@@ -8,6 +8,7 @@ import type http from "node:http";
 import {
   checkAtlassian,
   decodeAtlassianCredential,
+  describeAtlassianCredential,
   encodeAtlassianCredential,
   parseAtlassianCredential,
   type AtlassianCheck,
@@ -27,7 +28,7 @@ interface AtlassianIntegration {
     | { ok: true; credential: string; site: string; email: string }
     | { ok: false };
   check(credential: string, signal: AbortSignal): Promise<AtlassianCheck>;
-  describe(credential: string): { site: string; email: string } | undefined;
+  describe(credential: string): { site: string; email?: string } | undefined;
 }
 
 export interface EdgeToolSet {
@@ -78,7 +79,7 @@ export function createEdgeTools(
         describe(text) {
           const credential = decodeAtlassianCredential(text);
           return credential
-            ? { site: credential.site, email: credential.email }
+            ? describeAtlassianCredential(credential)
             : undefined;
         },
       },

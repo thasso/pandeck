@@ -8,13 +8,29 @@
  * any other error's message. `ToolError` exists only inside `gatewayTools/`.
  */
 
-/** The user's Atlassian credential, decoded for one tool call. */
-export interface AtlassianCredential {
+/** An API token the user set for their site. */
+export interface AtlassianTokenCredential {
   /** A bare `<name>.atlassian.net` host. */
   site: string;
   email: string;
   token: string;
 }
+
+/**
+ * The vault's OAuth access view (Task-1411): a short-lived access token for
+ * the site's cloud id. The edge keeps it for one call only.
+ */
+interface AtlassianOAuthCredential {
+  /** A bare `<name>.atlassian.net` host; browse URLs only. */
+  site: string;
+  /** A lowercase UUID. */
+  cloudId: string;
+  accessToken: string;
+}
+
+/** The user's Atlassian credential, decoded for one tool call. */
+export type AtlassianCredential =
+  AtlassianTokenCredential | AtlassianOAuthCredential;
 
 /** What the closed schema checker (`schema.ts`) understands. */
 type PropertySchema =

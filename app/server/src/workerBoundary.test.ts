@@ -509,6 +509,8 @@ const GATEWAY_VAULT = [
   // The standalone process's Codex renewal child, behind the renewal port.
   "codexChild",
   "holds",
+  // The vault's OAuth clients for users' integrations (Task-1411).
+  "integrationClients",
   // The login children's port (Task-1387), one child per login.
   "loginChild",
   // The YubiKey helper's port (Task-1395), the third spawn exception.
@@ -521,11 +523,14 @@ const GATEWAY_VAULT = [
   "sealedRecord",
   "sealedStore",
   "vault",
+  // Atlassian's token endpoint and site list, from the vault only (Task-1411).
+  "vaultAtlassian",
   "vaultControl",
-  // Users' integration credentials (Task-1397), sealed like token files.
+  // Users' integration credentials (Task-1397), sealed like token files, and
+  // their OAuth records' lanes, refresh and stop (Task-1411).
   "vaultIntegrations",
   "vaultLogins",
-  // The vault in its own process, serving gateway-vault/1.0.
+  // The vault in its own process, serving gateway-vault/1.1.
   "vaultServer",
 ];
 const GATEWAY_EDGE = [
@@ -541,7 +546,7 @@ const GATEWAY_EDGE = [
   "forward",
   "leases",
   "logins",
-  // The edge's VaultPort over gateway-vault/1.0.
+  // The edge's VaultPort over gateway-vault/1.1.
   "remoteVault",
   "upstreams",
   // The user-scoped account and login operations both renderers call.

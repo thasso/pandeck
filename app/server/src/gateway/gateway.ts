@@ -61,6 +61,8 @@ import { RENEW_TICK_MS, type CodexRenewPort } from "./renewal.ts";
 import { openGatewayState } from "./state.ts";
 import { createRemoteVault, type RemoteVaultOptions } from "./remoteVault.ts";
 import { createVault, type Vault } from "./vault.ts";
+import type { AtlassianEndpoint } from "./vaultAtlassian.ts";
+import type { IntegrationClients } from "./integrationClients.ts";
 
 /** How often a drain looks for streams that have ended. */
 const DRAIN_POLL_MS = 100;
@@ -112,6 +114,14 @@ export interface GatewayOptions {
    * is unknown and the integration methods refuse.
    */
   tools?: EdgeTools;
+  /**
+   * The in-process vault's OAuth clients for users' integrations
+   * (`integrationClients.ts`). Unused with a remote vault, which holds its
+   * own; without them no connect.
+   */
+  integrationClients?: IntegrationClients | undefined;
+  /** Test seam: where the in-process vault reaches Atlassian. */
+  atlassianEndpoint?: AtlassianEndpoint;
 }
 
 export interface RunningGateway {
@@ -210,7 +220,11 @@ export async function startGateway(
           stateDir: options.stateDir,
           drivers: options.loginDrivers ?? {},
         },
-        integrations: { stateDir: options.stateDir },
+        integrations: {
+          stateDir: options.stateDir,
+          clients: options.integrationClients,
+          atlassianEndpoint: options.atlassianEndpoint,
+        },
       });
   const vault: VaultPort = remote ?? local!;
   const compat = createCompatUpstream();

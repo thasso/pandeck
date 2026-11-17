@@ -2026,25 +2026,88 @@ host and a standalone MCP endpoint, and the first tool, `jira_get_issue`.
   `JIRA_HOST`, checked on the edge as a bare `<name>.atlassian.net` host at set
   and again at every decode. For each tool call the edge reads the calling
   client's user's credential from the vault and keeps nothing: no cache, no
-  disk. The gateway hands tools typed outcomes (`ok`, `absent`, `locked`,
-  `unavailable`), and `gatewayTools/toolCredential.ts` turns them into fixed
-  tool errors; a credential arriving after the call was aborted is dropped
-  before any Atlassian request.
+  disk. The gateway hands tools typed outcomes (`ok`, `absent`, `rejected`,
+  `locked`, `unavailable`), and `gatewayTools/toolCredential.ts` turns them into
+  fixed tool errors (`rejected`: "Atlassian rejected the credential; reconnect
+  Jira on the gateway's page."); a credential arriving after the call was
+  aborted is dropped before any Atlassian request.
+- **Atlassian OAuth records** (Task-1411, ADR-0005). The vault can also hold a
+  user's Atlassian OAuth 2.0 (3LO) credential. It holds the confidential client
+  (below), exchanges an authorization code itself (`integrations.connect`),
+  picks the site from `accessible-resources` (the deployment's site, else the
+  only one; entries are grouped by site host, and a site naming two ids is
+  refused as ambiguous), and writes the record
+  `{kind: "atlassian-oauth", v: 1, site, cloudId, refreshToken, scope}`, sealed
+  like any record (`gateway/vaultIntegrations.ts`, `gateway/vaultAtlassian.ts`).
+  A get answers the access view `{kind, site, cloudId, accessToken, expiresAt}`,
+  refreshing first when no access token is cached or it expires within 5
+  minutes. The refresh token and the client secret never leave the vault; access
+  tokens live only in the vault's memory, so the first get after a restart and
+  unlock refreshes. Atlassian rotates the refresh token on every use, so a
+  refresh is single-flight per record, re-reads the record in its lane, and
+  writes and seals the rotated record before it caches or answers anything;
+  neither a refresh nor a connect follows a caller's signal. A refresh Atlassian
+  refuses (400, 401 or 403 from the token endpoint) answers `rejected` and keeps
+  the record until a reconnect or clear; any other failure answers `unavailable`
+  and the next get retries with the same stored token. Every Atlassian call from
+  the vault goes to the fixed `auth.atlassian.com` or `api.atlassian.com` (TLS
+  name and `Host` fixed), follows no redirect, reads at most 64 KiB and is
+  bounded at 8 s; no answer, log line or refusal holds provider text, a token, a
+  code or the secret. API-token records stay opaque and are answered verbatim;
+  only connect creates an OAuth record, so an edge cannot plant a refresh token
+  through a put. No route starts a connect yet: "Sign in with Atlassian" on the
+  gateway's page is the next slice, so nothing changes for current users.
+- **Rotation recovery.** Sealing is best-effort, as for every vault writer: the
+  rename can succeed while the seal fails (logged, the sweep retries), or the
+  vault can die between the two. The rotated record then exists only in the
+  tmpfs `accounts/` and is gone at restart; the sealed record holds the previous
+  refresh token, which Atlassian still accepts within its 10-minute reuse
+  interval. After that the user connects again.
+- **OAuth client config.** A remote vault reads its OAuth clients from
+  `--integrations-config <file>` (`gateway/integrationClients.ts`), a regular
+  0600 JSON file `{"atlassian": {"clientId": "…", "clientSecret": "…"}}`: both
+  printable non-empty strings, other provider keys ignored, refusals fixed and
+  holding no value from the file. Without it connect answers `notConfigured`.
+  The edge's UI config may carry `atlassian.clientId` and
+  `atlassian.clientSecret`, each checked alone; what they do depends on where
+  the vault runs (`gatewayEdge.ts` `atlassianClientFor`): with the vault in the
+  edge's process both or neither (half a client refuses the start with a fixed
+  text before anything listens) and the pair goes to that vault; with a remote
+  vault the edge keeps only the id, for the page's sign-in link, never passes or
+  uses a secret, and logs one fixed line at start while the file still holds
+  one.
+- **Bearer destinations.** On an OAuth view the tools call Jira with
+  `Authorization: Bearer` at `https://api.atlassian.com/ex/jira/<cloudId>`
+  (`atlassian/atlassianFetch.ts`; Confluence at `/ex/confluence/<cloudId>`, for
+  a later tool), and the site makes only the browse URLs. The path must be
+  site-relative (`/…`, not `//…`, no scheme, no backslash), the cloud id a
+  lowercase UUID, and the final URL's origin and product and cloud-id prefix are
+  checked after normalization, before any request; the site never chooses the
+  destination. `atlassianDownload` follows the same rule and relies on fetch
+  dropping `Authorization` on the cross-origin redirect to Atlassian's media
+  host. An API token keeps its Basic calls to the site, absolute URLs included.
+  The access token is decoded per call (site, cloud id, at most 8 KiB of
+  printable token; any other `kind` is invalid) and never cached or written on
+  the edge.
 - **Client methods** (`gateway-client/1.0`, additive), always for the client's
   registry user: `integrations.set {integration, site, email, token}` checks the
   credential with Atlassian (`/rest/api/3/myself`, 15 s from the check's start)
   and stores it; `integrations.clear {integration}`;
   `integrations.status {integration, check?}` answers
   `{connected, site?, email?, displayName?, accountId?, problem?}`, never a
-  token. Failures carry fixed codes and texts: `integration_invalid`,
-  `integration_rejected`, `integration_unreachable`, `vault_locked`,
-  `vault_unavailable`, `tools_unavailable`, `integration_busy`. One set or clear
-  runs per user at a time, from any client or the gateway page
-  (`userOperations.ts`); another meanwhile is refused `integration_busy`
-  ("Another change to this credential is still running. Try again.") at once and
-  changes nothing, so an earlier set can never land after a later clear. A
-  status is never refused. Pandeck's Settings shows its own text for each code
-  (`remoteIntegrations.ts`), `integration_busy` included.
+  token: an OAuth record has a site and no email, and a refused refresh is
+  `{connected: false, problem: "rejected"}` (the page shows it as not connected
+  until its next slice); with `check` an OAuth record is checked with Bearer at
+  `/rest/api/3/myself` on the fixed Jira base. Failures carry fixed codes and
+  texts: `integration_invalid`, `integration_rejected`,
+  `integration_unreachable`, `vault_locked`, `vault_unavailable`,
+  `tools_unavailable`, `integration_busy`. One set or clear runs per user at a
+  time, from any client or the gateway page (`userOperations.ts`); another
+  meanwhile is refused `integration_busy` ("Another change to this credential is
+  still running. Try again.") at once and changes nothing, so an earlier set can
+  never land after a later clear. A status is never refused. Pandeck's Settings
+  shows its own text for each code (`remoteIntegrations.ts`), `integration_busy`
+  included.
 - **Tool calls** (`gateway-client/1.0`, additive, Task-1398), the client's
   second adapter over the same host: `tools.list {}` answers `{tools}`, each
   `{name, description, inputSchema, effect, actionKey}`;
@@ -2322,9 +2385,10 @@ The vault can run as its own process on another machine (Task-1394, M20), so the
 edge holds no refresh token. Renewal, the token files, the writer lane and the
 login runs then execute in the vault process (`gateway/vaultServer.ts`); the
 edge reaches it through `gateway/remoteVault.ts`, a `VaultPort` over
-**`gateway-vault/1.0`** (`gateway/vaultMethods.ts`). `startGateway`'s `vault`
-option selects it; without it the vault runs in the edge's process, as the
-server's local gateway does.
+**`gateway-vault/1.1`** (`gateway/vaultMethods.ts`; any `1.x` peer links, and an
+edge whose vault lacks `integrations.connect` gets `unavailable` for it, so
+upgrade the vault first). `startGateway`'s `vault` option selects it; without it
+the vault runs in the edge's process, as the server's local gateway does.
 
 - **Link.** Worker-protocol framing over mutual TLS. Each side has its own key
   and self-signed certificate and trusts exactly the other's, inside its dates,
@@ -2344,10 +2408,14 @@ server's local gateway does.
   `inputs.liveLeases` (the whole registry and live-lease set, on connect and on
   every change), `credential.for`, `credential.upstream401`, `accounts.discard`,
   `logins.start`, `logins.input`, `logins.cancel`, and `integrations.put`,
-  `integrations.get` and `integrations.clear` (a user's opaque integration
-  credential, at most 4 KiB, which the vault parses nothing in). Vault to edge:
-  `credential.report`, `logins.event`, `logins.done` (a failure code, never
-  driver text) and `logins.commit`.
+  `integrations.get` and `integrations.clear` (a user's integration credential,
+  at most 16 KiB; an API token stays opaque, an OAuth record answers its access
+  view or `rejected`), and `integrations.connect` (1.1:
+  `{userId, integration, code, redirectUri, site?}`, the code at most 2,048
+  characters and the redirect an `https:` URL; answers `{ok, site, cloudId}` or
+  `rejected`, `unreachable`, `site: missing|ambiguous`, `notConfigured`,
+  `locked`, `unavailable`). Vault to edge: `credential.report`, `logins.event`,
+  `logins.done` (a failure code, never driver text) and `logins.commit`.
 - **Rules.** The vault answers an access token and headers only, never a refresh
   token or a token file's content. It keeps only login profiles whose token file
   is under `<stateDir>/accounts/` and is a login credential file (never an
@@ -2367,11 +2435,14 @@ server's local gateway does.
   refusal (503) at once, or after 30 s without an answer, never needs-login, so
   no account shows as logged out; `needsLogin()` answers the last set the vault
   told. A login needs the link. No access token is cached on the edge: one round
-  trip per forwarded request. Every integration call is bounded at 10 s, and a
-  get also by its caller's signal: no link, the deadline, the abort or any
-  request error answers `unavailable`, and a late reply settles a promise nobody
-  reads. A put or clear that timed out has an unknown result, which the next
-  status shows.
+  trip per forwarded request. Every integration call is bounded: a put or clear
+  at 10 s, a get at 20 s (it may wait for a refresh, at most 8 s plus its lane),
+  a connect at 30 s (two 8 s Atlassian calls plus its lane); a get and a connect
+  also by the caller's signal. No link, the deadline, the abort or any request
+  error answers `unavailable`, and a late reply settles a promise nobody reads.
+  A put or clear that timed out has an unknown result, which the next status
+  shows; a connect or refresh the edge stopped waiting for still finishes in the
+  vault and stores its record.
 - **No control.** An edge with a remote vault serves no gateway control 1.4 (its
   holds are the in-process vault's); it is a client-mode edge.
 - **Pairing.**
@@ -2382,7 +2453,7 @@ server's local gateway does.
   `vault-init --edge-cert <file>` pins it on the vault. Certificates are public;
   keys never leave their machine.
 - **Running.**
-  `gateway:vault --state-dir <dir> [--bind-host <address>] [--port <n>] [--control-socket <path>]`
+  `gateway:vault --state-dir <dir> [--bind-host <address>] [--port <n>] [--control-socket <path>] [--integrations-config <file>]`
   (`gateway/vaultMain.ts`, port 8794; `vault.js` in the Bun package) runs the
   vault; `gateway:dev ... --vault-host <address> [--vault-port <n>]`, or
   `gateway-edge.js` with the same flags in the Bun package, runs the edge
@@ -2453,18 +2524,24 @@ never falls back to plaintext on disk.
   id and that account needs a login; the rest unlock.
 - **Seal after write.** Renewal (Claude's and Codex's) seals in the writer lane
   after each attempt, a login's ingest after moving the credential in, and
-  `integrations.put` right after its rename; `accounts.discard` and
-  `integrations.clear` delete the records. Every 60 s a sweep seals any token
-  file whose content changed since it was last sealed or opened. A record whose
-  plaintext is missing is never touched. A crash between a write and its seal
-  can leave the previous token sealed (accepted, M21).
+  `integrations.put`, a connect and an OAuth refresh right after their rename;
+  `accounts.discard` and `integrations.clear` delete the records. A user's
+  integration record has one writer at a time: put, clear, connect and refresh
+  run in order in its own lane (`vaultIntegrations.ts`). Every 60 s a sweep
+  seals any token file whose content changed since it was last sealed or opened.
+  A record whose plaintext is missing is never touched. A crash between a write
+  and its seal can leave the previous token sealed (accepted, M21).
 - **Stop.** From the moment SIGTERM or SIGINT arrives the vault admits no login,
   renewal, edge link or request: it withdraws every login, so none commits,
   cancels the logins and aborts the renewals in flight, drops every accepted
   connection (one still in its TLS handshake included) and the control socket's,
   and waits until each login's child group has ended and its directory is gone
-  and each renewal attempt has left its lane. Then it seals every file that
-  still differs from its record, trying three times; a file, its account
+  and each renewal attempt has left its lane. Integration operations stop being
+  admitted at once (a later put, clear, connect or get that needs a refresh
+  answers `unavailable`), queued ones are refused unrun, and the vault waits for
+  each record's running one, which is never aborted, to finish its write and
+  seal (a connect at most twice 8 s, a refresh 8 s). Then it seals every file
+  that still differs from its record, trying three times; a file, its account
   directory or `accounts/` that is there but cannot be read counts as unsealed,
   a file that is not there is left alone. It exits 0 only when every record
   matches its file. Otherwise it exits 1 with

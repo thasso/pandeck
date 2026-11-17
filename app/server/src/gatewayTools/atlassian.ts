@@ -5,20 +5,36 @@
  * makes. The site is a bare `<name>.atlassian.net` host, so a stored
  * credential can only ever be sent to Atlassian (SSRF guard). Errors become
  * fixed texts; no upstream body or credential reaches a caller.
+ *
+ * Or the vault's OAuth access view (Task-1411), `{kind: "atlassian-oauth",
+ * site, cloudId, accessToken, expiresAt}`, decoded and checked per call and
+ * never stored here: Jira calls go with Bearer to the fixed
+ * `api.atlassian.com/ex/jira/<cloudId>` base, the site only makes browse URLs.
+ * Any other `kind` is refused.
  */
 import { AtlassianHttpError } from "../atlassian/atlassianFetch.ts";
 import { deadlineSignal } from "../httpRetry.ts";
-import { jiraGet, type JiraApiConfig } from "../jiraClient.ts";
-import { ToolError, type AtlassianCredential } from "./descriptor.ts";
+import { jiraGet, type JiraConfig } from "../jiraClient.ts";
+import {
+  ToolError,
+  type AtlassianCredential,
+  type AtlassianTokenCredential,
+} from "./descriptor.ts";
 
 const SITE_RE = /^[a-z0-9][a-z0-9-]{0,62}\.atlassian\.net$/;
+const CLOUD_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const OAUTH_KIND = "atlassian-oauth";
+const MAX_ACCESS_TOKEN_CHARS = 8192;
+/** Printable ASCII without space: what fits an `Authorization` header. */
+const TOKEN_RE = /^[\x21-\x7e]+$/;
 const CHECK_TIMEOUT_MS = 15_000;
 const MAX_NAME_CHARS = 200;
 
 /** The checked credential, or undefined. */
 export function parseAtlassianCredential(
   input: unknown,
-): AtlassianCredential | undefined {
+): AtlassianTokenCredential | undefined {
   if (typeof input !== "object" || input === null) return undefined;
   const { site, email, token } = input as Record<string, unknown>;
   if (
@@ -41,7 +57,7 @@ export function parseAtlassianCredential(
 }
 
 export function encodeAtlassianCredential(
-  credential: AtlassianCredential,
+  credential: AtlassianTokenCredential,
 ): string {
   return JSON.stringify({
     site: credential.site,
@@ -50,23 +66,58 @@ export function encodeAtlassianCredential(
   });
 }
 
-/** The stored credential, checked again; undefined on any failure. */
+/**
+ * The vault's answer, checked again: an API token or an OAuth access view;
+ * undefined on any failure, an unknown `kind` included.
+ */
 export function decodeAtlassianCredential(
   text: string,
 ): AtlassianCredential | undefined {
+  let input: unknown;
   try {
-    return parseAtlassianCredential(JSON.parse(text));
+    input = JSON.parse(text);
   } catch {
     return undefined;
   }
+  if (typeof input !== "object" || input === null) return undefined;
+  const { kind, site, cloudId, accessToken } = input as Record<string, unknown>;
+  if (kind === undefined) return parseAtlassianCredential(input);
+  if (kind !== OAUTH_KIND) return undefined;
+  if (
+    typeof site !== "string" ||
+    !SITE_RE.test(site) ||
+    typeof cloudId !== "string" ||
+    !CLOUD_ID_RE.test(cloudId) ||
+    typeof accessToken !== "string" ||
+    accessToken.length > MAX_ACCESS_TOKEN_CHARS ||
+    !TOKEN_RE.test(accessToken)
+  )
+    return undefined;
+  return { site, cloudId, accessToken };
 }
 
-export function jiraConfigOf(credential: AtlassianCredential): JiraApiConfig {
-  return {
-    jiraHost: credential.site,
-    atlassianEmail: credential.email,
-    atlassianToken: credential.token,
-  };
+export function jiraConfigOf(credential: AtlassianCredential): JiraConfig {
+  return "accessToken" in credential
+    ? {
+        jiraHost: credential.site,
+        cloudId: credential.cloudId,
+        bearerToken: credential.accessToken,
+      }
+    : {
+        jiraHost: credential.site,
+        atlassianEmail: credential.email,
+        atlassianToken: credential.token,
+      };
+}
+
+/** The site, and the email an API token was set with; never a token. */
+export function describeAtlassianCredential(credential: AtlassianCredential): {
+  site: string;
+  email?: string;
+} {
+  return "accessToken" in credential
+    ? { site: credential.site }
+    : { site: credential.site, email: credential.email };
 }
 
 export type AtlassianCheck =
@@ -78,7 +129,10 @@ const named = (value: unknown): string | undefined =>
     ? value.slice(0, MAX_NAME_CHARS)
     : undefined;
 
-/** Asks Atlassian who the credential is (`/rest/api/3/myself`). */
+/**
+ * Asks Atlassian who the credential is (`/rest/api/3/myself`, on the site or,
+ * with Bearer, on the fixed API base).
+ */
 export async function checkAtlassian(
   credential: AtlassianCredential,
   signal: AbortSignal,

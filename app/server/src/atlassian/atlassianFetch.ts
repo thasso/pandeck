@@ -1,5 +1,6 @@
 /**
- * The Basic-auth HTTP call both Atlassian products share.
+ * The HTTP call both Atlassian products share, with an API token (Basic) or
+ * an OAuth access token (Bearer).
  *
  * Jira and Confluence are the same site, the same Atlassian account and the
  * same API token; only the path prefix differs (`/rest/api/3` vs `/wiki`). The
@@ -11,6 +12,12 @@
  * A `FormData` body goes out as multipart — attachment uploads are the only
  * caller — with the XSRF opt-out header Confluence requires on that route;
  * fetch writes the boundary, so no Content-Type is set by hand.
+ *
+ * A Bearer config (Task-1411) never goes to the site: its destination is
+ * fixed to `https://api.atlassian.com/ex/<jira|confluence>/<cloudId>`, the
+ * path must be site-relative, and the final URL's origin and product/cloudId
+ * prefix are checked before any request. Its `host` is the site for browse
+ * URLs only.
  */
 import { fetchWithRetry } from "../httpRetry.ts";
 
@@ -20,6 +27,17 @@ export interface AtlassianApiConfig {
   atlassianEmail: string;
   atlassianToken: string;
 }
+
+interface AtlassianBearerConfig {
+  /** The site, for browse URLs; never the destination. */
+  host: string;
+  /** The site's Atlassian cloud id, a UUID. */
+  cloudId: string;
+  bearerToken: string;
+}
+
+/** What the calls below take: an API token (Basic) or an access token (Bearer). */
+type AtlassianConfig = AtlassianApiConfig | AtlassianBearerConfig;
 
 /** Which product a call belongs to; only shapes error text and settings hints. */
 export type AtlassianProduct = "Jira" | "Confluence";
@@ -48,6 +66,10 @@ export type AtlassianQuery = Record<
   string | number | boolean | undefined
 >;
 
+const ATLASSIAN_API_ORIGIN = "https://api.atlassian.com";
+const CLOUD_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 /** Site base URL. A host that already names its scheme keeps it. */
 export function atlassianBaseUrl(host: string): string {
   const base = host.match(/^https?:\/\//i) ? host : `https://${host}`;
@@ -55,7 +77,7 @@ export function atlassianBaseUrl(host: string): string {
 }
 
 export async function atlassianFetch<T>(
-  config: AtlassianApiConfig,
+  config: AtlassianConfig,
   product: AtlassianProduct,
   method: "GET" | "POST" | "PUT" | "DELETE",
   path: string,
@@ -64,11 +86,14 @@ export async function atlassianFetch<T>(
   options: AtlassianCallOptions = {},
 ): Promise<T> {
   requireCredentials(config, product);
-  const url = new URL(
-    path.startsWith("http")
-      ? path
-      : `${atlassianBaseUrl(config.host)}${path.startsWith("/") ? "" : "/"}${path}`,
-  );
+  const url =
+    "bearerToken" in config
+      ? bearerUrl(config, product, path)
+      : new URL(
+          path.startsWith("http")
+            ? path
+            : `${atlassianBaseUrl(config.host)}${path.startsWith("/") ? "" : "/"}${path}`,
+        );
   for (const [key, value] of Object.entries(query ?? {})) {
     if (value !== undefined) url.searchParams.set(key, String(value));
   }
@@ -78,7 +103,7 @@ export async function atlassianFetch<T>(
     {
       method,
       headers: {
-        Authorization: basicAuth(config),
+        Authorization: authorization(config),
         Accept: "application/json",
         ...(body === undefined
           ? {}
@@ -111,24 +136,31 @@ export async function atlassianFetch<T>(
  * one.
  *
  * `path` must be site-relative, so the credential can only be sent to the
- * configured host. Attachment downloads answer with a redirect to Atlassian's
- * media host; fetch drops `Authorization` on that cross-origin hop and the
- * signed URL it lands on needs none.
+ * configured host (with Bearer, the fixed API base). Attachment downloads
+ * answer with a redirect to Atlassian's media host; fetch drops
+ * `Authorization` on that cross-origin hop and the signed URL it lands on
+ * needs none.
  */
 export async function atlassianDownload(
-  config: AtlassianApiConfig,
+  config: AtlassianConfig,
   product: AtlassianProduct,
   path: string,
   maxBytes: number,
   options: AtlassianCallOptions = {},
 ): Promise<{ bytes: Uint8Array; contentType: string | null }> {
   requireCredentials(config, product);
-  if (!path.startsWith("/") || path.startsWith("//"))
-    throw new Error(`${product} download path must be site-relative: ${path}`);
-  const url = new URL(`${atlassianBaseUrl(config.host)}${path}`);
+  let url: URL;
+  if ("bearerToken" in config) url = bearerUrl(config, product, path);
+  else {
+    if (!path.startsWith("/") || path.startsWith("//"))
+      throw new Error(
+        `${product} download path must be site-relative: ${path}`,
+      );
+    url = new URL(`${atlassianBaseUrl(config.host)}${path}`);
+  }
   const res = await fetchWithRetry(
     url,
-    { method: "GET", headers: { Authorization: basicAuth(config) } },
+    { method: "GET", headers: { Authorization: authorization(config) } },
     options.signal ? { signal: options.signal } : {},
   );
   if (!res.ok) {
@@ -168,17 +200,46 @@ export async function atlassianDownload(
   return { bytes, contentType: res.headers.get("content-type") };
 }
 
+/**
+ * The Bearer destination: the product's fixed API base for the cloud id plus
+ * a site-relative `path`. Anything else, or a URL that normalizes out of that
+ * base, is refused before a request is made; the site (`host`) plays no part.
+ */
+function bearerUrl(
+  config: AtlassianBearerConfig,
+  product: AtlassianProduct,
+  path: string,
+): URL {
+  if (!CLOUD_ID_RE.test(config.cloudId))
+    throw new Error(`${product} OAuth credential has no valid cloud id.`);
+  if (!path.startsWith("/") || path.startsWith("//") || path.includes("\\"))
+    throw new Error(`${product} path must be site-relative.`);
+  const base = `/ex/${product === "Jira" ? "jira" : "confluence"}/${config.cloudId}/`;
+  const url = new URL(`${ATLASSIAN_API_ORIGIN}${base.slice(0, -1)}${path}`);
+  if (url.origin !== ATLASSIAN_API_ORIGIN || !url.pathname.startsWith(base))
+    throw new Error(`${product} path must be site-relative.`);
+  return url;
+}
+
 function requireCredentials(
-  config: AtlassianApiConfig,
+  config: AtlassianConfig,
   product: AtlassianProduct,
 ): void {
+  if ("bearerToken" in config) {
+    if (!config.bearerToken)
+      throw new Error(
+        `Missing Atlassian access token; reconnect ${product} on the gateway's page.`,
+      );
+    return;
+  }
   if (!config.atlassianEmail || !config.atlassianToken)
     throw new Error(
       `Missing Atlassian email or API token. Configure them in Settings → ${product}.`,
     );
 }
 
-function basicAuth(config: AtlassianApiConfig): string {
+function authorization(config: AtlassianConfig): string {
+  if ("bearerToken" in config) return `Bearer ${config.bearerToken}`;
   const token = Buffer.from(
     `${config.atlassianEmail}:${config.atlassianToken}`,
   ).toString("base64");

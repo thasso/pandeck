@@ -40,6 +40,13 @@ export interface GatewayWebConfig {
 export interface AtlassianPreset {
   site?: string;
   emailFromSignIn: boolean;
+  /**
+   * The Atlassian OAuth client (Task-1411), each checked alone: whether the
+   * pair is needed depends on the vault's topology, which the edge decides
+   * (`gatewayEdge.ts`). Neither reaches the page.
+   */
+  clientId?: string;
+  clientSecret?: string;
 }
 
 export class GatewayWebConfigError extends Error {}
@@ -138,6 +145,12 @@ function atlassianPreset(value: unknown): AtlassianPreset | undefined {
       ? { site: text(raw.site, "atlassian.site") }
       : {}),
     emailFromSignIn: raw.emailFromSignIn === true,
+    ...(raw.clientId !== undefined
+      ? { clientId: text(raw.clientId, "atlassian.clientId") }
+      : {}),
+    ...(raw.clientSecret !== undefined
+      ? { clientSecret: text(raw.clientSecret, "atlassian.clientSecret") }
+      : {}),
   };
 }
 

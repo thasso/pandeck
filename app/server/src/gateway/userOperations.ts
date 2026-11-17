@@ -106,6 +106,8 @@ type AtlassianProblem =
 
 export type AtlassianStatus =
   | AtlassianSet
+  /** An OAuth record (Task-1411): its site, no email. */
+  | ({ connected: true; site: string; email?: string } & AtlassianIdentity)
   | {
       connected: false;
       site?: string;
@@ -344,14 +346,16 @@ export function createUserOperations(deps: UserOperationsDeps): UserOperations {
     async atlassianStatus(userId, { check }) {
       const tools = atlassian();
       const record = await deps.vault.integrationGet(userId, "atlassian", {});
-      if (!record.ok)
-        return "absent" in record
-          ? { connected: false }
-          : {
-              connected: false,
-              problem:
-                "locked" in record ? "vault_locked" : "vault_unavailable",
-            };
+      if (!record.ok) {
+        if ("absent" in record) return { connected: false };
+        // The vault's refresh of an OAuth record was refused: reconnect.
+        if ("rejected" in record)
+          return { connected: false, problem: "rejected" };
+        return {
+          connected: false,
+          problem: "locked" in record ? "vault_locked" : "vault_unavailable",
+        };
+      }
       const described = tools.describe(record.credential);
       if (!described) return { connected: false, problem: "invalid" };
       if (!check) return { connected: true, ...described };

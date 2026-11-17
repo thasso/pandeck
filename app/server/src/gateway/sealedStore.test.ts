@@ -43,7 +43,11 @@ import {
 import { askVaultControl, startVaultControl } from "./vaultControl.ts";
 import { createVaultIntegrations } from "./vaultIntegrations.ts";
 import { createVaultLogins } from "./vaultLogins.ts";
-import { INTEGRATION_FILE, integrationDirId } from "./vaultMethods.ts";
+import {
+  INTEGRATION_FILE,
+  LOGIN_CREDENTIAL_FILE,
+  integrationDirId,
+} from "./vaultMethods.ts";
 
 const root = mkdtempSync(join(tmpdir(), "sealed-store-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -386,6 +390,180 @@ test("integration records are sealed after a write, swept on drift, left alone w
   assert.equal(existsSync(record), false);
   for (const line of lines) assert.ok(!line.includes("fake"), line);
 });
+
+for (const recovery of [
+  "identical put",
+  "changed put",
+  "successful clear retry",
+] as const) {
+  test(`a partial sealed discard followed by ${recovery} survives restart`, async () => {
+    const dir = stateDir();
+    writeRecipients(dir, [softwareRecipient(dir, "soft")]);
+    const store = await unlockedStore(dir);
+    const integrations = createVaultIntegrations({
+      stateDir: dir,
+      written: store.written,
+      discarded: store.discarded,
+    });
+    const original = JSON.stringify({
+      site: "fake-site.atlassian.net",
+      email: "fake@example.test",
+      token: "fake-discard-api-token",
+    });
+    const replacement =
+      recovery === "changed put"
+        ? JSON.stringify({
+            site: "fake-site.atlassian.net",
+            email: "fake@example.test",
+            token: "fake-changed-api-token",
+          })
+        : original;
+    const sealedDir = join(dir, "sealed");
+    const recordDir = join(sealedDir, integrationDirId("u1", "atlassian"));
+    const record = join(recordDir, `${INTEGRATION_FILE}.sealed`);
+    try {
+      assert.deepEqual(
+        await integrations.integrationPut("u1", "atlassian", original),
+        { ok: true },
+      );
+      assert.equal(existsSync(record), true);
+      const beforeDiscard = readFileSync(record, "utf8");
+      // Node removes the ciphertext before its final rmdir fails; Bun can
+      // refuse earlier. Either failure must invalidate the cached hash.
+      chmodSync(sealedDir, 0o500);
+      try {
+        assert.deepEqual(
+          await integrations.integrationClear("u1", "atlassian"),
+          { ok: false, unavailable: true },
+        );
+        assert.equal(existsSync(recordDir), true);
+      } finally {
+        chmodSync(sealedDir, 0o700);
+      }
+      if (recovery === "successful clear retry") {
+        assert.deepEqual(
+          await integrations.integrationClear("u1", "atlassian"),
+          { ok: true },
+        );
+        assert.equal(existsSync(recordDir), false);
+      }
+      assert.deepEqual(
+        await integrations.integrationPut("u1", "atlassian", replacement),
+        { ok: true },
+      );
+      assert.equal(existsSync(record), true);
+      assert.notEqual(readFileSync(record, "utf8"), beforeDiscard);
+      await integrations.close();
+      store.sweep();
+      assert.deepEqual(await store.flush(), []);
+      assert.equal(existsSync(record), true);
+
+      // Simulate only this test vault's tmpfs loss. A fresh store must
+      // restore the actual credential, not merely report a clean flush.
+      rmSync(join(dir, "accounts"), { recursive: true, force: true });
+      const restarted = createSealedStore({ stateDir: dir, log: () => {} })!;
+      assert.deepEqual(await restarted.unlock("unused"), {
+        ok: true,
+        opened: 1,
+        unopened: 0,
+      });
+      const recovered = createVaultIntegrations({ stateDir: dir });
+      try {
+        assert.deepEqual(await recovered.integrationGet("u1", "atlassian"), {
+          ok: true,
+          credential: replacement,
+        });
+      } finally {
+        await recovered.close();
+      }
+    } finally {
+      await integrations.close();
+    }
+  });
+}
+
+for (const partialFailure of [false, true]) {
+  test(`${partialFailure ? "failed" : "successful"} account discard invalidates every sealed file but no other account`, async () => {
+    const dir = stateDir();
+    writeRecipients(dir, [softwareRecipient(dir, "soft")]);
+    const store = await unlockedStore(dir);
+    const accountId = "acc-multi";
+    const files = [...Object.values(LOGIN_CREDENTIAL_FILE), INTEGRATION_FILE];
+    const accountDir = join(dir, "accounts", accountId);
+    mkdirSync(accountDir, { recursive: true });
+    for (const file of files) {
+      const path = join(accountDir, file);
+      writeFileSync(path, JSON.stringify({ fake: file }));
+      store.written(path);
+    }
+    const unrelated = writeToken(dir, "acc-unrelated", TOKEN);
+    store.written(unrelated);
+    const otherRecord = readFileSync(recordPath(dir, "acc-unrelated"), "utf8");
+    const sealedDir = join(dir, "sealed");
+    const recordDir = join(sealedDir, accountId);
+    const beforeDiscard = new Map(
+      files.map((file) => [
+        file,
+        readFileSync(join(recordDir, `${file}.sealed`), "utf8"),
+      ]),
+    );
+    if (partialFailure) chmodSync(sealedDir, 0o500);
+    try {
+      if (partialFailure) {
+        assert.throws(
+          () => store.discarded(accountId),
+          (error: NodeJS.ErrnoException) =>
+            error.code === "EACCES" || error.code === "EPERM",
+        );
+        assert.equal(existsSync(recordDir), true);
+      } else {
+        store.discarded(accountId);
+        assert.equal(existsSync(recordDir), false);
+      }
+      if (!partialFailure) {
+        for (const file of files)
+          assert.equal(
+            existsSync(join(recordDir, `${file}.sealed`)),
+            false,
+            file,
+          );
+      }
+    } finally {
+      chmodSync(sealedDir, 0o700);
+    }
+    // Unchanged plaintext remains here: both successful and failed discards
+    // must invalidate all hashes so the sweep can seal it again.
+    store.sweep();
+    assert.deepEqual(await store.flush(), []);
+    for (const file of files) {
+      const record = join(recordDir, `${file}.sealed`);
+      assert.equal(existsSync(record), true, file);
+      assert.notEqual(
+        readFileSync(record, "utf8"),
+        beforeDiscard.get(file),
+        file,
+      );
+    }
+    assert.equal(
+      readFileSync(recordPath(dir, "acc-unrelated"), "utf8"),
+      otherRecord,
+    );
+    rmSync(join(dir, "accounts"), { recursive: true, force: true });
+    const restarted = createSealedStore({ stateDir: dir, log: () => {} })!;
+    assert.deepEqual(await restarted.unlock("unused"), {
+      ok: true,
+      opened: files.length + 1,
+      unopened: 0,
+    });
+    for (const file of files)
+      assert.equal(
+        readFileSync(join(accountDir, file), "utf8"),
+        JSON.stringify({ fake: file }),
+        file,
+      );
+    assert.equal(readFileSync(unrelated, "utf8"), claudeJson(TOKEN));
+  });
+}
 
 test("a login's ingest seals the moved-in file in the lane; discard deletes both copies", async () => {
   const dir = stateDir();

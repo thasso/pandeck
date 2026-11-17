@@ -4,7 +4,7 @@
  * (renewal, credential reads, the writer lane and the login holds) only
  * through `VaultPort`, and the vault reads the edge only through
  * `VaultInputs`. The tiers run in one process (`vault.ts`) or apart, the edge
- * reaching a vault process over `gateway-vault/1.0` (`remoteVault.ts`,
+ * reaching a vault process over `gateway-vault/1.1` (`remoteVault.ts`,
  * `vaultServer.ts`). This module holds types only, so neither tier's code
  * crosses it (`workerBoundary.test.ts`).
  */
@@ -37,8 +37,10 @@ export interface VaultPort {
   discardCredential(accountId: string): void | Promise<void>;
   /**
    * A user's integration credential (Task-1397): an opaque JSON string the
-   * vault stores, sealed when it has recipients, and parses nothing in. None
-   * of these rejects; a remote vault bounds each call.
+   * vault stores, sealed when it has recipients. The vault parses only the
+   * Atlassian OAuth records it writes itself (Task-1411): for those a get
+   * answers the access view, refreshing first when due. None of these
+   * rejects; a remote vault bounds each call.
    */
   integrationPut(
     userId: string,
@@ -54,14 +56,53 @@ export interface VaultPort {
     userId: string,
     integration: Integration,
   ): Promise<IntegrationWrite>;
+  /**
+   * Turns an authorization code into the user's sealed OAuth record
+   * (Task-1411), with the vault's own OAuth client: the exchange, the site
+   * choice and the write all run in the record's lane, and a caller that
+   * stops waiting cancels none of it.
+   */
+  integrationConnect(
+    userId: string,
+    integration: Integration,
+    request: IntegrationConnectRequest,
+  ): Promise<IntegrationConnect>;
 }
 
 /** The integrations whose credentials the vault keeps. */
 type Integration = "atlassian";
 
+/**
+ * A get's answer. For an OAuth record `credential` is the access view, JSON
+ * `{kind: "atlassian-oauth", site, cloudId, accessToken, expiresAt}`, never
+ * the refresh token; `rejected` is Atlassian refusing its refresh.
+ */
 export type IntegrationRecord =
   | { ok: true; credential: string }
   | { ok: false; absent: true }
+  | { ok: false; rejected: true }
+  | { ok: false; locked: true }
+  | { ok: false; unavailable: true };
+
+interface IntegrationConnectRequest {
+  code: string;
+  redirectUri: string;
+  /** The deployment's site preset; without it the only site is taken. */
+  site?: string | undefined;
+}
+
+/**
+ * A connect's answer: the chosen site and its cloud id, or why not.
+ * `rejected` is Atlassian refusing the code (or granting no refresh token);
+ * `unreachable` any other failure to talk to it; `notConfigured` a vault
+ * without that OAuth client.
+ */
+export type IntegrationConnect =
+  | { ok: true; site: string; cloudId: string }
+  | { ok: false; rejected: true }
+  | { ok: false; unreachable: true }
+  | { ok: false; site: "missing" | "ambiguous" }
+  | { ok: false; notConfigured: true }
   | { ok: false; locked: true }
   | { ok: false; unavailable: true };
 

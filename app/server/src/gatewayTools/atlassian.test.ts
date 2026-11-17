@@ -5,6 +5,7 @@
  */
 import assert from "node:assert/strict";
 import { afterEach, test, vi } from "vitest";
+import { FAKE_ACCESS } from "../test/atlassianFake.ts";
 import {
   checkAtlassian,
   decodeAtlassianCredential,
@@ -117,4 +118,97 @@ test("describe names the site and email, never the token", () => {
   assert.deepEqual(atlassian.parse({ ...base, site: "evil.com" }), {
     ok: false,
   });
+});
+
+// --- The vault's OAuth access view (Task-1411) ------------------------------
+
+const CLOUD_ID = "00000000-0000-4000-8000-00000000fa4e";
+const FAKE_ACCESS_VIEW = FAKE_ACCESS;
+const FAKE_INVALID_ACCESS_HEADER = "line\r\nX-Injected: 1";
+const VIEW = {
+  kind: "atlassian-oauth",
+  site: "castlabs-test.atlassian.net",
+  cloudId: CLOUD_ID,
+  accessToken: FAKE_ACCESS_VIEW,
+  expiresAt: 1_900_000_000_000,
+};
+
+test("an OAuth access view decodes to site, cloud id and access token", () => {
+  assert.deepEqual(decodeAtlassianCredential(JSON.stringify(VIEW)), {
+    site: VIEW.site,
+    cloudId: CLOUD_ID,
+    accessToken: VIEW.accessToken,
+  });
+  // `expiresAt` is the vault's; the edge needs none.
+  const { expiresAt: _unused, ...noExpiry } = VIEW;
+  assert.ok(decodeAtlassianCredential(JSON.stringify(noExpiry)));
+  assert.ok(
+    decodeAtlassianCredential(
+      JSON.stringify({ ...VIEW, accessToken: "a".repeat(8192) }),
+    ),
+  );
+});
+
+test("a bad view, a non-UUID cloud id or an unknown kind decodes to nothing", () => {
+  const bad: Record<string, unknown>[] = [
+    { ...VIEW, kind: "atlassian-token" },
+    { ...VIEW, kind: "" },
+    { ...VIEW, kind: 1 },
+    { ...VIEW, cloudId: "not-a-uuid" },
+    { ...VIEW, cloudId: CLOUD_ID.toUpperCase() },
+    { ...VIEW, cloudId: `${CLOUD_ID}/../x` },
+    { ...VIEW, cloudId: undefined },
+    { ...VIEW, site: "evil.com" },
+    { ...VIEW, site: "Castlabs-Test.atlassian.net" },
+    { ...VIEW, accessToken: "" },
+    { ...VIEW, accessToken: "a".repeat(8193) },
+    { ...VIEW, accessToken: "two words" },
+    { ...VIEW, accessToken: FAKE_INVALID_ACCESS_HEADER },
+    { ...VIEW, accessToken: 7 },
+    // An API token's fields under the OAuth kind are not a credential.
+    { kind: "atlassian-oauth", ...base, site: "x.atlassian.net" },
+  ];
+  for (const view of bad)
+    assert.equal(
+      decodeAtlassianCredential(JSON.stringify(view)),
+      undefined,
+      JSON.stringify(view),
+    );
+  assert.equal(decodeAtlassianCredential("null"), undefined);
+  assert.equal(decodeAtlassianCredential('"text"'), undefined);
+});
+
+test("a check of an OAuth view asks /myself on the fixed Jira base with Bearer", async () => {
+  const seen: { url: string; auth: string | null }[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: URL, init?: RequestInit) => {
+      seen.push({
+        url: String(url),
+        auth: new Headers(init?.headers).get("authorization"),
+      });
+      return new Response(JSON.stringify({ displayName: "Ada" }));
+    }),
+  );
+  const view = decodeAtlassianCredential(JSON.stringify(VIEW))!;
+  assert.deepEqual(await checkAtlassian(view, new AbortController().signal), {
+    ok: true,
+    displayName: "Ada",
+  });
+  assert.deepEqual(seen, [
+    {
+      url: `https://api.atlassian.com/ex/jira/${CLOUD_ID}/rest/api/3/myself`,
+      auth: `Bearer ${FAKE_ACCESS_VIEW}`,
+    },
+  ]);
+});
+
+test("describe names an OAuth view's site only, never its token", () => {
+  const { atlassian } = createEdgeTools({ log: () => {} }).integrations;
+  const text = JSON.stringify(VIEW);
+  assert.deepEqual(atlassian.describe(text), { site: VIEW.site });
+  assert.equal(
+    atlassian.describe(JSON.stringify({ ...VIEW, kind: "other" })),
+    undefined,
+  );
 });

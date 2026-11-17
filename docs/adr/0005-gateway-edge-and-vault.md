@@ -121,10 +121,18 @@ on the edge"):
   process never loads it, and `gateway/` holds no tool code or package: it
   reaches the tools only through the injected `EdgeTools`
   (`gateway/edgeTools.ts`, types only). A boundary test pins both directions.
-- A user's integration credential (the Atlassian API token for the pilot) is a
-  vault record, sealed like a token file. The edge reads it from the vault for
-  one tool call, or one set or status check, and never caches, logs or writes
-  it. Every vault integration call is bounded, and a late answer is dropped.
+- A user's integration credential is a vault record, sealed like a token file:
+  the pilot's Atlassian API token, or an Atlassian OAuth record the vault wrote
+  itself (Task-1411). For an OAuth record the vault holds the confidential
+  client, exchanges the code, does every refresh as the record's only writer and
+  seals each rotated refresh token before answering; the refresh token and the
+  client secret never leave it. The edge gets only a short-lived access token,
+  the cloud id and the site. It reads either from the vault for one tool call,
+  or one set or status check, and never caches, logs or writes it. Every vault
+  integration call is bounded, and a late answer is dropped.
+- An OAuth access token goes only to
+  `https://api.atlassian.com/ex/<product>/ <cloudId>` with a site-relative path,
+  checked before the request; the site makes only browse URLs.
 - The gateway hands tools typed credential outcomes and never builds a tool
   error; only fixed, edge-owned tool texts reach a caller.
 - The MCP endpoint needs the client's certificate and that client's MCP token,
@@ -134,7 +142,9 @@ on the edge"):
   for its agents, so approvals can later wrap write tools there (G5).
 
 The API token reaches the edge in plaintext per call. That is accepted for the
-pilot (M22); OAuth apps (G12) replace it later.
+pilot (M22). OAuth (G12) replaces it where an Atlassian OAuth client is
+configured: then only a short-lived access token reaches the edge. Existing
+API-token records keep working until they are replaced or cleared.
 
 ## Still in force from ADR-0004
 

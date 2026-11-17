@@ -17,6 +17,7 @@ import {
 export type CredentialOutcome =
   | { ok: true; credential: string }
   | { ok: false; absent: true }
+  | { ok: false; rejected: true }
   | { ok: false; locked: true }
   | { ok: false; unavailable: true };
 
@@ -50,6 +51,10 @@ export async function credentialFor(
   if ("absent" in outcome)
     throw new ToolError(
       "Jira is not connected for this user; connect it in Pandeck's Settings.",
+    );
+  if ("rejected" in outcome)
+    throw new ToolError(
+      "Atlassian rejected the credential; reconnect Jira on the gateway's page.",
     );
   if ("locked" in outcome) throw new ToolError("The vault is locked.");
   throw new ToolError("The vault did not answer; try again.");

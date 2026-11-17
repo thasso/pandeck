@@ -542,9 +542,11 @@ export function createSealedStore(
     written,
     discarded(accountId) {
       if (!ID_RE.test(accountId)) return;
-      rmSync(join(sealedDir, accountId), { recursive: true, force: true });
+      // Removal can delete files before throwing: no cached hash may outlive
+      // a possibly discarded record, even when the caller must retry.
       for (const file of SEALED_FILES)
         known.delete(join(accountsDir, accountId, file));
+      rmSync(join(sealedDir, accountId), { recursive: true, force: true });
     },
     sweep,
     flush,

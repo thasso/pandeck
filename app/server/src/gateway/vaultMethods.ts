@@ -1,5 +1,5 @@
 /**
- * `gateway-vault/1.0` (plan Task-1394, ADR-0005): what the edge and a vault
+ * `gateway-vault/1.1` (plan Task-1394, ADR-0005): what the edge and a vault
  * running as its own process send each other over the worker protocol's
  * framing, on mutual TLS where each side trusts exactly the other's
  * self-signed certificate. The edge dials (`remoteVault.ts`); the vault
@@ -19,8 +19,15 @@
  * - `integrations.put {userId, integration, credential}` and
  *   `integrations.clear {userId, integration}` answer `{}`, or fail with
  *   `VAULT_LOCKED`; `integrations.get {userId, integration}` answers
- *   `{record}`, an `IntegrationRecord`. The credential is opaque JSON, at most
- *   `MAX_INTEGRATION_CREDENTIAL` characters (Task-1397).
+ *   `{record}`, an `IntegrationRecord`. A put credential is opaque JSON, at
+ *   most `MAX_INTEGRATION_CREDENTIAL` characters (Task-1397). For an
+ *   Atlassian OAuth record the vault answers the access view instead, or
+ *   `rejected` once Atlassian refused its refresh (Task-1411).
+ * - `integrations.connect {userId, integration, code, redirectUri, site?}`
+ *   (1.1) answers `{connect}`, an `IntegrationConnect`: the vault exchanges
+ *   the code with its own OAuth client, picks the site and stores the sealed
+ *   record. Never a refresh token or the client secret. Fails with
+ *   `VAULT_LOCKED` when locked.
  * - `logins.start {loginId, kind, accountId, tokenFile}` answers `{}`;
  *   `logins.input {loginId, text}` and `logins.cancel {loginId}` answer
  *   `{}`. A cancel also withdraws the run: its credential is never moved in.
@@ -49,7 +56,7 @@ import type {
 } from "../workerProtocol/connection.ts";
 import type { LeaseProvider } from "./leases.ts";
 
-export const GATEWAY_VAULT_VERSION = "gateway-vault/1.0";
+export const GATEWAY_VAULT_VERSION = "gateway-vault/1.1";
 
 const VAULT_VERSION_RE = /^gateway-vault\/(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/;
 
@@ -68,6 +75,7 @@ export const VAULT_METHODS = {
   integrationPut: "integrations.put",
   integrationGet: "integrations.get",
   integrationClear: "integrations.clear",
+  integrationConnect: "integrations.connect",
   loginStart: "logins.start",
   loginInput: "logins.input",
   loginCancel: "logins.cancel",
@@ -132,12 +140,26 @@ export const VAULT_LOCKED = "vault_locked";
 
 /** The file a user's integration credential lives in, in its directory. */
 export const INTEGRATION_FILE = "integration.json";
-export const MAX_INTEGRATION_CREDENTIAL = 4096;
+export const MAX_INTEGRATION_CREDENTIAL = 16_384;
 const INTEGRATIONS = new Set(["atlassian"]);
 
 /** Whether the vault keeps credentials of this integration. */
 export function isIntegration(value: unknown): value is "atlassian" {
   return typeof value === "string" && INTEGRATIONS.has(value);
+}
+
+/** An Atlassian Cloud site's host, lowercase (`<name>.atlassian.net`). */
+const ATLASSIAN_SITE_RE = /^[a-z0-9][a-z0-9-]{0,62}\.atlassian\.net$/;
+const CLOUD_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+export function isAtlassianSite(value: unknown): value is string {
+  return typeof value === "string" && ATLASSIAN_SITE_RE.test(value);
+}
+
+/** An Atlassian cloud id: a lowercase UUID. */
+export function isCloudId(value: unknown): value is string {
+  return typeof value === "string" && CLOUD_ID_RE.test(value);
 }
 
 /**

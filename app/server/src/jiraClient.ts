@@ -5,11 +5,26 @@ import {
   type AtlassianQuery,
 } from "./atlassian/atlassianFetch.ts";
 
+/** An API token (Basic) to the site. */
 export interface JiraApiConfig {
   jiraHost: string;
   atlassianEmail: string;
   atlassianToken: string;
 }
+
+/**
+ * An OAuth access token (Bearer) to the fixed
+ * `api.atlassian.com/ex/jira/<cloudId>` base (`atlassianFetch.ts`, Task-1411);
+ * `jiraHost` is the site and makes only the browse URLs.
+ */
+interface JiraBearerConfig {
+  jiraHost: string;
+  cloudId: string;
+  bearerToken: string;
+}
+
+/** What the calls below take: either credential. */
+export type JiraConfig = JiraApiConfig | JiraBearerConfig;
 
 export interface JiraIssueInfo {
   id: string;
@@ -130,7 +145,7 @@ export interface JiraCallOptions {
 }
 
 export async function jiraGet<T>(
-  config: JiraApiConfig,
+  config: JiraConfig,
   path: string,
   query?: AtlassianQuery,
   options: JiraCallOptions = {},
@@ -142,7 +157,7 @@ export async function jiraGet<T>(
 }
 
 export async function jiraPost<T>(
-  config: JiraApiConfig,
+  config: JiraConfig,
   path: string,
   body: unknown,
   query?: AtlassianQuery,
@@ -152,7 +167,7 @@ export async function jiraPost<T>(
 }
 
 export async function jiraPut<T>(
-  config: JiraApiConfig,
+  config: JiraConfig,
   path: string,
   body: unknown,
   query?: AtlassianQuery,
@@ -161,16 +176,16 @@ export async function jiraPut<T>(
 }
 
 export async function jiraDelete<T>(
-  config: JiraApiConfig,
+  config: JiraConfig,
   path: string,
   query?: AtlassianQuery,
 ): Promise<T> {
   return jiraFetch<T>(config, "DELETE", path, undefined, query);
 }
 
-/** Jira's Basic-auth call, delegating transport and retry policy to the shared Atlassian client. */
+/** Jira's call, delegating transport and retry policy to the shared Atlassian client. */
 async function jiraFetch<T>(
-  config: JiraApiConfig,
+  config: JiraConfig,
   method: "GET" | "POST" | "PUT" | "DELETE",
   path: string,
   body?: unknown,
@@ -178,11 +193,17 @@ async function jiraFetch<T>(
   options: JiraCallOptions = {},
 ): Promise<T> {
   return atlassianFetch<T>(
-    {
-      host: config.jiraHost,
-      atlassianEmail: config.atlassianEmail,
-      atlassianToken: config.atlassianToken,
-    },
+    "bearerToken" in config
+      ? {
+          host: config.jiraHost,
+          cloudId: config.cloudId,
+          bearerToken: config.bearerToken,
+        }
+      : {
+          host: config.jiraHost,
+          atlassianEmail: config.atlassianEmail,
+          atlassianToken: config.atlassianToken,
+        },
     "Jira",
     method,
     path,
@@ -193,13 +214,18 @@ async function jiraFetch<T>(
 }
 
 export async function resolveJiraIssueInfos(
-  config: JiraApiConfig,
+  config: JiraConfig,
   issueIds: string[],
 ): Promise<Map<string, JiraIssueInfo>> {
   const ids = [...new Set(issueIds.filter(Boolean).map(String))];
   const out = new Map<string, JiraIssueInfo>();
   if (ids.length === 0) return out;
-  if (!config.atlassianEmail || !config.atlassianToken) return out;
+  if (
+    "bearerToken" in config
+      ? !config.bearerToken
+      : !config.atlassianEmail || !config.atlassianToken
+  )
+    return out;
 
   await mapLimit(ids, 6, async (id) => {
     const json = await jiraGet<JiraIssueResponse>(
@@ -260,7 +286,7 @@ type JiraCommentsResponse = {
 
 /** The issue's newest comments, as plain text. */
 export async function fetchJiraComments(
-  config: JiraApiConfig,
+  config: JiraConfig,
   issueKey: string,
   maxComments: number,
   options: { signal?: AbortSignal } = {},
