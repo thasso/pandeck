@@ -2334,9 +2334,10 @@ preset).
     with Atlassian (15 s from the check's start) then stores, as
     `integrations.set` does, →
     `{connected: true, kind: "token", connectWith: "token", site, email, displayName?, preset?}`;
-    `POST /api/integrations/atlassian/clear` → 204. While a set or clear of the
-    user runs (from this page, another tab or a client), another is refused
-    `409 integration_busy` and changes nothing; the page itself never sends one
+    `POST /api/integrations/atlassian/clear` → 204. While a set, clear or
+    sign-in callback's connect of the user runs (from this page, another tab or
+    a client), another is refused `409 integration_busy` (a callback:
+    `?atlassian=busy`) and changes nothing; the page itself never sends one
     while its own is pending. The token is write-only: no answer carries it.
     Refusals: `400 integration_invalid`, `422 integration_rejected`,
     `502 integration_unreachable`,

@@ -457,6 +457,47 @@ test.each([...GATEWAY_UI_ATLASSIAN_CONNECT_CODES])(
   },
 );
 
+/** A `pageshow`; jsdom has no `PageTransitionEvent`. */
+async function pageshow(persisted: boolean) {
+  const event = new Event("pageshow");
+  Object.defineProperty(event, "persisted", { value: persisted });
+  await act(async () => window.dispatchEvent(event));
+}
+
+test("Back from Atlassian into the cached page abandons the start; the controls work again", async () => {
+  const p = props({
+    status: ready({ connected: false, connectWith: "oauth" }),
+  });
+  mount(<GatewayAtlassian {...p} />);
+  await act(async () => button("Sign in with Atlassian")!.click());
+  expect(p.navigate).toHaveBeenCalledWith(AUTHORIZE);
+  expect(button("Sign in with Atlassian")!.disabled).toBe(true);
+  // An ordinary load's pageshow is not a return: the start stays.
+  await pageshow(false);
+  expect(button("Sign in with Atlassian")!.disabled).toBe(true);
+  const before = text();
+  await pageshow(true);
+  expect(button("Sign in with Atlassian")!.disabled).toBe(false);
+  // The user went back by choice: no note.
+  expect(text()).toBe(before);
+  await act(async () => button("Sign in with Atlassian")!.click());
+  expect(p.connect).toHaveBeenCalledTimes(2);
+});
+
+test("Back from Atlassian frees a stored record's actions too", async () => {
+  const p = props({ status: ready(OAUTH) });
+  mount(<GatewayAtlassian {...p} />);
+  await choose("Sign in again");
+  expect(p.navigate).toHaveBeenCalledTimes(1);
+  expect(await itemDisabled("Remove credential")).toBe(true);
+  expect(await itemDisabled("Sign in again")).toBe(true);
+  await pageshow(false);
+  expect(await itemDisabled("Remove credential")).toBe(true);
+  await pageshow(true);
+  expect(await itemDisabled("Remove credential")).toBe(false);
+  expect(await itemDisabled("Sign in again")).toBe(false);
+});
+
 test("a page refusal of a new API token reads as such", async () => {
   const p = props({
     save: vi.fn(() =>

@@ -12,7 +12,13 @@
  * callback's result arrives as a fixed code and shows only as its own text;
  * success is silent.
  */
-import { useCallback, useRef, useState, type SyntheticEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type SyntheticEvent,
+} from "react";
 import type {
   GatewayUiAtlassian,
   GatewayUiAtlassianConnectCode,
@@ -158,6 +164,19 @@ export function GatewayAtlassian({
       : status.data?.preset;
   /** The write in flight, set before any re-render can disable a control. */
   const writing = useRef<"save" | "clear" | "start" | null>(null);
+
+  // Back from Atlassian can restore this page from the back/forward cache
+  // with the start still marked pending: the user left Atlassian by choice,
+  // so the start is abandoned without a note and the controls work again.
+  useEffect(() => {
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (!event.persisted || writing.current !== "start") return;
+      writing.current = null;
+      setStarting(false);
+    };
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, []);
 
   const startSignIn = () => {
     if (writing.current) return;
