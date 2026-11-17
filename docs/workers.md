@@ -2163,7 +2163,9 @@ only its own origin with its session cookie.
 `pnpm --filter @assistant/web dev:gateway` serves the page on port 5180 over a
 dev-only fake `/api` and `/auth` (`app/web/gatewayDevApi.ts`, in-memory sample
 data, never in a build; the default shows a deployment that signs in with
-Atlassian, where `/auth/atlassian/callback` finishes a fake sign-in, and
+Atlassian: the plugin also serves its own `src/gateway/navigate.ts`, so "Sign in
+with Atlassian" goes to the dev `/auth/atlassian/callback` instead of Atlassian
+and finishes a fake sign-in without leaving localhost, and
 `GATEWAY_DEV_GENERIC=1` shows the generic gateway with the token form and no
 preset).
 

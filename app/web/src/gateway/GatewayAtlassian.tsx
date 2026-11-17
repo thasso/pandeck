@@ -45,6 +45,7 @@ import {
 import { Input } from "../components/ui/input.tsx";
 import type { LoadState } from "../lib/loadState.ts";
 import { GatewayApiError } from "./gatewayApi.ts";
+import { goTo } from "./navigate.ts";
 import { GatewayRow } from "./GatewayRow.tsx";
 
 export interface GatewayAtlassianProps {
@@ -127,8 +128,6 @@ function refusalText(err: unknown, fallback: string): string {
   const code = err instanceof GatewayApiError ? err.code : undefined;
   return (code && SAVE_TEXT[code]) || fallback;
 }
-
-const goTo = (url: string) => window.location.assign(url);
 
 export function GatewayAtlassian({
   status,

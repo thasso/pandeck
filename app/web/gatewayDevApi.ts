@@ -1,5 +1,25 @@
-import type { Plugin } from "vite";
+import { normalizePath, type Plugin } from "vite";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { fileURLToPath } from "node:url";
+
+/** The page's one way off the page (`src/gateway/navigate.ts`). */
+const NAVIGATE = normalizePath(
+  fileURLToPath(new URL("./src/gateway/navigate.ts", import.meta.url)),
+);
+
+/**
+ * What the dev server serves in its place: instead of Atlassian's authorize
+ * URL, the browser goes to this server's callback with a fake code, as if
+ * Atlassian had answered, and never leaves localhost.
+ */
+export const DEV_NAVIGATE = `export const goTo = (url) => {
+  const state = new URL(url).searchParams.get("state") ?? "";
+  window.location.assign(
+    "/auth/atlassian/callback?" +
+      new URLSearchParams({ code: "FAKE_DEV_CODE", state }),
+  );
+};
+`;
 
 /**
  * DEV ONLY: a fake gateway `/api` and `/auth` for `pnpm dev:gateway`, so the
@@ -93,6 +113,9 @@ export function gatewayDevApi(): Plugin {
   return {
     name: "gateway-dev-api",
     apply: "serve",
+    load(id) {
+      return id.split("?")[0] === NAVIGATE ? DEV_NAVIGATE : null;
+    },
     configureServer(server) {
       const handle = async (
         req: IncomingMessage,
@@ -112,8 +135,9 @@ export function gatewayDevApi(): Plugin {
           res.end();
           return;
         }
-        // Atlassian refuses the fake client id: open this path to finish as
-        // if it had answered (`?atlassian=<code>` replays a failure instead).
+        // The dev page's "Sign in with Atlassian" lands here (`DEV_NAVIGATE`)
+        // and finishes as if Atlassian had answered; open this path with
+        // `?atlassian=<code>` to replay a failure instead.
         if (path === "/auth/atlassian/callback") {
           const code = url.searchParams.get("atlassian");
           if (code === null)
