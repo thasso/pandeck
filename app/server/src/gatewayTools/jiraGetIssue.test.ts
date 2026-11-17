@@ -239,3 +239,41 @@ test("with the vault's OAuth view: the fixed Jira base for the cloud id, Bearer,
   );
   assert.doesNotMatch(answer.text, new RegExp(FAKE_ACCESS_VIEW));
 });
+
+test("a 401 or 403 on the vault's OAuth view says to sign in with Atlassian again on the gateway's page; an API token keeps the Settings text", async () => {
+  setRetrySleepForTests(() => Promise.resolve());
+  const view = JSON.stringify({
+    kind: "atlassian-oauth",
+    site: "castlabs-test.atlassian.net",
+    cloudId: "00000000-0000-4000-8000-00000000fa4e",
+    accessToken: FAKE_ACCESS,
+    expiresAt: 1_900_000_000_000,
+  });
+  const host = createToolHost(EDGE_TOOLS, { log: () => {} });
+  for (const status of [401, 403]) {
+    stubFetch(() => new Response(`echo ${FAKE_ACCESS}`, { status }));
+    const oauth = await host.call(
+      "jira_get_issue",
+      { issue: "OPS-1" },
+      {
+        clientId: "client-1",
+        credential: () => Promise.resolve({ ok: true, credential: view }),
+      },
+    );
+    assert.deepEqual(oauth, {
+      ok: false,
+      code: "tool_error",
+      message:
+        "Atlassian rejected the credential; sign in with Atlassian again on the gateway's page.",
+    });
+    assert.doesNotMatch(JSON.stringify(oauth), new RegExp(FAKE_ACCESS));
+    stubFetch(() => new Response("", { status }));
+    const token = await host.call("jira_get_issue", { issue: "OPS-1" }, caller);
+    assert.deepEqual(token, {
+      ok: false,
+      code: "tool_error",
+      message:
+        "Atlassian rejected the credential; reconnect Jira in Pandeck's Settings.",
+    });
+  }
+});

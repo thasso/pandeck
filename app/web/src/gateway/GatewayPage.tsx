@@ -32,6 +32,8 @@ export type GatewayPageState =
       signin?: GatewayUiSigninCode;
       /** A machine's enrollment link was opened; it waits for sign-in. */
       enrollmentWaiting?: boolean;
+      /** Atlassian answered after the gateway session had ended. */
+      atlassianSignedOut?: boolean;
     }
   | { kind: "signedIn"; me: GatewayUiMe }
   | { kind: "unavailable" };
@@ -44,6 +46,10 @@ const SIGNIN_TEXT: Record<GatewayUiSigninCode, string> = {
   failed: "The sign-in did not complete. Try again.",
   busy: "The gateway has too many sign-ins right now. Try again in a few minutes.",
 };
+
+/** The one Atlassian callback code shown signed out (Task-1411). */
+const ATLASSIAN_SIGNED_OUT_TEXT =
+  "Your gateway session ended before Atlassian answered. Sign in, then use Sign in with Atlassian again.";
 
 export interface GatewayPageProps {
   state: GatewayPageState;
@@ -119,6 +125,9 @@ export function GatewayPage({
             <CardContent className="flex flex-col gap-3">
               {state.signin ? (
                 <ErrorNote message={SIGNIN_TEXT[state.signin]} />
+              ) : null}
+              {state.atlassianSignedOut ? (
+                <ErrorNote message={ATLASSIAN_SIGNED_OUT_TEXT} />
               ) : null}
               <p className="text-sm text-muted-foreground">
                 {state.enrollmentWaiting

@@ -194,8 +194,9 @@ function settingsRefusal(err: unknown): never {
 }
 
 /**
- * What the page shows of a credential: site, email, Atlassian's display name
- * and a stored record's problem; never the account id or the token.
+ * What the page shows of a credential: its kind, site, email, Atlassian's
+ * display name and a stored record's problem, and how a new connection is
+ * made; never the account id or the token.
  */
 function browserAtlassian(
   status: AtlassianStatus,
@@ -204,13 +205,18 @@ function browserAtlassian(
     "problem" in status &&
     (status.problem === "vault_locked" ||
       status.problem === "vault_unavailable" ||
-      status.problem === "invalid")
+      status.problem === "invalid" ||
+      status.problem === "rejected")
       ? status.problem
       : undefined;
   return {
     connected: status.connected,
+    ...(status.kind !== undefined ? { kind: status.kind } : {}),
+    connectWith: status.connectWith,
     ...(status.site !== undefined ? { site: status.site } : {}),
-    ...(status.email !== undefined ? { email: status.email } : {}),
+    ...("email" in status && status.email !== undefined
+      ? { email: status.email }
+      : {}),
     ...("displayName" in status && status.displayName !== undefined
       ? { displayName: status.displayName }
       : {}),
@@ -230,6 +236,10 @@ function webIntegrations(operations: UserOperations): GatewayWebIntegrations {
         .setAtlassian(userId, input)
         .then(browserAtlassian, settingsRefusal),
     clear: (userId) => operations.clearAtlassian(userId).catch(settingsRefusal),
+    connect: (userId, request) =>
+      operations
+        .connectAtlassian(userId, request)
+        .then(browserAtlassian, settingsRefusal),
   };
 }
 
@@ -357,6 +367,11 @@ export async function startEdge(
       // The page approves enrollment requests, so only with it may machines
       // start them; the link they show points at it.
       ...(ui ? { approvalOrigin: ui.publicOrigin } : {}),
+      // D2: with an Atlassian OAuth client the page is the only way to
+      // connect Jira; new API tokens are refused on page and client.
+      ...(ui?.atlassian?.clientId !== undefined
+        ? { atlassianSignIn: true }
+        : {}),
     },
     ...(vault
       ? { vault }

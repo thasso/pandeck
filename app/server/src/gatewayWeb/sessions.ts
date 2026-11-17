@@ -4,7 +4,6 @@
  * edge restart forgets both, which signs everyone out.
  */
 import { createHash, randomBytes } from "node:crypto";
-import type { AuthorizationRequest } from "./oidc.ts";
 
 const MAX_PENDING = 256;
 export const PENDING_TTL_MS = 10 * 60_000;
@@ -17,51 +16,47 @@ function token(): string {
   return randomBytes(32).toString("base64url");
 }
 
-interface Pending {
-  signinId: string;
-  request: AuthorizationRequest;
+interface Pending<T> {
+  cookieId: string;
+  value: T;
   createdAt: number;
 }
 
-/** What a callback's state and sign-in cookie lead to. */
-export type PendingTake =
-  | { kind: "ok"; request: AuthorizationRequest }
-  | { kind: "expired" }
-  | { kind: "failed" };
+/** What a callback's state and pending cookie lead to. */
+export type PendingTake<T> =
+  { kind: "ok"; value: T } | { kind: "expired" } | { kind: "failed" };
 
 /**
- * Sign-ins between `/auth/login` and `/auth/callback`, keyed by their state
- * and bound to the browser by the `__Host-pgw_signin` cookie's id. Each is
- * used once: any callback naming its state removes it.
+ * Redirects waiting for their callback, keyed by their state and bound to the
+ * browser by a `__Host-` cookie's id: sign-ins between `/auth/login` and
+ * `/auth/callback` (`__Host-pgw_signin`), Atlassian connects between their
+ * start and `/auth/atlassian/callback` (`__Host-pgw_atlassian`). Each is used
+ * once: any callback naming its state removes it.
  */
-export class PendingSignins {
-  private readonly entries = new Map<string, Pending>();
+export class PendingRedirects<T> {
+  private readonly entries = new Map<string, Pending<T>>();
 
   constructor(private readonly now: () => number) {}
 
-  /** The browser's sign-in id for `request`, or undefined when full. */
-  add(request: AuthorizationRequest): string | undefined {
+  /** The browser's cookie id for `state`, or undefined when full. */
+  add(state: string, value: T): string | undefined {
     if (this.entries.size >= MAX_PENDING) this.sweep();
     if (this.entries.size >= MAX_PENDING) return undefined;
-    const signinId = token();
-    this.entries.set(request.state, {
-      signinId,
-      request,
-      createdAt: this.now(),
-    });
-    return signinId;
+    const cookieId = token();
+    this.entries.set(state, { cookieId, value, createdAt: this.now() });
+    return cookieId;
   }
 
-  take(state: string | null, signinId: string | undefined): PendingTake {
+  take(state: string | null, cookieId: string | undefined): PendingTake<T> {
     const entry = state === null ? undefined : this.entries.get(state);
     if (entry) this.entries.delete(state!);
     // Without its cookie the browser dropped it (Max-Age is the TTL) or never
-    // started this sign-in; either way, start again.
-    if (signinId === undefined) return { kind: "expired" };
-    if (!entry || entry.signinId !== signinId) return { kind: "failed" };
+    // started this redirect; either way, start again.
+    if (cookieId === undefined) return { kind: "expired" };
+    if (!entry || entry.cookieId !== cookieId) return { kind: "failed" };
     if (this.now() - entry.createdAt >= PENDING_TTL_MS)
       return { kind: "expired" };
-    return { kind: "ok", request: entry.request };
+    return { kind: "ok", value: entry.value };
   }
 
   private sweep(): void {

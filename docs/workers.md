@@ -2055,8 +2055,10 @@ host and a standalone MCP endpoint, and the first tool, `jira_get_issue`.
   bounded at 8 s; no answer, log line or refusal holds provider text, a token, a
   code or the secret. API-token records stay opaque and are answered verbatim;
   only connect creates an OAuth record, so an edge cannot plant a refresh token
-  through a put. No route starts a connect yet: "Sign in with Atlassian" on the
-  gateway's page is the next slice, so nothing changes for current users.
+  through a put. "Sign in with Atlassian" on the gateway's page starts every
+  connect (Task-1411, "The gateway's sign-in and UI"); the edge hands the
+  callback's code and redirect URI to the vault, which exchanges, picks the site
+  and stores the record.
 - **Rotation recovery.** Sealing is best-effort, as for every vault writer: the
   rename can succeed while the seal fails (logged, the sweep retries), or the
   vault can die between the two. The rotated record then exists only in the
@@ -2094,20 +2096,26 @@ host and a standalone MCP endpoint, and the first tool, `jira_get_issue`.
   credential with Atlassian (`/rest/api/3/myself`, 15 s from the check's start)
   and stores it; `integrations.clear {integration}`;
   `integrations.status {integration, check?}` answers
-  `{connected, site?, email?, displayName?, accountId?, problem?}`, never a
-  token: an OAuth record has a site and no email, and a refused refresh is
-  `{connected: false, problem: "rejected"}` (the page shows it as not connected
-  until its next slice); with `check` an OAuth record is checked with Bearer at
-  `/rest/api/3/myself` on the fixed Jira base. Failures carry fixed codes and
-  texts: `integration_invalid`, `integration_rejected`,
+  `{connected, kind?, connectWith, site?, email?, displayName?, accountId?, problem?}`,
+  never a token: `kind` (`token` or `oauth`) whenever a record is stored, and
+  `connectWith` how the gateway makes a new connection (`oauth` where the edge's
+  UI config names `atlassian.clientId`, else `token`). An OAuth record has a
+  site and no email, and a refused refresh is
+  `{connected: false, kind: "oauth", problem: "rejected"}`; with `check` an
+  OAuth record is checked with Bearer at `/rest/api/3/myself` on the fixed Jira
+  base. Where `connectWith` is `oauth`, `integrations.set` is refused
+  `integration_sign_in_required` ("This gateway connects Jira only with Sign in
+  with Atlassian on its page.") before anything else, and an existing API-token
+  record keeps working until it is replaced or cleared. Failures carry fixed
+  codes and texts: `integration_invalid`, `integration_rejected`,
   `integration_unreachable`, `vault_locked`, `vault_unavailable`,
-  `tools_unavailable`, `integration_busy`. One set or clear runs per user at a
-  time, from any client or the gateway page (`userOperations.ts`); another
-  meanwhile is refused `integration_busy` ("Another change to this credential is
-  still running. Try again.") at once and changes nothing, so an earlier set can
-  never land after a later clear. A status is never refused. Pandeck's Settings
-  shows its own text for each code (`remoteIntegrations.ts`), `integration_busy`
-  included.
+  `tools_unavailable`, `integration_busy`, `integration_sign_in_required`. One
+  set, clear or connect runs per user at a time, from any client or the gateway
+  page (`userOperations.ts`); another meanwhile is refused `integration_busy`
+  ("Another change to this credential is still running. Try again.") at once and
+  changes nothing, so an earlier set can never land after a later clear. A
+  status is never refused. Pandeck's Settings shows its own text for each code
+  (`remoteIntegrations.ts`), `integration_busy` included.
 - **Tool calls** (`gateway-client/1.0`, additive, Task-1398), the client's
   second adapter over the same host: `tools.list {}` answers `{tools}`, each
   `{name, description, inputSchema, effect, actionKey}`;
@@ -2130,7 +2138,15 @@ host and a standalone MCP endpoint, and the first tool, `jira_get_issue`.
   `credentialStore: "gateway"`. Agents read Jira through the gateway's tools
   ("Gateway tools" under Client mode). Pandeck's non-agent Jira features
   (linked-ticket and Tempo enrichment, `isJiraConfigured`) have no credential in
-  client mode until a later slice (D3, Task-1399).
+  client mode until a later slice (D3, Task-1399). Against a gateway that
+  answers `connectWith: "oauth"`, Settings reports `gatewaySignIn: true` and
+  `gatewayKind`, shows no email or token field, and keeps enable with "Save and
+  test" (only `enabled` is sent, then the connection test, which also runs when
+  the card opens; no separate Test button) and Clear while a record is stored, a
+  refused OAuth record included (a status naming a site or a `kind` counts as
+  stored); a clear keeps the gateway's last `connectWith` until a later status
+  says otherwise, also when that read fails. Users connect on the gateway's
+  page.
 
 #### The gateway's sign-in and UI
 
@@ -2146,7 +2162,12 @@ the user's Claude and ChatGPT accounts, Jira credential and clients, and reaches
 only its own origin with its session cookie.
 `pnpm --filter @assistant/web dev:gateway` serves the page on port 5180 over a
 dev-only fake `/api` and `/auth` (`app/web/gatewayDevApi.ts`, in-memory sample
-data, never in a build; `GATEWAY_DEV_GENERIC=1` drops the Atlassian preset).
+data, never in a build; the default shows a deployment that signs in with
+Atlassian: the plugin also serves its own `src/gateway/navigate.ts`, so "Sign in
+with Atlassian" goes to the dev `/auth/atlassian/callback` instead of Atlassian
+and finishes a fake sign-in without leaving localhost, and
+`GATEWAY_DEV_GENERIC=1` shows the generic gateway with the token form and no
+preset).
 
 - **Config.** One JSON file, refused unless mode 0600 (no group or other bits),
   so the client secret stays out of argv. Every refusal is a fixed message
@@ -2183,7 +2204,19 @@ data, never in a build; `GATEWAY_DEV_GENERIC=1` drops the Atlassian preset).
   and the `hd` claim. An optional
   `"atlassian": {"site": "team.atlassian.net", "emailFromSignIn": true}` fixes
   every user's Atlassian site and, with `emailFromSignIn`, binds the credential
-  to the email the user signed in with; either may be given alone.
+  to the email the user signed in with; either may be given alone. With
+  `atlassian.clientId` (the Atlassian OAuth 2.0 (3LO) app's id; Task-1411) the
+  page connects Jira only with "Sign in with Atlassian" ("Atlassian sign-in"
+  below); the client secret stays with the vault ("OAuth client config" under
+  Credentials). `atlassian.scopes` overrides the scopes asked for: a list of at
+  most 64, each 1-128 printable characters without spaces, duplicates dropped,
+  refused with a fixed text naming only the field. Without it the gateway asks
+  for `read:jira-work`, `write:jira-work`, `read:jira-user`,
+  `read:servicedesk-request`, `write:servicedesk-request`,
+  `read:confluence-content.all` and `write:confluence-content`; either way it
+  adds `offline_access`, so the vault gets a refresh token. The Atlassian app
+  needs the callback `<publicOrigin>/auth/atlassian/callback` and every scope
+  asked for.
 
 - **Allow rule.** Admitted only when `email_verified` is the boolean `true`,
   `email` is a string whose lowercased address is in `emails` or whose domain is
@@ -2287,24 +2320,68 @@ data, never in a build; `GATEWAY_DEV_GENERIC=1` drops the Atlassian preset).
   `GatewayWebClients` adapters in `gatewayEdge.ts`
   (`gatewayWeb/integrations.ts`, `gatewayWeb/clients.ts`):
   - `GET /api/integrations/atlassian` →
-    `{connected, site?, email?, problem?, preset?}` with `problem` one of
-    `vault_locked`, `vault_unavailable`, `invalid`; no live check. `preset`
-    (`{site?, email?}`) is what the config's `atlassian` fixes, and in it the
-    signed-in user's email; it is on every answer of this route and of a set. A
-    set uses the preset's values whatever the request says, and a preset bound
-    to the sign-in for a user with no email answers `503 unavailable`. The page
-    shows no field for a preset value.
-    `POST /api/integrations/atlassian/set {site, email, token}` checks with
-    Atlassian (15 s from the check's start) then stores, as `integrations.set`
-    does, → `{connected: true, site, email, displayName?}`;
-    `POST /api/integrations/atlassian/clear` → 204. While a set or clear of the
-    user runs (from this page, another tab or a client), another is refused
-    `409 integration_busy` and changes nothing; the page itself never sends one
+    `{connected, kind?, connectWith, site?, email?, problem?, preset?}` with
+    `kind` (`token` or `oauth`) whenever a record is stored, `connectWith`
+    `oauth` where the config names `atlassian.clientId` (else `token`), and
+    `problem` one of `vault_locked`, `vault_unavailable`, `invalid`, `rejected`
+    (Atlassian refused an OAuth record's refresh; the record stays until a new
+    sign-in or a clear); no live check. `preset` (`{site?, email?}`) is what the
+    config's `atlassian` fixes, and in it the signed-in user's email; it is on
+    every answer of this route and of a set. A set uses the preset's values
+    whatever the request says, and a preset bound to the sign-in for a user with
+    no email answers `503 unavailable`. The page shows no field for a preset
+    value. `POST /api/integrations/atlassian/set {site, email, token}` checks
+    with Atlassian (15 s from the check's start) then stores, as
+    `integrations.set` does, →
+    `{connected: true, kind: "token", connectWith: "token", site, email, displayName?, preset?}`;
+    `POST /api/integrations/atlassian/clear` → 204. While a set, clear or
+    sign-in callback's connect of the user runs (from this page, another tab or
+    a client), another is refused `409 integration_busy` (a callback:
+    `?atlassian=busy`) and changes nothing; the page itself never sends one
     while its own is pending. The token is write-only: no answer carries it.
     Refusals: `400 integration_invalid`, `422 integration_rejected`,
     `502 integration_unreachable`,
     `503 vault_locked|vault_unavailable|tools_unavailable`,
-    `409 integration_busy`.
+    `409 integration_busy`, and where `connectWith` is `oauth`
+    `409 integration_sign_in_required` before anything else: such a page shows
+    no token form, and an API-token record stored earlier keeps working,
+    labelled "API token", until a sign-in replaces it or a clear removes it.
+  - **Atlassian sign-in** (Task-1411), only where the config names
+    `atlassian.clientId` (else both routes are `404`):
+    `POST /api/integrations/atlassian/connect {}` behind the session and the
+    mutation gate → `{authorizeUrl}`, Atlassian's
+    `https://auth.atlassian.com/authorize` with `audience=api.atlassian.com`,
+    the client id, the scopes,
+    `redirect_uri=<publicOrigin>/auth/atlassian/callback`, a fresh `state` (32
+    random bytes), `response_type=code` and `prompt=consent` (no PKCE: the vault
+    exchanges with its secret). The answer sets `__Host-pgw_atlassian`
+    (attributes as the session cookie, 10 minutes); the state waits at most 10
+    minutes, one of at most 256 (else `503 unavailable`), bound to that cookie
+    and to the session's user. The state is in that `authorizeUrl` and nowhere
+    else: no cookie, log line, refusal or redirect carries it.
+    `GET /auth/atlassian/callback` takes the state first (one use, whatever
+    follows), then needs the session (else `signed_out`), an unexpired entry
+    (`expired`), the same cookie and user (`failed`), no `error` parameter
+    (`access_denied` is `denied`, any other `failed`, its text never read) and a
+    printable `code` of at most 2,048 characters (`failed`). Only then does the
+    code go, with the same redirect URI and the preset `site` if any, to the
+    vault's connect (`UserOperations.connectAtlassian`, one per user at a time
+    with set and clear), while the socket idles up to 40 s (above the remote
+    vault's 30 s connect bound; the 10 s bound is back before the answer). It
+    answers `303 /` on success, else `303 /?atlassian=<code>` with `code` one of
+    `rejected`, `unreachable`, `site_missing`, `site_ambiguous`,
+    `not_configured`, `vault_locked`, `vault_unavailable`, `busy`,
+    `tools_unavailable`, `signed_out`, `expired`, `failed`, `denied`; both clear
+    the cookie and say `no-store`. A `vault_unavailable` may still have stored
+    the record (the vault's unknown-result rule); the next status shows it. Log
+    lines are `ui atlassian connect: started|ok user=<id>`,
+    `refused, busy user=<id>` and `failed (<code>|state)[ user=<id>]`. The page
+    reads `?atlassian=` once at load and removes it from the address; an unknown
+    value is ignored, never shown. Signed in, the Jira section shows the code's
+    fixed text until the user acts; signed out, only `signed_out` shows, on the
+    sign-in card. Success is silent. Pending sign-ins are in memory, so an edge
+    restart between start and callback answers `failed` or `expired`, and the
+    user starts again.
   - `GET /api/clients` → `{clients: [{id, label, createdAt, mcpToken}]}`, the
     user's clients that are not revoked, `mcpToken` a boolean.
     `POST /api/clients/code {label}` → `{code, validForSeconds: 900}`;

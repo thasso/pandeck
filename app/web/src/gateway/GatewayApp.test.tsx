@@ -135,6 +135,7 @@ test("signed in: Accounts, Jira and Clients each load; signed out none is fetche
             connected: true,
             site: "x.atlassian.net",
             email: "p@example.org",
+            connectWith: "token",
           }),
         );
       case "/api/clients":
@@ -165,4 +166,68 @@ test("signed in: Accounts, Jira and Clients each load; signed out none is fetche
   expect(sections).toEqual(["Accounts", "Jira", "Clients"]);
   expect(host.textContent).toContain("x.atlassian.net");
   expect(host.textContent).toContain("Laptop");
+});
+
+// --- the Atlassian callback's code (Task-1411, AC8) --------------------------
+
+/** Signed in with nothing stored on a gateway that signs in with Atlassian. */
+function signedInRoutes() {
+  fetchMock.mockImplementation((input) => {
+    switch (String(input)) {
+      case "/api/me":
+        return Promise.resolve(
+          answer(200, {
+            userId: "u_abc",
+            email: "p@example.org",
+            label: "p@example.org",
+          }),
+        );
+      case "/api/accounts":
+        return Promise.resolve(answer(200, { accounts: [] }));
+      case "/api/integrations/atlassian":
+        return Promise.resolve(
+          answer(200, { connected: false, connectWith: "oauth" }),
+        );
+      case "/api/clients":
+        return Promise.resolve(answer(200, { clients: [] }));
+      default:
+        return Promise.resolve(answer(404, { error: "not_found" }));
+    }
+  });
+}
+
+const jiraSection = () => host.querySelector('section[aria-label="Jira"]');
+
+test("signed in, a kept ?atlassian= code shows in the Jira section and leaves the address", async () => {
+  signedInRoutes();
+  await render("/?atlassian=site_ambiguous");
+  expect(window.location.pathname + window.location.search).toBe("/");
+  expect(jiraSection()?.textContent).toContain(
+    "Your Atlassian sign-in includes more than one Jira site",
+  );
+});
+
+test("an unknown ?atlassian= value is dropped unshown and leaves the address", async () => {
+  signedInRoutes();
+  await render("/?atlassian=bogus");
+  expect(window.location.pathname + window.location.search).toBe("/");
+  expect(jiraSection()).not.toBeNull();
+  expect(host.textContent).not.toContain("bogus");
+  expect(host.querySelector('[role="alert"]')).toBeNull();
+});
+
+test("signed out, ?atlassian=signed_out shows on the sign-in card; other codes do not", async () => {
+  fetchMock.mockResolvedValueOnce(answer(401, { error: "signed_out" }));
+  await render("/?atlassian=signed_out");
+  expect(window.location.pathname + window.location.search).toBe("/");
+  expect(host.textContent).toContain(
+    "Your gateway session ended before Atlassian answered. Sign in, then use Sign in with Atlassian again.",
+  );
+  expect(host.querySelector("a")?.getAttribute("href")).toBe("/auth/login");
+  act(() => root?.unmount());
+
+  fetchMock.mockResolvedValueOnce(answer(401, { error: "signed_out" }));
+  await render("/?atlassian=site_missing");
+  expect(window.location.pathname + window.location.search).toBe("/");
+  expect(host.querySelector('[role="alert"]')).toBeNull();
 });

@@ -346,7 +346,7 @@ test("a write while the gateway runs another for the user: integration_busy reac
             string,
             string
           >;
-          return site && email ? { site, email } : undefined;
+          return site && email ? { site, email, kind: "token" } : undefined;
         },
       },
     },

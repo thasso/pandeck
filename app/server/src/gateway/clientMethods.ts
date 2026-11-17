@@ -29,13 +29,19 @@
  *
  * - `integrations.set {integration, site, email, token}` checks the
  *   credential with the integration and stores it in the vault; answers
- *   `{connected: true, site, email, displayName?, accountId?}`.
+ *   `{connected: true, kind: "token", site, email, displayName?,
+ *   accountId?, connectWith}`. A gateway whose page offers "Sign in with
+ *   Atlassian" (Task-1411) refuses every set `integration_sign_in_required`.
  * - `integrations.clear {integration}` answers `{}`.
- * - `integrations.status {integration, check?}` answers `{connected, site?,
- *   email?, displayName?, accountId?, problem?}`: `site` whenever a
- *   credential is stored, `email` for an API token (an OAuth record has none),
- *   and with `check` whether it works; `problem: "rejected"` also when the
- *   vault's OAuth refresh was refused. Never a token.
+ * - `integrations.status {integration, check?}` answers `{connected, kind?,
+ *   site?, email?, displayName?, accountId?, problem?, connectWith}`: `kind`
+ *   (`token` or `oauth`) and `site` whenever a credential is stored, `email`
+ *   for an API token (an OAuth record has none), and with `check` whether it
+ *   works; `problem: "rejected"` with `kind: "oauth"` also when the vault's
+ *   OAuth refresh was refused. Never a token.
+ * - `connectWith` on both says how this gateway makes a new connection:
+ *   `oauth` on its page, or `token` through `integrations.set`. An older edge
+ *   answers without it or `kind`.
  *
  * The edge's tools (Task-1398), run with the client's user's credential:
  *
@@ -114,6 +120,8 @@ const INTEGRATION_FAILURES = {
   tools_unavailable: "This gateway runs no tools.",
   integration_busy:
     "Another change to this credential is still running. Try again.",
+  integration_sign_in_required:
+    "This gateway connects Jira only with Sign in with Atlassian on its page.",
 } as const;
 export type IntegrationFailure = keyof typeof INTEGRATION_FAILURES;
 
@@ -142,8 +150,16 @@ const INTEGRATION_PROBLEMS = new Set<string>([
   "failed",
 ]);
 
+type IntegrationKind = "token" | "oauth";
+const isIntegrationKind = (value: unknown): value is IntegrationKind =>
+  value === "token" || value === "oauth";
+
 export interface IntegrationStatus {
   connected: boolean;
+  /** How the stored credential was made; absent from an older edge. */
+  kind?: IntegrationKind;
+  /** How the gateway makes a new connection; absent from an older edge. */
+  connectWith?: IntegrationKind;
   site?: string;
   email?: string;
   displayName?: string;
@@ -330,6 +346,10 @@ export function decodeIntegrationStatus(payload: Payload): IntegrationStatus {
       : undefined;
   return {
     connected: answer.connected,
+    ...(isIntegrationKind(answer.kind) ? { kind: answer.kind } : {}),
+    ...(isIntegrationKind(answer.connectWith)
+      ? { connectWith: answer.connectWith }
+      : {}),
     ...(site !== undefined ? { site } : {}),
     ...(email !== undefined ? { email } : {}),
     ...(displayName !== undefined ? { displayName } : {}),

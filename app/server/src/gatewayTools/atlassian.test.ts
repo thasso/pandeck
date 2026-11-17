@@ -102,13 +102,14 @@ test("a check maps 401 to rejected and a network failure to unreachable, with no
   assert.deepEqual(seen, ["https://x.atlassian.net/rest/api/3/myself"]);
 });
 
-test("describe names the site and email, never the token", () => {
+test("describe names an API token's kind, site and email, never the token", () => {
   const { atlassian } = createEdgeTools({ log: () => {} }).integrations;
   const parsed = atlassian.parse({ ...base, site: "x.atlassian.net" });
   assert.ok(parsed.ok);
   assert.deepEqual(atlassian.describe(parsed.credential), {
     site: "x.atlassian.net",
     email: base.email,
+    kind: "token",
   });
   assert.doesNotMatch(
     JSON.stringify(atlassian.describe(parsed.credential)),
@@ -203,10 +204,13 @@ test("a check of an OAuth view asks /myself on the fixed Jira base with Bearer",
   ]);
 });
 
-test("describe names an OAuth view's site only, never its token", () => {
+test("describe names an OAuth view's kind and site only, never its token", () => {
   const { atlassian } = createEdgeTools({ log: () => {} }).integrations;
   const text = JSON.stringify(VIEW);
-  assert.deepEqual(atlassian.describe(text), { site: VIEW.site });
+  assert.deepEqual(atlassian.describe(text), {
+    site: VIEW.site,
+    kind: "oauth",
+  });
   assert.equal(
     atlassian.describe(JSON.stringify({ ...VIEW, kind: "other" })),
     undefined,

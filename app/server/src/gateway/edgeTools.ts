@@ -79,12 +79,12 @@ export interface EdgeTools {
       /** Asks Atlassian whether the stored credential works. */
       check(credential: string, signal: AbortSignal): Promise<IntegrationCheck>;
       /**
-       * The site of a stored credential, and the email of an API token;
-       * never a token.
+       * The kind and site of a stored credential, and the email of an API
+       * token; never a token.
        */
       describe(
         credential: string,
-      ): { site: string; email?: string } | undefined;
+      ): { site: string; email?: string; kind: "token" | "oauth" } | undefined;
     };
   };
 }

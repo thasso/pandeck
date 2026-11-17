@@ -4,6 +4,9 @@ import {
   gatewayUiAtlassianConnected,
   gatewayUiAtlassianLocked,
   gatewayUiAtlassianNotSet,
+  gatewayUiAtlassianSignedIn,
+  gatewayUiAtlassianSignInNotSet,
+  gatewayUiAtlassianSignInRejected,
 } from "../../fixtures/gatewayUi.ts";
 
 /** Every action is inert in the preview. */
@@ -14,6 +17,8 @@ const meta = {
     status: { status: "ready", data: gatewayUiAtlassianNotSet },
     save: () => Promise.resolve(gatewayUiAtlassianConnected),
     clear: () => Promise.resolve(),
+    connect: () => new Promise<string>(() => {}),
+    navigate: () => {},
   },
   decorators: [
     (Story) => (
@@ -36,4 +41,21 @@ export const VaultLocked: Story = {
 };
 export const Error: Story = {
   args: { status: { status: "error", error: "unavailable" } },
+};
+export const SignInNotSet: Story = {
+  args: { status: { status: "ready", data: gatewayUiAtlassianSignInNotSet } },
+};
+export const SignedIn: Story = {
+  args: { status: { status: "ready", data: gatewayUiAtlassianSignedIn } },
+};
+export const SignInRejected: Story = {
+  args: {
+    status: { status: "ready", data: gatewayUiAtlassianSignInRejected },
+  },
+};
+export const SignInCallbackFailed: Story = {
+  args: {
+    status: { status: "ready", data: gatewayUiAtlassianSignInNotSet },
+    callback: "site_missing",
+  },
 };

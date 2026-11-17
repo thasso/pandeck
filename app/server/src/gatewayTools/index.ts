@@ -28,7 +28,9 @@ interface AtlassianIntegration {
     | { ok: true; credential: string; site: string; email: string }
     | { ok: false };
   check(credential: string, signal: AbortSignal): Promise<AtlassianCheck>;
-  describe(credential: string): { site: string; email?: string } | undefined;
+  describe(
+    credential: string,
+  ): { site: string; email?: string; kind: "token" | "oauth" } | undefined;
 }
 
 export interface EdgeToolSet {

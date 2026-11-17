@@ -3,7 +3,9 @@
  * gateway's sign-in and UI"): HTTPS with the deployment's certificate, OIDC
  * sign-in, in-memory sessions, `/api/me`, the user's accounts and logins
  * (`/api/accounts*`, `/api/logins*`, over the injected `GatewayWebAccounts`),
- * the Atlassian credential (`/api/integrations/*`, `GatewayWebIntegrations`),
+ * the Atlassian credential (`/api/integrations/*`, `GatewayWebIntegrations`;
+ * with an Atlassian OAuth client, "Sign in with Atlassian": a POST start
+ * answering the authorize URL and `/auth/atlassian/callback`, Task-1411),
  * clients and MCP tokens (`/api/clients*`, `GatewayWebClients`), machines'
  * enrollment requests (`/api/enrollments/*`, Task-1410: looked up and decided
  * by user code under a per-user and global budget, `enrollmentBudget.ts`) and
@@ -15,11 +17,13 @@
  * cancelled. Expired sessions are swept on every request and every 60 s.
  *
  * The user comes only from the session, the session only from a validated
- * callback. Mutations need `Origin` equal to the public origin and the
- * `x-gateway-ui: 1` header. Refusals and log lines are fixed: no email, code,
- * state, nonce, verifier, token, cookie, secret or query reaches either, nor a
- * redirect the gateway sends back to itself.
+ * callback, the Atlassian callback included. Mutations need `Origin` equal to
+ * the public origin and the `x-gateway-ui: 1` header. Refusals and log lines
+ * are fixed: no email, code, state, nonce, verifier, token, cookie, secret or
+ * query reaches either, nor a redirect the gateway sends back to itself. An
+ * Atlassian state appears only in the `authorizeUrl` of its start's answer.
  */
+import { randomBytes } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import https from "node:https";
@@ -28,6 +32,8 @@ import {
   GATEWAY_UI_CSRF_HEADER,
   type GatewayUiAccounts,
   type GatewayUiAtlassian,
+  type GatewayUiAtlassianConnectCode,
+  type GatewayUiAtlassianConnectStart,
   type GatewayUiAtlassianPreset,
   type GatewayUiClients,
   type GatewayUiEnrollmentCode,
@@ -63,16 +69,22 @@ import {
 import { EnrollmentBudget } from "./enrollmentBudget.ts";
 import { admittedEmail, type GatewayWebConfig } from "./config.ts";
 import {
+  atlassianAuthorizeUrl,
   decodeAtlassianSet,
   IntegrationsRefusal,
   type GatewayWebIntegrations,
   type IntegrationsRefusalCode,
 } from "./integrations.ts";
-import { createOidcClient, OidcFailure, type OidcTestOptions } from "./oidc.ts";
+import {
+  createOidcClient,
+  OidcFailure,
+  type AuthorizationRequest,
+  type OidcTestOptions,
+} from "./oidc.ts";
 import {
   ABSOLUTE_MS,
   PENDING_TTL_MS,
-  PendingSignins,
+  PendingRedirects,
   Sessions,
   type SessionRef,
 } from "./sessions.ts";
@@ -80,6 +92,12 @@ import type { GatewayWebUsers } from "./users.ts";
 
 const SESSION_COOKIE = "__Host-pgw_session";
 const SIGNIN_COOKIE = "__Host-pgw_signin";
+/** Binds a "Sign in with Atlassian" start to its browser (Task-1411). */
+const ATLASSIAN_COOKIE = "__Host-pgw_atlassian";
+const ATLASSIAN_CONNECT_PATH = "/api/integrations/atlassian/connect";
+const ATLASSIAN_CALLBACK_PATH = "/auth/atlassian/callback";
+/** Atlassian's authorization codes are far shorter; printable ASCII only. */
+const ATLASSIAN_CODE = /^[\x21-\x7e]{1,2048}$/;
 const MAX_CONNECTIONS = 64;
 const MAX_BODY_BYTES = 1_024;
 /** Claude's pasted code: up to 8,192 characters, JSON-quoted. */
@@ -96,6 +114,12 @@ const IDLE_MS = 10_000;
  * then the vault's write (10 s). The baseline is back before its response.
  */
 const INTEGRATION_IDLE_MS = 30_000;
+/**
+ * The idle bound while the Atlassian callback's connect runs: above the
+ * remote vault's 30 s connect bound (`gateway/remoteVault.ts`), so the edge
+ * answers before the socket is cut.
+ */
+const CONNECT_IDLE_MS = 40_000;
 
 const INTEGRATION_STATUS: Record<IntegrationsRefusalCode, number> = {
   integration_invalid: 400,
@@ -105,6 +129,25 @@ const INTEGRATION_STATUS: Record<IntegrationsRefusalCode, number> = {
   vault_unavailable: 503,
   tools_unavailable: 503,
   integration_busy: 409,
+  integration_sign_in_required: 409,
+  integration_site_missing: 422,
+  integration_site_ambiguous: 422,
+  integration_not_configured: 503,
+};
+
+/** A connect refusal as the callback's `?atlassian=` code. */
+const CONNECT_CODE: Partial<
+  Record<IntegrationsRefusalCode, GatewayUiAtlassianConnectCode>
+> = {
+  integration_rejected: "rejected",
+  integration_unreachable: "unreachable",
+  integration_site_missing: "site_missing",
+  integration_site_ambiguous: "site_ambiguous",
+  integration_not_configured: "not_configured",
+  vault_locked: "vault_locked",
+  vault_unavailable: "vault_unavailable",
+  integration_busy: "busy",
+  tools_unavailable: "tools_unavailable",
 };
 
 const SECURITY_HEADERS = {
@@ -127,7 +170,7 @@ export interface GatewayWebOptions {
   /** Tests only; never read from the config file. */
   oidcTestOptions?: OidcTestOptions;
   /** Tests only, as `oidcTestOptions`: shorter socket idle bounds. */
-  testIdleMs?: { idle: number; integration: number };
+  testIdleMs?: { idle: number; integration: number; connect?: number };
 }
 
 export interface RunningGatewayWeb {
@@ -216,10 +259,15 @@ export async function startGatewayWeb(
   const idleMs = options.testIdleMs?.idle ?? IDLE_MS;
   const integrationIdleMs =
     options.testIdleMs?.integration ?? INTEGRATION_IDLE_MS;
+  const connectIdleMs = options.testIdleMs?.connect ?? CONNECT_IDLE_MS;
   const now = options.now ?? Date.now;
   const files = staticFiles(config.distDir);
   const enrollmentBudget = new EnrollmentBudget(now);
-  const pending = new PendingSignins(now);
+  const pending = new PendingRedirects<AuthorizationRequest>(now);
+  /** "Sign in with Atlassian" starts, each bound to the user who started it. */
+  const pendingConnects = new PendingRedirects<{ userId: string }>(now);
+  const atlassianClientId = config.atlassian?.clientId;
+  const atlassianRedirectUri = `${config.publicOrigin}${ATLASSIAN_CALLBACK_PATH}`;
   // A session that leaves the table, however, ends its logins.
   const sessions = new Sessions(now, (actorId) => {
     try {
@@ -249,6 +297,7 @@ export async function startGatewayWeb(
     status: number,
     value:
       | GatewayUiMe
+      | GatewayUiAtlassianConnectStart
       | GatewayUiError
       | GatewayUiAccounts
       | GatewayUiLoginStart
@@ -258,6 +307,7 @@ export async function startGatewayWeb(
       | GatewayUiEnrollmentCode
       | GatewayUiEnrollmentRequest
       | GatewayUiMcpToken,
+    headers: Record<string, string> = {},
   ): void =>
     send(
       res,
@@ -265,6 +315,7 @@ export async function startGatewayWeb(
       {
         "content-type": "application/json; charset=utf-8",
         "cache-control": "no-store",
+        ...headers,
       },
       JSON.stringify(value),
     );
@@ -296,7 +347,7 @@ export async function startGatewayWeb(
       );
       return toPage(res, { signin: "failed" });
     }
-    const signinId = pending.add(begun.request);
+    const signinId = pending.add(begun.request.state, begun.request);
     if (signinId === undefined) return toPage(res, { signin: "busy" });
     send(res, 302, {
       location: begun.url.href,
@@ -321,7 +372,7 @@ export async function startGatewayWeb(
     }
     let claims: Record<string, unknown>;
     try {
-      claims = await oidc.finish(url, taken.request);
+      claims = await oidc.finish(url, taken.value);
     } catch (err) {
       log(
         `ui sign-in: failed (${err instanceof OidcFailure ? err.stage : "exchange"})`,
@@ -350,6 +401,109 @@ export async function startGatewayWeb(
     if (session === undefined) return toPage(res, { signin: "busy" });
     log(`ui sign-in: ok user=${signedIn.userId} (${signedIn.outcome})`);
     toPage(res, { session });
+  };
+
+  /**
+   * Back to the page after Atlassian's redirect: `/` on success, else a
+   * fixed `?atlassian=` code; the pending cookie cleared either way.
+   */
+  const toAtlassian = (
+    res: ServerResponse,
+    code?: GatewayUiAtlassianConnectCode,
+  ): void =>
+    send(res, 303, {
+      location: code === undefined ? "/" : `/?atlassian=${code}`,
+      "cache-control": "no-store",
+      "set-cookie": cookie(ATLASSIAN_COOKIE, "", 0),
+    });
+
+  /**
+   * `POST /api/integrations/atlassian/connect`, behind the session and the
+   * mutation gate: a fresh state bound to this browser's new pending cookie
+   * and to the session's user, answered only inside the authorize URL.
+   */
+  const atlassianConnectStart = (
+    userId: string,
+    clientId: string,
+    res: ServerResponse,
+  ): void => {
+    const state = randomBytes(32).toString("base64url");
+    const cookieId = pendingConnects.add(state, { userId });
+    if (cookieId === undefined) {
+      log(`ui atlassian connect: refused, busy user=${userId}`);
+      return json(res, 503, { error: "unavailable" });
+    }
+    log(`ui atlassian connect: started user=${userId}`);
+    json(
+      res,
+      200,
+      {
+        authorizeUrl: atlassianAuthorizeUrl({
+          clientId,
+          scopes: config.atlassian?.scopes ?? [],
+          redirectUri: atlassianRedirectUri,
+          state,
+        }),
+      },
+      {
+        "set-cookie": cookie(ATLASSIAN_COOKIE, cookieId, PENDING_TTL_MS / 1000),
+      },
+    );
+  };
+
+  /**
+   * `GET /auth/atlassian/callback`: the state is taken (one use) before
+   * anything else, then the session, the pending cookie and the user are
+   * checked; only then does the code go to the vault, under the longer
+   * connect bound. Atlassian's `error` text is never read past its code.
+   */
+  const atlassianCallback = async (
+    req: IncomingMessage,
+    url: URL,
+    res: ServerResponse,
+  ): Promise<void> => {
+    const taken = pendingConnects.take(
+      url.searchParams.get("state"),
+      cookieOf(req, ATLASSIAN_COOKIE),
+    );
+    const session = sessions.lookup(cookieOf(req, SESSION_COOKIE));
+    const failed = (
+      code: GatewayUiAtlassianConnectCode,
+      reason: string = code,
+    ) => {
+      log(
+        `ui atlassian connect: failed (${reason})${session ? ` user=${session.userId}` : ""}`,
+      );
+      toAtlassian(res, code);
+    };
+    if (!session) return failed("signed_out");
+    if (taken.kind === "expired") return failed("expired");
+    if (taken.kind === "failed" || taken.value.userId !== session.userId)
+      return failed("failed", "state");
+    const error = url.searchParams.get("error");
+    if (error !== null)
+      return failed(error === "access_denied" ? "denied" : "failed");
+    const code = url.searchParams.get("code");
+    if (code === null || !ATLASSIAN_CODE.test(code)) return failed("failed");
+    const site = config.atlassian?.site;
+    req.socket.setTimeout(connectIdleMs);
+    try {
+      await integrations.connect(session.userId, {
+        code,
+        redirectUri: atlassianRedirectUri,
+        ...(site !== undefined ? { site } : {}),
+      });
+    } catch (err) {
+      return failed(
+        (err instanceof IntegrationsRefusal
+          ? CONNECT_CODE[err.code]
+          : undefined) ?? "failed",
+      );
+    } finally {
+      req.socket.setTimeout(idleMs);
+    }
+    log(`ui atlassian connect: ok user=${session.userId}`);
+    toAtlassian(res);
   };
 
   const me = (req: IncomingMessage, res: ServerResponse): void => {
@@ -487,6 +641,11 @@ export async function startGatewayWeb(
     const badRequest = () => json(res, 400, { error: "bad_request" });
     try {
       if (path.startsWith("/api/integrations/")) {
+        if (path === ATLASSIAN_CONNECT_PATH) {
+          if (method !== "POST" || atlassianClientId === undefined)
+            return text(res, 404, "not found");
+          return atlassianConnectStart(userId, atlassianClientId, res);
+        }
         // Atlassian and the vault may take longer than the idle bound: the
         // socket has the longer one while the adapter runs, and the baseline
         // back before the response, so keep-alive handling is as for any route.
@@ -657,6 +816,10 @@ export async function startGatewayWeb(
     if (method === "GET" && path === "/auth/login") return login(res);
     if (method === "GET" && path === "/auth/callback")
       return callback(req, url, res);
+    if (method === "GET" && path === ATLASSIAN_CALLBACK_PATH) {
+      if (atlassianClientId === undefined) return text(res, 404, "not found");
+      return atlassianCallback(req, url, res);
+    }
     if (method === "GET" && path === "/api/me") return me(req, res);
     if (
       path === "/api/accounts" ||

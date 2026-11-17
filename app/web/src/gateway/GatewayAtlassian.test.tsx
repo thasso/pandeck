@@ -4,8 +4,12 @@
  * states, Connect and Reconnect in a dialog sending the three fields with the
  * token in a password field dropped after success, a deployment's preset
  * replacing the site and email fields, Remove asking first, fixed texts for
- * refusals, and a save and a remove never overlapping.
+ * refusals, and a save and a remove never overlapping. Where the gateway
+ * signs in with Atlassian (Task-1411): no token form, the button starting the
+ * sign-in once and handing its URL to `navigate`, the rows and actions per
+ * stored kind, and the callback's fixed texts.
  */
+import { GATEWAY_UI_ATLASSIAN_CONNECT_CODES } from "@assistant/shared/gatewayUi";
 import { act } from "react";
 import { expect, test, vi } from "vitest";
 import { failed, loading, ready } from "../lib/loadState.ts";
@@ -18,18 +22,25 @@ import {
 
 function props(over: Partial<GatewayAtlassianProps> = {}) {
   return {
-    status: ready({ connected: false }),
+    status: ready({ connected: false, connectWith: "token" as const }),
     save: vi.fn(() =>
       Promise.resolve({
         connected: true,
+        connectWith: "token" as const,
         site: "x.atlassian.net",
         email: "p@example.org",
       }),
     ),
     clear: vi.fn(() => Promise.resolve()),
+    connect: vi.fn(() => Promise.resolve(AUTHORIZE)),
+    navigate: vi.fn(),
     ...over,
   };
 }
+
+/** A synthetic authorize URL; the page only hands it to `navigate`. */
+const AUTHORIZE =
+  "https://auth.atlassian.com/authorize?client_id=FAKE_CLIENT&state=FAKE_STATE";
 
 const button = (label: string) =>
   [...document.querySelectorAll("button")].find(
@@ -88,10 +99,14 @@ async function itemDisabled(label: string): Promise<boolean> {
 
 test("not set, connected, a vault problem and a failed load each read as such", () => {
   const cases: [GatewayAtlassianProps["status"], string][] = [
-    [ready({ connected: false }), "No Atlassian credential yet."],
+    [
+      ready({ connected: false, connectWith: "token" as const }),
+      "No Atlassian credential yet.",
+    ],
     [
       ready({
         connected: true,
+        connectWith: "token" as const,
         site: "x.atlassian.net",
         email: "p@example.org",
         displayName: "P",
@@ -99,7 +114,11 @@ test("not set, connected, a vault problem and a failed load each read as such", 
       "Pp@example.org · x.atlassian.netConnected",
     ],
     [
-      ready({ connected: false, problem: "vault_locked" }),
+      ready({
+        connected: false,
+        problem: "vault_locked",
+        connectWith: "token" as const,
+      }),
       "The gateway's vault is locked",
     ],
     [failed("unavailable"), "The Jira credential could not be loaded."],
@@ -142,6 +161,7 @@ test("Reconnect starts from the stored site and email; a preset hides its fields
   const preset = props({
     status: ready({
       connected: false,
+      connectWith: "token" as const,
       preset: { site: "fixed.atlassian.net", email: "me@example.org" },
     }),
   });
@@ -218,12 +238,13 @@ function deferred<T>() {
 
 const CONNECTED = ready({
   connected: true,
+  connectWith: "token" as const,
   site: "x.atlassian.net",
   email: "p@example.org",
 });
 
 test("while a Save is pending, a second submit sends nothing and Remove cannot start", async () => {
-  const saved = deferred<{ connected: boolean }>();
+  const saved = deferred<{ connected: boolean; connectWith: "token" }>();
   const p = props({ status: CONNECTED, save: vi.fn(() => saved.promise) });
   mount(<GatewayAtlassian {...p} />);
   await choose("Reconnect");
@@ -235,7 +256,9 @@ test("while a Save is pending, a second submit sends nothing and Remove cannot s
   });
   expect(p.save).toHaveBeenCalledTimes(1);
   expect(await itemDisabled("Remove credential")).toBe(true);
-  await act(async () => saved.resolve({ connected: true }));
+  await act(async () =>
+    saved.resolve({ connected: true, connectWith: "token" as const }),
+  );
   expect(await itemDisabled("Remove credential")).toBe(false);
 });
 
@@ -253,4 +276,239 @@ test("while a Remove is pending, Reconnect cannot start", async () => {
   expect(await itemDisabled("Reconnect")).toBe(true);
   await act(async () => cleared.resolve());
   expect(await itemDisabled("Reconnect")).toBe(false);
+});
+
+// --- Sign in with Atlassian (Task-1411, AC8) ---------------------------------
+
+const OAUTH = {
+  connected: true,
+  kind: "oauth" as const,
+  site: "x.atlassian.net",
+  connectWith: "oauth" as const,
+};
+
+const text = () => document.body.textContent ?? "";
+const inputs = () => document.querySelectorAll("input").length;
+
+test("signing in with Atlassian: no record shows the button, never a token form", async () => {
+  const p = props({
+    status: ready({ connected: false, connectWith: "oauth" }),
+  });
+  mount(<GatewayAtlassian {...p} />);
+  expect(text()).toContain("No Atlassian credential yet.");
+  expect(button("Connect")).toBeUndefined();
+  expect(button("Sign in with Atlassian")).toBeDefined();
+  expect(inputs()).toBe(0);
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+});
+
+test("the button starts the sign-in once, stays busy and hands the answered URL to navigate", async () => {
+  let answer!: (url: string) => void;
+  const connect = vi.fn(
+    () =>
+      new Promise<string>((resolve) => {
+        answer = resolve;
+      }),
+  );
+  const p = props({
+    status: ready({ connected: false, connectWith: "oauth" }),
+    connect,
+  });
+  mount(<GatewayAtlassian {...p} />);
+  await act(async () => button("Sign in with Atlassian")!.click());
+  expect(button("Sign in with Atlassian")!.disabled).toBe(true);
+  await act(async () => button("Sign in with Atlassian")!.click());
+  expect(connect).toHaveBeenCalledTimes(1);
+  await act(async () => answer(AUTHORIZE));
+  expect(p.navigate).toHaveBeenCalledTimes(1);
+  expect(p.navigate).toHaveBeenCalledWith(AUTHORIZE);
+  // The browser is leaving: the button does not come back.
+  expect(button("Sign in with Atlassian")!.disabled).toBe(true);
+});
+
+test("a refused start shows its fixed text in the section and the button again", async () => {
+  const p = props({
+    status: ready({ connected: false, connectWith: "oauth" }),
+    connect: vi.fn(() =>
+      Promise.reject(new GatewayApiError(503, "unavailable")),
+    ),
+  });
+  mount(<GatewayAtlassian {...p} />);
+  await act(async () => button("Sign in with Atlassian")!.click());
+  expect(text()).toContain(
+    "The gateway has too many sign-ins in progress. Try again in a few minutes.",
+  );
+  expect(p.navigate).not.toHaveBeenCalled();
+  expect(button("Sign in with Atlassian")!.disabled).toBe(false);
+});
+
+test("an OAuth record reads Signed in with Atlassian with its site; Sign in again starts the sign-in", async () => {
+  const p = props({ status: ready(OAUTH) });
+  mount(<GatewayAtlassian {...p} />);
+  expect(text()).toContain("Signed in with Atlassian");
+  expect(text()).toContain("x.atlassian.net");
+  expect(text()).toContain("Connected");
+  expect(inputs()).toBe(0);
+  expect(await itemDisabled("Remove credential")).toBe(false);
+  await choose("Sign in again");
+  expect(p.connect).toHaveBeenCalledTimes(1);
+  expect(p.navigate).toHaveBeenCalledWith(AUTHORIZE);
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+});
+
+test("a rejected OAuth record says to sign in again and stays removable", async () => {
+  const p = props({
+    status: ready({
+      connected: false,
+      kind: "oauth",
+      problem: "rejected",
+      connectWith: "oauth",
+    }),
+  });
+  mount(<GatewayAtlassian {...p} />);
+  expect(text()).toContain(
+    "Atlassian no longer accepts this sign-in. Sign in with Atlassian again.",
+  );
+  await choose("Remove credential");
+  await act(async () => dialogButton("Remove")!.click());
+  expect(p.clear).toHaveBeenCalledTimes(1);
+});
+
+test("a token record on a sign-in gateway reads API token and offers Sign in with Atlassian", async () => {
+  const p = props({
+    status: ready({
+      connected: true,
+      kind: "token",
+      site: "x.atlassian.net",
+      email: "p@example.org",
+      connectWith: "oauth",
+    }),
+  });
+  mount(<GatewayAtlassian {...p} />);
+  expect(text()).toContain("API token");
+  expect(text()).toContain("p@example.org · x.atlassian.net");
+  const item = await menuItem("Sign in with Atlassian");
+  expect(
+    [...document.querySelectorAll('[role="menuitem"]')].some(
+      (node) => node.textContent === "Reconnect",
+    ),
+  ).toBe(false);
+  await act(async () => item.click());
+  expect(p.connect).toHaveBeenCalledTimes(1);
+  expect(inputs()).toBe(0);
+});
+
+test("a token gateway labels a token record API token and keeps Reconnect with the form", async () => {
+  const p = props({
+    status: ready({
+      connected: true,
+      kind: "token",
+      site: "x.atlassian.net",
+      email: "p@example.org",
+      displayName: "P",
+      connectWith: "token",
+    }),
+  });
+  mount(<GatewayAtlassian {...p} />);
+  expect(text()).toContain("API tokenp@example.org · x.atlassian.net");
+  await choose("Reconnect");
+  expect(field("token").type).toBe("password");
+  expect(p.connect).not.toHaveBeenCalled();
+});
+
+test("the callback's code shows its fixed text until the user acts", async () => {
+  const p = props({
+    status: ready({ connected: false, connectWith: "oauth" }),
+    callback: "site_ambiguous",
+  });
+  mount(<GatewayAtlassian {...p} />);
+  const note =
+    "Your Atlassian sign-in includes more than one Jira site and this gateway names none. Ask its operator to set the site.";
+  expect(text()).toContain(note);
+  await act(async () => button("Sign in with Atlassian")!.click());
+  expect(text()).not.toContain(note);
+});
+
+test("a denied new sign-in leaves a stored token connected and says nothing else", () => {
+  const p = props({
+    status: ready({
+      connected: true,
+      kind: "token",
+      site: "x.atlassian.net",
+      email: "p@example.org",
+      connectWith: "oauth",
+    }),
+    callback: "denied",
+  });
+  mount(<GatewayAtlassian {...p} />);
+  expect(text()).toContain("Access was not granted on Atlassian's page");
+  expect(text()).toContain("Connected");
+  expect(text()).not.toMatch(/not connected/i);
+});
+
+test.each([...GATEWAY_UI_ATLASSIAN_CONNECT_CODES])(
+  "the %s callback text does not claim a stored sign-in is gone",
+  (code) => {
+    mount(
+      <GatewayAtlassian {...props({ status: ready(OAUTH), callback: code })} />,
+    );
+    expect(text()).toContain("Connected");
+    expect(text()).not.toMatch(/not connected/i);
+  },
+);
+
+/** A `pageshow`; jsdom has no `PageTransitionEvent`. */
+async function pageshow(persisted: boolean) {
+  const event = new Event("pageshow");
+  Object.defineProperty(event, "persisted", { value: persisted });
+  await act(async () => window.dispatchEvent(event));
+}
+
+test("Back from Atlassian into the cached page abandons the start; the controls work again", async () => {
+  const p = props({
+    status: ready({ connected: false, connectWith: "oauth" }),
+  });
+  mount(<GatewayAtlassian {...p} />);
+  await act(async () => button("Sign in with Atlassian")!.click());
+  expect(p.navigate).toHaveBeenCalledWith(AUTHORIZE);
+  expect(button("Sign in with Atlassian")!.disabled).toBe(true);
+  // An ordinary load's pageshow is not a return: the start stays.
+  await pageshow(false);
+  expect(button("Sign in with Atlassian")!.disabled).toBe(true);
+  const before = text();
+  await pageshow(true);
+  expect(button("Sign in with Atlassian")!.disabled).toBe(false);
+  // The user went back by choice: no note.
+  expect(text()).toBe(before);
+  await act(async () => button("Sign in with Atlassian")!.click());
+  expect(p.connect).toHaveBeenCalledTimes(2);
+});
+
+test("Back from Atlassian frees a stored record's actions too", async () => {
+  const p = props({ status: ready(OAUTH) });
+  mount(<GatewayAtlassian {...p} />);
+  await choose("Sign in again");
+  expect(p.navigate).toHaveBeenCalledTimes(1);
+  expect(await itemDisabled("Remove credential")).toBe(true);
+  expect(await itemDisabled("Sign in again")).toBe(true);
+  await pageshow(false);
+  expect(await itemDisabled("Remove credential")).toBe(true);
+  await pageshow(true);
+  expect(await itemDisabled("Remove credential")).toBe(false);
+  expect(await itemDisabled("Sign in again")).toBe(false);
+});
+
+test("a page refusal of a new API token reads as such", async () => {
+  const p = props({
+    save: vi.fn(() =>
+      Promise.reject(new GatewayApiError(409, "integration_sign_in_required")),
+    ),
+  });
+  mount(<GatewayAtlassian {...p} />);
+  await act(async () => button("Connect")!.click());
+  await fill();
+  await act(async () => dialogButton("Connect")!.click());
+  expect(text()).toContain(
+    "This gateway connects Jira only with Sign in with Atlassian.",
+  );
 });

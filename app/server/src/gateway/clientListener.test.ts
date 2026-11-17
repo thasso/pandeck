@@ -32,6 +32,7 @@ import {
   CLIENT_METHODS,
   GATEWAY_CLIENT_PROTOCOL,
   decodeAccounts,
+  decodeIntegrationStatus,
   encodeClientMessage,
 } from "./clientMethods.ts";
 import { decodeLeaseGranted, decodeLeaseRevoked } from "./controlMethods.ts";
@@ -48,6 +49,7 @@ import { LeaseTable } from "./leases.ts";
 import { UserOperationRefusal } from "./userOperations.ts";
 import { ProfileRegistry } from "./profiles.ts";
 import type {
+  IntegrationConnect,
   IntegrationRecord,
   IntegrationWrite,
   LoginDrivers,
@@ -891,11 +893,12 @@ function fakeTools(
         check: (_credential, signal) => check(signal),
         describe: (credential) => {
           try {
-            const { site, email } = JSON.parse(credential) as Record<
-              string,
-              string
-            >;
-            return { site: site!, email: email! };
+            const { site, email, accessToken } = JSON.parse(
+              credential,
+            ) as Record<string, string>;
+            return accessToken !== undefined
+              ? { site: site!, kind: "oauth" }
+              : { site: site!, email: email!, kind: "token" };
           } catch {
             return undefined;
           }
@@ -1047,6 +1050,8 @@ test("async client methods: a coded rejection answers its code, a foreign one an
   const answer = await set();
   assert.deepEqual(answer.json, {
     connected: true,
+    kind: "token",
+    connectWith: "token",
     site: "x.atlassian.net",
     email: "a@x.test",
   });
@@ -1057,6 +1062,9 @@ test("async client methods: a coded rejection answers its code, a foreign one an
 //
 // Written against the handlers before their move into `userOperations.ts`:
 // the replies, codes, texts and the check's deadline must not change.
+
+/** The access view a stub-stored OAuth record answers; synthetic. */
+const FAKE_T3_ACCESS = "FAKE-T3-ACCESS";
 
 /** A vault that answers as told and records whose credential it touched. */
 function stubVault() {
@@ -1069,6 +1077,11 @@ function stubVault() {
     clearAnswer: undefined as IntegrationWrite | undefined,
     getAnswer: undefined as IntegrationRecord | undefined,
     getDelayMs: 0,
+    connectAnswer: undefined as IntegrationConnect | undefined,
+    /** Holds every connect until the test calls the release it pushes. */
+    connectHeld: false,
+    connectReleases: [] as (() => void)[],
+    connectRequests: [] as unknown[],
     port: {
       login: () => undefined,
       newTokenFile: () => {
@@ -1097,6 +1110,29 @@ function stubVault() {
           ? { ok: false, absent: true }
           : { ok: true, credential };
       },
+      integrationConnect: async (
+        userId: string,
+        _integration: string,
+        request: unknown,
+      ): Promise<IntegrationConnect> => {
+        calls.push(`connect ${userId}`);
+        stub.connectRequests.push(request);
+        if (stub.connectHeld)
+          await new Promise<void>((resolve) =>
+            stub.connectReleases.push(resolve),
+          );
+        if (stub.connectAnswer) return stub.connectAnswer;
+        // The vault stores the record; a get answers its access view.
+        stored.set(
+          userId,
+          JSON.stringify({
+            kind: "atlassian-oauth",
+            site: "x.atlassian.net",
+            accessToken: FAKE_T3_ACCESS,
+          }),
+        );
+        return { ok: true, site: "x.atlassian.net", cloudId: "FAKE-CLOUD" };
+      },
     },
   };
   return stub;
@@ -1107,18 +1143,22 @@ async function listenerWith(
   vault: ReturnType<typeof stubVault>,
   tools: EdgeTools | undefined,
   integrationCheckMs?: number,
+  options: { atlassianSignIn?: boolean } = {},
 ): Promise<Edge> {
-  const clients = await startClientListener({
-    stateDir: await mkdtemp(join(DATA_DIR, "client-listener-")),
-    leases: new LeaseTable(),
-    profiles: new ProfileRegistry(),
-    needsLogin: () => [],
-    forwarder: { handleRequest: (_req, res) => res.end() },
-    log: () => {},
-    vault: vault.port,
-    tools,
-    ...(integrationCheckMs !== undefined ? { integrationCheckMs } : {}),
-  });
+  const clients = await startClientListener(
+    {
+      stateDir: await mkdtemp(join(DATA_DIR, "client-listener-")),
+      leases: new LeaseTable(),
+      profiles: new ProfileRegistry(),
+      needsLogin: () => [],
+      forwarder: { handleRequest: (_req, res) => res.end() },
+      log: () => {},
+      vault: vault.port,
+      tools,
+      ...(integrationCheckMs !== undefined ? { integrationCheckMs } : {}),
+    },
+    options,
+  );
   open.push(clients);
   clients.registry.addUser("u1");
   clients.registry.addUser("u2");
@@ -1164,6 +1204,8 @@ test("T2a integrations.set: the exact answer, and each failure's code and fixed 
   // A `userId` in the payload is ignored: the credential is u1's.
   assert.deepEqual(await set(), {
     connected: true,
+    kind: "token",
+    connectWith: "token",
     site: "x.atlassian.net",
     email: "a@x.test",
     displayName: "A User",
@@ -1205,6 +1247,8 @@ test("T2a integrations.set: the exact answer, and each failure's code and fixed 
   vault.putAnswer = undefined;
   assert.deepEqual(await set(), {
     connected: true,
+    kind: "token",
+    connectWith: "token",
     site: "x.atlassian.net",
     email: "a@x.test",
   });
@@ -1283,19 +1327,25 @@ test("T2a integrations.status without check: each vault outcome's answer, and no
     "u2",
     JSON.stringify({ site: "y.atlassian.net", email: "b@y" }),
   );
-  assert.deepEqual(await status(), { connected: false });
+  assert.deepEqual(await status(), { connected: false, connectWith: "token" });
   vault.getAnswer = { ok: false, locked: true };
   assert.deepEqual(await status(), {
     connected: false,
+    connectWith: "token",
     problem: "vault_locked",
   });
   vault.getAnswer = { ok: false, unavailable: true };
   assert.deepEqual(await status(), {
     connected: false,
+    connectWith: "token",
     problem: "vault_unavailable",
   });
   vault.getAnswer = { ok: true, credential: "not a credential" };
-  assert.deepEqual(await status(), { connected: false, problem: "invalid" });
+  assert.deepEqual(await status(), {
+    connected: false,
+    problem: "invalid",
+    connectWith: "token",
+  });
   vault.getAnswer = undefined;
   vault.stored.set(
     "u1",
@@ -1303,6 +1353,8 @@ test("T2a integrations.status without check: each vault outcome's answer, and no
   );
   assert.deepEqual(await status(), {
     connected: true,
+    kind: "token",
+    connectWith: "token",
     site: "x.atlassian.net",
     email: "a@x",
   });
@@ -1330,6 +1382,8 @@ test("T2a integrations.status with check: a failed check is an answer, not a ref
     });
   assert.deepEqual(await status(), {
     connected: true,
+    kind: "token",
+    connectWith: "token",
     site: "x.atlassian.net",
     email: "a@x",
     displayName: "A User",
@@ -1339,6 +1393,8 @@ test("T2a integrations.status with check: a failed check is an answer, not a ref
     check = () => Promise.resolve({ ok: false, problem });
     assert.deepEqual(await status(), {
       connected: false,
+      kind: "token",
+      connectWith: "token",
       site: "x.atlassian.net",
       email: "a@x",
       problem,
@@ -1378,13 +1434,15 @@ test("T2a beside: a second write while one runs answers integration_busy with it
     await integrationCall(connection, CLIENT_METHODS.integrationStatus, {
       integration: "atlassian",
     }),
-    { connected: false },
+    { connected: false, connectWith: "token" },
   );
   // The client's cancel changes nothing; the set ends, then frees the slot.
   controller.abort();
   settles[0]!({ ok: true });
   assert.deepEqual(await pending, {
     connected: true,
+    kind: "token",
+    connectWith: "token",
     site: "x.atlassian.net",
     email: "a@x.test",
   });
@@ -1438,6 +1496,8 @@ test("T2a each check's deadline starts at the check, after the vault read", asyn
   // A 300 ms read, then a 100 ms check under a 200 ms deadline: connected.
   assert.deepEqual(await status(true), {
     connected: true,
+    kind: "token",
+    connectWith: "token",
     site: "x.atlassian.net",
     email: "a@x",
   });
@@ -1445,6 +1505,8 @@ test("T2a each check's deadline starts at the check, after the vault read", asyn
   // The same slow read unchecked never reaches a check.
   assert.deepEqual(await status(false), {
     connected: true,
+    kind: "token",
+    connectWith: "token",
     site: "x.atlassian.net",
     email: "a@x",
   });
@@ -1454,7 +1516,13 @@ test("T2a each check's deadline starts at the check, after the vault read", asyn
   vault.getDelayMs = 0;
   assert.deepEqual(
     await integrationCall(connection, CLIENT_METHODS.integrationSet, SET),
-    { connected: true, site: "x.atlassian.net", email: "a@x.test" },
+    {
+      connected: true,
+      kind: "token",
+      connectWith: "token",
+      site: "x.atlassian.net",
+      email: "a@x.test",
+    },
   );
   // A check longer than the deadline is cut: the deadline is in force.
   checkMs = 400;
@@ -1499,6 +1567,8 @@ test("T2a a client's cancel during a set's check does not change its outcome", a
   release();
   assert.deepEqual(await pending, {
     connected: true,
+    kind: "token",
+    connectWith: "token",
     site: "x.atlassian.net",
     email: "a@x.test",
   });
@@ -1561,12 +1631,19 @@ test("T3 setAtlassian stores under the given user only", async () => {
       email: "b@x.test",
       token: "FAKE-T3",
     }),
-    { connected: true, site: "x.atlassian.net", email: "b@x.test" },
+    {
+      connected: true,
+      kind: "token",
+      connectWith: "token",
+      site: "x.atlassian.net",
+      email: "b@x.test",
+    },
   );
   assert.deepEqual(vault.calls, ["put u2"]);
   assert.deepEqual([...vault.stored.keys()], ["u2"]);
   assert.deepEqual(await ops.atlassianStatus("u1", { check: false }), {
     connected: false,
+    connectWith: "token",
   });
 });
 
@@ -1606,6 +1683,7 @@ test("while a set runs, another set or a clear of that user is refused busy at o
   assert.equal(settles.length, 1);
   assert.deepEqual(await ops.atlassianStatus("u1", { check: false }), {
     connected: false,
+    connectWith: "token",
   });
   // Another user is not held.
   const other = ops.setAtlassian("u2", CREDENTIAL);
@@ -1663,6 +1741,7 @@ test("the slot is free again after a success, a refusal, a failed write and a de
   await ops.clearAtlassian("u1");
   assert.deepEqual(await ops.atlassianStatus("u1", { check: false }), {
     connected: false,
+    connectWith: "token",
   });
 
   // A check cut by its deadline frees the slot too.
@@ -2451,4 +2530,227 @@ test("model deadlines: the socket's close clears every timer", () => {
   vi.advanceTimersByTime(SHORT.requestMs * 10);
   assert.equal(socket.destroys, 0);
   assert.equal(vi.getTimerCount(), 0);
+});
+
+// --- Sign in with Atlassian: connect and the D2 refusal (Task-1411 PR2) ----
+
+const CONNECT = {
+  code: "FAKE-T1411-CODE",
+  redirectUri: "https://gateway.test/auth/atlassian/callback",
+  site: "x.atlassian.net",
+};
+
+test("connectAtlassian hands the code to the vault only and answers the new OAuth record's status", async () => {
+  const vault = stubVault();
+  const ops = (
+    await listenerWith(
+      vault,
+      fakeTools(() => Promise.resolve({ ok: true })),
+      undefined,
+      { atlassianSignIn: true },
+    )
+  ).clients!.userOperations;
+  assert.deepEqual(await ops.connectAtlassian("u1", CONNECT), {
+    connected: true,
+    kind: "oauth",
+    site: "x.atlassian.net",
+    connectWith: "oauth",
+  });
+  // Only the vault's connect ran: no put, no check, no get.
+  assert.deepEqual(vault.calls, ["connect u1"]);
+  assert.deepEqual(vault.connectRequests, [CONNECT]);
+  // Without a site preset none is passed on.
+  const { site: _site, ...noSite } = CONNECT;
+  await ops.connectAtlassian("u2", noSite);
+  assert.deepEqual(vault.connectRequests[1], noSite);
+  assert.deepEqual(await ops.atlassianStatus("u1", { check: false }), {
+    connected: true,
+    kind: "oauth",
+    site: "x.atlassian.net",
+    connectWith: "oauth",
+  });
+});
+
+test("connectAtlassian maps every vault outcome to its fixed refusal code", async () => {
+  const vault = stubVault();
+  const ops = (
+    await listenerWith(
+      vault,
+      fakeTools(() => Promise.resolve({ ok: true })),
+    )
+  ).clients!.userOperations;
+  const cases: [IntegrationConnect, string][] = [
+    [{ ok: false, rejected: true }, "integration_rejected"],
+    [{ ok: false, unreachable: true }, "integration_unreachable"],
+    [{ ok: false, site: "missing" }, "integration_site_missing"],
+    [{ ok: false, site: "ambiguous" }, "integration_site_ambiguous"],
+    [{ ok: false, notConfigured: true }, "integration_not_configured"],
+    [{ ok: false, locked: true }, "vault_locked"],
+    [{ ok: false, unavailable: true }, "vault_unavailable"],
+  ];
+  for (const [answer, code] of cases) {
+    vault.connectAnswer = answer;
+    await assert.rejects(
+      ops.connectAtlassian("u1", CONNECT),
+      (err: unknown) =>
+        err instanceof UserOperationRefusal && err.code === code,
+      code,
+    );
+  }
+  assert.ok(vault.calls.every((call) => call === "connect u1"));
+  assert.equal(vault.stored.size, 0);
+});
+
+test("a connect shares the per-user slot with set and clear; without tools it refuses tools_unavailable", async () => {
+  const vault = stubVault();
+  const { tools, settles } = heldChecks();
+  const ops = (await listenerWith(vault, tools)).clients!.userOperations;
+  // A held set makes a connect busy, and the vault sees no connect.
+  const held = ops.setAtlassian("u1", CREDENTIAL);
+  await vi.waitFor(() => assert.equal(settles.length, 1));
+  await assert.rejects(ops.connectAtlassian("u1", CONNECT), isBusy);
+  assert.ok(!vault.calls.some((call) => call.startsWith("connect")));
+  settles[0]!({ ok: true });
+  await held;
+  // A held connect makes a set and a clear busy.
+  vault.connectHeld = true;
+  const connecting = ops.connectAtlassian("u1", CONNECT);
+  await vi.waitFor(() => assert.equal(vault.connectReleases.length, 1));
+  await assert.rejects(ops.clearAtlassian("u1"), isBusy);
+  await assert.rejects(ops.setAtlassian("u1", CREDENTIAL), isBusy);
+  vault.connectReleases[0]!();
+  assert.equal((await connecting).kind, "oauth");
+  assert.deepEqual(vault.calls, ["put u1", "connect u1"]);
+
+  const bare = stubVault();
+  const noTools = (await listenerWith(bare, undefined)).clients!.userOperations;
+  await assert.rejects(
+    noTools.connectAtlassian("u1", CONNECT),
+    (err: unknown) =>
+      err instanceof UserOperationRefusal && err.code === "tools_unavailable",
+  );
+  assert.deepEqual(bare.calls, []);
+});
+
+test("D2: with atlassianSignIn, integrations.set is refused with its code and text before any check or write; a stored token record keeps working", async () => {
+  const vault = stubVault();
+  let checks = 0;
+  let toolCredential: string | undefined;
+  const edge = await listenerWith(
+    vault,
+    fakeTools(
+      () => {
+        checks += 1;
+        return Promise.resolve({ ok: true });
+      },
+      {
+        list: () => [],
+        call: async (_name, _args, caller) => {
+          const outcome = await caller.credential("atlassian", caller.signal!);
+          toolCredential = outcome.ok ? outcome.credential : undefined;
+          return { ok: true, text: "ran" };
+        },
+      },
+    ),
+    undefined,
+    { atlassianSignIn: true },
+  );
+  const connection = await dialClient(edge, await enroll(edge, "u1"));
+  assert.deepEqual(
+    await integrationCall(connection, CLIENT_METHODS.integrationSet, SET).then(
+      () => "answered",
+      failureOf,
+    ),
+    {
+      code: "integration_sign_in_required",
+      text: "This gateway connects Jira only with Sign in with Atlassian on its page.",
+    },
+  );
+  // Even a malformed set gets the same refusal: nothing is parsed.
+  await assert.rejects(
+    edge.clients!.userOperations.setAtlassian("u1", { site: "x.example" }),
+    (err: unknown) =>
+      err instanceof UserOperationRefusal &&
+      err.code === "integration_sign_in_required",
+  );
+  assert.equal(checks, 0);
+  assert.deepEqual(vault.calls, []);
+
+  // An API token stored before keeps being read, described and used.
+  const token = JSON.stringify({
+    site: "x.atlassian.net",
+    email: "a@x",
+    token: "FAKE-D2-TOKEN",
+  });
+  vault.stored.set("u1", token);
+  assert.deepEqual(
+    await integrationCall(connection, CLIENT_METHODS.integrationStatus, {
+      integration: "atlassian",
+    }),
+    {
+      connected: true,
+      kind: "token",
+      site: "x.atlassian.net",
+      email: "a@x",
+      connectWith: "oauth",
+    },
+  );
+  assert.deepEqual(
+    (
+      await connection.request(
+        CLIENT_METHODS.toolsCall,
+        encodeClientMessage({ name: "stub_read" }),
+      )
+    ).json,
+    { ok: true, text: "ran" },
+  );
+  assert.equal(toolCredential, token);
+  // Clear stays: the record goes.
+  assert.deepEqual(
+    await integrationCall(connection, CLIENT_METHODS.integrationClear, {
+      integration: "atlassian",
+    }),
+    {},
+  );
+  assert.equal(vault.stored.has("u1"), false);
+  // A refused OAuth refresh is an OAuth record's problem.
+  vault.getAnswer = { ok: false, rejected: true };
+  assert.deepEqual(
+    await integrationCall(connection, CLIENT_METHODS.integrationStatus, {
+      integration: "atlassian",
+    }),
+    {
+      connected: false,
+      kind: "oauth",
+      problem: "rejected",
+      connectWith: "oauth",
+    },
+  );
+});
+
+test("the client decodes kind and connectWith, drops unknown ones, and accepts an older edge's answer without them", () => {
+  const decode = (json: object) =>
+    decodeIntegrationStatus(encodeClientMessage(json));
+  assert.deepEqual(
+    decode({
+      connected: true,
+      kind: "oauth",
+      site: "x.atlassian.net",
+      connectWith: "oauth",
+    }),
+    {
+      connected: true,
+      kind: "oauth",
+      connectWith: "oauth",
+      site: "x.atlassian.net",
+    },
+  );
+  assert.deepEqual(
+    decode({ connected: false, kind: "saml", connectWith: "magic" }),
+    { connected: false },
+  );
+  assert.deepEqual(
+    decode({ connected: true, site: "x.atlassian.net", email: "a@x" }),
+    { connected: true, site: "x.atlassian.net", email: "a@x" },
+  );
 });

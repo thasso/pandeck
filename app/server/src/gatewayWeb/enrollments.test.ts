@@ -220,9 +220,11 @@ async function startUi() {
     },
     accounts: NO_ACCOUNTS,
     integrations: {
-      status: () => Promise.resolve({ connected: false }),
+      status: () => Promise.resolve({ connected: false, connectWith: "token" }),
       set: () => Promise.reject(new IntegrationsRefusal("tools_unavailable")),
       clear: () => Promise.reject(new IntegrationsRefusal("tools_unavailable")),
+      connect: () =>
+        Promise.reject(new IntegrationsRefusal("tools_unavailable")),
     },
     clients: fake.clients,
     log: (line) => logs.push(line),

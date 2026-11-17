@@ -24,7 +24,10 @@ Jira tools are the gateway's: the catalog's `gateway-jira` group, gated by
 `gatewayJira` (the gateway is connected and Jira is `enabled`), replaces the
 local four. The same Settings → Jira toggle governs it, and a call while it is
 off answers the same disabled text. Today the gateway offers `jira_get_issue`
-only.
+only. Against a gateway that signs in with Atlassian (Task-1411), Settings →
+Jira takes no email or token: the user connects on the gateway's page, and the
+card keeps enable with "Save and test" and clear (`docs/workers.md`
+"Credentials").
 
 ## Jira cache files
 

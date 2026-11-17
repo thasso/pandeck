@@ -61,6 +61,7 @@ function publicSettings(settings: StoredJiraSettings): JiraSettings {
   // Client mode (Task-1397): the credential is the gateway's; jira.json keeps
   // only `enabled` here, and any old local email or token stays unread.
   if (remoteIntegrationPort()) {
+    // A gateway that signs in with Atlassian takes no token from here.
     const last = lastAtlassianStatus();
     return {
       enabled: Boolean(settings.enabled),
@@ -68,6 +69,8 @@ function publicSettings(settings: StoredJiraSettings): JiraSettings {
       atlassianEmail: last.email ?? "",
       atlassianTokenConfigured: last.stored,
       credentialStore: "gateway",
+      ...(last.kind !== undefined ? { gatewayKind: last.kind } : {}),
+      gatewaySignIn: last.connectWith === "oauth",
     };
   }
   return {
@@ -200,6 +203,12 @@ export function isJiraConfigured(): boolean {
   );
 }
 
+/** The remedy where the gateway signs in with Atlassian on its own page. */
+const SIGN_IN_AGAIN =
+  "Atlassian no longer accepts the gateway's sign-in; sign in with Atlassian again on the gateway's page.";
+const NOT_SIGNED_IN =
+  "Jira is not connected on the gateway; sign in with Atlassian on the gateway's page.";
+
 const GATEWAY_PROBLEMS: Record<
   NonNullable<IntegrationStatus["problem"]>,
   string
@@ -237,9 +246,14 @@ async function testGatewayJira(
     return {
       ok: false,
       checkedAt,
-      message: status.problem
-        ? GATEWAY_PROBLEMS[status.problem]
-        : "Missing Atlassian email or API token.",
+      message:
+        status.problem === "rejected" && status.kind === "oauth"
+          ? SIGN_IN_AGAIN
+          : status.problem
+            ? GATEWAY_PROBLEMS[status.problem]
+            : status.connectWith === "oauth"
+              ? NOT_SIGNED_IN
+              : "Missing Atlassian email or API token.",
     };
   const displayName = status.displayName || "Jira API user";
   return {

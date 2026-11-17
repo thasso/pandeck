@@ -110,14 +110,18 @@ export function jiraConfigOf(credential: AtlassianCredential): JiraConfig {
       };
 }
 
-/** The site, and the email an API token was set with; never a token. */
+/**
+ * The credential's kind and site, and the email an API token was set with;
+ * never a token.
+ */
 export function describeAtlassianCredential(credential: AtlassianCredential): {
   site: string;
   email?: string;
+  kind: "token" | "oauth";
 } {
   return "accessToken" in credential
-    ? { site: credential.site }
-    : { site: credential.site, email: credential.email };
+    ? { site: credential.site, kind: "oauth" }
+    : { site: credential.site, email: credential.email, kind: "token" };
 }
 
 export type AtlassianCheck =
@@ -163,14 +167,21 @@ export async function checkAtlassian(
 }
 
 /**
- * A Jira HTTP failure as its fixed tool text. Anything else, an abort
- * included, is thrown on for the host to classify.
+ * A Jira HTTP failure as its fixed tool text, the 401/403 remedy by the
+ * credential's kind: an OAuth one is renewed on the gateway's page, an API
+ * token in Pandeck's Settings. Anything else, an abort included, is thrown on
+ * for the host to classify.
  */
-export function jiraFailure(err: unknown): never {
+export function jiraFailure(
+  err: unknown,
+  credential: AtlassianCredential,
+): never {
   if (err instanceof AtlassianHttpError) {
     if (err.status === 401 || err.status === 403)
       throw new ToolError(
-        "Atlassian rejected the credential; reconnect Jira in Pandeck's Settings.",
+        "accessToken" in credential
+          ? "Atlassian rejected the credential; sign in with Atlassian again on the gateway's page."
+          : "Atlassian rejected the credential; reconnect Jira in Pandeck's Settings.",
       );
     if (err.status === 404)
       throw new ToolError("Jira has no such issue, or the user can't see it.");

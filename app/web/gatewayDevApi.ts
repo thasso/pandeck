@@ -1,5 +1,25 @@
-import type { Plugin } from "vite";
+import { normalizePath, type Plugin } from "vite";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { fileURLToPath } from "node:url";
+
+/** The page's one way off the page (`src/gateway/navigate.ts`). */
+const NAVIGATE = normalizePath(
+  fileURLToPath(new URL("./src/gateway/navigate.ts", import.meta.url)),
+);
+
+/**
+ * What the dev server serves in its place: instead of Atlassian's authorize
+ * URL, the browser goes to this server's callback with a fake code, as if
+ * Atlassian had answered, and never leaves localhost.
+ */
+export const DEV_NAVIGATE = `export const goTo = (url) => {
+  const state = new URL(url).searchParams.get("state") ?? "";
+  window.location.assign(
+    "/auth/atlassian/callback?" +
+      new URLSearchParams({ code: "FAKE_DEV_CODE", state }),
+  );
+};
+`;
 
 /**
  * DEV ONLY: a fake gateway `/api` and `/auth` for `pnpm dev:gateway`, so the
@@ -17,10 +37,13 @@ export function gatewayDevApi(): Plugin {
       needsLogin: true,
     },
   ];
-  // The Castlabs deployment fixes site and email; GATEWAY_DEV_GENERIC=1 shows
-  // the generic gateway, where the user enters both.
+  // The Castlabs deployment fixes site and email and signs in with Atlassian;
+  // GATEWAY_DEV_GENERIC=1 shows the generic gateway, where the user enters
+  // site, email and an API token.
+  const generic = () => process.env.GATEWAY_DEV_GENERIC === "1";
+  const connectWith = () => (generic() ? "token" : "oauth");
   const presetOf = () =>
-    process.env.GATEWAY_DEV_GENERIC === "1"
+    generic()
       ? {}
       : {
           preset: {
@@ -28,8 +51,10 @@ export function gatewayDevApi(): Plugin {
             email: "thasso.griebel@castlabs.com",
           },
         };
+  // An API token stored before the gateway signed in with Atlassian.
   let atlassian: Record<string, unknown> = {
     connected: true,
+    kind: "token",
     site: "castlabs.atlassian.net",
     email: "thasso.griebel@castlabs.com",
     displayName: "Thasso Griebel",
@@ -88,6 +113,9 @@ export function gatewayDevApi(): Plugin {
   return {
     name: "gateway-dev-api",
     apply: "serve",
+    load(id) {
+      return id.split("?")[0] === NAVIGATE ? DEV_NAVIGATE : null;
+    },
     configureServer(server) {
       const handle = async (
         req: IncomingMessage,
@@ -104,6 +132,27 @@ export function gatewayDevApi(): Plugin {
           signedIn = true;
           res.statusCode = 303;
           res.setHeader("location", "/");
+          res.end();
+          return;
+        }
+        // The dev page's "Sign in with Atlassian" lands here (`DEV_NAVIGATE`)
+        // and finishes as if Atlassian had answered; open this path with
+        // `?atlassian=<code>` to replay a failure instead.
+        if (path === "/auth/atlassian/callback") {
+          const code = url.searchParams.get("atlassian");
+          if (code === null)
+            atlassian = {
+              connected: true,
+              kind: "oauth",
+              site: "castlabs.atlassian.net",
+            };
+          res.statusCode = 303;
+          res.setHeader(
+            "location",
+            code === null
+              ? "/"
+              : `/?${new URLSearchParams({ atlassian: code })}`,
+          );
           res.end();
           return;
         }
@@ -193,15 +242,41 @@ export function gatewayDevApi(): Plugin {
             return json(res, 204);
           }
           case "/api/integrations/atlassian":
-            return json(res, 200, { ...atlassian, ...presetOf() });
+            return json(res, 200, {
+              ...atlassian,
+              connectWith: connectWith(),
+              ...presetOf(),
+            });
           case "/api/integrations/atlassian/set":
+            if (!generic())
+              return json(res, 409, { error: "integration_sign_in_required" });
             atlassian = {
               connected: true,
+              kind: "token",
               site: body.site,
               email: body.email,
               displayName: "Dev User",
             };
-            return json(res, 200, { ...atlassian, ...presetOf() });
+            return json(res, 200, {
+              ...atlassian,
+              connectWith: connectWith(),
+              ...presetOf(),
+            });
+          case "/api/integrations/atlassian/connect":
+            if (generic()) return json(res, 404, { error: "not_found" });
+            return json(res, 200, {
+              authorizeUrl: `https://auth.atlassian.com/authorize?${new URLSearchParams(
+                {
+                  audience: "api.atlassian.com",
+                  client_id: "FAKE_DEV_CLIENT",
+                  scope: "read:jira-work offline_access",
+                  redirect_uri: "http://localhost/auth/atlassian/callback",
+                  state: "FAKE_DEV_STATE",
+                  response_type: "code",
+                  prompt: "consent",
+                },
+              )}`,
+            });
           case "/api/integrations/atlassian/clear":
             atlassian = { connected: false };
             return json(res, 204);

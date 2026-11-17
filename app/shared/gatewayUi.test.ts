@@ -1,11 +1,14 @@
 import { describe, expect, test } from "vitest";
 import {
+  ATLASSIAN_AUTHORIZE_URL,
   decodeGatewayUiAtlassian,
+  decodeGatewayUiAtlassianConnectStart,
   decodeGatewayUiClients,
   decodeGatewayUiEnrollmentCode,
   decodeGatewayUiEnrollmentRequest,
   decodeGatewayUiMcpToken,
   decodeGatewayUiMe,
+  GATEWAY_UI_ATLASSIAN_CONNECT_CODES,
   GATEWAY_UI_SIGNIN_CODES,
 } from "./gatewayUi.ts";
 
@@ -50,13 +53,15 @@ describe("gateway UI wire model", () => {
     ]);
   });
 
-  test("decodes an Atlassian status; an unknown problem drops; never a token", () => {
-    expect(decodeGatewayUiAtlassian({ connected: false })).toEqual({
-      connected: false,
-    });
+  test("decodes an Atlassian status; an unknown problem or kind drops; never a token", () => {
+    expect(
+      decodeGatewayUiAtlassian({ connected: false, connectWith: "token" }),
+    ).toEqual({ connected: false, connectWith: "token" });
     expect(
       decodeGatewayUiAtlassian({
         connected: true,
+        kind: "token",
+        connectWith: "oauth",
         site: "x.atlassian.net",
         email: "a@x.test",
         displayName: "A",
@@ -65,26 +70,116 @@ describe("gateway UI wire model", () => {
       }),
     ).toEqual({
       connected: true,
+      kind: "token",
+      connectWith: "oauth",
       site: "x.atlassian.net",
       email: "a@x.test",
       displayName: "A",
     });
     expect(
-      decodeGatewayUiAtlassian({ connected: false, problem: "vault_locked" }),
-    ).toEqual({ connected: false, problem: "vault_locked" });
+      decodeGatewayUiAtlassian({
+        connected: true,
+        kind: "oauth",
+        connectWith: "oauth",
+        site: "x.atlassian.net",
+      }),
+    ).toEqual({
+      connected: true,
+      kind: "oauth",
+      connectWith: "oauth",
+      site: "x.atlassian.net",
+    });
     expect(
-      decodeGatewayUiAtlassian({ connected: false, problem: "on_fire" }),
-    ).toEqual({ connected: false });
+      decodeGatewayUiAtlassian({
+        connected: false,
+        connectWith: "token",
+        problem: "vault_locked",
+      }),
+    ).toEqual({
+      connected: false,
+      connectWith: "token",
+      problem: "vault_locked",
+    });
+    expect(
+      decodeGatewayUiAtlassian({
+        connected: false,
+        kind: "oauth",
+        connectWith: "oauth",
+        problem: "rejected",
+      }),
+    ).toEqual({
+      connected: false,
+      kind: "oauth",
+      connectWith: "oauth",
+      problem: "rejected",
+    });
+    expect(
+      decodeGatewayUiAtlassian({
+        connected: false,
+        kind: "saml",
+        connectWith: "token",
+        problem: "on_fire",
+      }),
+    ).toEqual({ connected: false, connectWith: "token" });
     for (const value of [
       undefined,
       null,
       {},
-      { connected: "yes" },
-      { connected: true, site: 1 },
-      { connected: true, email: false },
-      { connected: true, displayName: {} },
+      { connected: false },
+      { connected: false, connectWith: "saml" },
+      { connected: "yes", connectWith: "token" },
+      { connected: true, connectWith: "token", site: 1 },
+      { connected: true, connectWith: "token", email: false },
+      { connected: true, connectWith: "token", displayName: {} },
     ])
       expect(decodeGatewayUiAtlassian(value)).toBeUndefined();
+  });
+
+  test("a connect start decodes only with Atlassian's authorization endpoint", () => {
+    expect(ATLASSIAN_AUTHORIZE_URL).toBe(
+      "https://auth.atlassian.com/authorize",
+    );
+    const ok =
+      "https://auth.atlassian.com/authorize?audience=api.atlassian.com&client_id=FAKE_ID&state=FAKE_STATE";
+    expect(decodeGatewayUiAtlassianConnectStart({ authorizeUrl: ok })).toEqual({
+      authorizeUrl: ok,
+    });
+    for (const authorizeUrl of [
+      "http://auth.atlassian.com/authorize?x=1",
+      "https://auth.atlassian.com.evil.test/authorize?x=1",
+      "https://auth.atlassian.com/authorize/x?x=1",
+      "https://auth.atlassian.com/other?x=1",
+      "https://user@auth.atlassian.com/authorize?x=1",
+      "https://auth.atlassian.com:8443/authorize?x=1",
+      "https://auth.atlassian.com/authorize#x",
+      "javascript:alert(1)",
+      "/authorize",
+      "",
+      7,
+    ])
+      expect(
+        decodeGatewayUiAtlassianConnectStart({ authorizeUrl }),
+        String(authorizeUrl),
+      ).toBeUndefined();
+    expect(decodeGatewayUiAtlassianConnectStart(null)).toBeUndefined();
+  });
+
+  test("the Atlassian connect codes are fixed", () => {
+    expect([...GATEWAY_UI_ATLASSIAN_CONNECT_CODES]).toEqual([
+      "rejected",
+      "unreachable",
+      "site_missing",
+      "site_ambiguous",
+      "not_configured",
+      "vault_locked",
+      "vault_unavailable",
+      "busy",
+      "tools_unavailable",
+      "signed_out",
+      "expired",
+      "failed",
+      "denied",
+    ]);
   });
 
   test("decodes the client list; one malformed client rejects it", () => {

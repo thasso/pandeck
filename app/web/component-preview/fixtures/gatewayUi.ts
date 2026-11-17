@@ -33,20 +33,46 @@ export const gatewayUiAccounts: GatewayUiAccount[] = [
 /** `GET /api/integrations/atlassian` with nothing stored. */
 export const gatewayUiAtlassianNotSet: GatewayUiAtlassian = {
   connected: false,
+  connectWith: "token",
 };
 
 /** A stored credential: site and email, never the token. */
 export const gatewayUiAtlassianConnected: GatewayUiAtlassian = {
   connected: true,
+  kind: "token",
+  connectWith: "token",
   site: "example-team.atlassian.net",
   email: "person@example.org",
   displayName: "Person Example",
+};
+
+/** A gateway that connects Jira with Sign in with Atlassian, nothing stored. */
+export const gatewayUiAtlassianSignInNotSet: GatewayUiAtlassian = {
+  connected: false,
+  connectWith: "oauth",
+};
+
+/** Signed in with Atlassian: the site only. */
+export const gatewayUiAtlassianSignedIn: GatewayUiAtlassian = {
+  connected: true,
+  kind: "oauth",
+  connectWith: "oauth",
+  site: "example-team.atlassian.net",
+};
+
+/** Atlassian no longer accepts the stored sign-in. */
+export const gatewayUiAtlassianSignInRejected: GatewayUiAtlassian = {
+  connected: false,
+  kind: "oauth",
+  problem: "rejected",
+  connectWith: "oauth",
 };
 
 /** The vault is locked: the stored credential cannot be read now. */
 export const gatewayUiAtlassianLocked: GatewayUiAtlassian = {
   connected: false,
   problem: "vault_locked",
+  connectWith: "token",
 };
 
 /** `GET /api/clients`: two machines, one with an MCP token. */
