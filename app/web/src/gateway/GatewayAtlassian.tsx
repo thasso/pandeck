@@ -54,6 +54,8 @@ const PROBLEM_TEXT: Record<GatewayUiAtlassianProblem, string> = {
   vault_unavailable:
     "The gateway's vault did not answer. Reload the page to try again.",
   invalid: "The stored credential cannot be read. Set it again.",
+  rejected:
+    "Atlassian no longer accepts this sign-in. Sign in with Atlassian again.",
 };
 
 /** Fixed text per refusal; nothing from the gateway's answer is shown. */

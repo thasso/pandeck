@@ -47,6 +47,47 @@ export interface AtlassianPreset {
    */
   clientId?: string;
   clientSecret?: string;
+  /**
+   * The scopes "Sign in with Atlassian" asks for (Task-1411 PR2): the
+   * configured list or `DEFAULT_ATLASSIAN_SCOPES`, always with
+   * `offline_access`, so the vault gets a refresh token.
+   */
+  scopes: string[];
+}
+
+/** Asked for when the file names no `atlassian.scopes`. */
+const DEFAULT_ATLASSIAN_SCOPES: readonly string[] = [
+  "read:jira-work",
+  "write:jira-work",
+  "read:jira-user",
+  "read:servicedesk-request",
+  "write:servicedesk-request",
+  "read:confluence-content.all",
+  "write:confluence-content",
+  "offline_access",
+];
+
+const SCOPE = /^[\x21-\x7e]{1,128}$/;
+const MAX_SCOPES = 64;
+
+/**
+ * `atlassian.scopes`: up to 64 printable-ASCII strings without spaces, case
+ * kept, duplicates dropped, `offline_access` appended when missing. The
+ * refusal names the field only, never an entry.
+ */
+function scopeList(value: unknown): string[] {
+  if (value === undefined) return [...DEFAULT_ATLASSIAN_SCOPES];
+  if (
+    !Array.isArray(value) ||
+    value.length > MAX_SCOPES ||
+    value.some((v) => typeof v !== "string" || !SCOPE.test(v))
+  )
+    refuse(
+      `atlassian.scopes must be a list of at most ${MAX_SCOPES} scopes, each 1-128 printable characters without spaces`,
+    );
+  const scopes = [...new Set(value as string[])];
+  if (!scopes.includes("offline_access")) scopes.push("offline_access");
+  return scopes;
 }
 
 export class GatewayWebConfigError extends Error {}
@@ -151,6 +192,7 @@ function atlassianPreset(value: unknown): AtlassianPreset | undefined {
     ...(raw.clientSecret !== undefined
       ? { clientSecret: text(raw.clientSecret, "atlassian.clientSecret") }
       : {}),
+    scopes: scopeList(raw.scopes),
   };
 }
 

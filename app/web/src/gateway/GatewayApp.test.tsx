@@ -135,6 +135,7 @@ test("signed in: Accounts, Jira and Clients each load; signed out none is fetche
             connected: true,
             site: "x.atlassian.net",
             email: "p@example.org",
+            connectWith: "token",
           }),
         );
       case "/api/clients":

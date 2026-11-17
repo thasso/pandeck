@@ -18,10 +18,11 @@ import {
 
 function props(over: Partial<GatewayAtlassianProps> = {}) {
   return {
-    status: ready({ connected: false }),
+    status: ready({ connected: false, connectWith: "token" as const }),
     save: vi.fn(() =>
       Promise.resolve({
         connected: true,
+        connectWith: "token" as const,
         site: "x.atlassian.net",
         email: "p@example.org",
       }),
@@ -88,10 +89,14 @@ async function itemDisabled(label: string): Promise<boolean> {
 
 test("not set, connected, a vault problem and a failed load each read as such", () => {
   const cases: [GatewayAtlassianProps["status"], string][] = [
-    [ready({ connected: false }), "No Atlassian credential yet."],
+    [
+      ready({ connected: false, connectWith: "token" as const }),
+      "No Atlassian credential yet.",
+    ],
     [
       ready({
         connected: true,
+        connectWith: "token" as const,
         site: "x.atlassian.net",
         email: "p@example.org",
         displayName: "P",
@@ -99,7 +104,11 @@ test("not set, connected, a vault problem and a failed load each read as such", 
       "Pp@example.org · x.atlassian.netConnected",
     ],
     [
-      ready({ connected: false, problem: "vault_locked" }),
+      ready({
+        connected: false,
+        problem: "vault_locked",
+        connectWith: "token" as const,
+      }),
       "The gateway's vault is locked",
     ],
     [failed("unavailable"), "The Jira credential could not be loaded."],
@@ -142,6 +151,7 @@ test("Reconnect starts from the stored site and email; a preset hides its fields
   const preset = props({
     status: ready({
       connected: false,
+      connectWith: "token" as const,
       preset: { site: "fixed.atlassian.net", email: "me@example.org" },
     }),
   });
@@ -218,12 +228,13 @@ function deferred<T>() {
 
 const CONNECTED = ready({
   connected: true,
+  connectWith: "token" as const,
   site: "x.atlassian.net",
   email: "p@example.org",
 });
 
 test("while a Save is pending, a second submit sends nothing and Remove cannot start", async () => {
-  const saved = deferred<{ connected: boolean }>();
+  const saved = deferred<{ connected: boolean; connectWith: "token" }>();
   const p = props({ status: CONNECTED, save: vi.fn(() => saved.promise) });
   mount(<GatewayAtlassian {...p} />);
   await choose("Reconnect");
@@ -235,7 +246,9 @@ test("while a Save is pending, a second submit sends nothing and Remove cannot s
   });
   expect(p.save).toHaveBeenCalledTimes(1);
   expect(await itemDisabled("Remove credential")).toBe(true);
-  await act(async () => saved.resolve({ connected: true }));
+  await act(async () =>
+    saved.resolve({ connected: true, connectWith: "token" as const }),
+  );
   expect(await itemDisabled("Remove credential")).toBe(false);
 });
 

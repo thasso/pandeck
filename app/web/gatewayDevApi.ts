@@ -193,7 +193,11 @@ export function gatewayDevApi(): Plugin {
             return json(res, 204);
           }
           case "/api/integrations/atlassian":
-            return json(res, 200, { ...atlassian, ...presetOf() });
+            return json(res, 200, {
+              ...atlassian,
+              connectWith: "token",
+              ...presetOf(),
+            });
           case "/api/integrations/atlassian/set":
             atlassian = {
               connected: true,
@@ -201,7 +205,11 @@ export function gatewayDevApi(): Plugin {
               email: body.email,
               displayName: "Dev User",
             };
-            return json(res, 200, { ...atlassian, ...presetOf() });
+            return json(res, 200, {
+              ...atlassian,
+              connectWith: "token",
+              ...presetOf(),
+            });
           case "/api/integrations/atlassian/clear":
             atlassian = { connected: false };
             return json(res, 204);

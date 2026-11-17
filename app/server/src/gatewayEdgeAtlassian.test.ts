@@ -39,6 +39,7 @@ afterEach(async () => {
 test("the helper: in-process both or neither, remote never a secret", () => {
   const preset = (fields: { clientId?: string; clientSecret?: string }) => ({
     emailFromSignIn: false,
+    scopes: ["offline_access"],
     ...fields,
   });
   // In process: the pair goes to the vault; neither, nothing.

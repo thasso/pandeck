@@ -47,7 +47,10 @@ const clients = (
 });
 /** The Jira and Clients sections, inert, beside the accounts stories. */
 const settings = {
-  atlassian: atlassian({ status: "ready", data: { connected: false } }),
+  atlassian: atlassian({
+    status: "ready",
+    data: { connected: false, connectWith: "token" },
+  }),
   clients: clients({ status: "ready", data: [] }),
 };
 const signedIn = { kind: "signedIn", me: gatewayUiMe } as const;

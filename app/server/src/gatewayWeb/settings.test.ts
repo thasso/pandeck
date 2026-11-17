@@ -183,15 +183,31 @@ function fakeSettings() {
   const integrations: GatewayWebIntegrations = {
     status: async (userId) => {
       record("status", userId);
-      return { connected: true, site: "x.atlassian.net", email: EMAIL };
+      return {
+        connected: true,
+        kind: "token",
+        connectWith: "token",
+        site: "x.atlassian.net",
+        email: EMAIL,
+      };
     },
     set: async (userId, input) => {
       if (setDelayMs)
         await new Promise((resolve) => setTimeout(resolve, setDelayMs));
       record("set", userId, input);
-      return { connected: true, site: input.site, email: input.email };
+      return {
+        connected: true,
+        kind: "token",
+        connectWith: "token",
+        site: input.site,
+        email: input.email,
+      };
     },
     clear: async (userId) => record("clear", userId),
+    connect: async (userId, request) => {
+      record("connect", userId, request);
+      return { connected: true, kind: "oauth", connectWith: "oauth" };
+    },
   };
   const clients: GatewayWebClients = {
     list: (userId) => {
@@ -348,7 +364,11 @@ test("a deployment's Atlassian preset is in every answer and wins over the reque
   assert.equal(json(plainStatus).preset, undefined);
 
   const { port, fake } = await startUi(fakeSettings(), undefined, {
-    atlassian: { site: "fixed.atlassian.net", emailFromSignIn: true },
+    atlassian: {
+      site: "fixed.atlassian.net",
+      emailFromSignIn: true,
+      scopes: ["read:jira-work", "offline_access"],
+    },
   });
   const cookie = await signIn(port);
   const preset = { site: "fixed.atlassian.net", email: EMAIL };
@@ -376,7 +396,7 @@ test("a deployment's Atlassian preset is in every answer and wins over the reque
 
 test("a preset bound to the sign-in email refuses a user with none instead of taking the request's", async () => {
   const { port, fake } = await startUi(fakeSettings(), undefined, {
-    atlassian: { emailFromSignIn: true },
+    atlassian: { emailFromSignIn: true, scopes: ["offline_access"] },
     email: null,
   });
   const cookie = await signIn(port);
@@ -510,6 +530,11 @@ test("T4 each refusal answers its status and fixed code; a MARKER token reaches 
     ["vault_unavailable", 503],
     ["tools_unavailable", 503],
     ["integration_busy", 409],
+    // Task-1411: OAuth only where configured, and the connect's own codes.
+    ["integration_sign_in_required", 409],
+    ["integration_site_missing", 422],
+    ["integration_site_ambiguous", 422],
+    ["integration_not_configured", 503],
   ];
   for (const [code, status] of expected) {
     fake.fail(new IntegrationsRefusal(code));
@@ -656,7 +681,7 @@ function fakeTools(check: () => Promise<IntegrationCheck>): EdgeTools {
             string,
             string
           >;
-          return site && email ? { site, email } : undefined;
+          return site && email ? { site, email, kind: "token" } : undefined;
         },
       },
     },
@@ -849,17 +874,25 @@ test("T5 two users over the real seam: clients, MCP tokens, limits and the Atlas
   assert.equal(set.status, 200);
   assert.deepEqual(json(set), {
     connected: true,
+    kind: "token",
+    connectWith: "token",
     site: "x.atlassian.net",
     email: EMAIL,
     displayName: "Person",
   });
   assert.deepEqual(
     json(await api(port, a, "GET", "/api/integrations/atlassian")),
-    { connected: true, site: "x.atlassian.net", email: EMAIL },
+    {
+      connected: true,
+      kind: "token",
+      connectWith: "token",
+      site: "x.atlassian.net",
+      email: EMAIL,
+    },
   );
   assert.deepEqual(
     json(await api(port, b, "GET", "/api/integrations/atlassian")),
-    { connected: false },
+    { connected: false, connectWith: "token" },
   );
   assert.equal(
     (await api(port, a, "POST", "/api/integrations/atlassian/clear", {}))
@@ -868,7 +901,7 @@ test("T5 two users over the real seam: clients, MCP tokens, limits and the Atlas
   );
   assert.deepEqual(
     json(await api(port, a, "GET", "/api/integrations/atlassian")),
-    { connected: false },
+    { connected: false, connectWith: "token" },
   );
   check = () => Promise.resolve({ ok: false, problem: "rejected" });
   const rejected = await api(
@@ -908,7 +941,13 @@ test("T5 two users over the real seam: clients, MCP tokens, limits and the Atlas
   assert.equal((await first).status, 200);
   assert.deepEqual(
     json(await api(port, a, "GET", "/api/integrations/atlassian")),
-    { connected: true, site: "x.atlassian.net", email: EMAIL },
+    {
+      connected: true,
+      kind: "token",
+      connectWith: "token",
+      site: "x.atlassian.net",
+      email: EMAIL,
+    },
   );
 
   // 6. Each code and token is in its creating answer only, and in no log.

@@ -24,6 +24,18 @@ import {
 } from "./config.ts";
 
 const PW = "config-test-client-pw";
+
+/** The split plan's default list (Task-1411 PR2), written out, not imported. */
+const DEFAULT_SCOPES = [
+  "read:jira-work",
+  "write:jira-work",
+  "read:jira-user",
+  "read:servicedesk-request",
+  "write:servicedesk-request",
+  "read:confluence-content.all",
+  "write:confluence-content",
+  "offline_access",
+];
 const directories: string[] = [];
 
 afterEach(() => {
@@ -102,11 +114,13 @@ test("the Atlassian preset is optional and, when given, fixes the site and the s
   assert.deepEqual(loadGatewayWebConfig(file).atlassian, {
     site: "team.atlassian.net",
     emailFromSignIn: true,
+    scopes: DEFAULT_SCOPES,
   });
   const siteOnly = fixture((c) => (c.atlassian = { site: "t.atlassian.net" }));
   assert.deepEqual(loadGatewayWebConfig(siteOnly.file).atlassian, {
     site: "t.atlassian.net",
     emailFromSignIn: false,
+    scopes: DEFAULT_SCOPES,
   });
 });
 
@@ -117,10 +131,12 @@ test("the Atlassian OAuth client: clientId and clientSecret each load alone or t
   assert.deepEqual(load({ clientId: FAKE_CLIENT.clientId }), {
     emailFromSignIn: false,
     clientId: FAKE_CLIENT.clientId,
+    scopes: DEFAULT_SCOPES,
   });
   assert.deepEqual(load({ clientSecret: FAKE_CLIENT.clientSecret }), {
     emailFromSignIn: false,
     clientSecret: FAKE_CLIENT.clientSecret,
+    scopes: DEFAULT_SCOPES,
   });
   assert.deepEqual(
     load({
@@ -133,6 +149,7 @@ test("the Atlassian OAuth client: clientId and clientSecret each load alone or t
       emailFromSignIn: false,
       clientId: FAKE_CLIENT.clientId,
       clientSecret: FAKE_CLIENT.clientSecret,
+      scopes: DEFAULT_SCOPES,
     },
   );
   for (const [atlassian, field] of [
@@ -159,6 +176,55 @@ test("the Atlassian OAuth client: clientId and clientSecret each load alone or t
       message,
       new RegExp(`${FAKE_CLIENT.clientId}|${FAKE_CLIENT.clientSecret}`),
     );
+  }
+});
+
+test("atlassian.scopes: absent gives the default list; a list keeps case, drops duplicates and always ends with offline_access", () => {
+  const scopes = (value: unknown) =>
+    loadGatewayWebConfig(
+      fixture(
+        (c) =>
+          (c.atlassian = {
+            clientId: FAKE_CLIENT.clientId,
+            ...(value === undefined ? {} : { scopes: value }),
+          }),
+      ).file,
+    ).atlassian?.scopes;
+  assert.deepEqual(scopes(undefined), DEFAULT_SCOPES);
+  assert.deepEqual(scopes(["read:jira-work"]), [
+    "read:jira-work",
+    "offline_access",
+  ]);
+  assert.deepEqual(scopes(["Read:Jira-Work"]), [
+    "Read:Jira-Work",
+    "offline_access",
+  ]);
+  assert.deepEqual(
+    scopes(["offline_access", "read:jira-work", "read:jira-work"]),
+    ["offline_access", "read:jira-work"],
+  );
+  assert.equal(
+    scopes(Array.from({ length: 64 }, (_, i) => `s${i}`))?.length,
+    65,
+  );
+});
+
+test("atlassian.scopes refuses a non-list, an empty or spaced entry, a long entry and more than 64 entries, naming only the field", () => {
+  const SENTINEL = "FAKE_SCOPE_SENTINEL";
+  for (const value of [
+    SENTINEL,
+    [SENTINEL, ""],
+    [SENTINEL, `${SENTINEL} x`],
+    [SENTINEL, 7],
+    [`${SENTINEL}\u00e9`],
+    [`${SENTINEL}${"x".repeat(128)}`],
+    Array.from({ length: 65 }, (_, i) => `${SENTINEL}${i}`),
+  ]) {
+    const message = refusal(
+      fixture((c) => (c.atlassian = { scopes: value })).file,
+    );
+    assert.match(message, /^gateway UI config: atlassian\.scopes /);
+    assert.doesNotMatch(message, new RegExp(SENTINEL));
   }
 });
 

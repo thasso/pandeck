@@ -31,6 +31,10 @@ export interface GatewayUiError {
     | "vault_unavailable"
     | "tools_unavailable"
     | "integration_busy"
+    | "integration_sign_in_required"
+    | "integration_site_missing"
+    | "integration_site_ambiguous"
+    | "integration_not_configured"
     | "unknown_request"
     | "rate_limited";
 }
@@ -109,22 +113,40 @@ export const GATEWAY_UI_SIGNIN_CODES = [
 ] as const;
 export type GatewayUiSigninCode = (typeof GATEWAY_UI_SIGNIN_CODES)[number];
 
-/** Why a stored Atlassian credential cannot be used now. */
+/**
+ * Why a stored Atlassian credential cannot be used now; `rejected` is
+ * Atlassian refusing the vault's refresh of an OAuth record.
+ */
 export const GATEWAY_UI_ATLASSIAN_PROBLEMS = [
   "vault_locked",
   "vault_unavailable",
   "invalid",
+  "rejected",
 ] as const;
 export type GatewayUiAtlassianProblem =
   (typeof GATEWAY_UI_ATLASSIAN_PROBLEMS)[number];
 
 /**
+ * How an Atlassian credential was made: an API token, or "Sign in with
+ * Atlassian" (OAuth 2.0 3LO, Task-1411).
+ */
+export type GatewayUiAtlassianKind = "token" | "oauth";
+
+/**
  * `GET /api/integrations/atlassian` and what a set answers: whether the
- * user's Atlassian credential is stored, with its site and email. Never the
- * API token, which is write-only.
+ * user's Atlassian credential is stored, with its kind, site and email. Never
+ * a token, which the edge does not answer.
  */
 export interface GatewayUiAtlassian {
   connected: boolean;
+  /** Whenever a record was read, and `oauth` on `problem: "rejected"`. */
+  kind?: GatewayUiAtlassianKind;
+  /**
+   * How a new connection is made on this gateway: `oauth` where it has an
+   * Atlassian OAuth client (a set is then refused
+   * `integration_sign_in_required`), else `token`.
+   */
+  connectWith: GatewayUiAtlassianKind;
   site?: string;
   email?: string;
   /** Atlassian's name for the account, from the check a set ran. */
@@ -149,6 +171,40 @@ export interface GatewayUiAtlassianSetRequest {
   email: string;
   token: string;
 }
+
+/**
+ * `POST /api/integrations/atlassian/connect`: where the browser goes to sign
+ * in with Atlassian. The URL carries this start's state, and only it does.
+ */
+export interface GatewayUiAtlassianConnectStart {
+  authorizeUrl: string;
+}
+
+/** Atlassian's authorization endpoint, the only place a start sends to. */
+export const ATLASSIAN_AUTHORIZE_URL = "https://auth.atlassian.com/authorize";
+
+/**
+ * Why "Sign in with Atlassian" did not connect, as `/?atlassian=<code>` after
+ * `/auth/atlassian/callback` (a success goes to `/` with no code). The page
+ * shows only these and ignores any other value.
+ */
+export const GATEWAY_UI_ATLASSIAN_CONNECT_CODES = [
+  "rejected",
+  "unreachable",
+  "site_missing",
+  "site_ambiguous",
+  "not_configured",
+  "vault_locked",
+  "vault_unavailable",
+  "busy",
+  "tools_unavailable",
+  "signed_out",
+  "expired",
+  "failed",
+  "denied",
+] as const;
+export type GatewayUiAtlassianConnectCode =
+  (typeof GATEWAY_UI_ATLASSIAN_CONNECT_CODES)[number];
 
 /** One of the user's active clients, as `GET /api/clients` lists it. */
 export interface GatewayUiClient {
@@ -306,14 +362,30 @@ export function decodeGatewayUiLogin(
 const optionalText = (value: unknown): value is string | undefined =>
   value === undefined || typeof value === "string";
 
-/** A well-formed `GatewayUiAtlassian`, or undefined; an unknown problem drops. */
+const isAtlassianKind = (value: unknown): value is GatewayUiAtlassianKind =>
+  value === "token" || value === "oauth";
+
+/**
+ * A well-formed `GatewayUiAtlassian`, or undefined; an unknown problem or
+ * kind drops, a missing or unknown `connectWith` refuses.
+ */
 export function decodeGatewayUiAtlassian(
   value: unknown,
 ): GatewayUiAtlassian | undefined {
   if (!isRecord(value)) return undefined;
-  const { connected, site, email, displayName, problem, preset } = value;
+  const {
+    connected,
+    kind,
+    connectWith,
+    site,
+    email,
+    displayName,
+    problem,
+    preset,
+  } = value;
   if (
     typeof connected !== "boolean" ||
+    !isAtlassianKind(connectWith) ||
     !optionalText(site) ||
     !optionalText(email) ||
     !optionalText(displayName)
@@ -333,6 +405,8 @@ export function decodeGatewayUiAtlassian(
   }
   return {
     connected,
+    ...(isAtlassianKind(kind) ? { kind } : {}),
+    connectWith,
     ...(site !== undefined ? { site } : {}),
     ...(email !== undefined ? { email } : {}),
     ...(displayName !== undefined ? { displayName } : {}),
@@ -341,6 +415,30 @@ export function decodeGatewayUiAtlassian(
       : {}),
     ...(fixed ? { preset: fixed } : {}),
   };
+}
+
+/**
+ * A well-formed `GatewayUiAtlassianConnectStart`, or undefined: the URL must
+ * be Atlassian's authorization endpoint, so the page never navigates
+ * anywhere else.
+ */
+export function decodeGatewayUiAtlassianConnectStart(
+  value: unknown,
+): GatewayUiAtlassianConnectStart | undefined {
+  if (!isRecord(value) || typeof value.authorizeUrl !== "string")
+    return undefined;
+  let url: URL;
+  try {
+    url = new URL(value.authorizeUrl);
+  } catch {
+    return undefined;
+  }
+  return `${url.origin}${url.pathname}` === ATLASSIAN_AUTHORIZE_URL &&
+    url.username === "" &&
+    url.password === "" &&
+    url.hash === ""
+    ? { authorizeUrl: url.href }
+    : undefined;
 }
 
 /** A well-formed `GatewayUiClients`, or undefined. */

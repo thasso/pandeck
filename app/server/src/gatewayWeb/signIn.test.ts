@@ -116,9 +116,10 @@ function cookieValue(answer: Answer, name: string): string | undefined {
 
 /** Sign-in tests touch no credential or client: every change is refused. */
 const NO_INTEGRATIONS: GatewayWebIntegrations = {
-  status: () => Promise.resolve({ connected: false }),
+  status: () => Promise.resolve({ connected: false, connectWith: "token" }),
   set: () => Promise.reject(new IntegrationsRefusal("tools_unavailable")),
   clear: () => Promise.reject(new IntegrationsRefusal("tools_unavailable")),
+  connect: () => Promise.reject(new IntegrationsRefusal("tools_unavailable")),
 };
 const NO_CLIENTS: GatewayWebClients = {
   list: () => [],

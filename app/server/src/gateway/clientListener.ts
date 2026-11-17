@@ -172,6 +172,12 @@ export interface ClientListenerOptions {
    * points there; without it both are unknown paths.
    */
   approvalOrigin?: string;
+  /**
+   * The gateway page offers "Sign in with Atlassian" (Task-1411 D2): on page
+   * and client alike, a new API token is refused
+   * `integration_sign_in_required` (`userOperations.ts`).
+   */
+  atlassianSignIn?: boolean;
 }
 
 interface ClientListenerDeps {
@@ -198,6 +204,7 @@ interface ClientListenerDeps {
     | "integrationPut"
     | "integrationGet"
     | "integrationClear"
+    | "integrationConnect"
   >;
   /** The edge's tools; without them `/mcp` is 404 and integrations refuse. */
   tools?: EdgeTools | undefined;
@@ -508,6 +515,7 @@ export async function startClientListener(
 
   const userOperations = createUserOperations({
     vault: deps.vault,
+    atlassianSignIn: options.atlassianSignIn === true,
     integrations: () => deps.tools?.integrations,
     checkSignal,
     registry,

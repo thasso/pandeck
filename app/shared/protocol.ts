@@ -1162,6 +1162,13 @@ export interface JiraSettings {
   atlassianTokenConfigured: boolean;
   /** Where the token is kept: this server's data, or the credential gateway (client mode). */
   credentialStore: "local" | "gateway";
+  /** Gateway mode: how the stored credential was made, when one is. */
+  gatewayKind?: "token" | "oauth";
+  /**
+   * Gateway mode: the gateway connects Jira only with "Sign in with
+   * Atlassian" on its own page, so no token is entered here (Task-1411).
+   */
+  gatewaySignIn?: boolean;
 }
 
 /** Compact Jira issue metadata used to enrich linked-ticket UI rows. */

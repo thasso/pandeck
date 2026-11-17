@@ -339,6 +339,8 @@ async function twoUsers(deadlineMs?: number) {
     await linkA.set({ site: A_SITE, email: "a@x.test", token: A_TOKEN }),
     {
       connected: true,
+      kind: "token",
+      connectWith: "token",
       site: A_SITE,
       email: "a@x.test",
       displayName: "Fake User",
@@ -406,7 +408,10 @@ test("a userId in an integration payload is ignored: only the client's user is t
   });
   assert.equal((await linkB.status({ userId: "A" })).email, "b@x.test");
   await linkA.clear({ userId: "B" });
-  assert.deepEqual(await linkA.status({ userId: "B" }), { connected: false });
+  assert.deepEqual(await linkA.status({ userId: "B" }), {
+    connected: false,
+    connectWith: "token",
+  });
   assert.equal((await linkB.status()).connected, true);
 });
 
@@ -728,7 +733,12 @@ test("an OAuth record connected in a vault process reaches Jira with Bearer thro
     await delay(25);
   }
   // An OAuth record has a site and no email.
-  assert.deepEqual(status, { connected: true, site: FAKE_SITE });
+  assert.deepEqual(status, {
+    connected: true,
+    kind: "oauth",
+    connectWith: "token",
+    site: FAKE_SITE,
+  });
 
   const client = await mcpClient(a1.url, token);
   outbound = [];
@@ -768,6 +778,8 @@ test("an OAuth record connected in a vault process reaches Jira with Bearer thro
   assert.equal(outbound.length, 0);
   assert.deepEqual(await linkA.status(), {
     connected: false,
+    kind: "oauth",
+    connectWith: "token",
     problem: "rejected",
   });
 

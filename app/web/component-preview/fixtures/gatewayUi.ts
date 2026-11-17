@@ -33,11 +33,14 @@ export const gatewayUiAccounts: GatewayUiAccount[] = [
 /** `GET /api/integrations/atlassian` with nothing stored. */
 export const gatewayUiAtlassianNotSet: GatewayUiAtlassian = {
   connected: false,
+  connectWith: "token",
 };
 
 /** A stored credential: site and email, never the token. */
 export const gatewayUiAtlassianConnected: GatewayUiAtlassian = {
   connected: true,
+  kind: "token",
+  connectWith: "token",
   site: "example-team.atlassian.net",
   email: "person@example.org",
   displayName: "Person Example",
@@ -47,6 +50,7 @@ export const gatewayUiAtlassianConnected: GatewayUiAtlassian = {
 export const gatewayUiAtlassianLocked: GatewayUiAtlassian = {
   connected: false,
   problem: "vault_locked",
+  connectWith: "token",
 };
 
 /** `GET /api/clients`: two machines, one with an MCP token. */

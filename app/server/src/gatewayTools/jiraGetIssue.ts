@@ -69,7 +69,8 @@ export const jiraGetIssue: ToolDescriptor = {
     const maxComments =
       typeof params.maxComments === "number" ? params.maxComments : 10;
     // Nothing goes upstream before the credential is here.
-    const config = jiraConfigOf(await ctx.credential());
+    const credential = await ctx.credential();
+    const config = jiraConfigOf(credential);
     try {
       const raw = await jiraGet<Parameters<typeof normalizeJiraIssue>[0]>(
         config,
@@ -125,7 +126,7 @@ export const jiraGetIssue: ToolDescriptor = {
         },
       };
     } catch (err) {
-      jiraFailure(err);
+      jiraFailure(err, credential);
     }
   },
 };

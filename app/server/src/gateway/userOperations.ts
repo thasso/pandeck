@@ -38,7 +38,11 @@ import {
   type LoginProfile,
   type ProfileRegistry,
 } from "./profiles.ts";
-import type { IntegrationWrite, VaultPort } from "./vaultPort.ts";
+import type {
+  IntegrationConnect,
+  IntegrationWrite,
+  VaultPort,
+} from "./vaultPort.ts";
 
 /** An account of a user, as logins and tests create it. */
 export type UserAccountRecord = LoginProfile & { userId: string };
@@ -48,6 +52,7 @@ export class UserOperationRefusal extends Error {
   constructor(
     readonly code:
       | IntegrationFailure
+      | AtlassianConnectFailure
       | "unknown_client"
       | "limit_reached"
       | "unknown_request",
@@ -84,6 +89,26 @@ interface PendingEnrollment {
   expiresAt: number;
 }
 
+/**
+ * A connect's refusals that only the page's callback sees (`gateway-client`
+ * has no connect method), beside the shared vault and busy codes.
+ */
+type AtlassianConnectFailure =
+  | "integration_site_missing"
+  | "integration_site_ambiguous"
+  | "integration_not_configured";
+
+/** How an Atlassian credential was made, or how a new one is made. */
+type AtlassianKind = "token" | "oauth";
+
+/**
+ * On every status, set and connect answer: how this gateway makes a new
+ * Atlassian connection, `oauth` with the `atlassianSignIn` start option.
+ */
+interface AtlassianConnectWith {
+  connectWith: AtlassianKind;
+}
+
 /** What Atlassian said about a credential that works. */
 interface AtlassianIdentity {
   displayName?: string;
@@ -93,9 +118,18 @@ interface AtlassianIdentity {
 /** A credential stored and checked: site and email, never the token. */
 type AtlassianSet = {
   connected: true;
+  kind: "token";
   site: string;
   email: string;
-} & AtlassianIdentity;
+} & AtlassianIdentity &
+  AtlassianConnectWith;
+
+/** An OAuth record the vault just stored from a connect (Task-1411). */
+type AtlassianConnected = {
+  connected: true;
+  kind: "oauth";
+  site: string;
+} & AtlassianConnectWith;
 
 /** Why a stored credential is not usable now. */
 type AtlassianProblem =
@@ -104,16 +138,28 @@ type AtlassianProblem =
   | "invalid"
   | Extract<IntegrationCheck, { ok: false }>["problem"];
 
+/**
+ * `kind` whenever a record was read, and `oauth` on a refused refresh (only
+ * OAuth records refresh); `connectWith` always.
+ */
 export type AtlassianStatus =
   | AtlassianSet
-  /** An OAuth record (Task-1411): its site, no email. */
-  | ({ connected: true; site: string; email?: string } & AtlassianIdentity)
-  | {
+  | AtlassianConnected
+  /** A stored record as read: an OAuth one has its site, no email. */
+  | ({
+      connected: true;
+      kind: AtlassianKind;
+      site: string;
+      email?: string;
+    } & AtlassianIdentity &
+      AtlassianConnectWith)
+  | ({
       connected: false;
+      kind?: AtlassianKind;
       site?: string;
       email?: string;
       problem?: AtlassianProblem;
-    };
+    } & AtlassianConnectWith);
 
 interface UserOperationsDeps {
   vault: Pick<
@@ -124,7 +170,14 @@ interface UserOperationsDeps {
     | "integrationPut"
     | "integrationGet"
     | "integrationClear"
+    | "integrationConnect"
   >;
+  /**
+   * The gateway page offers "Sign in with Atlassian" (the edge's UI config
+   * names `atlassian.clientId`, Task-1411 D2): a new API token is refused
+   * `integration_sign_in_required`; stored ones keep being read and used.
+   */
+  atlassianSignIn: boolean;
   /** The edge's integration tools, if it runs any. */
   integrations(): EdgeTools["integrations"] | undefined;
   /** A fresh deadline for one Atlassian check, created as the check starts. */
@@ -194,10 +247,22 @@ export interface UserOperations {
   ): Promise<AtlassianStatus>;
   /**
    * Checks the credential with Atlassian, then stores it for the user. While
-   * one set or clear of the user runs, another is refused `integration_busy`.
+   * one set, clear or connect of the user runs, another is refused
+   * `integration_busy`. With `atlassianSignIn` every set is refused
+   * `integration_sign_in_required` before anything is read or checked.
    */
   setAtlassian(userId: string, input: unknown): Promise<AtlassianSet>;
   clearAtlassian(userId: string): Promise<void>;
+  /**
+   * Hands an authorization code from the page's Atlassian callback to the
+   * vault, which exchanges it, picks the site and stores the user's OAuth
+   * record (`VaultPort.integrationConnect`); one at a time with set and
+   * clear. Answers the new record's status.
+   */
+  connectAtlassian(
+    userId: string,
+    request: { code: string; redirectUri: string; site?: string },
+  ): Promise<AtlassianConnected>;
   /** The user's clients that are not revoked. */
   clients(userId: string): UserClient[];
   /**
@@ -283,8 +348,8 @@ export function createUserOperations(deps: UserOperationsDeps): UserOperations {
     return tools.atlassian;
   };
   /**
-   * The users with an Atlassian set or clear running. One runs per user at a
-   * time and another meanwhile is refused `integration_busy` at once, so an
+   * The users with an Atlassian set, clear or connect running. One runs per
+   * user at a time and another meanwhile is refused `integration_busy` at once, so an
    * earlier set's check can never land its write after a later clear, and no
    * request waits for another. Reads are never refused.
    */
@@ -302,6 +367,26 @@ export function createUserOperations(deps: UserOperationsDeps): UserOperations {
       atlassianWriting.delete(userId);
     }
   };
+  const connectWith: AtlassianKind = deps.atlassianSignIn ? "oauth" : "token";
+  /** A connect's refusal as its fixed code, every outcome named. */
+  const connectRefusal = (
+    outcome: Exclude<IntegrationConnect, { ok: true }>,
+  ): UserOperationRefusal =>
+    new UserOperationRefusal(
+      "rejected" in outcome
+        ? "integration_rejected"
+        : "unreachable" in outcome
+          ? "integration_unreachable"
+          : "site" in outcome
+            ? outcome.site === "missing"
+              ? "integration_site_missing"
+              : "integration_site_ambiguous"
+            : "notConfigured" in outcome
+              ? "integration_not_configured"
+              : "locked" in outcome
+                ? "vault_locked"
+                : "vault_unavailable",
+    );
   const wrote = (outcome: IntegrationWrite): void => {
     if (outcome.ok) return;
     throw new UserOperationRefusal(
@@ -347,25 +432,40 @@ export function createUserOperations(deps: UserOperationsDeps): UserOperations {
       const tools = atlassian();
       const record = await deps.vault.integrationGet(userId, "atlassian", {});
       if (!record.ok) {
-        if ("absent" in record) return { connected: false };
+        if ("absent" in record) return { connected: false, connectWith };
         // The vault's refresh of an OAuth record was refused: reconnect.
         if ("rejected" in record)
-          return { connected: false, problem: "rejected" };
+          return {
+            connected: false,
+            kind: "oauth",
+            problem: "rejected",
+            connectWith,
+          };
         return {
           connected: false,
           problem: "locked" in record ? "vault_locked" : "vault_unavailable",
+          connectWith,
         };
       }
       const described = tools.describe(record.credential);
-      if (!described) return { connected: false, problem: "invalid" };
-      if (!check) return { connected: true, ...described };
+      if (!described)
+        return { connected: false, problem: "invalid", connectWith };
+      if (!check) return { connected: true, ...described, connectWith };
       // The deadline starts here, at the check, not before the read.
       const checked = await tools.check(record.credential, deps.checkSignal());
       return checked.ok
-        ? { connected: true, ...described, ...identityOf(checked) }
-        : { connected: false, ...described, problem: checked.problem };
+        ? { connected: true, ...described, ...identityOf(checked), connectWith }
+        : {
+            connected: false,
+            ...described,
+            problem: checked.problem,
+            connectWith,
+          };
     },
     async setAtlassian(userId, input) {
+      // D2: where the page signs in with Atlassian, no new API token at all.
+      if (deps.atlassianSignIn)
+        throw new UserOperationRefusal("integration_sign_in_required");
       const tools = atlassian();
       const parsed = tools.parse(input);
       if (!parsed.ok) throw new UserOperationRefusal("integration_invalid");
@@ -389,9 +489,11 @@ export function createUserOperations(deps: UserOperationsDeps): UserOperations {
         );
         return {
           connected: true,
+          kind: "token",
           site: parsed.site,
           email: parsed.email,
           ...identityOf(checked),
+          connectWith,
         };
       });
     },
@@ -400,6 +502,23 @@ export function createUserOperations(deps: UserOperationsDeps): UserOperations {
       await alone(userId, async () =>
         wrote(await deps.vault.integrationClear(userId, "atlassian")),
       );
+    },
+    async connectAtlassian(userId, { code, redirectUri, site }) {
+      atlassian();
+      return alone(userId, async (): Promise<AtlassianConnected> => {
+        const outcome = await deps.vault.integrationConnect(
+          userId,
+          "atlassian",
+          { code, redirectUri, ...(site !== undefined ? { site } : {}) },
+        );
+        if (!outcome.ok) throw connectRefusal(outcome);
+        return {
+          connected: true,
+          kind: "oauth",
+          site: outcome.site,
+          connectWith,
+        };
+      });
     },
     clients: (userId) =>
       deps.registry

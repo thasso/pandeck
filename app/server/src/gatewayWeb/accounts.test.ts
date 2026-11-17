@@ -247,9 +247,11 @@ async function startUi(fake = fakeAccounts()) {
     accounts: fake.accounts,
     // These tests touch no credential or client.
     integrations: {
-      status: () => Promise.resolve({ connected: false }),
+      status: () => Promise.resolve({ connected: false, connectWith: "token" }),
       set: () => Promise.reject(new IntegrationsRefusal("tools_unavailable")),
       clear: () => Promise.reject(new IntegrationsRefusal("tools_unavailable")),
+      connect: () =>
+        Promise.reject(new IntegrationsRefusal("tools_unavailable")),
     },
     clients: {
       list: () => [],
