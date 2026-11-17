@@ -386,6 +386,96 @@ describe("reset classification (A3)", () => {
   });
 });
 
+describe("HTTP-date forms (A3, F001)", () => {
+  const now = Date.parse("2026-11-17T12:00:00Z");
+  // The three RFC 9110 forms of the same instant, 30 s after `now`.
+  const thirtySeconds = [
+    ["IMF-fixdate", "Tue, 17 Nov 2026 12:00:30 GMT"],
+    ["RFC 850", "Tuesday, 17-Nov-26 12:00:30 GMT"],
+    ["asctime", "Tue Nov 17 12:00:30 2026"],
+  ] as const;
+  for (const [name, value] of thirtySeconds)
+    test(`F001: a 30 s ${name} reset is short, with a 30 s bench`, () => {
+      assert.deepEqual(classifyReset("claude", ["retry-after", value], now), {
+        long: false,
+        benchUntil: now + 30 * SECOND,
+      });
+    });
+
+  test("F001: asctime pads a one-digit day with a space", () => {
+    const sixth = Date.parse("2026-11-06T12:00:00Z");
+    assert.deepEqual(
+      classifyReset(
+        "claude",
+        ["retry-after", "Fri Nov  6 12:00:30 2026"],
+        sixth,
+      ),
+      { long: false, benchUntil: sixth + 30 * SECOND },
+    );
+  });
+
+  test("F001: an RFC 850 two-digit year is the most recent one not more than 50 years ahead", () => {
+    // 94 is 1994 here, long past: the reset is elapsed, so short with no bench.
+    assert.deepEqual(
+      classifyReset(
+        "claude",
+        ["retry-after", "Sunday, 06-Nov-94 08:49:37 GMT"],
+        now,
+      ),
+      { long: false, benchUntil: undefined },
+    );
+  });
+
+  test("F001: date forms that are not valid HTTP-dates stay unknown, so long", () => {
+    const unknown = { long: true, benchUntil: now + RATE_LIMIT_BENCH_MS };
+    for (const value of [
+      "Tuesday, 17-Nov-26 12:00:30 PST",
+      "Tuesday, 17-Nov-26 12:00:30.5 GMT",
+      "Tue, 17 Nov 2026 12:00:30",
+      "17 Nov 2026 12:00:30 GMT",
+      "Tue Nov 31 12:00:30 2026",
+      "Tue Nov 17 24:00:30 2026",
+      "Tue Nov 17 12:00:30 2026 GMT",
+      "Tue Nov 17 12:00:30 26",
+      "1e3",
+      "Infinity",
+      "NaN",
+      "2026-11-17T12:00:30Z",
+    ])
+      assert.deepEqual(
+        classifyReset("claude", ["retry-after", value], now),
+        unknown,
+        value,
+      );
+    const rfc850 = "Tuesday, 17-Nov-26 12:00:30 GMT";
+    assert.deepEqual(
+      classifyReset(
+        "claude",
+        ["retry-after", rfc850, "Retry-After", rfc850],
+        now,
+      ),
+      unknown,
+      "a repeated obsolete date",
+    );
+  });
+
+  for (const [name, value] of [
+    ["RFC 850", "Tuesday, 17-Nov-26 12:00:30 GMT"],
+    ["asctime", "Tue Nov 17 12:00:30 2026"],
+  ] as const)
+    test(`F001: a valid ${name} 30 s reset keeps the pin and leaves the tried set unchanged`, () => {
+      const f = fixture();
+      f.clock.now = now;
+      const ref = claudeRef("session-key");
+      const first = served(f.pool.select("u1", ref));
+      assert.equal(first.binding.profileId, "claude-a");
+      answer(f.pool, first, 429, ["retry-after", value]);
+      assert.equal(profileOf(f.pool.select("u1", ref)), "claude-a");
+      assert.equal(f.pool.records()[0]!.profileId, "claude-a");
+      assert.deepEqual(f.pool.records()[0]!.tried, []);
+    });
+});
+
 describe("select", () => {
   test("a new session pins the best eligible account; its requests stay there on one machine lease", () => {
     const f = fixture();
@@ -993,6 +1083,52 @@ describe("persistence", () => {
     const again = served(restored.select("u1", claudeRef("secret-key")));
     assert.equal(again.binding.profileId, "claude-b");
     assert.equal(again.leaseId, moved.leaseId);
+  });
+
+  test("F002: a pin the pool generated with 1,025 tried accounts restores through the state files and keeps its account", async () => {
+    await mkdir(DATA_DIR, { recursive: true });
+    const stateDir = join(
+      await mkdtemp(join(DATA_DIR, "gateway-tried-")),
+      "gateway",
+    );
+    const lines: string[] = [];
+    const first = openGatewayState(stateDir, (line) => lines.push(line));
+    const f = fixture({ persist: first.persistMachinePins });
+    const ref = claudeRef("session-key");
+    // Account churn: one usable account at a time, each forced move leaves
+    // the previous one tried. The pin itself stays well under the per-client cap.
+    const account = (i: number): string => `account-${i}`;
+    const only = (id: string): void => {
+      f.owners.set("u1", [id]);
+      f.profiles.set(id, login(id, "claude"));
+    };
+    only(account(0));
+    served(f.pool.select("u1", ref));
+    for (let i = 1; i <= 1025; i++) {
+      f.clock.now += 1;
+      only(account(i));
+      assert.equal(profileOf(f.pool.select("u1", ref)), account(i));
+    }
+    const saved = f.pool.records();
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0]!.tried.length, 1025);
+
+    const second = openGatewayState(stateDir, (line) => lines.push(line));
+    assert.deepEqual(lines, []);
+    assert.deepEqual(second.machinePins, saved);
+    // The old account returns alongside the working one: the pin must not move.
+    f.owners.set("u1", [account(0), account(1025)]);
+    const restarted = new MachinePool({
+      leases: new LeaseTable({ now: () => f.clock.now }),
+      accountsOf: (user) => f.owners.get(user) ?? [],
+      profile: (id) => f.profiles.get(id),
+      needsLogin: () => [],
+      now: () => f.clock.now,
+    });
+    restarted.restore(second.machinePins);
+    assert.deepEqual(restarted.records(), saved);
+    assert.equal(profileOf(restarted.select("u1", ref)), account(1025));
+    assert.equal(restarted.records()[0]!.tried.length, 1025);
   });
 });
 

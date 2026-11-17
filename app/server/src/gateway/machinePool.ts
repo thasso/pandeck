@@ -49,8 +49,6 @@ const LAST_USE_SAVE_MS = 10 * 60_000;
 const SWEEP_EVERY_MS = 60 * 60_000;
 const MAX_SESSION_KEY_CHARS = 256;
 const KEY_HASH_RE = /^[0-9a-f]{64}$/;
-/** Bounds a saved tried set; no user holds this many accounts. */
-const MAX_TRIED = 1024;
 
 /**
  * Session-key headers per provider route, in order: the first present wins.
@@ -142,9 +140,100 @@ export interface ResetClass {
 
 const SECONDS_RE = /^\d+$/;
 const DECIMAL_RE = /^\d+(?:\.\d+)?$/;
-/** RFC 9110's preferred HTTP-date, IMF-fixdate; obsolete forms are skipped. */
-const IMF_FIXDATE_RE =
-  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/;
+
+const MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+const MONTH_RE = `(${MONTHS.join("|")})`;
+/**
+ * RFC 9110's three HTTP-date forms, each matched strictly: the preferred
+ * IMF-fixdate, then the obsolete RFC 850 and asctime forms. `Date.parse` is
+ * never given the raw value, since it also reads numbers and other text.
+ */
+const IMF_FIXDATE_RE = new RegExp(
+  `^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (\\d{2}) ${MONTH_RE} (\\d{4}) (\\d{2}):(\\d{2}):(\\d{2}) GMT$`,
+);
+const RFC850_DATE_RE = new RegExp(
+  `^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (\\d{2})-${MONTH_RE}-(\\d{2}) (\\d{2}):(\\d{2}):(\\d{2}) GMT$`,
+);
+const ASCTIME_DATE_RE = new RegExp(
+  `^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) ${MONTH_RE} ( \\d|\\d{2}) (\\d{2}):(\\d{2}):(\\d{2}) (\\d{4})$`,
+);
+
+/**
+ * The instant an HTTP-date names, in any of its three forms, or undefined
+ * when the value is not one. RFC 850's two-digit year is the most recent
+ * year not more than 50 years ahead of `now` (RFC 9110 section 5.6.7).
+ */
+function httpDate(value: string, now: number): number | undefined {
+  const imf = IMF_FIXDATE_RE.exec(value);
+  if (imf)
+    return utcInstant(
+      Number(imf[3]),
+      imf[2]!,
+      Number(imf[1]),
+      imf.slice(4, 7).map(Number),
+    );
+  const rfc850 = RFC850_DATE_RE.exec(value);
+  if (rfc850)
+    return utcInstant(
+      twoDigitYear(rfc850[3]!, now),
+      rfc850[2]!,
+      Number(rfc850[1]),
+      rfc850.slice(4, 7).map(Number),
+    );
+  const asctime = ASCTIME_DATE_RE.exec(value);
+  if (asctime)
+    return utcInstant(
+      Number(asctime[6]),
+      asctime[1]!,
+      Number(asctime[2]),
+      asctime.slice(3, 6).map(Number),
+    );
+  return undefined;
+}
+
+function twoDigitYear(digits: string, now: number): number {
+  const nowYear = new Date(now).getUTCFullYear();
+  const year = Math.floor(nowYear / 100) * 100 + Number(digits);
+  return year - nowYear > 50 ? year - 100 : year;
+}
+
+/**
+ * The UTC instant of an HTTP-date's fields, or undefined when they name no
+ * such time: a second past 59, an hour past 23, or a day the month lacks.
+ * `clock` is hour, minute, second; the regexes guarantee a month name.
+ */
+function utcInstant(
+  year: number,
+  month: string,
+  day: number,
+  clock: readonly number[],
+): number | undefined {
+  const [hour = NaN, minute = NaN, second = NaN] = clock;
+  if (!(hour <= 23 && minute <= 59 && second <= 59)) return undefined;
+  const instant = Date.UTC(
+    year,
+    MONTHS.indexOf(month),
+    day,
+    hour,
+    minute,
+    second,
+  );
+  // Date.UTC rolls an impossible day over (31 Nov becomes 1 Dec): reject it.
+  return new Date(instant).getUTCDate() === day ? instant : undefined;
+}
 
 function retryAfterReset(
   rawHeaders: readonly string[],
@@ -156,9 +245,7 @@ function retryAfterReset(
     const reset = now + Number(value) * 1000;
     return Number.isFinite(reset) ? reset : undefined;
   }
-  if (!IMF_FIXDATE_RE.test(value)) return undefined;
-  const reset = Date.parse(value);
-  return Number.isFinite(reset) ? reset : undefined;
+  return httpDate(value, now);
 }
 
 function codexReset(
@@ -612,7 +699,6 @@ export function parsePinRecord(value: unknown): MachinePinRecord | undefined {
       (typeof r.keyHash !== "string" || !KEY_HASH_RE.test(r.keyHash))) ||
     !isProfileId(r.profileId) ||
     !Array.isArray(r.tried) ||
-    r.tried.length > MAX_TRIED ||
     !r.tried.every(isProfileId) ||
     typeof r.lastUsedAt !== "number" ||
     !Number.isSafeInteger(r.lastUsedAt) ||
