@@ -686,3 +686,62 @@ replace the original caller's outcome. Claude retained hosts close only through
 the background supervisor; active work refuses the switch. Pi background
 processes are supervisor-owned and keep running independently of its SDK
 runtime. No switch interrupts admitted work or changes running credentials.
+
+### Moving a session by choice
+
+The user can move an idle session to another account from the inspector's
+Account row ("Move to another account"), and an owning coordinator can move its
+idle direct child with `session_control` `move_account`. Both go through
+`moveSessionAccount` in `app/server/src/sessionAccountMove.ts`. One predicate
+there decides which accounts qualify, and it serves the picker's list
+(`listSessionAccountMoveTargets`), the move (`moveSessionAccount`), and the
+tool's error text. The source must be a subscription login whose model it runs
+as a subscription model; another kind of account is the only one serving its
+models, so the session cannot move. The source may be disabled. The target must:
+
+- be another account of the same kind, and enabled;
+- serve the session's model (`accountServesModel`) and offer it at the session's
+  effort, judged on the same per-account model snapshot Automatic reads;
+- not need login;
+- have no bench on the session's model. The bench is judged as Automatic judges
+  it: an account-wide limit, or the model's own limit, even when the account's
+  displayed bench names another model.
+- be an enterprise account if the session requires one.
+
+The move never sets or clears `requiresEnterprise`, never changes the model or
+effort, and never moves a running session. The list reads the model of a
+resident session, or the one the stored row names; it opens no harness. The move
+opens a session that is not resident (`hub.acquireById`).
+
+The move takes every turn hold before any await: the session must not be busy
+(running, or holding an admitted prompt), and account recovery must not be
+reserved. It then takes the run lease (a worktree hold refuses it), the recovery
+reservation and harness admission. While the move runs, prompts, provider turns,
+slash commands and queued or peer deliveries see the typed busy state and wait.
+A second move is refused. Each engine step and the binding compare-and-set
+recheck the following:
+
+- the caller's authority (the coordinator's still-owned spawn edge; takeover
+  refuses);
+- the reservation;
+- the session row;
+- the model and effort;
+- the target's enabled state, health and bench.
+
+The move goes through the same `driver.switchAccount` as failover. On Claude
+this is the history copy; on pi, the staged reopen. Every hold is released in
+`finally`, and the idle edge is re-offered, so queued work drains on the new
+account. The next run counts as moved for the encrypted-reasoning retry. After
+the commit, a display-only marker `Switched from A to B — chosen by you.` (or
+`— chosen by its coordinating session.`) is appended. If that append fails, the
+failure is logged and the move still succeeds.
+
+The server answers each list request with `sessionAccountMoveTargets`. Only the
+latest request's answer lands. A move answers once with
+`sessionAccountMoveAnswer`. A successful move is silent: the session row shows
+the new account. A refusal carries `error` and becomes that session's failure
+(`docs/messaging.md`). It shows in place above the session's composer, or as one
+toast naming the session when the user is elsewhere. A dropped connection
+retires the pending control. The control is offered only on a subscription
+login, and it is disabled with "Available once the current turn ends." while the
+session runs.

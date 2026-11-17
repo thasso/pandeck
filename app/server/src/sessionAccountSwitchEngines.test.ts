@@ -1691,3 +1691,211 @@ test("real Claude store moves a fresh session that requires enterprise before it
     profiles.setCredentialProfileEnabled(e, false);
   }
 });
+
+/* --------------- an explicit move of a session not loaded --------------- */
+
+const { moveSessionAccount } = await import("./sessionAccountMove.ts");
+const { hub } = await import("./hub.ts");
+
+test("an explicit move opens an evicted Claude session, copies its history and resumes it on the target", async () => {
+  const a = account("claude", "Cold Claude A");
+  const b = account("claude", "Cold Claude B");
+  const providerId = randomUUID();
+  const project = "-account-move-cold";
+  const from = join(profiles.claudeConfigDir(a), "projects", project);
+  mkdirSync(from, { recursive: true });
+  const queries: ClaudeQueryParams[] = [];
+  const seam: ClaudeSdkSeam = {
+    query(params) {
+      queries.push(params);
+      return {
+        async *[Symbol.asyncIterator]() {
+          if (typeof params.prompt !== "string") {
+            const iterator = params.prompt[Symbol.asyncIterator]();
+            const input = await iterator.next();
+            if (queries.length === 1)
+              writeFileSync(
+                join(from, `${providerId}.jsonl`),
+                JSON.stringify(input.value) + "\n",
+              );
+            await iterator.return?.();
+          }
+          yield {
+            type: "system",
+            subtype: "init",
+            session_id: providerId,
+            uuid: randomUUID(),
+          } as ClaudeSdkMessage;
+          yield {
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            session_id: providerId,
+            uuid: randomUUID(),
+            total_cost_usd: 0,
+            modelUsage: {},
+          } as unknown as ClaudeSdkMessage;
+        },
+      };
+    },
+  };
+  const internals = claudeSdkStore as unknown as {
+    seam: () => Promise<ClaudeSdkSeam>;
+    evictIdle: (session: unknown) => boolean;
+  };
+  const factory = vi.spyOn(internals, "seam").mockResolvedValue(seam);
+  const id = randomUUID();
+  try {
+    const live = await createSession({
+      harness: "claude-sdk",
+      id,
+      agentType: "assistant",
+      credentialProfileId: a,
+      modelId: "sonnet",
+      thinkingLevel: "medium",
+      title: "Cold Claude",
+    });
+    await promptRuntimeSessionWithRuntime(sessionRuntime, live, "First turn");
+    await vi.waitFor(() => assert.equal(live.isRunning, false));
+    assert.ok(internals.evictIdle(live), "evicted while idle");
+    assert.equal(hub.getLiveById(id), undefined);
+
+    assert.deepEqual(
+      await moveSessionAccount({
+        sessionId: id,
+        targetProfileId: b,
+        by: "user",
+        authorize: () => {},
+      }),
+      { from: "Cold Claude A", to: "Cold Claude B" },
+    );
+    assert.equal(sessionStore.get(id)?.credentialProfileId, b);
+    const to = join(profiles.claudeConfigDir(b), "projects", project);
+    assert.match(
+      readFileSync(join(to, `${providerId}.jsonl`), "utf8"),
+      /First turn/,
+    );
+    assert.equal(existsSync(join(from, `${providerId}.jsonl`)), false);
+
+    const moved = hub.getLiveById(id) as typeof live;
+    assert.equal(moved.credentialProfileId, b);
+    await promptRuntimeSessionWithRuntime(sessionRuntime, moved, "Next turn");
+    const last = queries.at(-1)!;
+    assert.equal(last.options?.resume, providerId);
+    assert.equal(
+      last.options?.env?.CLAUDE_CONFIG_DIR,
+      profiles.claudeConfigDir(b),
+    );
+    assert.ok(
+      JSON.stringify(sessionRuntime.get(id)!.clientTimeline()).includes(
+        "Switched from Cold Claude A to Cold Claude B — chosen by you.",
+      ),
+    );
+  } finally {
+    factory.mockRestore();
+    await sessionRuntime.disposeSession(id);
+    claudeSdkStore.remove(id);
+    profiles.setCredentialProfileEnabled(a, false);
+    profiles.setCredentialProfileEnabled(b, false);
+  }
+});
+
+test("an explicit move reopens an evicted pi session on the target with its history", async () => {
+  const a = account("openai-codex", "Cold Pi A");
+  const b = account("openai-codex", "Cold Pi B");
+  const calls: { profile: string; context: Context }[] = [];
+  const internals = piStore as unknown as {
+    openEngine: (
+      spec: PiEngineOpenSpec,
+    ) => Promise<{ engine: PiEngineHandle; info: unknown }>;
+  };
+  const original = internals.openEngine.bind(piStore);
+  const factory = vi
+    .spyOn(internals, "openEngine")
+    .mockImplementation(async (spec) => {
+      const opened = await original(spec);
+      const session = nativePiSessionForTests(opened.engine);
+      const profile = spec.credentialProfileId;
+      session.setAutoRetryEnabled(false);
+      session.agent.streamFunction = (model, context) => {
+        calls.push({ profile, context: structuredClone(context) });
+        const message: AssistantMessage = {
+          role: "assistant",
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          content: [{ type: "text", text: "Answer" }],
+          stopReason: "stop",
+          timestamp: Date.now(),
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
+          },
+        };
+        const stream = createAssistantMessageEventStream();
+        queueMicrotask(() => {
+          stream.push({ type: "start", partial: message });
+          stream.push({ type: "done", reason: "stop", message });
+          stream.end();
+        });
+        return stream;
+      };
+      return opened;
+    });
+  let id: string | undefined;
+  try {
+    const live = await createSession({
+      harness: "pi",
+      agentType: "assistant",
+      credentialProfileId: a,
+      model: await piModelForAccount(a, "openai-codex", "gpt-5.5"),
+      thinkingLevel: "off",
+      title: "Cold pi",
+    });
+    id = live.id;
+    await promptRuntimeSessionWithRuntime(
+      sessionRuntime,
+      live,
+      "Cold question",
+    );
+    piStore.evict(id);
+    assert.equal(hub.getLiveById(id), undefined);
+
+    await moveSessionAccount({
+      sessionId: id,
+      targetProfileId: b,
+      by: "coordinator",
+      authorize: () => {},
+    });
+    assert.equal(sessionStore.get(id)?.credentialProfileId, b);
+    const moved = hub.getLiveById(id) as typeof live;
+    assert.equal(moved.credentialProfileId, b);
+    await promptRuntimeSessionWithRuntime(sessionRuntime, moved, "Warm again");
+    const last = calls.at(-1)!;
+    assert.equal(last.profile, b);
+    assert.match(JSON.stringify(last.context.messages), /Cold question/);
+    assert.ok(
+      JSON.stringify(sessionRuntime.get(id)!.clientTimeline()).includes(
+        "Switched from Cold Pi A to Cold Pi B — chosen by its coordinating session.",
+      ),
+    );
+  } finally {
+    factory.mockRestore();
+    if (id) {
+      await sessionRuntime.disposeSession(id);
+      piStore.evict(id);
+    }
+    profiles.setCredentialProfileEnabled(a, false);
+    profiles.setCredentialProfileEnabled(b, false);
+  }
+});

@@ -1295,6 +1295,15 @@ const REGISTRY = defineRegistry({
   ),
   revokeApprovalGrant: fields({ sessionId: STRING, key: STRING }),
   setSessionRequiresEnterprise: fields({ sessionId: STRING }),
+  listSessionAccountMoveTargets: fields({
+    sessionId: STRING,
+    requestId: STRING,
+  }),
+  moveSessionAccount: fields({
+    sessionId: STRING,
+    credentialProfileId: STRING,
+    requestId: STRING,
+  }),
   setSessionPeerTurnCap: fields({
     sessionId: STRING,
     cap: {

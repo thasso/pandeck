@@ -151,6 +151,10 @@ import {
 import { isStateTopicInvariant } from "./stateTopicKernel.ts";
 import { publishSessionRowsNow, stateTopicFor } from "./stateTopics.ts";
 import {
+  accountMoveTargets,
+  moveSessionAccount,
+} from "./sessionAccountMove.ts";
+import {
   backgroundWorkHumanStopDeps,
   stopAllBackgroundWorkForHuman,
   stopBackgroundWorkForHuman,
@@ -1224,6 +1228,18 @@ export class Connection implements Viewer {
           });
         }
         return;
+
+      case "listSessionAccountMoveTargets":
+        return this.onListSessionAccountMoveTargets(
+          msg.sessionId,
+          msg.requestId,
+        );
+      case "moveSessionAccount":
+        return this.onMoveSessionAccount(
+          msg.sessionId,
+          msg.credentialProfileId,
+          msg.requestId,
+        );
 
       case "grantApprovalForSession":
         grantApprovalForSession(
@@ -4833,6 +4849,63 @@ export class Connection implements Viewer {
         Boolean(hub.getLiveById(ownerSessionId)?.isRunning),
       ),
     );
+  }
+
+  /** The accounts the inspector's picker offers for an idle session. */
+  private async onListSessionAccountMoveTargets(
+    sessionId: string,
+    requestId: string,
+  ): Promise<void> {
+    try {
+      const accounts = await accountMoveTargets(sessionId);
+      this.send({
+        type: "sessionAccountMoveTargets",
+        requestId,
+        sessionId,
+        accounts,
+      });
+    } catch (err) {
+      this.send({
+        type: "sessionAccountMoveTargets",
+        requestId,
+        sessionId,
+        error: errorText(err),
+      });
+    }
+  }
+
+  /**
+   * The user's move of an idle session to the account they picked, right
+   * away. The answer retires the inspector's pending control; a refusal is
+   * the session's failure (`web/src/lib/messageArrival.ts`).
+   */
+  private async onMoveSessionAccount(
+    sessionId: string,
+    credentialProfileId: string,
+    requestId: string,
+  ): Promise<void> {
+    try {
+      await moveSessionAccount({
+        sessionId,
+        targetProfileId: credentialProfileId,
+        by: "user",
+        // The user may move any of their own sessions while it exists.
+        authorize: () => {
+          const row = sessionStore.get(sessionId);
+          if (!row) throw new Error("Session does not exist or was deleted.");
+          if (row.scope !== "user")
+            throw new Error("Only a user session can move to another account.");
+        },
+      });
+      this.send({ type: "sessionAccountMoveAnswer", requestId, sessionId });
+    } catch (err) {
+      this.send({
+        type: "sessionAccountMoveAnswer",
+        requestId,
+        sessionId,
+        error: errorText(err),
+      });
+    }
   }
 
   /** Human Stop for one background item; the row itself answers as an event. */

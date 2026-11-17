@@ -131,8 +131,10 @@ describe("session_control tool", () => {
       "stop",
       "dismiss_background_updates",
       "require_enterprise",
+      "move_account",
     ]);
     assert.deepEqual(Object.keys(schema.properties).sort(), [
+      "account",
       "clearQueue",
       "operation",
       "targetSessionId",
@@ -159,6 +161,14 @@ describe("session_control tool", () => {
           context(caller),
         ),
       /clearQueue must be a boolean/,
+    );
+    await assert.rejects(
+      () =>
+        tool().execute(
+          { operation: "stop", targetSessionId: target, account: "B" },
+          context(caller),
+        ),
+      /account is only valid with operation "move_account"/,
     );
   });
 

@@ -1,7 +1,7 @@
 /**
  * `session_control`: retract the caller's waiting peer prompts, stop an owned
- * child, or, while it is not running, dismiss its unhandled background updates
- * or make it enterprise-only. A sender may retract only its own messages. The
+ * child, or, while it is not running, dismiss its unhandled background updates,
+ * make it enterprise-only or move it to another account. A sender may retract only its own messages. The
  * other operations require a direct spawn edge still owned by `coordinator`;
  * user takeover revokes them.
  */
@@ -14,6 +14,11 @@ import { noteDelegationStandDown } from "../../delegationFailureNotice.ts";
 import { defineAgentTool, type AgentTool } from "../../mcp/tool.ts";
 import { cancelQueuedPeerPrompts } from "../../peerPrompt.ts";
 import { requireSessionEnterprise } from "../../sessionAccount.ts";
+import {
+  accountMoveTargets,
+  moveSessionAccount,
+} from "../../sessionAccountMove.ts";
+import { listCredentialProfiles } from "../../credentialProfiles.ts";
 import { sessionRuntime } from "../../session/runtimeInstance.ts";
 import { cleanSessionId, SessionInspectionError } from "./sessionInspection.ts";
 
@@ -21,11 +26,13 @@ type SessionControlOperation =
   | "cancel_queued_prompts"
   | "stop"
   | "dismiss_background_updates"
-  | "require_enterprise";
+  | "require_enterprise"
+  | "move_account";
 type SessionControlParams = {
   operation?: unknown;
   targetSessionId?: unknown;
   clearQueue?: unknown;
+  account?: unknown;
 };
 
 interface SessionControlRuntime {
@@ -55,9 +62,9 @@ function makeSessionControlTool() {
     name: "session_control",
     label: "Control Session",
     description:
-      "Abort a child you spawned and still own, or retract your own waiting peer deliveries. The cancellation operation removes every delivery YOU sent to the target that has not started dispatching. The stop operation aborts the child's current turn. Its `clearQueue` option cancels every not-yet-dispatched delivery queued for that child before aborting, so the idle transition does not start the next turn. A child the user took over cannot be stopped. Stopping does not archive or delete it. dismiss_background_updates is the user's Dismiss for every unhandled update of your still-owned direct child, refused while it runs; dismissal is not handling and leaves jobs and output unchanged. require_enterprise makes that idle child enterprise-only for good; its next prompt moves it to an enterprise account.",
+      "Abort a child you spawned and still own, or retract your own waiting peer deliveries. The cancellation operation removes every delivery YOU sent to the target that has not started dispatching. The stop operation aborts the child's current turn. Its `clearQueue` option cancels every not-yet-dispatched delivery queued for that child before aborting, so the idle transition does not start the next turn. A child the user took over cannot be stopped. Stopping does not archive or delete it. dismiss_background_updates is the user's Dismiss for every unhandled update of your still-owned direct child, refused while it runs; dismissal is not handling and leaves jobs and output unchanged. require_enterprise makes that idle child enterprise-only for good; its next prompt moves it to an enterprise account. move_account moves that idle child to another eligible account of the same kind now.",
     searchHint:
-      "stop abort spawned child cancel retract remove queued peer delivery clear queue dismiss unhandled background updates require enterprise account cybersecurity refusal",
+      "stop abort spawned child cancel retract remove queued peer delivery clear queue dismiss unhandled background updates require enterprise account cybersecurity refusal move switch account",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -70,9 +77,10 @@ function makeSessionControlTool() {
             "stop",
             "dismiss_background_updates",
             "require_enterprise",
+            "move_account",
           ],
           description:
-            '"cancel_queued_prompts" retracts your waiting messages. "stop" aborts an owned child. "dismiss_background_updates" dismisses its interrupted receipts. "require_enterprise" makes it enterprise-only.',
+            '"cancel_queued_prompts" retracts your waiting messages. "stop" aborts an owned child. "dismiss_background_updates" dismisses its interrupted receipts. "require_enterprise" makes it enterprise-only. "move_account" moves it to `account`.',
         },
         targetSessionId: {
           type: "string",
@@ -83,17 +91,28 @@ function makeSessionControlTool() {
           description:
             'Only for "stop". Cancel every waiting prompt to the owned child before aborting. Defaults to false.',
         },
+        account: {
+          type: "string",
+          description:
+            'Only for "move_account", and required there: the target account\'s name or id.',
+        },
       },
     } as const,
     async execute(params, ctx) {
       for (const key of Object.keys(params))
-        if (!["operation", "targetSessionId", "clearQueue"].includes(key))
+        if (
+          !["operation", "targetSessionId", "clearQueue", "account"].includes(
+            key,
+          )
+        )
           throw new Error(`session_control does not accept "${key}".`);
 
       const operation = readOperation(params.operation);
       const targetSessionId = requireSessionId(params.targetSessionId);
       if (operation !== "stop" && params.clearQueue !== undefined)
         throw new Error('clearQueue is only valid with operation "stop".');
+      if (operation !== "move_account" && params.account !== undefined)
+        throw new Error('account is only valid with operation "move_account".');
       if (targetSessionId === ctx.session.sessionId)
         throw new Error(
           "Cannot control the current session through session_control.",
@@ -141,6 +160,39 @@ function makeSessionControlTool() {
         );
       }
 
+      if (operation === "move_account") {
+        const coordinator = ctx.session.sessionId;
+        const authorize = () => {
+          requireUserTarget(targetSessionId);
+          requireOwnedChild(coordinator, targetSessionId, "moved");
+        };
+        authorize();
+        if (runtime().isRunning(targetSessionId))
+          throw new Error(
+            `Session ${targetSessionId} is running; move it once its turn ends.`,
+          );
+        const target = await resolveMoveAccount(
+          targetSessionId,
+          params.account,
+        );
+        try {
+          const moved = await moveSessionAccount({
+            sessionId: targetSessionId,
+            targetProfileId: target.id,
+            by: "coordinator",
+            authorize,
+          });
+          return textResult(
+            `Moved ${targetSessionId} from ${moved.from} to ${moved.to}.`,
+          );
+        } catch (err) {
+          // An account that was not eligible a moment ago: its own reason,
+          // and what the coordinator could pick instead.
+          if (target.eligible || !(err instanceof Error)) throw err;
+          throw new Error(`${err.message} ${target.alternatives}`);
+        }
+      }
+
       const clearQueue = readOptionalBoolean(params.clearQueue, "clearQueue");
       requireOwnedChild(ctx.session.sessionId, targetSessionId);
       const cancelled = clearQueue
@@ -171,12 +223,51 @@ function readOperation(value: unknown): SessionControlOperation {
     value === "cancel_queued_prompts" ||
     value === "stop" ||
     value === "dismiss_background_updates" ||
-    value === "require_enterprise"
+    value === "require_enterprise" ||
+    value === "move_account"
   )
     return value;
   throw new Error(
-    'operation must be "cancel_queued_prompts", "stop", "dismiss_background_updates" or "require_enterprise".',
+    'operation must be "cancel_queued_prompts", "stop", "dismiss_background_updates", "require_enterprise" or "move_account".',
   );
+}
+
+/**
+ * The account `move_account` names, by id or exact (case-insensitive) name,
+ * and whether it is eligible right now. An unknown name lists the child's
+ * eligible accounts; the move re-judges the target itself.
+ */
+async function resolveMoveAccount(
+  sessionId: string,
+  value: unknown,
+): Promise<{ id: string; eligible: boolean; alternatives: string }> {
+  if (typeof value !== "string" || !value.trim())
+    throw new Error('operation "move_account" requires an account name or id.');
+  const wanted = value.trim();
+  const profiles = listCredentialProfiles();
+  const byId = profiles.find((profile) => profile.id === wanted);
+  const matches = byId
+    ? [byId]
+    : profiles.filter(
+        (profile) => profile.name.toLowerCase() === wanted.toLowerCase(),
+      );
+  if (matches.length > 1)
+    throw new Error(
+      `More than one account is named "${wanted}" (${matches.map((profile) => profile.id).join(", ")}); name it by id.`,
+    );
+  const eligible = await accountMoveTargets(sessionId);
+  const names = eligible.map((account) => account.name).join(", ");
+  const alternatives = names
+    ? `Eligible accounts: ${names}.`
+    : "No account is eligible for this session now.";
+  const match = matches[0];
+  if (!match)
+    throw new Error(`No account is named "${wanted}". ${alternatives}`);
+  return {
+    id: match.id,
+    eligible: eligible.some((account) => account.id === match.id),
+    alternatives,
+  };
 }
 
 function requireSessionId(value: unknown): string {

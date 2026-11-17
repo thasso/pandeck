@@ -6813,6 +6813,21 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         onRequireEnterprise={
           displaySessionListItem ? actions.requireSessionEnterprise : undefined
         }
+        accountMove={
+          displaySessionListItem && displayCurrentId
+            ? {
+                targets:
+                  state.accountMoveTargets?.sessionId === displayCurrentId
+                    ? state.accountMoveTargets.targets
+                    : undefined,
+                pending: displayCurrentId in state.accountMovePending,
+                onOpen: () =>
+                  actions.listSessionAccountMoveTargets(displayCurrentId),
+                onPick: (profileId) =>
+                  actions.moveSessionAccount(displayCurrentId, profileId),
+              }
+            : undefined
+        }
         enterpriseAccountAvailable={
           displayCredentialProfile !== undefined &&
           credentialProfiles.some(

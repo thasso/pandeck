@@ -24,6 +24,16 @@ const { drivers, fakeHub } = vi.hoisted(() => {
   };
 });
 vi.mock("./hub.ts", () => ({ hub: fakeHub }));
+const offers = vi.hoisted(
+  () => new Map<string, { provider: string; id: string }>(),
+);
+vi.mock("./harnesses/models.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./harnesses/models.ts")>()),
+  modelsForAccount: async ({ id }: { id: string }) =>
+    offers.has(id)
+      ? [{ ...offers.get(id), name: "Test model", reasoning: false }]
+      : [],
+}));
 vi.mock("./webPush.ts", () => ({ notifySessionBlocked: async () => {} }));
 
 const peer = await import("./peerPrompt.ts");
@@ -583,5 +593,102 @@ test("running joinable offers do not await the handoff turn they may steer", asy
   releaseHandoff();
   await until(() => f.driver.promptTexts.length === 3);
   assert.match(f.driver.promptTexts[2]!, /Background work updated/);
+  assert.deepEqual(f.errors, []);
+});
+
+test("an explicit account move holds peer and queued prompts until it ends, then they drain", async () => {
+  const { writeFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const profiles = await import("./credentialProfiles.ts");
+  const { sessionRuntime } = await import("./session/runtimeInstance.ts");
+  const { moveSessionAccount, setAccountMoveHostForTests } =
+    await import("./sessionAccountMove.ts");
+  const account = (name: string) => {
+    const p = profiles.createCredentialProfile({
+      name,
+      provider: "openai-codex",
+    });
+    writeFileSync(
+      join(profiles.piAgentDir(p.id), "auth.json"),
+      JSON.stringify({
+        "openai-codex": {
+          type: "oauth",
+          access: "test-token",
+          refresh: "test-refresh",
+          expires: Date.now() + 86400_000,
+        },
+      }),
+    );
+    offers.set(p.id, { provider: "openai-codex", id: "gpt-5.5" });
+    cleanups.push(() => {
+      profiles.setCredentialProfileEnabled(p.id, false);
+    });
+    return p.id;
+  };
+  const a = account("Lanes A");
+  const b = account("Lanes B");
+  const f = fixture();
+  const id = f.driver.sessionId;
+  sessionStore.upsert({
+    id,
+    harness: "pi",
+    agentType: "assistant",
+    credentialProfileId: a,
+  });
+  const moving = deferred();
+  let entered = false;
+  let bound = a;
+  Object.assign(f.driver, {
+    modelSelection: () => ({ model: offers.get(a)!, thinkingLevel: "off" }),
+    switchAccount: async (next: string, admit: () => void) => {
+      admit();
+      entered = true;
+      await moving.promise;
+      admit();
+      sessionStore.switchCredentialProfile(id, bound, next);
+      bound = next;
+    },
+  });
+  setAccountMoveHostForTests({
+    runtime: sessionRuntime,
+    resident: async () => drivers.get(id),
+    acquire: async () => drivers.get(id),
+    publishRows: async () => {},
+  });
+  cleanups.push(() => setAccountMoveHostForTests(undefined));
+
+  const move = moveSessionAccount({
+    sessionId: id,
+    targetProfileId: b,
+    by: "user",
+    authorize: () => {},
+  });
+  await until(() => entered);
+  const sent = await f.send("peer during move");
+  queue.queuePrompt(id, { text: "queued during move" });
+  await f.scheduler.wake(id);
+  assert.equal(f.driver.promptTexts.length, 0);
+  assert.notEqual(
+    peerPromptStore.getById(sent.message.id)?.status,
+    "completed",
+  );
+  assert.equal(promptQueueStore.list(id).length, 1);
+
+  moving.resolve();
+  await move;
+  assert.equal(sessionStore.get(id)?.credentialProfileId, b);
+  await until(
+    () =>
+      f.driver.promptTexts.length === 2 &&
+      peerPromptStore.getById(sent.message.id)?.status === "completed",
+    () => JSON.stringify(f.driver.promptTexts),
+  );
+  assert.ok(
+    f.driver.promptTexts.some((text) => text.includes("queued during move")),
+  );
+  assert.ok(
+    f.driver.promptTexts.some((text) => text.includes("peer during move")),
+  );
+  assert.equal(promptQueueStore.list(id).length, 0);
   assert.deepEqual(f.errors, []);
 });
