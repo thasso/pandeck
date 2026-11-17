@@ -3,18 +3,22 @@
  * token made on the machine and sent only as its hash on both paths, the
  * approval poll's timing (interval, `slow_down`, 503 and network backoff, the
  * 15 s request deadline, the request's expiry plus 30 s, cancel) and that no
- * file is written before a 200. Every value is fake; nothing is printed.
+ * file is written before a 200. A devbox's owner token (Task-1410 PR2) goes
+ * only in the start's body, is retried without once, and is never written.
+ * Every value is fake; nothing is printed.
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import type http from "node:http";
@@ -70,15 +74,20 @@ interface FakePort {
   polled(count: number): Promise<void>;
 }
 
-/** The enrollment port: `/enroll/start`, then `polls` in order (the last repeats). */
+/**
+ * The enrollment port: `/enroll/start` (a list: one reply per start, the last
+ * repeating), then `polls` in order (the last repeats).
+ */
 async function fakePort(
   polls: Reply[],
-  start: Reply = { status: 200, body: STARTED },
+  start: Reply | Reply[] = { status: 200, body: STARTED },
   enroll: Reply = { status: 200, body: ENROLLED },
 ): Promise<FakePort> {
   const seen: FakePort["seen"] = [];
   const waiters: { count: number; resolve: () => void }[] = [];
+  const starts = Array.isArray(start) ? start : [start];
   let pollCount = 0;
+  let startCount = 0;
   const stalled: http.ServerResponse[] = [];
   const server = https.createServer(
     { key: edgeTls.serverKeyPem, cert: edgeTls.serverCertPem },
@@ -90,7 +99,8 @@ async function fakePort(
         const path = req.url ?? "";
         seen.push({ path, body: JSON.parse(raw) as Record<string, unknown> });
         let reply: Reply;
-        if (path === "/enroll/start") reply = start;
+        if (path === "/enroll/start")
+          reply = starts[Math.min(startCount++, starts.length - 1)]!;
         else if (path === "/enroll") reply = enroll;
         else {
           reply = polls[Math.min(pollCount, polls.length - 1)]!;
@@ -526,4 +536,277 @@ test("CLI: --approve needs --name, refuses a code file and an unknown kind", asy
     assert.equal(await run.done, 2, args.join(" "));
     assert.match(run.err(), /usage:/);
   }
+});
+
+// --- a devbox's owner token (Task-1410 PR2) -----------------------------------
+
+const FAKE_OWNER_TOKEN = "FAKE_owner-google-access-token";
+
+/** No file under `stateDir` holds the owner token. */
+function assertTokenNotWritten(stateDir: string): void {
+  if (!existsSync(stateDir)) return;
+  for (const name of readdirSync(stateDir))
+    assert.ok(
+      !readFileSync(join(stateDir, name), "utf8").includes(FAKE_OWNER_TOKEN),
+      name,
+    );
+}
+
+const starts = (port: FakePort) =>
+  port.seen.filter((request) => request.path === "/enroll/start");
+
+test("devbox: an automatic answer shows no link, polls once at once, and writes the files but never the token", async () => {
+  const port = await fakePort([{ status: 200, body: ENROLLED }], {
+    status: 200,
+    body: { ...STARTED, approval: "automatic" },
+  });
+  let automatic = 0;
+  const { stateDir, prompts, clock, run } = approval(port.port, {
+    devbox: { googleAccessToken: FAKE_OWNER_TOKEN },
+    onAutomatic: () => (automatic += 1),
+  });
+  assert.equal(await run, "c_fake");
+  assert.equal(automatic, 1);
+  assert.deepEqual(prompts, []);
+  assert.deepEqual(clock.sleeps, [], "the first poll waits for nothing");
+  const [start, ...polls] = port.seen;
+  assert.deepEqual(start!.body.devbox, { googleAccessToken: FAKE_OWNER_TOKEN });
+  assert.equal(polls.length, 1);
+  assert.ok(!JSON.stringify(polls).includes(FAKE_OWNER_TOKEN));
+  assertEnrolled(stateDir, start!.body.mcpTokenHash);
+  assertTokenNotWritten(stateDir);
+});
+
+test("devbox: a browser answer prompts with the gateway's fixed reason; an unknown reason, a gateway without approval, or no proof prompts without one", async () => {
+  const cases: [unknown, boolean, string | undefined][] = [
+    [
+      { ...STARTED, approval: "browser", automaticRefused: "already_used" },
+      true,
+      "already_used",
+    ],
+    [
+      { ...STARTED, approval: "browser", automaticRefused: "FAKE upstream" },
+      true,
+      undefined,
+    ],
+    // A gateway before PR 2: no `approval`, so the browser.
+    [STARTED, true, undefined],
+    // No proof sent: a reason the gateway gives anyway is not shown.
+    [
+      { ...STARTED, approval: "browser", automaticRefused: "limit" },
+      false,
+      undefined,
+    ],
+  ];
+  for (const [body, withProof, reason] of cases) {
+    const port = await fakePort([{ status: 200, body: ENROLLED }], {
+      status: 200,
+      body,
+    });
+    const { prompts, clock, run } = approval(port.port, {
+      ...(withProof ? { devbox: { googleAccessToken: FAKE_OWNER_TOKEN } } : {}),
+    });
+    assert.equal(await run, "c_fake");
+    assert.deepEqual(prompts, [
+      {
+        verificationUri: STARTED.verificationUri,
+        userCode: FAKE_USER_CODE,
+        expiresInSeconds: 600,
+        ...(reason ? { automaticRefused: reason } : {}),
+      },
+    ]);
+    assert.deepEqual(clock.sleeps, [5_000]);
+    assert.equal(
+      "devbox" in starts(port)[0]!.body,
+      withProof,
+      "the proof goes only when given",
+    );
+  }
+});
+
+test("devbox: a start with the proof that answers 5xx, drops or stalls is sent once more at once without it, and the link shows unavailable", async () => {
+  for (const first of [
+    { status: 503, body: { error: "enrollment requests full" } },
+    "drop",
+    "stall",
+  ] as Reply[]) {
+    const port = await fakePort(
+      [{ status: 200, body: ENROLLED }],
+      [first, { status: 200, body: STARTED }],
+    );
+    const { prompts, stateDir, run } = approval(port.port, {
+      devbox: { googleAccessToken: FAKE_OWNER_TOKEN },
+      requestTimeoutMs: 300,
+    });
+    assert.equal(await run, "c_fake");
+    const [withProof, without] = starts(port);
+    assert.equal(starts(port).length, 2);
+    assert.deepEqual(withProof!.body.devbox, {
+      googleAccessToken: FAKE_OWNER_TOKEN,
+    });
+    assert.ok(!("devbox" in without!.body));
+    // The same machine asks again: the same key and token hash.
+    assert.equal(without!.body.publicKeyPem, withProof!.body.publicKeyPem);
+    assert.equal(without!.body.mcpTokenHash, withProof!.body.mcpTokenHash);
+    assert.equal(prompts[0]!.automaticRefused, "unavailable");
+    assertTokenNotWritten(stateDir);
+  }
+
+  // Once only: a second failure is the refusal, without a third start.
+  const twice = await fakePort([], { status: 503, body: {} });
+  const failed = approval(twice.port, {
+    devbox: { googleAccessToken: FAKE_OWNER_TOKEN },
+  });
+  await assert.rejects(failed.run, /refused the enrollment request \(503\)/);
+  assert.equal(starts(twice).length, 2);
+  assert.ok(!existsSync(failed.stateDir));
+
+  // A 4xx is an answer, not a failure: no retry.
+  const limited = await fakePort([], {
+    status: 429,
+    body: { error: "too many" },
+    retryAfter: 60,
+  });
+  const refused = approval(limited.port, {
+    devbox: { googleAccessToken: FAKE_OWNER_TOKEN },
+  });
+  await assert.rejects(refused.run);
+  assert.equal(starts(limited).length, 1);
+});
+
+test("devbox: an abort during the start with the proof is not retried and writes nothing", async () => {
+  const port = await fakePort([], "stall");
+  const stop = new AbortController();
+  const { run, stateDir } = approval(port.port, {
+    devbox: { googleAccessToken: FAKE_OWNER_TOKEN },
+    signal: stop.signal,
+  });
+  const deadline = Date.now() + 5_000;
+  while (port.seen.length === 0 && Date.now() < deadline)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  stop.abort();
+  await assert.rejects(run, { name: "AbortError" });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(starts(port).length, 1, "no second start");
+  assert.ok(!existsSync(stateDir));
+});
+
+test("CLI: --owner-token-file - sends the stdin token and prints Approved automatically; an empty stdin sends none and shows the link", async () => {
+  const automatic = await fakePort([{ status: 200, body: ENROLLED }], {
+    status: 200,
+    body: { ...STARTED, approval: "automatic" },
+  });
+  const dir = mkdtempSync(join(root, "cli-"));
+  const caFile = join(dir, "ca.pem");
+  writeFileSync(caFile, edgeTls.caCertPem);
+  const args = (port: number, stateDir: string) => [
+    "enroll",
+    "--approve",
+    "--name",
+    "devbox-7",
+    "--kind",
+    "devbox",
+    "--owner-token-file",
+    "-",
+    "--state-dir",
+    stateDir,
+    "--gateway",
+    `127.0.0.1:${port}`,
+    "--ca",
+    caFile,
+  ];
+  const stateDir = join(dir, "state");
+  const run = cli(args(automatic.port, stateDir));
+  run.child.stdin.end(`${FAKE_OWNER_TOKEN}\n`);
+  assert.equal(await run.done, 0, run.err());
+  assert.match(run.out(), /^Approved automatically\.$/m);
+  assert.match(run.out(), /enrolled as client c_fake/);
+  assert.ok(!run.out().includes(STARTED.verificationUri), "no link");
+  assert.ok(!`${run.out()}${run.err()}`.includes(FAKE_OWNER_TOKEN));
+  assert.deepEqual(starts(automatic)[0]!.body.devbox, {
+    googleAccessToken: FAKE_OWNER_TOKEN,
+  });
+  assertTokenNotWritten(stateDir);
+
+  const browser = await fakePort([
+    { status: 202, body: { status: "pending" } },
+  ]);
+  const empty = cli(args(browser.port, join(dir, "state-2")));
+  empty.child.stdin.end("");
+  const deadline = Date.now() + 20_000;
+  while (!empty.out().includes("Waiting for approval") && Date.now() < deadline)
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.ok(empty.out().includes(STARTED.verificationUri), "the link");
+  assert.ok(!empty.out().includes("declined"), "no reason without a proof");
+  empty.child.kill("SIGINT");
+  assert.equal(await empty.done, 130);
+  assert.ok(!("devbox" in starts(browser)[0]!.body));
+});
+
+test("CLI: the owner token file must be a 0600 regular file, not a symlink; refused before any request, without its content", async () => {
+  const port = await fakePort([{ status: 200, body: ENROLLED }], {
+    status: 200,
+    body: { ...STARTED, approval: "browser", automaticRefused: "limit" },
+  });
+  const dir = mkdtempSync(join(root, "cli-"));
+  const caFile = join(dir, "ca.pem");
+  writeFileSync(caFile, edgeTls.caCertPem);
+  const tokenFile = join(dir, "owner-token");
+  writeFileSync(tokenFile, `${FAKE_OWNER_TOKEN}\n`, { mode: 0o600 });
+  const link = join(dir, "owner-token-link");
+  symlinkSync(tokenFile, link);
+  const loose = join(dir, "owner-token-loose");
+  writeFileSync(loose, FAKE_OWNER_TOKEN);
+  chmodSync(loose, 0o644);
+  const args = (file: string) => [
+    "enroll",
+    "--approve",
+    "--name",
+    "devbox-7",
+    "--owner-token-file",
+    file,
+    "--state-dir",
+    join(dir, "state"),
+    "--gateway",
+    `127.0.0.1:${port.port}`,
+    "--ca",
+    caFile,
+  ];
+  for (const file of [link, loose]) {
+    const run = cli(args(file));
+    assert.equal(await run.done, 1, file);
+    assert.ok(!`${run.out()}${run.err()}`.includes(FAKE_OWNER_TOKEN));
+  }
+  assert.equal(port.seen.length, 0, "nothing was sent");
+
+  // The 0600 file: the proof goes, the reason precedes the link.
+  const run = cli(args(tokenFile));
+  const deadline = Date.now() + 20_000;
+  while (!run.out().includes("Waiting for approval") && Date.now() < deadline)
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  const out = run.out();
+  assert.ok(
+    out.indexOf("Automatic approval declined (limit)") >= 0 &&
+      out.indexOf("Automatic approval declined (limit)") <
+        out.indexOf(STARTED.verificationUri),
+  );
+  run.child.kill("SIGINT");
+  assert.equal(await run.done, 130);
+  assert.deepEqual(starts(port)[0]!.body.devbox, {
+    googleAccessToken: FAKE_OWNER_TOKEN,
+  });
+
+  // Not on the typed path.
+  const typed = cli([
+    "enroll",
+    "--owner-token-file",
+    tokenFile,
+    "--state-dir",
+    "/unused",
+    "--gateway",
+    "127.0.0.1:1",
+    "--ca",
+    "/unused",
+  ]);
+  assert.equal(await typed.done, 2);
 });

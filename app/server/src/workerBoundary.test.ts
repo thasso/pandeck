@@ -541,6 +541,8 @@ const GATEWAY_EDGE = [
   "compatUpstream",
   "control",
   "controlMethods",
+  // A devbox's Google proof of its owner, checked with Google (Task-1410 PR2).
+  "devboxProof",
   // Approval enrollment's bodies and poll limiter (Task-1410).
   "enrollmentApproval",
   "forward",

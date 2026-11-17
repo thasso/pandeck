@@ -1,4 +1,4 @@
-<!-- instruction-budget: bytes=3750 reason="Twelve contracts; edge tools add the injected-tools rule, the per-call credential read of /mcp and tools.call, approval enrollment's collect that never touches a token, and the integration records' four writers (OAuth connect and rotating refresh) with their per-record lane and stop." task=1411 date=2026-11-16 -->
+<!-- instruction-budget: bytes=4040 reason="Thirteen contracts: edge tools, per-call credential reads, enrollment collect and automatic approval, and the integration records' four writers with their lane and stop." task=1410 date=2026-11-17 -->
 
 # Credential gateway
 
@@ -29,6 +29,12 @@ Contract: `docs/workers.md` "Credentials" and ADR-0005.
   and `tools.call` read the registry user's credential per call. An enrollment
   collect never sets, restores or replaces a token. Every vault integration call
   is bounded and answers a typed outcome.
+- Outside the page, only `approveAutomatically` decides an enrollment request,
+  after a devbox proof: a Google token for Coder's client that the allow rule
+  admits, still before the `notAfter` fixed at token info when the registry lock
+  is held, and once per token (its hash kept 61 minutes). It finds or creates
+  the user as sign-in does but never binds a claim. The token is used once, in
+  memory.
 - A vault with recipients keeps credentials on disk only as sealed records
   (`sealedStore.ts`); plaintext lives only under its tmpfs `accounts/`, written
   by unlock. Each writer seals in its lane; the sweep never overwrites a record

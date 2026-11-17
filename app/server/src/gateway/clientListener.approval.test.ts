@@ -3,7 +3,9 @@
  * `/enroll/poll`, the typed `/enroll`'s optional MCP token hash, and their
  * limits, through a started gateway. The page's decision is the registry's
  * `decide` until the page routes exist. Every key, token, request id and code
- * is synthetic and stays inside this process.
+ * is synthetic and stays inside this process. Zero-click (Task-1410 PR2): a
+ * start's devbox proof, through an injected verifier or the real one against
+ * the loopback Google fake.
  */
 import assert from "node:assert/strict";
 import {
@@ -16,18 +18,35 @@ import {
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import type http from "node:http";
 import https from "node:https";
+import net from "node:net";
 import { join } from "node:path";
-import { afterAll, afterEach, beforeAll, test } from "vitest";
+import tls from "node:tls";
+import { afterAll, afterEach, beforeAll, test, vi } from "vitest";
 import { DATA_DIR } from "../config.ts";
+import { admittedEmail, type AllowRule } from "../gatewayWeb/config.ts";
 import {
   startFakeUpstreams,
   type FakeUpstreams,
 } from "../test/gatewayFixtures.ts";
 import {
+  FAKE_CODER_CLIENT_ID,
+  FAKE_HD,
+  FAKE_OWNER_EMAIL,
+  FAKE_OWNER_SUB,
+  FAKE_OWNER_TOKEN,
+  startGoogleFake,
+  type GoogleFake,
+} from "../test/googleFake.ts";
+import {
   ENROLLMENT_REQUEST_RETAIN_MS,
   ENROLLMENT_REQUEST_TTL_MS,
   MAX_OPEN_REQUESTS,
 } from "./clientRegistry.ts";
+import {
+  devboxApproval,
+  type DevboxApproval,
+  type DevboxProofResult,
+} from "./devboxProof.ts";
 import type { EdgeTools } from "./edgeTools.ts";
 import { startGateway, type RunningGateway } from "./gateway.ts";
 
@@ -40,6 +59,7 @@ beforeAll(async () => {
   upstreams = await startFakeUpstreams();
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   while (open.length) await open.pop()!.close();
   clock = Date.now();
 });
@@ -267,6 +287,7 @@ test("a start answers the request id, the user code and a link with the code in 
   const { gateway } = await edge({ approvalOrigin: `${ORIGIN}/` });
   const { answer, requestId, userCode } = await startRequest(gateway);
   assert.deepEqual(Object.keys(answer.json).sort(), [
+    "approval",
     "expiresInSeconds",
     "intervalSeconds",
     "requestId",
@@ -284,6 +305,7 @@ test("a start answers the request id, the user code and a link with the code in 
   assert.ok(!uri.href.includes(requestId));
   assert.equal(answer.json.expiresInSeconds, 600);
   assert.equal(answer.json.intervalSeconds, 5);
+  assert.equal(answer.json.approval, "browser");
   assert.deepEqual(gateway.clients!.registry.enrollmentRequest(userCode), {
     name: "devbox-7",
     kind: "devbox",
@@ -646,4 +668,687 @@ test("a registry failure answers 503 on start and poll and leaves the gateway se
   assert.equal((await poll(gateway, started.requestId)).status, 503);
   await writeFile(file, saved);
   assert.equal((await poll(gateway, started.requestId)).status, 202);
+});
+
+// --- Zero-click enrollment (Task-1410 PR2) ----------------------------------
+
+const GOOGLE_ISSUER = "https://accounts.google.com";
+const ALLOW: AllowRule = {
+  emailDomains: ["example.test"],
+  emails: [],
+  claims: { hd: FAKE_HD },
+};
+const PR1_KEYS = [
+  "expiresInSeconds",
+  "intervalSeconds",
+  "requestId",
+  "userCode",
+  "verificationUri",
+];
+
+async function devboxEdge(
+  options: {
+    devboxApproval?: DevboxApproval;
+    logs?: string[];
+    enrollIdle?: { baseMs: number; proofMs: number };
+  } = {},
+): Promise<{ gateway: RunningGateway; stateDir: string }> {
+  const stateDir = await mkdtemp(join(DATA_DIR, "client-devbox-"));
+  const gateway = await startGateway({
+    stateDir,
+    upstreams: upstreams.overrides,
+    now: () => clock,
+    log: (line) => options.logs?.push(line),
+    clients: {
+      approvalOrigin: ORIGIN,
+      ...(options.devboxApproval
+        ? { devboxApproval: options.devboxApproval }
+        : {}),
+    },
+    ...(options.enrollIdle ? { enrollIdle: options.enrollIdle } : {}),
+    tools,
+  });
+  open.push(gateway);
+  gateway.clients!.registry.addUser("u1");
+  return { gateway, stateDir };
+}
+
+/** A verifier answering `result`, recording each token, clock and signal. */
+function scripted(
+  result: (
+    now: () => number,
+    signal: AbortSignal,
+  ) => DevboxProofResult | Promise<DevboxProofResult>,
+) {
+  const calls: { token: string; at: number; signal: AbortSignal }[] = [];
+  const approval: DevboxApproval = {
+    issuer: GOOGLE_ISSUER,
+    verify: async (token, { now, signal }) => {
+      calls.push({ token, at: now(), signal });
+      return result(now, signal);
+    },
+  };
+  return { approval, calls };
+}
+
+/** The proof of the fake owner, as the verifier answers it. */
+const proven =
+  (subject = FAKE_OWNER_SUB, email = FAKE_OWNER_EMAIL) =>
+  (now: () => number): DevboxProofResult => ({
+    ok: true,
+    subject,
+    email,
+    notAfter: now() + 3_566_000,
+  });
+
+function startBody(who: ReturnType<typeof machine>, token?: string) {
+  return {
+    publicKeyPem: who.publicKeyPem,
+    mcpTokenHash: sha256(who.token),
+    name: "devbox-7",
+    kind: "devbox",
+    ...(token === undefined ? {} : { devbox: { googleAccessToken: token } }),
+  };
+}
+
+async function startWithProof(
+  gateway: RunningGateway,
+  token: string | undefined,
+  from = "127.0.0.1",
+) {
+  const who = machine();
+  const answer = await post(
+    gateway,
+    "/enroll/start",
+    startBody(who, token),
+    from,
+  );
+  assert.equal(answer.status, 200);
+  return {
+    ...who,
+    requestId: answer.json.requestId as string,
+    userCode: answer.json.userCode as string,
+    answer,
+  };
+}
+
+async function until(done: () => boolean, what: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!done()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+/** Nothing the proof touched in a log line: token, hash, email, ids, codes. */
+function assertQuiet(
+  logs: string[],
+  started: { requestId: string; userCode: string }[],
+): void {
+  const logged = logs.join("\n");
+  for (const secret of [
+    FAKE_OWNER_TOKEN,
+    sha256(FAKE_OWNER_TOKEN),
+    FAKE_OWNER_EMAIL,
+    ...started.flatMap((one) => [
+      one.requestId,
+      one.userCode,
+      one.userCode.replace("-", ""),
+    ]),
+  ])
+    assert.ok(!logged.includes(secret), "a log line holds a secret");
+}
+
+test("a devbox proof that holds approves the request at once: the first poll collects, a user exists for the owner, and only the token's hash is kept", async () => {
+  const logs: string[] = [];
+  const verifier = scripted(proven());
+  const { gateway, stateDir } = await devboxEdge({
+    devboxApproval: verifier.approval,
+    logs,
+  });
+  const registry = gateway.clients!.registry;
+  const started = await startWithProof(gateway, FAKE_OWNER_TOKEN);
+  assert.deepEqual(Object.keys(started.answer.json).sort(), [
+    "approval",
+    ...PR1_KEYS,
+  ]);
+  assert.equal(started.answer.json.approval, "automatic");
+  // The verifier got the token and the registry's clock.
+  assert.equal(verifier.calls.length, 1);
+  assert.equal(verifier.calls[0]!.token, FAKE_OWNER_TOKEN);
+  assert.equal(verifier.calls[0]!.at, clock);
+  // The page never sees it; the owner is a new user of Google's issuer.
+  assert.equal(registry.enrollmentRequest(started.userCode), undefined);
+  const owner = registry
+    .users()
+    .find((user) => user.oidc?.subject === FAKE_OWNER_SUB)!;
+  assert.deepEqual(owner.oidc, {
+    issuer: GOOGLE_ISSUER,
+    subject: FAKE_OWNER_SUB,
+  });
+  assert.equal(owner.email, FAKE_OWNER_EMAIL);
+
+  const collected = await poll(gateway, started.requestId);
+  assert.equal(collected.status, 200);
+  const client = registry
+    .clients()
+    .find((c) => c.id === collected.json.clientId)!;
+  assert.equal(client.userId, owner.id);
+  assert.equal(
+    (
+      await mcp(
+        gateway,
+        started,
+        collected.json.certificatePem as string,
+        started.token,
+      )
+    ).text,
+    `mcp ${client.id}`,
+  );
+
+  // A second devbox of that owner, with another token: the same user.
+  const second = await startWithProof(gateway, "FAKE_second-owner-token");
+  assert.equal(second.answer.json.approval, "automatic");
+  assert.equal(
+    registry.users().filter((user) => user.oidc?.subject === FAKE_OWNER_SUB)
+      .length,
+    1,
+  );
+
+  assert.deepEqual(
+    logs.filter((line) => line.includes("automatically")),
+    [
+      `enrollment request approved automatically for user ${owner.id}, new user`,
+      `enrollment request approved automatically for user ${owner.id}`,
+    ],
+  );
+  assertQuiet(logs, [started, second]);
+  const state = await readFile(join(stateDir, "clients.json"), "utf8");
+  assert.ok(!state.includes(FAKE_OWNER_TOKEN));
+  assert.ok(state.includes(sha256(FAKE_OWNER_TOKEN)));
+  for (const answer of [started.answer, collected])
+    assert.ok(!JSON.stringify(answer.json).includes(FAKE_OWNER_TOKEN));
+});
+
+test("every refused proof answers browser with its fixed reason, logs it without upstream text, and leaves the request to the page", async () => {
+  const logs: string[] = [];
+  let next: (now: () => number) => DevboxProofResult = proven();
+  const verifier = scripted((now) => next(now));
+  const { gateway, stateDir } = await devboxEdge({
+    devboxApproval: verifier.approval,
+    logs,
+  });
+  const registry = gateway.clients!.registry;
+  const file = join(stateDir, "clients.json");
+  let source = 1;
+  /** A start with `token` from a new address: browser for `reason`. */
+  const refused = async (
+    token: string,
+    reason: string,
+    line: string,
+  ): Promise<{ requestId: string; userCode: string }> => {
+    source += 1;
+    const before = logs.length;
+    const started = await startWithProof(gateway, token, `127.0.0.${source}`);
+    assert.deepEqual(Object.keys(started.answer.json).sort(), [
+      "approval",
+      "automaticRefused",
+      ...PR1_KEYS,
+    ]);
+    assert.equal(started.answer.json.approval, "browser");
+    assert.equal(started.answer.json.automaticRefused, reason);
+    assert.deepEqual(
+      logs.slice(before).filter((l) => l.startsWith("automatic")),
+      [line],
+    );
+    return started;
+  };
+  /** The page approves it and the machine collects it. */
+  const pageApproves = async (started: {
+    requestId: string;
+    userCode: string;
+  }): Promise<void> => {
+    assert.equal(registry.decide(started.userCode, "u1", true), "approved");
+    assert.equal((await poll(gateway, started.requestId)).status, 200);
+  };
+  const fileBefore = await readFile(file, "utf8").catch(() => "");
+  const seen: { requestId: string; userCode: string }[] = [];
+
+  // The verifier's own refusals, with an HTTP status or errno code at most.
+  next = () => ({ ok: false, reason: "token_rejected", code: "400" });
+  seen.push(
+    await refused(
+      FAKE_OWNER_TOKEN,
+      "token_rejected",
+      "automatic enrollment declined: token_rejected (400)",
+    ),
+  );
+  next = () => ({ ok: false, reason: "not_admitted" });
+  seen.push(
+    await refused(
+      FAKE_OWNER_TOKEN,
+      "not_admitted",
+      "automatic enrollment declined: not_admitted",
+    ),
+  );
+  next = () => ({ ok: false, reason: "unavailable", code: "ECONNREFUSED" });
+  seen.push(
+    await refused(
+      FAKE_OWNER_TOKEN,
+      "unavailable",
+      "automatic enrollment declined: unavailable (ECONNREFUSED)",
+    ),
+  );
+  // An expired proof is a rejected token.
+  next = (now) => ({ ...proven()(now), notAfter: now() }) as DevboxProofResult;
+  seen.push(
+    await refused(
+      FAKE_OWNER_TOKEN,
+      "token_rejected",
+      "automatic enrollment declined: token_rejected",
+    ),
+  );
+  for (const started of seen) await pageApproves(started);
+  // No user, no ledger entry from any of them.
+  assert.equal(
+    registry.users().some((user) => user.oidc !== undefined),
+    false,
+  );
+  assert.ok(!(await readFile(file, "utf8")).includes(sha256(FAKE_OWNER_TOKEN)));
+  assert.notEqual(fileBefore, undefined);
+
+  // An operator's claim waiting on the owner's email: the page binds it.
+  registry.addUser("u2");
+  registry.claimUser("u2", FAKE_OWNER_EMAIL, 60_000);
+  next = proven();
+  const claimed = await refused(
+    FAKE_OWNER_TOKEN,
+    "claim_pending",
+    "automatic enrollment declined: claim_pending",
+  );
+  assert.equal(registry.users().length, 2);
+  await pageApproves(claimed);
+  seen.push(claimed);
+  // The owner signs in on the page, which binds the claim: later proofs
+  // reach that user.
+  assert.deepEqual(
+    registry.signIn({
+      issuer: GOOGLE_ISSUER,
+      subject: FAKE_OWNER_SUB,
+      email: FAKE_OWNER_EMAIL,
+    }),
+    { userId: "u2", outcome: "bound" },
+  );
+
+  // Once per token; and the owner's limits are the page's.
+  const owner = await startWithProof(
+    gateway,
+    "FAKE_owner-token-2",
+    "127.0.0.20",
+  );
+  assert.equal(owner.answer.json.approval, "automatic");
+  const reused = await refused(
+    "FAKE_owner-token-2",
+    "already_used",
+    "automatic enrollment declined: already_used",
+  );
+  await pageApproves(reused);
+  const ownerId = registry
+    .users()
+    .find((user) => user.oidc?.subject === FAKE_OWNER_SUB)!.id;
+  for (let i = 0; i < 3; i += 1) registry.createCode(ownerId, `code ${i}`);
+  const limited = await refused(
+    "FAKE_owner-token-3",
+    "limit",
+    "automatic enrollment declined: limit",
+  );
+  await pageApproves(limited);
+  assertQuiet(logs, [...seen, owner, reused, limited]);
+});
+
+test("a request the page decides or that expires while the proof runs answers browser with unavailable; the poll answers what happened", async () => {
+  const logs: string[] = [];
+  let during: (userCode: string) => void = () => {};
+  const codes: string[] = [];
+  const verifier = scripted((now) => {
+    during(codes.at(-1)!);
+    return proven()(now);
+  });
+  const { gateway, stateDir } = await devboxEdge({
+    devboxApproval: verifier.approval,
+    logs,
+  });
+  const registry = gateway.clients!.registry;
+  // The user code exists only inside the start until it answers.
+  const startRequest = registry.startRequest.bind(registry);
+  vi.spyOn(registry, "startRequest").mockImplementation((start) => {
+    const outcome = startRequest(start);
+    if (outcome.ok) codes.push(outcome.userCode);
+    return outcome;
+  });
+  const inWindow = async (from: string) => {
+    const before = logs.length;
+    const started = await startWithProof(gateway, FAKE_OWNER_TOKEN, from);
+    assert.equal(started.answer.json.approval, "browser");
+    assert.equal(started.answer.json.automaticRefused, "unavailable");
+    assert.deepEqual(
+      logs.slice(before).filter((line) => line.startsWith("automatic")),
+      ["automatic enrollment declined: unavailable"],
+    );
+    return started;
+  };
+
+  // The page decides first: the poll collects the page's decision.
+  during = (userCode) =>
+    assert.equal(registry.decide(userCode, "u1", true), "approved");
+  const decided = await inWindow("127.0.0.2");
+  const collected = await poll(gateway, decided.requestId);
+  assert.equal(collected.status, 200);
+  assert.equal(
+    registry.clients().find((c) => c.id === collected.json.clientId)!.userId,
+    "u1",
+  );
+
+  // The request expires first: the poll answers expired.
+  during = () => {
+    clock += ENROLLMENT_REQUEST_TTL_MS;
+  };
+  const expired = await inWindow("127.0.0.3");
+  const late = await poll(gateway, expired.requestId);
+  assert.equal(late.status, 410);
+  assert.deepEqual(late.json, { error: "expired" });
+
+  // Neither proof created a user or spent its token.
+  assert.equal(verifier.calls.length, 2);
+  assert.equal(
+    registry.users().some((user) => user.oidc),
+    false,
+  );
+  assert.ok(
+    !(await readFile(join(stateDir, "clients.json"), "utf8")).includes(
+      sha256(FAKE_OWNER_TOKEN),
+    ),
+  );
+  assertQuiet(logs, [decided, expired]);
+});
+
+test("without devbox approval a proof is not_configured and nothing is called; a start without a proof answers browser alone", async () => {
+  const logs: string[] = [];
+  const { gateway } = await devboxEdge({ logs });
+  const proofless = await startWithProof(gateway, undefined);
+  assert.deepEqual(Object.keys(proofless.answer.json).sort(), [
+    "approval",
+    ...PR1_KEYS,
+  ]);
+  assert.equal(proofless.answer.json.approval, "browser");
+  const ignored = await startWithProof(gateway, FAKE_OWNER_TOKEN);
+  assert.equal(ignored.answer.json.approval, "browser");
+  assert.equal(ignored.answer.json.automaticRefused, "not_configured");
+  assert.deepEqual(
+    logs.filter((line) => line.startsWith("automatic")),
+    ["automatic enrollment declined: not_configured"],
+  );
+  assert.equal(
+    gateway.clients!.registry.decide(ignored.userCode, "u1", true),
+    "approved",
+  );
+  assert.equal((await poll(gateway, ignored.requestId)).status, 200);
+  assertQuiet(logs, [proofless, ignored]);
+
+  // With a verifier configured, a start without a proof calls nothing.
+  const verifier = scripted(proven());
+  const configured = await devboxEdge({ devboxApproval: verifier.approval });
+  const plain = await startWithProof(configured.gateway, undefined);
+  assert.equal(plain.answer.json.approval, "browser");
+  assert.equal(plain.answer.json.automaticRefused, undefined);
+  assert.equal(verifier.calls.length, 0);
+});
+
+/** The real verifier against the Google fake, with a short proof deadline. */
+function realVerifier(fake: GoogleFake, proofMs: number): DevboxApproval {
+  return devboxApproval({
+    issuer: GOOGLE_ISSUER,
+    googleClientId: FAKE_CODER_CLIENT_ID,
+    admit: (claims) => admittedEmail(ALLOW, claims),
+    endpoints: fake.endpoints,
+    timeouts: { proofMs },
+  });
+}
+
+test("at most four proofs run at once: a fifth start answers unavailable at once, the four end at their deadline, every request stays open", async () => {
+  const fake = await startGoogleFake();
+  open.push(fake);
+  fake.tokenInfo = () => {};
+  const logs: string[] = [];
+  const { gateway } = await devboxEdge({
+    devboxApproval: realVerifier(fake, 2_000),
+    logs,
+  });
+  const four = [2, 3, 4, 5].map((n) =>
+    startWithProof(gateway, FAKE_OWNER_TOKEN, `127.0.0.${n}`),
+  );
+  await until(() => fake.on("tokeninfo").length === 4, "four proofs");
+  const sent = Date.now();
+  const fifth = await startWithProof(gateway, FAKE_OWNER_TOKEN, "127.0.0.6");
+  assert.ok(Date.now() - sent < 1_000, "the fifth waits for no proof");
+  assert.equal(fifth.answer.json.approval, "browser");
+  assert.equal(fifth.answer.json.automaticRefused, "unavailable");
+  const ended = await Promise.all(four);
+  assert.ok(Date.now() - sent >= 1_500, "the four ran to their deadline");
+  for (const started of ended) {
+    assert.equal(started.answer.json.approval, "browser");
+    assert.equal(started.answer.json.automaticRefused, "unavailable");
+  }
+  // No fifth call; each held call's socket closed.
+  assert.equal(fake.seen.length, 4);
+  await Promise.all(fake.seen.map((request) => request.closed));
+  assert.deepEqual(
+    logs.filter((line) => line.startsWith("automatic")).sort(),
+    [
+      "automatic enrollment declined: unavailable (busy)",
+      ...Array<string>(4).fill(
+        "automatic enrollment declined: unavailable (timeout)",
+      ),
+    ].sort(),
+  );
+  for (const started of [...ended, fifth])
+    assert.equal(
+      gateway.clients!.registry.decide(started.userCode, "u1", true),
+      "approved",
+    );
+  assertQuiet(logs, [...ended, fifth]);
+});
+
+test("a proof outlives the idle bound, which is back before the answer: a hanging Google answers browser on a live connection, and the page still approves", async () => {
+  const fake = await startGoogleFake();
+  open.push(fake);
+  fake.tokenInfo = () => {};
+  const { gateway } = await devboxEdge({
+    devboxApproval: realVerifier(fake, 600),
+    enrollIdle: { baseMs: 300, proofMs: 900 },
+  });
+  // Every idle bound set on a socket, with when; the test's own client
+  // sockets set none.
+  const bounds: { socket: net.Socket; ms: number; at: number }[] = [];
+  const setTimeout = net.Socket.prototype.setTimeout;
+  vi.spyOn(net.Socket.prototype, "setTimeout").mockImplementation(function (
+    this: net.Socket,
+    ms: number,
+    ...rest: unknown[]
+  ) {
+    bounds.push({ socket: this, ms, at: Date.now() });
+    return setTimeout.call(this, ms, ...(rest as [])) as net.Socket;
+  });
+  const agent = new https.Agent({
+    ca: gateway.clients!.caPem,
+    keepAlive: true,
+    maxSockets: 1,
+  });
+  open.push({ close: () => agent.destroy() });
+  const keptAlive = (body: unknown) =>
+    new Promise<{ status: number; json: Record<string, unknown> }>(
+      (resolve, reject) => {
+        const request = https.request(
+          {
+            host: "127.0.0.1",
+            port: gateway.clients!.enrollPort,
+            method: "POST",
+            path: "/enroll/start",
+            agent,
+          },
+          (response) => {
+            const chunks: Buffer[] = [];
+            response.on("data", (chunk: Buffer) => chunks.push(chunk));
+            response.on("end", () =>
+              resolve({
+                status: response.statusCode ?? 0,
+                json: JSON.parse(
+                  Buffer.concat(chunks).toString("utf8"),
+                ) as Record<string, unknown>,
+              }),
+            );
+          },
+        );
+        request.on("error", reject);
+        request.end(JSON.stringify(body));
+      },
+    );
+
+  const sent = Date.now();
+  const who = machine();
+  const answer = await keptAlive(startBody(who, FAKE_OWNER_TOKEN));
+  const answeredAt = Date.now();
+  // 600 ms of proof against a 300 ms baseline: answered, not reset.
+  assert.equal(answer.status, 200);
+  assert.ok(answeredAt - sent >= 550, `answered after ${answeredAt - sent}`);
+  assert.equal(answer.json.approval, "browser");
+  assert.equal(answer.json.automaticRefused, "unavailable");
+  const raised = bounds.filter((bound) => bound.ms === 900);
+  assert.equal(raised.length, 1);
+  const restored = bounds.filter(
+    (bound) =>
+      bound.socket === raised[0]!.socket &&
+      bound.ms === 300 &&
+      bound.at >= raised[0]!.at,
+  );
+  assert.ok(
+    restored.some((bound) => bound.at >= raised[0]!.at + 500),
+    "the baseline is restored after the proof",
+  );
+  assert.ok(restored.every((bound) => bound.at <= answeredAt));
+
+  // The same kept-alive connection serves the next start, without a proof,
+  // which raises nothing.
+  bounds.length = 0;
+  const plain = await keptAlive(startBody(machine()));
+  assert.equal(plain.status, 200);
+  assert.equal(plain.json.approval, "browser");
+  assert.deepEqual(
+    bounds.filter((bound) => bound.ms === 900),
+    [],
+  );
+
+  // A fresh connection left without a request closes at the baseline.
+  vi.restoreAllMocks();
+  const raw = tls.connect({
+    host: "127.0.0.1",
+    port: gateway.clients!.enrollPort,
+    ca: gateway.clients!.caPem,
+  });
+  await new Promise<void>((resolve, reject) => {
+    raw.once("secureConnect", resolve);
+    raw.once("error", reject);
+  });
+  const connectedAt = Date.now();
+  await new Promise<void>((resolve) => raw.once("close", () => resolve()));
+  const idle = Date.now() - connectedAt;
+  assert.ok(idle >= 200 && idle < 1_500, `closed after ${idle} ms`);
+
+  // The page approves the request the proof left open; the machine collects.
+  const userCode = answer.json.userCode as string;
+  assert.equal(
+    gateway.clients!.registry.decide(userCode, "u1", true),
+    "approved",
+  );
+  clock += 4_000;
+  const collected = await post(gateway, "/enroll/poll", {
+    requestId: answer.json.requestId,
+  });
+  assert.equal(collected.status, 200);
+});
+
+test("a connection that ends during the proof aborts it and approves nothing", async () => {
+  const logs: string[] = [];
+  let finished!: () => void;
+  const done = new Promise<void>((resolve) => (finished = resolve));
+  // A verifier that ignores the abort and proves the owner anyway.
+  const verifier = scripted(async (now, signal) => {
+    await new Promise<void>((resolve) =>
+      signal.addEventListener("abort", () => resolve(), { once: true }),
+    );
+    finished();
+    return proven()(now);
+  });
+  const { gateway, stateDir } = await devboxEdge({
+    devboxApproval: verifier.approval,
+    logs,
+  });
+  const request = https.request({
+    host: "127.0.0.1",
+    port: gateway.clients!.enrollPort,
+    ca: gateway.clients!.caPem,
+    method: "POST",
+    path: "/enroll/start",
+    agent: false,
+  });
+  request.on("error", () => {});
+  request.end(JSON.stringify(startBody(machine(), FAKE_OWNER_TOKEN)));
+  await until(() => verifier.calls.length === 1, "the proof");
+  request.destroy();
+  await done;
+  await until(
+    () => logs.some((line) => line.startsWith("automatic")),
+    "the decline",
+  );
+  assert.ok(verifier.calls[0]!.signal.aborted);
+  assert.deepEqual(
+    logs.filter((line) => line.startsWith("automatic")),
+    ["automatic enrollment declined: unavailable"],
+  );
+  assert.equal(
+    gateway.clients!.registry.users().some((user) => user.oidc),
+    false,
+  );
+  assert.ok(
+    !(await readFile(join(stateDir, "clients.json"), "utf8")).includes(
+      sha256(FAKE_OWNER_TOKEN),
+    ),
+  );
+});
+
+test("a registry failure after the proof answers 503 like a thrown one and leaves the gateway serving", async () => {
+  const logs: string[] = [];
+  let file = "";
+  let saved = "";
+  const verifier = scripted(async (now) => {
+    saved = await readFile(file, "utf8");
+    await writeFile(file, "corrupt json");
+    return proven()(now);
+  });
+  const { gateway, stateDir } = await devboxEdge({
+    devboxApproval: verifier.approval,
+    logs,
+  });
+  file = join(stateDir, "clients.json");
+  const answer = await post(
+    gateway,
+    "/enroll/start",
+    startBody(machine(), FAKE_OWNER_TOKEN),
+  );
+  assert.equal(answer.status, 503);
+  assert.deepEqual(answer.json, { error: "client registry unavailable" });
+  assert.ok(logs.includes("enrollment failed: client registry unavailable"));
+  await writeFile(file, saved);
+  const after = await startWithProof(gateway, undefined, "127.0.0.9");
+  assert.equal(after.answer.json.approval, "browser");
 });

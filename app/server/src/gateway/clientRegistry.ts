@@ -16,6 +16,11 @@
  * issuer plus subject; the email is an attribute. An operator's claim binds
  * the next admitted sign-in with that email to an existing user once.
  *
+ * A devbox's request can also be approved without a click (Task-1410 PR2),
+ * by `approveAutomatically` after the edge checked the owner's Google token:
+ * the user is found or created as a sign-in does, never by a claim, and each
+ * token approves once, its hash kept for `AUTOMATIC_APPROVAL_RETAIN_MS`.
+ *
  * The admin CLI writes the same file from its own process, so reads always
  * reload the current file. Writers hold clients.json.lock across the complete
  * read-modify-rename, including code redemption. A crashed writer leaves its
@@ -52,6 +57,14 @@ export const MAX_OPEN_REQUESTS_PER_SOURCE = 4;
 export const MAX_OPEN_REQUESTS = 64;
 /** Retained enrollment records at most, including open and terminal requests. */
 export const MAX_RETAINED_REQUESTS = 256;
+/**
+ * How long an automatic approval keeps its token's hash: past the 3600 s a
+ * proof of that token can last after it approved (`approveAutomatically`), with
+ * 59 s to spare for the wall clock.
+ */
+export const AUTOMATIC_APPROVAL_RETAIN_MS = 61 * 60_000;
+/** Live automatic approvals at most; past it, one more is refused. */
+export const MAX_AUTOMATIC_APPROVALS = 256;
 const USER_CODE_ALPHABET = "BCDFGHJKLMNPQRSTVWXZ";
 const USER_CODE_RE = /^[BCDFGHJKLMNPQRSTVWXZ]{8}$/;
 const REQUEST_ID_RE = /^[A-Za-z0-9_-]{43}$/;
@@ -114,7 +127,8 @@ interface EnrollmentRequest {
   from: string;
   createdAt: number;
   expiresAt: number;
-  decision?: { userId: string; at: number } | "denied";
+  /** `automatic` when `approveAutomatically` decided it, not a click. */
+  decision?: { userId: string; at: number; automatic?: true } | "denied";
   /** The client the first collect created; the certificate is public. */
   issued?: { clientId: string; certificatePem: string };
 }
@@ -127,8 +141,56 @@ interface PendingClaim {
   expiresAt: number;
 }
 
+/** An automatic approval's record of the token that made it. */
+interface AutomaticApproval {
+  /** Hex SHA-256 of the token string; the token itself is never kept. */
+  tokenHash: string;
+  at: number;
+}
+
 /** How a sign-in reached its user. */
 export type SignInOutcome = "existing" | "created" | "bound";
+
+/**
+ * What a devbox proof established (`devboxProof.ts`), for
+ * `approveAutomatically`: the owner's admitted identity, the hash of the
+ * token, and the instant from which the proof no longer counts.
+ */
+export interface AutomaticProof {
+  issuer: string;
+  subject: string;
+  email: string;
+  tokenHash: string;
+  notAfter: number;
+}
+
+/**
+ * An automatic approval's outcome. Every refusal writes nothing: `expired`
+ * for a proof past its `notAfter`, `unknown` for a request that is decided,
+ * expired or gone, `claim_pending` for an identity an operator's claim waits
+ * for, `limit` past the user's `EnrollmentLimits`, `already_used` for a token
+ * that approved before, `unavailable` with `MAX_AUTOMATIC_APPROVALS` live.
+ */
+export type AutomaticOutcome =
+  | { status: "approved"; userId: string; created: boolean }
+  | {
+      status:
+        | "expired"
+        | "unknown"
+        | "claim_pending"
+        | "limit"
+        | "already_used"
+        | "unavailable";
+    };
+
+/**
+ * Where an admitted identity leads (`resolveIdentity`): an existing user, an
+ * unexpired claim on its email (by index), or a user just created.
+ */
+type Resolution =
+  | { kind: "existing"; userId: string; changed: boolean }
+  | { kind: "claim"; index: number }
+  | { kind: "created"; userId: string };
 
 interface AccountOwner {
   profileId: string;
@@ -145,6 +207,8 @@ interface Stored {
   claims?: PendingClaim[];
   /** Absent in a file an older build wrote; read as empty. */
   requests?: EnrollmentRequest[];
+  /** Absent in a file an older build wrote; read as empty. */
+  automaticApprovals?: AutomaticApproval[];
 }
 
 const empty = (): Stored => ({
@@ -193,6 +257,11 @@ export function newClientId(
   random: (size: number) => Buffer = randomBytes,
 ): string {
   return `c_${random(12).toString("base64url")}`;
+}
+
+/** Blocks the thread for `ms`; the lock wait between attempts. */
+function sleep(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 function hashOf(code: string): string {
@@ -330,6 +399,18 @@ function approverOf(request: EnrollmentRequest): string | undefined {
     : undefined;
 }
 
+/**
+ * The automatic approvals whose token hash is still kept at `now`: until
+ * `AUTOMATIC_APPROVAL_RETAIN_MS` after the approval.
+ */
+function liveApprovals(state: Stored, now: number): AutomaticApproval[] {
+  return (state.automaticApprovals ?? []).filter(
+    (entry) =>
+      typeof entry.at === "number" &&
+      now < entry.at + AUTOMATIC_APPROVAL_RETAIN_MS,
+  );
+}
+
 /** The user code as the machine shows it: `XXXX-XXXX`. */
 function displayUserCode(code: string): string {
   return `${code.slice(0, 4)}-${code.slice(4)}`;
@@ -342,10 +423,15 @@ export class ClientRegistry {
   private lockReported = false;
   private seenFile = false;
 
+  /**
+   * `pause` waits between attempts at a held lock (10 ms); a test seam, so a
+   * test can let time pass while a writer waits.
+   */
   constructor(
     stateDir: string,
     now: () => number = Date.now,
     private readonly reportLock: (message: string) => void = () => {},
+    private readonly pause: (ms: number) => void = sleep,
   ) {
     this.path = join(stateDir, "clients.json");
     this.file = createPrivateJsonFile(this.path, "gateway clients", {
@@ -369,7 +455,9 @@ export class ClientRegistry {
         !Array.isArray(value.clients) ||
         !Array.isArray(value.codes) ||
         !Array.isArray(value.accounts) ||
-        (value.requests !== undefined && !Array.isArray(value.requests))
+        (value.requests !== undefined && !Array.isArray(value.requests)) ||
+        (value.automaticApprovals !== undefined &&
+          !Array.isArray(value.automaticApprovals))
       )
         throw new Error("Invalid gateway client registry.");
       this.seenFile = true;
@@ -384,7 +472,6 @@ export class ClientRegistry {
     const lock = `${this.path}.lock`;
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
     const deadline = Date.now() + 1_000;
-    const pause = new Int32Array(new SharedArrayBuffer(4));
     let fd: number;
     for (;;) {
       try {
@@ -401,7 +488,7 @@ export class ClientRegistry {
           }
           throw error;
         }
-        Atomics.wait(pause, 0, 0, 10);
+        this.pause(10);
       }
     }
     try {
@@ -417,6 +504,8 @@ export class ClientRegistry {
           state.requests = state.requests.filter((request) =>
             this.live(request),
           );
+        if (state.automaticApprovals)
+          state.automaticApprovals = liveApprovals(state, this.now());
         this.file.write(state);
         this.seenFile = true;
       }
@@ -484,44 +573,69 @@ export class ClientRegistry {
     const { issuer, subject } = identity;
     const { userId, outcome } = this.change(
       (state) => {
-        const known = state.users.find(
-          (user) =>
-            user.oidc?.issuer === issuer && user.oidc.subject === subject,
-        );
-        if (known) {
-          const changed = known.email !== email;
-          if (changed) {
-            if (known.label === known.email) known.label = label(email);
-            known.email = email;
-          }
-          return { userId: known.id, outcome: "existing" as const, changed };
-        }
-        const claims = state.claims ?? [];
-        const index = claims.findIndex((claim) => {
-          if (claim.email !== email || claim.expiresAt <= this.now())
-            return false;
-          const user = state.users.find((u) => u.id === claim.userId);
-          return user !== undefined && !hasIdentity(user);
-        });
-        if (index >= 0) {
-          const [claim] = claims.splice(index, 1);
-          const user = state.users.find((u) => u.id === claim!.userId)!;
-          user.oidc = { issuer, subject };
-          user.email = email;
-          return { userId: user.id, outcome: "bound" as const, changed: true };
-        }
-        const id = newUserId(state);
-        state.users.push({
-          id,
-          label: label(email),
-          oidc: { issuer, subject },
-          email,
-        });
-        return { userId: id, outcome: "created" as const, changed: true };
+        const found = this.resolveIdentity(state, issuer, subject, email);
+        if (found.kind === "existing")
+          return {
+            userId: found.userId,
+            outcome: "existing" as const,
+            changed: found.changed,
+          };
+        if (found.kind === "created")
+          return {
+            userId: found.userId,
+            outcome: "created" as const,
+            changed: true,
+          };
+        const [claim] = state.claims!.splice(found.index, 1);
+        const user = state.users.find((u) => u.id === claim!.userId)!;
+        user.oidc = { issuer, subject };
+        user.email = email;
+        return { userId: user.id, outcome: "bound" as const, changed: true };
       },
       (answer) => answer.changed,
     );
     return { userId, outcome };
+  }
+
+  /**
+   * Where an admitted identity leads, as a sign-in finds it, on `state` only
+   * (the caller writes it or drops it): the user with this identity, its email
+   * updated and a label that was its email following it; else, when an
+   * unexpired claim on this email names a user still without an identity,
+   * that claim, untouched; else a new user with this identity, pushed.
+   * Nothing here binds an existing user by email.
+   */
+  private resolveIdentity(
+    state: Stored,
+    issuer: string,
+    subject: string,
+    email: string,
+  ): Resolution {
+    const known = state.users.find(
+      (user) => user.oidc?.issuer === issuer && user.oidc.subject === subject,
+    );
+    if (known) {
+      const changed = known.email !== email;
+      if (changed) {
+        if (known.label === known.email) known.label = label(email);
+        known.email = email;
+      }
+      return { kind: "existing", userId: known.id, changed };
+    }
+    const index = (state.claims ?? []).findIndex((claim) => {
+      if (claim.email !== email || claim.expiresAt <= this.now()) return false;
+      const user = state.users.find((u) => u.id === claim.userId);
+      return user !== undefined && !hasIdentity(user);
+    });
+    if (index >= 0) return { kind: "claim", index };
+    const id = newUserId(state);
+    state.users.push({
+      id,
+      label: label(email),
+      oidc: { issuer, subject },
+      email,
+    });
+    return { kind: "created", userId: id };
   }
 
   /**
@@ -685,6 +799,73 @@ export class ClientRegistry {
         return "approved";
       },
       (outcome) => outcome === "approved" || outcome === "denied",
+    );
+  }
+
+  /**
+   * Approves the request with this id for the owner a devbox proof names,
+   * in one change that writes only an approval. In order: a proof whose
+   * `notAfter` has come (`expired`); a request no longer undecided and
+   * unexpired (`unknown`); the user, found or created as `signIn` does but
+   * never through a claim (`claim_pending` when one waits for this email);
+   * an existing user's `limits` (`limit`); the token's record, among those
+   * still live, kept `AUTOMATIC_APPROVAL_RETAIN_MS` (`already_used`), and
+   * room for one more (`unavailable`). An approval records the token's hash,
+   * a new user when one was made, an existing user's changed email, and the
+   * decision, marked `automatic`. The proof's freshness and the records'
+   * age are judged at one reading of the clock, taken under the lock.
+   *
+   * The proof's `notAfter` is at most the token's real expiry, which is less
+   * than 3601 s after any approval it made, so the hash outlives every proof
+   * of the token and a second one meets `already_used` or `expired`. That
+   * holds while the clock does not jump forward by more than 59 s.
+   */
+  approveAutomatically(
+    requestId: string,
+    proof: AutomaticProof,
+    limits: EnrollmentLimits,
+  ): AutomaticOutcome {
+    const email = emailOf(proof.email);
+    if (!isHash(proof.tokenHash)) throw new Error("Not a token hash.");
+    const tokenHash = Buffer.from(proof.tokenHash, "hex");
+    return this.change(
+      (state): AutomaticOutcome => {
+        const now = this.now();
+        if (!(now < proof.notAfter)) return { status: "expired" };
+        const request = this.requestById(state, requestId);
+        if (
+          !request ||
+          request.decision !== undefined ||
+          !(request.expiresAt > now)
+        )
+          return { status: "unknown" };
+        const found = this.resolveIdentity(
+          state,
+          proof.issuer,
+          proof.subject,
+          email,
+        );
+        if (found.kind === "claim") return { status: "claim_pending" };
+        if (
+          found.kind === "existing" &&
+          this.overLimits(state, found.userId, limits)
+        )
+          return { status: "limit" };
+        const approvals = liveApprovals(state, now);
+        if (approvals.some((entry) => hashEquals(entry.tokenHash, tokenHash)))
+          return { status: "already_used" };
+        if (approvals.length >= MAX_AUTOMATIC_APPROVALS)
+          return { status: "unavailable" };
+        approvals.push({ tokenHash: proof.tokenHash, at: now });
+        state.automaticApprovals = approvals;
+        request.decision = { userId: found.userId, at: now, automatic: true };
+        return {
+          status: "approved",
+          userId: found.userId,
+          created: found.kind === "created",
+        };
+      },
+      (outcome) => outcome.status === "approved",
     );
   }
 

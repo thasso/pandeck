@@ -7,7 +7,10 @@
  *   clientPort}`; an optional `mcpTokenHash` becomes the client's MCP token.
  *   With `approvalOrigin` (Task-1410), `POST /enroll/start` opens a request
  *   for the page to approve and `POST /enroll/poll {requestId}` collects it,
- *   answering the same fields (`enrollmentApproval.ts`);
+ *   answering the same fields (`enrollmentApproval.ts`). With
+ *   `devboxApproval` (Task-1410 PR2), a start carrying a devbox's proof of
+ *   its owner is approved without a click when the proof holds
+ *   (`devboxProof.ts`, `ClientRegistry.approveAutomatically`);
  * - the model port, HTTP over mutual TLS, the same routes as the loopback
  *   listener through a forwarder that spends only the calling client's
  *   leases;
@@ -37,6 +40,7 @@
  * live in `edge-tls.json`, the clients in `clients.json` (`clientRegistry.ts`),
  * both under the state directory.
  */
+import { createHash } from "node:crypto";
 import http from "node:http";
 import https from "node:https";
 import type net from "node:net";
@@ -78,10 +82,12 @@ import {
   newClientId,
   type GatewayClient,
 } from "./clientRegistry.ts";
+import type { DevboxApproval } from "./devboxProof.ts";
 import type { CredentialOutcome, EdgeTools } from "./edgeTools.ts";
 import { LoginRefusal, type LoginActor } from "./logins.ts";
 import {
   createUserOperations,
+  PAGE_ENROLLMENT_LIMITS,
   UserOperationRefusal,
   type UserAccountRecord,
   type UserOperations,
@@ -114,6 +120,8 @@ import {
   PollLimiter,
   decodePoll,
   decodeStart,
+  registryRefused,
+  type AutomaticRefused,
 } from "./enrollmentApproval.ts";
 import {
   clientPublicKey,
@@ -130,6 +138,18 @@ const ENROLL_ATTEMPTS = 30;
 const MAX_ENROLL_SOURCES = 4_096;
 /** How long `integrations.set` and a checked status wait for Atlassian. */
 const INTEGRATION_CHECK_MS = 15_000;
+
+/**
+ * The enrollment port's socket idle bounds: `baseMs` always, `proofMs`
+ * while a start's devbox proof runs (at most 6 s plus two registry locks of
+ * at most 1 s each), restored before the answer.
+ */
+interface EnrollIdle {
+  baseMs: number;
+  proofMs: number;
+}
+
+const ENROLL_IDLE: EnrollIdle = { baseMs: 10_000, proofMs: 15_000 };
 
 /**
  * The model port's request deadlines, each a separate phase of a
@@ -178,6 +198,12 @@ export interface ClientListenerOptions {
    * `integration_sign_in_required` (`userOperations.ts`).
    */
   atlassianSignIn?: boolean;
+  /**
+   * Zero-click enrollment (Task-1410 PR2), only with `approvalOrigin`: a
+   * start's devbox proof is checked and, when it holds, the request approved
+   * at once. Without it a proof is ignored (`not_configured`).
+   */
+  devboxApproval?: DevboxApproval;
 }
 
 interface ClientListenerDeps {
@@ -215,6 +241,8 @@ interface ClientListenerDeps {
    * `INTEGRATION_CHECK_MS`; no entry passes it.
    */
   integrationCheckMs?: number | undefined;
+  /** Test seam: shorter enrollment-port idle bounds; no entry passes it. */
+  enrollIdle?: EnrollIdle | undefined;
 }
 
 export interface RunningClientListener {
@@ -366,6 +394,7 @@ export async function startClientListener(
 ): Promise<RunningClientListener> {
   const { leases, profiles, log } = deps;
   const now = deps.now ?? Date.now;
+  const enrollIdle = deps.enrollIdle ?? ENROLL_IDLE;
   const bindHost = options.bindHost ?? "127.0.0.1";
   const edgeTls = loadEdgeTls(
     deps.stateDir,
@@ -1045,18 +1074,88 @@ export async function startClientListener(
     enrolled(res, client.id, certificatePem);
   };
 
-  /** `POST /enroll/start`: a machine asks to be approved. */
-  const startRequest = (
+  /**
+   * A start's devbox proof, checked and, when it holds, the request approved:
+   * undefined then, else why not. The socket keeps the raised idle bound
+   * while the proof runs and has the baseline back before the answer; the
+   * connection's end aborts the proof. Only the token's hash outlives this.
+   */
+  const approveByProof = async (
+    requestId: string,
+    token: string,
+    req: http.IncomingMessage,
+  ): Promise<AutomaticRefused | undefined> => {
+    const declined = (
+      reason: AutomaticRefused,
+      code?: string,
+    ): AutomaticRefused => {
+      log(
+        `automatic enrollment declined: ${reason}${code === undefined ? "" : ` (${code})`}`,
+      );
+      return reason;
+    };
+    const devbox = options.devboxApproval;
+    if (!devbox) return declined("not_configured");
+    const ended = new AbortController();
+    const onClose = (): void => ended.abort();
+    req.socket.setTimeout(enrollIdle.proofMs);
+    req.socket.once("close", onClose);
+    try {
+      const proof = await devbox.verify(token, { now, signal: ended.signal });
+      if (!proof.ok) return declined(proof.reason, proof.code);
+      // Nobody would collect an approval for a connection already gone.
+      if (ended.signal.aborted) return declined("unavailable");
+      const tokenHash = createHash("sha256")
+        .update(token, "utf8")
+        .digest("hex");
+      let outcome;
+      try {
+        outcome = registry.approveAutomatically(
+          requestId,
+          {
+            issuer: devbox.issuer,
+            subject: proof.subject,
+            email: proof.email,
+            tokenHash,
+            notAfter: proof.notAfter,
+          },
+          PAGE_ENROLLMENT_LIMITS,
+        );
+      } catch (err) {
+        // The request is open: the page can still approve it.
+        if (err instanceof ClientRegistryLockedError)
+          return declined("unavailable");
+        throw err;
+      }
+      if (outcome.status !== "approved")
+        return declined(registryRefused(outcome.status));
+      log(
+        `enrollment request approved automatically for user ${outcome.userId}${outcome.created ? ", new user" : ""}`,
+      );
+      return undefined;
+    } finally {
+      req.socket.removeListener("close", onClose);
+      req.socket.setTimeout(enrollIdle.baseMs);
+    }
+  };
+
+  /**
+   * `POST /enroll/start`: a machine asks to be approved, a devbox maybe with
+   * its proof. The request opens first, under the same admission as without
+   * one; a proof that does not hold leaves it to the page.
+   */
+  const startRequest = async (
     body: unknown,
     req: http.IncomingMessage,
     res: http.ServerResponse,
-  ): void => {
+  ): Promise<void> => {
     const start = decodeStart(body);
     if (!start)
       return json(res, 400, {
         error: "an EC P-256 key, an MCP token hash and a name needed",
       });
-    const outcome = registry.startRequest({ ...start, from: sourceOf(req) });
+    const { devboxToken, ...request } = start;
+    const outcome = registry.startRequest({ ...request, from: sourceOf(req) });
     if (!outcome.ok) {
       res.setHeader("retry-after", "60");
       return outcome.reason === "source_limit"
@@ -1064,13 +1163,23 @@ export async function startClientListener(
         : json(res, 503, { error: "enrollment requests full" });
     }
     log("enrollment request started");
-    json(res, 200, {
+    const answer = {
       requestId: outcome.requestId,
       userCode: outcome.userCode,
       verificationUri: `${approvalOrigin}/#enroll=${outcome.userCode}`,
       expiresInSeconds: ENROLLMENT_REQUEST_TTL_MS / 1000,
       intervalSeconds: POLL_ADVICE_SECONDS,
-    });
+    };
+    if (devboxToken === undefined)
+      return json(res, 200, { ...answer, approval: "browser" });
+    const refused = await approveByProof(outcome.requestId, devboxToken, req);
+    json(
+      res,
+      200,
+      refused === undefined
+        ? { ...answer, approval: "automatic" }
+        : { ...answer, approval: "browser", automaticRefused: refused },
+    );
   };
 
   /**
@@ -1142,13 +1251,18 @@ export async function startClientListener(
       // A poll is limited once its id is read: per request when known.
       if (route !== pollRequest && !admitEnrollment(sourceOf(req)))
         return refuseAttempts(req, res);
+      const failed = (err: unknown): void => {
+        if (!(err instanceof ClientRegistryLockedError))
+          log("enrollment failed: client registry unavailable");
+        if (res.headersSent) res.destroy();
+        else json(res, 503, { error: "client registry unavailable" });
+      };
       readBody(req, (body) => {
         try {
-          route(body, req, res);
+          // The start is async; its rejection is a throw like the others'.
+          void Promise.resolve(route(body, req, res)).catch(failed);
         } catch (err) {
-          if (!(err instanceof ClientRegistryLockedError))
-            log("enrollment failed: client registry unavailable");
-          json(res, 503, { error: "client registry unavailable" });
+          failed(err);
         }
       });
     },
@@ -1157,7 +1271,7 @@ export async function startClientListener(
     server.maxConnections = MAX_CONNECTIONS;
     server.on("connection", track);
   }
-  enroll.setTimeout(10_000, (socket) => socket.destroy());
+  enroll.setTimeout(enrollIdle.baseMs, (socket) => socket.destroy());
 
   const modelPort = await listen(model, options.modelPort ?? 0, bindHost);
   const clientPort = await listen(

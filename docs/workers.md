@@ -1778,27 +1778,30 @@ path above.
   gateway's page configured, `gatewayEdge.ts` passes its `publicOrigin` to the
   listener (`approvalOrigin`) and machines can enroll by an approval on the page
   instead of a code.
-  `POST /enroll/start {publicKeyPem, mcpTokenHash, name, kind?}` (an EC P-256
-  key; the SHA-256 of the machine's MCP token as 64 lowercase hex; a name of
-  1-64 shown characters, no control or format characters; `kind` `devbox`,
-  `laptop` or `other`, the default) answers
-  `{requestId, userCode, verificationUri, expiresInSeconds: 600, intervalSeconds: 5}`,
+  `POST /enroll/start {publicKeyPem, mcpTokenHash, name, kind?, devbox?}` (an EC
+  P-256 key; the SHA-256 of the machine's MCP token as 64 lowercase hex; a name
+  of 1-64 shown characters, no control or format characters; `kind` `devbox`,
+  `laptop` or `other`, the default; `devbox` under "Zero-click enrollment")
+  answers
+  `{requestId, userCode, verificationUri, expiresInSeconds: 600, intervalSeconds: 5, approval}`,
   with `verificationUri` `<publicOrigin>/#enroll=<userCode>`: the code only in
-  the fragment, the request id nowhere in it. A malformed body is 400; without
-  the page, `/enroll/start` is 404 like an unknown path. `requestId` (32 random
-  bytes) is the machine's secret for collecting; `userCode` (8 letters of
-  `BCDFGHJKLMNPQRSTVWXZ`, shown `XXXX-XXXX`) is what a person compares.
-  `clients.json` keeps only their SHA-256 hashes, in an optional `requests` list
-  that older builds keep and ignore.
+  the fragment, the request id nowhere in it. `approval` is `"browser"`, or
+  `"automatic"` when a devbox's proof approved the request at once. A malformed
+  body is 400; without the page, `/enroll/start` is 404 like an unknown path.
+  `requestId` (32 random bytes) is the machine's secret for collecting;
+  `userCode` (8 letters of `BCDFGHJKLMNPQRSTVWXZ`, shown `XXXX-XXXX`) is what a
+  person compares. `clients.json` keeps only their SHA-256 hashes, in an
+  optional `requests` list that older builds keep and ignore.
   - Admission: a start costs a per-source attempt (above). A source address has
     at most 4 open requests (429) and the edge 64 (503); open means undecided or
     approved and not collected, and unexpired. Denied, collected and expired
     requests free their slot, but at most 256 records are retained in all (503
     at the cap, nothing written). A request expires 600 s after its start,
     decided or not; its record is swept 600 s after that.
-  - Decision: only the page's (below). The first decision wins; an approval
-    binds the session's user and counts as one of the page's pending codes
-    (bounds below), both ways, under the registry's lock.
+  - Decision: the page's (below), or a devbox's proof ("Zero-click enrollment").
+    The first decision wins; an approval binds the session's user, or the proven
+    owner, and counts as one of the page's pending codes (bounds below), both
+    ways, under the registry's lock.
   - `POST /enroll/poll {requestId}` works with or without the page, so an
     approved request is still collected after a restart that dropped it. It
     answers 202 `{status: "pending"}`, 200
@@ -1823,6 +1826,82 @@ path above.
     enroll again.
   - Logs: `enrollment request started` and `enrolled client <id> by approval`,
     never a request id, user code, token hash or key.
+- **Zero-click enrollment** (Task-1410 PR2, `gateway/devboxProof.ts`,
+  `ClientRegistry.approveAutomatically`). With the page's `coder` section and
+  `automaticApproval: true` ("The gateway's sign-in and UI"), a devbox may send
+  its owner's Google access token, the one Coder holds for the workspace owner,
+  as `devbox: {googleAccessToken}` (1-2048 printable ASCII characters, no
+  spaces; anything else is a 400) with its start. The request opens first, under
+  the admission above, so a proof costs what any start costs; then:
+  - Proof: token info (`POST https://oauth2.googleapis.com/tokeninfo`, the token
+    in a form body, never a URL) must name Coder's client
+    (`coder.googleClientId`) as `aud` and, when present, `azp`; give an
+    `expires_in` of 1-3600 s, a `scope` with `email` and a `sub`. Its `email`,
+    `email_verified` and `hd` are never read. The proof stops counting at
+    `notAfter`, the clock read just before sending plus `expires_in`, fixed
+    once. Userinfo (`GET https://openidconnect.googleapis.com/v1/userinfo`, the
+    token as a Bearer) must name the same `sub`, and the page's allow rule
+    judges its claims, `hd` among them when configured. The proof must still be
+    before `notAfter` after userinfo, and again under the registry's lock.
+  - Approval: one locked change finds the user by Google's issuer and `sub` or
+    creates one exactly as a first page sign-in does; never binds by email: an
+    operator's unexpired claim on that email answers `claim_pending`, and the
+    page's sign-in binds it. It applies the page's bounds (4 pending, 16
+    clients), stores the decision as `{userId, at, automatic: true}`, which the
+    page never shows, and records the token's SHA-256 in `automaticApprovals`.
+    The first poll collects. A refusal writes nothing.
+  - Replay fence: one approval per token. A hash is kept 61 minutes; Google's
+    `expires_in` is at most 3600 s from its answer, and an approval follows that
+    answer, so every later proof of an approved token meets `already_used` or
+    `expired`, across restarts and processes. **This guarantee assumes the
+    edge's wall clock does not jump forward by more than 59 seconds** (the
+    margin between 3601 s and 61 minutes) between an approval and a later proof
+    of the same token; a backward jump only delays expiry. The edge runs NTP. At
+    most 256 hashes are live; past that, `unavailable`.
+  - Answer: after a proof answered `"browser"`, `automaticRefused` is one of
+    `not_configured` (no `coder`, or `automaticApproval: false`; nothing is
+    called), `token_rejected` (Google refused it, another client, a longer life,
+    no email scope, another subject at userinfo, or past `notAfter`),
+    `not_admitted` (the allow rule), `claim_pending`, `already_used`, `limit`,
+    or `unavailable` (4 proofs already running, Google unreachable, 5xx,
+    redirecting, oversized or too slow, 256 live hashes, or its connection
+    gone). Nothing else about the proof is answered. The request stays open for
+    the page.
+  - Window: a request the page decides, or that expires, between the start and
+    the locked approval answers `"browser"` with `unavailable`; the poll then
+    collects the page's decision or answers `expired`.
+  - Deadlines: each Google call 3 s, the whole proof 6 s; at most 4 proofs in
+    flight per edge, a fifth `unavailable` without a call; redirects are not
+    followed, answers over 64 KiB refused, and every outstanding call is
+    destroyed at the deadline. While a proof runs its socket idles up to 15 s,
+    back to 10 s before the answer: the route takes at most about 8 s, inside
+    the relay's 15 s request deadline, so a slow Google answers `"browser"`. A
+    connection that ends aborts the proof and approves nothing.
+  - The token is held in memory for one verification and goes only to those two
+    hosts; state keeps only its SHA-256. Logs:
+    `enrollment request approved automatically for user <userId>` (with
+    `, new user` when one was created) and
+    `automatic enrollment declined: <reason>[ (<HTTP status or errno code>)]`;
+    never an email, request id, user code, token, hash or Google's text.
+  - Trust model: anyone holding a fresh owner Google access token issued to
+    Coder's client can enroll one machine as that owner within the token's hour,
+    once per token. Holders: Coder (it stores each owner's Google access and
+    refresh tokens: its operators and anyone with its database); Google; every
+    workspace of that owner whose template reads the owner's OIDC access token
+    (any process in it, and the build's Terraform state); Template Admins and
+    Coder owners, who can read Terraform state and, when a template puts the
+    token in env, a script, an app command, metadata or a log, the workspace
+    API; and Template Admins, who can make a template read it on the owner's
+    next build. Nothing ties the request to a workspace or a starting build.
+    When the real devbox comes second with the same token it gets
+    `already_used`, falls back to the browser and the edge logs it. Any admitted
+    Google account with such a token gets a gateway user without visiting the
+    page, admitted by the page's own rule. `automaticRefused` tells a token
+    holder which check failed. This residual risk is accepted for now
+    (Task-1422). Follow-ups: Task-1422 (approve automatically only from the
+    address ranges devboxes reach the edge from) and Task-1423 (bring back a
+    check with Coder's API, through a service user's read-only token, once
+    credentials visible through the workspace API are revoked or expired).
 - **MCP token at enrollment** (Task-1410), on both paths: the relay makes its
   token (`pgmcp_` and 32 random bytes from `randomBytes`, the format the page
   mints), sends only its SHA-256 as `mcpTokenHash` with `/enroll/start` or
@@ -1834,14 +1913,25 @@ path above.
   cannot check its private key's. `/enroll` without `mcpTokenHash` enrolls a
   tokenless client as before; such callers are not migrated.
 - **Relay approval mode.**
-  `gateway:relay enroll --approve --name <text> [--kind devbox|laptop|other] --state-dir <dir> --gateway <host:port> --ca <pem file>`
-  prints the link and the code, nothing secret, and waits. It polls every
-  `intervalSeconds`, 5 s longer after each 429; after a 5xx or a network error
-  it waits 5 s, doubling to 60 s, until a poll is answered again. Every
-  enrollment request (both paths) has a 15 s deadline. It gives up 630 s after
-  the start (`expiresInSeconds` + 30 s, its own deadline, shorter than the
-  record's 1,200 s retention), on `denied`, `expired`, `revoked` or an unknown
-  request (exit 1), or on Ctrl-C (exit 130), writing nothing in each case.
+  `gateway:relay enroll --approve --name <text> [--kind devbox|laptop|other] [--owner-token-file <0600 file | ->] --state-dir <dir> --gateway <host:port> --ca <pem file>`
+  prints the link and the code, nothing secret, and waits. With
+  `--owner-token-file` (`-` reads stdin; otherwise a regular 0600 file opened
+  without following a symlink) a devbox sends its owner's Google token as proof:
+  at most 2048 bytes after trimming, empty meaning none. It is never written,
+  logged or put in argv or a child's environment. On `approval: "automatic"` the
+  relay prints "Approved automatically." and polls at once; otherwise it prints
+  the reason, then the link and the code. A gateway without `approval` (before
+  Task-1410 PR2) means the browser. A start with the proof that times out, fails
+  on the network or answers 5xx is sent once more at once without it, with the
+  same key and token hash, and the reason shown is `unavailable`; an abort is
+  never retried and writes nothing. The first request, if the edge opened it,
+  expires unused. It polls every `intervalSeconds`, 5 s longer after each 429;
+  after a 5xx or a network error it waits 5 s, doubling to 60 s, until a poll is
+  answered again. Every enrollment request (both paths) has a 15 s deadline. It
+  gives up 630 s after the start (`expiresInSeconds` + 30 s, its own deadline,
+  shorter than the record's 1,200 s retention), on `denied`, `expired`,
+  `revoked` or an unknown request (exit 1), or on Ctrl-C (exit 130), writing
+  nothing in each case.
 - **Client ids.** A client's id, its certificate's CN, is `c_` and 16 random
   base64url characters, so it never starts with `-`. Ids enrolled before the
   prefix keep their shape; one that starts with `-` goes after `--` on the admin
@@ -2216,7 +2306,15 @@ preset).
   `read:confluence-content.all` and `write:confluence-content`; either way it
   adds `offline_access`, so the vault gets a refresh token. The Atlassian app
   needs the callback `<publicOrigin>/auth/atlassian/callback` and every scope
-  asked for.
+  asked for. An optional
+  `"coder": {"googleClientId": "<Coder's Google client id>", "automaticApproval": true}`
+  (Task-1410 PR2) turns on zero-click enrollment ("Zero-click enrollment" under
+  Client mode): `googleClientId` is the OAuth client Coder signs its users in
+  with, not the page's; `automaticApproval` is a required boolean, `false`
+  keeping the id while browser approval stays the only way. No other key is
+  taken (a Coder API token, for one, is refused), and the section is refused
+  unless `oidc.issuer` is exactly `https://accounts.google.com`, since the users
+  a proof finds or creates are Google identities.
 
 - **Allow rule.** Admitted only when `email_verified` is the boolean `true`,
   `email` is a string whose lowercased address is in `emails` or whose domain is
@@ -2259,7 +2357,9 @@ preset).
   email within its TTL (60 minutes unless given, at most 1,440), replacing an
   earlier claim on that user or email. All of it is one `clients.json` change
   under its lock; files of older builds load unchanged (`claims` absent is
-  empty).
+  empty). Zero-click enrollment finds or creates users the same way, without a
+  sign-in, but leaves a claim to the page's sign-in; a user it created is an
+  ordinary user, and signing in later reaches it.
 - **Sessions.** In memory: an edge restart signs everyone out. The cookie
   `__Host-pgw_session` (32 random bytes, kept as its SHA-256; `HttpOnly`,
   `Secure`, `SameSite=Lax`, `Path=/`) lasts 2 h idle and 12 h in all; the table
@@ -2813,6 +2913,27 @@ The credential gateway already has this shape: its own unit,
 `personal-assistant-gateway`, which a deploy never restarts, and a
 `pa-pr-gateway@<n>` beside each preview, restarted by the preview's deploy
 ([deployment.md](deployment.md) "Credential gateway unit").
+
+### Zero-click enrollment checklist
+
+Turning on `coder` in production (Task-1410 PR2) is the operator's step after
+these checks, not part of a release:
+
+1. Feasibility M1-M3 was measured on 2026-11-17. Record M1b (whether a build
+   started after the first token expired gets a fresh one) and M5 (the edge host
+   reaches `oauth2.googleapis.com` and `openidconnect.googleapis.com` over
+   HTTPS) where deployment evidence is kept, without tokens; then stop and
+   delete the probe workspaces and retire the probe template.
+2. Add to the edge's UI config (mode 0600)
+   `"coder": {"googleClientId": "<Coder's Google client id>", "automaticApproval": true}`;
+   its `oidc.issuer` must be `https://accounts.google.com`.
+3. Restart the edge and start a Pandeck devbox: its startup log shows "Approved
+   automatically.", the edge's
+   `enrollment request approved automatically for user …`.
+4. Check the fallback: a devbox started with an empty token prints the link and
+   the code.
+5. To turn zero-click off, set `automaticApproval` to `false` and restart the
+   edge; browser approval keeps working.
 
 ## What the user sees
 

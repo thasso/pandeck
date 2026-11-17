@@ -35,7 +35,24 @@ export interface GatewayWebConfig {
    * user enters both.
    */
   atlassian?: AtlassianPreset;
+  /**
+   * Devbox zero-click (Task-1410 PR2): Coder's Google OAuth client, whose
+   * owner tokens the edge accepts as a devbox's proof, and whether it does.
+   * Absent, or `automaticApproval` false, every machine approves in the
+   * browser.
+   */
+  coder?: CoderPreset;
 }
+
+interface CoderPreset {
+  /** The OAuth client id Coder signs its users in to Google with. */
+  googleClientId: string;
+  automaticApproval: boolean;
+}
+
+/** The only issuer a `coder` section works with: its tokens are Google's. */
+const GOOGLE_ISSUER = "https://accounts.google.com";
+const CODER_KEYS = new Set(["googleClientId", "automaticApproval"]);
 
 export interface AtlassianPreset {
   site?: string;
@@ -196,6 +213,27 @@ function atlassianPreset(value: unknown): AtlassianPreset | undefined {
   };
 }
 
+/**
+ * `coder`: both keys required and nothing else, so a key this build does not
+ * use (an `apiToken`, say) refuses rather than sits unread. The refusal names
+ * the field, never a value.
+ */
+function coderPreset(value: unknown, issuer: string): CoderPreset | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    refuse("coder must be an object");
+  const raw = value as Record<string, unknown>;
+  for (const key of Object.keys(raw))
+    if (!CODER_KEYS.has(key))
+      refuse("coder takes only googleClientId and automaticApproval");
+  const googleClientId = text(raw.googleClientId, "coder.googleClientId");
+  if (typeof raw.automaticApproval !== "boolean")
+    refuse("coder.automaticApproval must be true or false");
+  if (issuer !== GOOGLE_ISSUER)
+    refuse(`coder needs oidc.issuer ${GOOGLE_ISSUER}`);
+  return { googleClientId, automaticApproval: raw.automaticApproval };
+}
+
 /** Reads and checks the UI config at `file`; throws `GatewayWebConfigError`. */
 export function loadGatewayWebConfig(file: string): GatewayWebConfig {
   let mode: number;
@@ -232,6 +270,8 @@ export function loadGatewayWebConfig(file: string): GatewayWebConfig {
   const clientSecret = text(oidc.clientSecret, "oidc.clientSecret");
   const allow = allowRule(raw.allow);
   const atlassian = atlassianPreset(raw.atlassian);
+  const issuer = text(oidc.issuer, "oidc.issuer");
+  const coder = coderPreset(raw.coder, issuer);
 
   const certPem = pem(raw.certFile, "certFile");
   const keyPem = pem(raw.keyFile, "keyFile");
@@ -246,9 +286,10 @@ export function loadGatewayWebConfig(file: string): GatewayWebConfig {
     certPem,
     keyPem,
     distDir,
-    oidc: { issuer: text(oidc.issuer, "oidc.issuer"), clientId, clientSecret },
+    oidc: { issuer, clientId, clientSecret },
     allow,
     ...(atlassian ? { atlassian } : {}),
+    ...(coder ? { coder } : {}),
   };
 }
 

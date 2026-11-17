@@ -228,6 +228,108 @@ test("atlassian.scopes refuses a non-list, an empty or spaced entry, a long entr
   }
 });
 
+/** Synthetic: Coder's Google client id and a v02-style Coder token. */
+const FAKE_CODER_CLIENT_ID = "FAKE_coder-google-client.apps.example";
+const FAKE_CODER_API_TOKEN = "FAKE_coder-api-token-sentinel";
+const GOOGLE = "https://accounts.google.com";
+
+/** The fixture with Google as its issuer and `coder` as given. */
+function coderFixture(coder: unknown, issuer = GOOGLE) {
+  return fixture((c) => {
+    (c.oidc as Record<string, unknown>).issuer = issuer;
+    c.coder = coder;
+  });
+}
+
+test("the coder preset: absent leaves coder undefined; given, both keys load", () => {
+  assert.equal(loadGatewayWebConfig(fixture().file).coder, undefined);
+  assert.deepEqual(
+    loadGatewayWebConfig(
+      coderFixture({
+        googleClientId: ` ${FAKE_CODER_CLIENT_ID} `,
+        automaticApproval: true,
+      }).file,
+    ).coder,
+    { googleClientId: FAKE_CODER_CLIENT_ID, automaticApproval: true },
+  );
+  // Turned off, the client id stays.
+  assert.deepEqual(
+    loadGatewayWebConfig(
+      coderFixture({
+        googleClientId: FAKE_CODER_CLIENT_ID,
+        automaticApproval: false,
+      }).file,
+    ).coder,
+    { googleClientId: FAKE_CODER_CLIENT_ID, automaticApproval: false },
+  );
+});
+
+test("the coder preset refuses a missing or empty id, a non-boolean switch, an unknown key and a non-Google issuer, naming the field and no value", () => {
+  const valid = {
+    googleClientId: FAKE_CODER_CLIENT_ID,
+    automaticApproval: true,
+  };
+  const cases: [string, unknown, string | undefined, RegExp][] = [
+    ["not an object", "x", undefined, /^gateway UI config: coder must be/],
+    ["a list", [valid], undefined, /^gateway UI config: coder must be/],
+    [
+      "missing id",
+      { automaticApproval: true },
+      undefined,
+      /^gateway UI config: coder\.googleClientId /,
+    ],
+    [
+      "empty id",
+      { ...valid, googleClientId: " " },
+      undefined,
+      /^gateway UI config: coder\.googleClientId /,
+    ],
+    [
+      "id not a string",
+      { ...valid, googleClientId: 7 },
+      undefined,
+      /^gateway UI config: coder\.googleClientId /,
+    ],
+    [
+      "missing switch",
+      { googleClientId: FAKE_CODER_CLIENT_ID },
+      undefined,
+      /^gateway UI config: coder\.automaticApproval /,
+    ],
+    [
+      "switch a string",
+      { ...valid, automaticApproval: "true" },
+      undefined,
+      /^gateway UI config: coder\.automaticApproval /,
+    ],
+    [
+      "an apiToken",
+      { ...valid, apiToken: FAKE_CODER_API_TOKEN },
+      undefined,
+      /^gateway UI config: coder takes only /,
+    ],
+    [
+      "another issuer",
+      valid,
+      "https://issuer.example",
+      /^gateway UI config: coder needs oidc\.issuer https:\/\/accounts\.google\.com$/,
+    ],
+    [
+      "Google's issuer with a slash",
+      valid,
+      "https://accounts.google.com/",
+      /^gateway UI config: coder needs oidc\.issuer /,
+    ],
+  ];
+  for (const [name, coder, issuer, expected] of cases) {
+    const message = refusal(coderFixture(coder, issuer).file);
+    assert.match(message, expected, name);
+    assert.ok(!message.includes(FAKE_CODER_CLIENT_ID), `${name}: no id`);
+    assert.ok(!message.includes(FAKE_CODER_API_TOKEN), `${name}: no token`);
+    assert.ok(!message.includes("apiToken"), `${name}: no key from the file`);
+  }
+});
+
 test("the port defaults to 443", () => {
   const { file } = fixture((c) => delete c.port);
   assert.equal(loadGatewayWebConfig(file).port, 443);

@@ -101,6 +101,8 @@ export interface GatewayOptions {
    * `clients`, which an entry may read from its environment.
    */
   modelDeadlines?: ModelDeadlines;
+  /** Test seam: shorter enrollment-port idle bounds for the client listener. */
+  enrollIdle?: { baseMs: number; proofMs: number };
   /** The login drivers enrolled clients' logins run (`logins.ts`). */
   loginDrivers?: LoginDrivers;
   /**
@@ -294,6 +296,7 @@ export async function startGateway(
         vault,
         tools: options.tools,
         modelDeadlines: options.modelDeadlines,
+        enrollIdle: options.enrollIdle,
       },
       options.clients,
     );

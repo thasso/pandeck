@@ -67,7 +67,7 @@ export class UserOperationRefusal extends Error {
  * enrollment request not yet collected counts as an unused code, both where
  * a code is issued and where a request is approved (Task-1410).
  */
-const PAGE_ENROLLMENT_LIMITS: EnrollmentLimits = {
+export const PAGE_ENROLLMENT_LIMITS: EnrollmentLimits = {
   maxPendingCodes: 4,
   maxClients: 16,
 };

@@ -4,8 +4,10 @@
  * approves (or denies) it through the gateway page's API, the relay collects
  * its certificate and keeps key, certificate, CA, ports and its own MCP token
  * 0600; `relay run` then reaches the edge with that identity and the token
- * opens `/mcp`. The typed-code path gets its token the same way. Every value
- * is fake and stays in this process.
+ * opens `/mcp`. The typed-code path gets its token the same way. With a
+ * `coder` section (Task-1410 PR2) a devbox's owner token approves at once,
+ * checked against the loopback Google fake. Every value is fake and stays in
+ * this process.
  */
 import assert from "node:assert/strict";
 import { createHash, createPrivateKey, X509Certificate } from "node:crypto";
@@ -43,6 +45,15 @@ import {
   PUBLIC_ORIGIN,
   startFakeIssuer,
 } from "./test/gatewayUiIssuer.ts";
+import {
+  FAKE_CODER_CLIENT_ID,
+  FAKE_OWNER_EMAIL,
+  FAKE_OWNER_SUB,
+  FAKE_OWNER_TOKEN,
+  jsonResponder,
+  startGoogleFake,
+  type GoogleFake,
+} from "./test/googleFake.ts";
 
 const EDGE_ISSUER = "https://issuer.test";
 const uiTls = edgeTlsFor(["localhost", "127.0.0.1"], undefined);
@@ -143,9 +154,18 @@ const TOOLS: EdgeTools = {
   },
 };
 
-async function edgeWithUi() {
+/**
+ * A started edge with its page. `coder` adds the zero-click section (its
+ * `automaticApproval` as given) and Google's issuer, which it requires;
+ * `google` is where a devbox proof goes.
+ */
+async function edgeWithUi(
+  options: { coder?: boolean; google?: GoogleFake } = {},
+) {
+  const issuerUrl =
+    options.coder === undefined ? EDGE_ISSUER : "https://accounts.google.com";
   const issuer = await startFakeIssuer({
-    advertised: EDGE_ISSUER,
+    advertised: issuerUrl,
     now: () => Date.now(),
   });
   open.push({ close: () => issuer.close() });
@@ -163,11 +183,19 @@ async function edgeWithUi() {
       keyFile: join(dir, "key.pem"),
       distDir,
       oidc: {
-        issuer: EDGE_ISSUER,
+        issuer: issuerUrl,
         clientId: CLIENT_ID,
         clientSecret: CLIENT_PW,
       },
-      allow: { emailDomains: ["example.org"] },
+      allow: { emailDomains: ["example.org", "example.test"] },
+      ...(options.coder === undefined
+        ? {}
+        : {
+            coder: {
+              googleClientId: FAKE_CODER_CLIENT_ID,
+              automaticApproval: options.coder,
+            },
+          }),
     }),
     { mode: 0o600 },
   );
@@ -188,9 +216,10 @@ async function edgeWithUi() {
       log: (line) => logs.push(line),
       oidcTestOptions: {
         fetch: (url, init) =>
-          fetch(url.replace(EDGE_ISSUER, issuer.listening), init),
+          fetch(url.replace(issuerUrl, issuer.listening), init),
       },
       tools: TOOLS,
+      ...(options.google ? { devboxEndpoints: options.google.endpoints } : {}),
     },
   );
   open.push(edge);
@@ -474,4 +503,179 @@ test("typed code: the relay sends its token's hash with the code; the token open
   });
   open.push(relay);
   assert.equal((await mcp(relay.url, files.token)).status, 200);
+});
+
+// --- zero-click (Task-1410 PR2) ----------------------------------------------
+
+/**
+ * A relay enrollment with the owner's token, recording what it showed. With
+ * `cookie`, that signed-in user approves a prompt in the page and the first
+ * poll waits for it.
+ */
+async function devboxRelay(
+  edge: Awaited<ReturnType<typeof edgeWithUi>>,
+  name: string,
+  token: string,
+  cookie?: string,
+) {
+  const prompts: ApprovalPrompt[] = [];
+  let automatic = 0;
+  const stateDir = join(relayRoot, name);
+  const { clock, decided } = afterDecision();
+  const clientId = await enrollRelayByApproval({
+    ...edge.target,
+    stateDir,
+    name: "devbox-7",
+    kind: "devbox",
+    devbox: { googleAccessToken: token },
+    onAutomatic: () => (automatic += 1),
+    onPrompt: (prompt) => {
+      prompts.push(prompt);
+      secrets.push(prompt.userCode, prompt.userCode.replace("-", ""));
+      if (cookie)
+        decided(
+          (async () => {
+            const approved = await edge.post(
+              cookie,
+              "/api/enrollments/decide",
+              { userCode: prompt.userCode, approve: true },
+            );
+            assert.equal(approved.status, 204);
+          })(),
+        );
+    },
+    clock,
+  });
+  return { clientId, stateDir, prompts, automatic };
+}
+
+test("zero-click: a fresh token of an owner who never signed in enrolls the relay without the page; the same token again falls back as already_used", async () => {
+  secrets.push(FAKE_OWNER_TOKEN, sha256(FAKE_OWNER_TOKEN), FAKE_OWNER_EMAIL);
+  const google = await startGoogleFake();
+  open.push(google);
+  const edge = await edgeWithUi({ coder: true, google });
+  assert.equal(edge.registry.users().length, 0);
+
+  const first = await devboxRelay(edge, "zero-click", FAKE_OWNER_TOKEN);
+  assert.equal(first.automatic, 1);
+  assert.deepEqual(first.prompts, []);
+  // Google saw a form POST and a Bearer GET, each at its own name.
+  assert.deepEqual(
+    google.seen.map((request) => [
+      request.route,
+      request.servername,
+      request.headers.host,
+    ]),
+    [
+      ["tokeninfo", "oauth2.googleapis.com", "oauth2.googleapis.com"],
+      [
+        "userinfo",
+        "openidconnect.googleapis.com",
+        "openidconnect.googleapis.com",
+      ],
+    ],
+  );
+  const [owner] = edge.registry.users();
+  assert.deepEqual(owner!.oidc, {
+    issuer: "https://accounts.google.com",
+    subject: FAKE_OWNER_SUB,
+  });
+  assert.equal(owner!.email, FAKE_OWNER_EMAIL);
+  const client = edge.registry.clients().find((c) => c.id === first.clientId)!;
+  assert.equal(client.userId, owner!.id);
+
+  // `relay run` with that identity; its own MCP token opens /mcp.
+  const files = relayState(first.stateDir);
+  assert.ok(
+    !readFileSync(join(first.stateDir, "edge.json"), "utf8").includes(
+      FAKE_OWNER_TOKEN,
+    ),
+  );
+  const relay = await startRelay({
+    stateDir: first.stateDir,
+    port: 0,
+    socketPath: join(relayRoot, "zero-click.sock"),
+    log: (line) => logs.push(line),
+  });
+  open.push(relay);
+  const allowed = await mcp(relay.url, files.token);
+  assert.equal(allowed.status, 200);
+
+  // A second relay with the same token: the page decides.
+  const cookie = await edge.signIn("subject-a");
+  const second = await devboxRelay(
+    edge,
+    "zero-click-again",
+    FAKE_OWNER_TOKEN,
+    cookie,
+  );
+  assert.equal(second.automatic, 0);
+  assert.equal(second.prompts[0]!.automaticRefused, "already_used");
+  assert.notEqual(
+    edge.registry.clients().find((c) => c.id === second.clientId)!.userId,
+    owner!.id,
+    "the page's user approved it",
+  );
+  const stored = readFileSync(join(edge.stateDir, "clients.json"), "utf8");
+  assert.ok(!stored.includes(FAKE_OWNER_TOKEN));
+  assert.ok(
+    logs.some((line) =>
+      line.endsWith(
+        `enrollment request approved automatically for user ${owner!.id}, new user`,
+      ),
+    ),
+  );
+  assert.ok(
+    logs.some((line) =>
+      line.endsWith("automatic enrollment declined: already_used"),
+    ),
+  );
+});
+
+test("zero-click: an expired token (token info 400) falls back to the page, which approves", async () => {
+  const google = await startGoogleFake();
+  open.push(google);
+  google.tokenInfo = jsonResponder(400, {
+    error: "invalid_token",
+    error_description: "FAKE upstream text",
+  });
+  const edge = await edgeWithUi({ coder: true, google });
+  const cookie = await edge.signIn("subject-a");
+  const relay = await devboxRelay(
+    edge,
+    "zero-click-expired",
+    "FAKE_expired-owner-token",
+    cookie,
+  );
+  assert.equal(relay.automatic, 0);
+  assert.equal(relay.prompts[0]!.automaticRefused, "token_rejected");
+  assert.equal(google.on("userinfo").length, 0);
+  relayState(relay.stateDir);
+  assert.ok(
+    logs.some((line) =>
+      line.endsWith("automatic enrollment declined: token_rejected (400)"),
+    ),
+  );
+  assert.ok(!logs.some((line) => line.includes("FAKE upstream text")));
+});
+
+test("zero-click: without a coder section, or with automaticApproval false, a proof calls nothing and the page decides", async () => {
+  for (const coder of [undefined, false]) {
+    const google = await startGoogleFake();
+    open.push(google);
+    const edge = await edgeWithUi({
+      ...(coder === undefined ? {} : { coder }),
+      google,
+    });
+    const cookie = await edge.signIn("subject-a");
+    const relay = await devboxRelay(
+      edge,
+      `zero-click-off-${String(coder)}`,
+      "FAKE_unused-owner-token",
+      cookie,
+    );
+    assert.equal(relay.prompts[0]!.automaticRefused, "not_configured");
+    assert.equal(google.seen.length, 0, "no call to Google");
+    relayState(relay.stateDir);
+  }
 });
