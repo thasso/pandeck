@@ -562,6 +562,7 @@ describe("withdrawing a sent request (Task-1427)", () => {
     message: "verify the fix",
     responseRequested: true,
     state: "awaiting_response",
+    withdrawable: true,
   } as PeerPromptCardType;
   const withdrawButton = () =>
     [...container.querySelectorAll("button")].find((b) =>
@@ -601,13 +602,17 @@ describe("withdrawing a sent request (Task-1427)", () => {
     expect(onWithdrawPeerRequest).toHaveBeenCalledWith("k7");
   });
 
-  it("offers nothing on a closed, received or unrequested card, or without a handler", () => {
+  it("offers it only where the server says so, whatever the state reads", () => {
     const onWithdraw = vi.fn();
+    // A request whose answer was lost before delivery reads "Replied" yet is
+    // still owed: the server's flag decides, not the state.
+    renderCard({ ...request, state: "replied" }, { onWithdraw });
+    expandCard();
+    expect(withdrawButton()).toBeDefined();
     for (const card of [
-      { ...request, state: "replied" },
-      { ...request, state: "withdrawn" },
+      { ...request, withdrawable: undefined },
+      { ...request, state: "withdrawn", withdrawable: undefined },
       { ...request, direction: "received" },
-      { ...request, responseRequested: false },
     ] as PeerPromptCardType[]) {
       renderCard(card, { onWithdraw });
       expandCard();

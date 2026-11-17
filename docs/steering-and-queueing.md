@@ -430,7 +430,10 @@ restarts its reply deadline.
   `withdrawn` is terminal and sender-written, carries the reason in
   `withdraw_reason`, and is owed by nobody. It moves only from the admitted
   states, like `settled`, so it can be written while the request's turn still
-  runs and that turn's end never overwrites it; the addressee is not prompted. A
+  runs and that turn's end never overwrites it; the addressee is not prompted.
+  It also moves from `replied` when that reply was lost before admission
+  (`cancelled` or `failed` with no `accepted_at_ms`), checked in the same
+  transaction; both answer states are closed, so the check cannot go stale. A
   row not yet dispatched (`held`, `queued`, `retryable_failed`) is cancelled
   instead, exactly like **Withdraw** above, with "Withdrawn before delivery: …"
   as its reason; a `dispatching` one is refused until it lands.

@@ -28,6 +28,7 @@ import { sessionStore } from "./db/sessionStore.ts";
 import { backgroundWorkStore } from "./db/backgroundWorkStore.ts";
 import { agentHandoffStore } from "./db/agentHandoffStore.ts";
 import { peerPromptStore } from "./db/peerPromptStore.ts";
+import { peerPromptKey } from "./peerPromptKey.ts";
 import { deadlineWatermark } from "./db/peerDeadlineClock.ts";
 import { directPeerChildStore } from "./db/directPeerChildStore.ts";
 import { waitingForSlotByChild } from "./heldDirectPeers.ts";
@@ -328,10 +329,30 @@ function attentionFields(
   return { awaitingInput, ...(attention ? { attention } : {}) };
 }
 
-/** Who still owes each session a reply; empty (and logged) when unreadable. */
-function awaitingRepliesBySender(): Map<string, string[]> {
+/**
+ * Who still owes each session a reply, and the keys of the requests owed,
+ * as the row projects them; empty (and logged) when unreadable.
+ */
+function awaitingRepliesBySender(): Map<
+  string,
+  Pick<SessionListItem, "awaitingRepliesFrom" | "awaitingReplyKeys">
+> {
   try {
-    return peerPromptStore.outstandingRepliesBySender(deadlineWatermark());
+    const out = new Map<
+      string,
+      Pick<SessionListItem, "awaitingRepliesFrom" | "awaitingReplyKeys">
+    >();
+    for (const [
+      sender,
+      owed,
+    ] of peerPromptStore.outstandingReplyRequestsBySender(deadlineWatermark()))
+      out.set(sender, {
+        awaitingRepliesFrom: [...owed.keys()],
+        awaitingReplyKeys: Object.fromEntries(
+          [...owed].map(([peer, ids]) => [peer, ids.map(peerPromptKey)]),
+        ),
+      });
+    return out;
   } catch (err) {
     console.warn("Failed to read awaited peer replies for session list:", err);
     return new Map();
@@ -621,9 +642,7 @@ export function listSessions(
       ...(hopRefusals.has(row.id)
         ? { peerPromptHopRefusal: hopRefusals.get(row.id)! }
         : {}),
-      ...(awaitingReplies.has(row.id)
-        ? { awaitingRepliesFrom: awaitingReplies.get(row.id)! }
-        : {}),
+      ...awaitingReplies.get(row.id),
       ...(unansweredRequests.has(row.id)
         ? { unansweredRequestsFrom: unansweredRequests.get(row.id)! }
         : {}),
@@ -718,9 +737,7 @@ export function listSessions(
       ...(hopRefusals.has(key)
         ? { peerPromptHopRefusal: hopRefusals.get(key)! }
         : {}),
-      ...(awaitingReplies.has(key)
-        ? { awaitingRepliesFrom: awaitingReplies.get(key)! }
-        : {}),
+      ...awaitingReplies.get(key),
       ...(unansweredRequests.has(key)
         ? { unansweredRequestsFrom: unansweredRequests.get(key)! }
         : {}),

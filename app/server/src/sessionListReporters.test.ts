@@ -292,6 +292,8 @@ const CLASSIFIED: Record<
       openForRecipient: "read",
       openRequestsTo: "read",
       withdrawableFrom: "read",
+      isWithdrawable: "read",
+      outstandingReplyRequestsBySender: "read",
       dueReminderRequests: "read",
       remindersExhaustedByRecipient: "read",
       listRepliedBy: "read",

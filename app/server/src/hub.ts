@@ -600,6 +600,7 @@ class SessionHub {
       interruption?: import("@assistant/shared").PeerPromptInterruption;
       settledReason?: string;
       withdrawnReason?: string;
+      withdrawable?: boolean;
     },
   ): void {
     const msg: import("@assistant/shared").ServerMessage = {

@@ -502,6 +502,55 @@ describe("ActiveSessionCard stall", () => {
   });
 });
 
+describe("ActiveSessionCard stall close (Task-1427)", () => {
+  it("closes the request the chip names, and is offered only with a key", () => {
+    const reviewer = card({ id: "rev", title: "Reviewer" }).session;
+    const base = card({ id: "root", title: "Coordinator" });
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const closed: Array<[string, string]> = [];
+    const render = (close?: { requesterId: string; key: string }) =>
+      act(() =>
+        root.render(
+          <ActiveSessionCard
+            card={{
+              ...base,
+              stall: {
+                peers: [reviewer],
+                askers: [],
+                ...(close ? { close } : {}),
+              },
+            }}
+            now={NOW}
+            active={false}
+            relations={{}}
+            onOpen={() => {}}
+            onSettle={() => {}}
+            onDismissFailure={() => {}}
+            onWithdrawPeerRequest={(requester, key) =>
+              closed.push([requester, key])
+            }
+            onRename={() => {}}
+            onArchive={() => {}}
+            onDelete={() => {}}
+          />,
+        ),
+      );
+    const closeButton = () =>
+      host.querySelector<HTMLButtonElement>(
+        'button[aria-label^="Close the stalled request"]',
+      );
+    render();
+    expect(closeButton()).toBeNull();
+    render({ requesterId: "root", key: "k1" });
+    act(() => closeButton()!.click());
+    expect(closed).toEqual([["root", "k1"]]);
+    act(() => root.unmount());
+    host.remove();
+  });
+});
+
 describe("ActiveSessionCard stall chip fit", () => {
   it("truncates only the title, never the prefix or the count", () => {
     const long = (id: string) =>

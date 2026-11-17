@@ -2582,6 +2582,16 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     [actions],
   );
 
+  /**
+   * Close a stalled request from its owed-reply chip, as its requester's
+   * withdraw would; same stability contract. Nobody is prompted.
+   */
+  const withdrawPeerRequest = useCallback(
+    (requesterId: string, key: string) =>
+      actions.withdrawPeerRequest(requesterId, key),
+    [actions],
+  );
+
   /** Settle a Workflow Run out of the inbox; same stability contract. */
   const settleWorkflowRun = useCallback(
     (runId: string, throughRevision: number) =>
@@ -6352,6 +6362,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
           onArchive={archiveSession}
           onSettleSession={settleSession}
           onDismissSessionFailure={dismissSessionFailure}
+          onWithdrawPeerRequest={withdrawPeerRequest}
           onRenameSession={promptRenameSession}
           onDeleteSession={confirmDeleteSession}
           onLoadArchivedSessions={actions.loadArchivedSessions}

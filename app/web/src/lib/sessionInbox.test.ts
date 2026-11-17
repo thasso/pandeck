@@ -3219,6 +3219,39 @@ describe("a stalled tree", () => {
     ).toEqual(["rev"]);
   });
 
+  it("offers to close the newest request the named session owes (Task-1427)", () => {
+    const stallFor = (rows: SessionListItem[]) =>
+      spawnTreeStall(rows, new Map(rows.map((row) => [row.id, row])));
+    // A peer owes the tree: the request of the first session that it owes.
+    expect(
+      stallFor([
+        session({
+          id: "root",
+          awaitingRepliesFrom: ["rev"],
+          awaitingReplyKeys: { rev: ["knew", "kold"] },
+        }),
+        peer("rev", "root"),
+      ])?.close,
+    ).toEqual({ requesterId: "root", key: "knew" });
+    // A child waits on the root: its own request to the root.
+    expect(
+      stallFor([
+        session({ id: "root" }),
+        peer("asker", "root", {
+          awaitingRepliesFrom: ["root"],
+          awaitingReplyKeys: { root: ["kask"] },
+        }),
+      ])?.close,
+    ).toEqual({ requesterId: "asker", key: "kask" });
+    // No key in the list: the chip offers no close.
+    expect(
+      stallFor([
+        session({ id: "root", awaitingRepliesFrom: ["rev"] }),
+        peer("rev", "root"),
+      ])?.close,
+    ).toBeUndefined();
+  });
+
   it("is not a stall while anything in the tree, or the peer owed, is moving", () => {
     const owed = session({ id: "root", awaitingRepliesFrom: ["rev"] });
     for (const moving of [

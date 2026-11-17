@@ -76,6 +76,7 @@ import {
   type PeerPromptStatus,
 } from "./db/peerPromptStore.ts";
 import { advancePeerDeadlines } from "./db/peerDeadlineClock.ts";
+import { peerPromptKey } from "./peerPromptKey.ts";
 import { getSettings } from "./settings.ts";
 import { sessionFirstTurnContext } from "./sessionContext.ts";
 import { canonicalSessionLogPath } from "./sessionStorage.ts";
@@ -172,6 +173,7 @@ export interface PeerPromptHub {
       interruption?: PeerPromptInterruption;
       settledReason?: string;
       withdrawnReason?: string;
+      withdrawable?: boolean;
     },
   ): void;
   /** Tell a recipient's viewers what still waits for it; optional for test hubs. */
@@ -502,7 +504,7 @@ const LOG_UNREADABLE_REASON =
  */
 function queuedPeerPromptsFor(recipientId: string): QueuedPeerPrompt[] {
   return peerPromptStore.listUndeliveredForRecipient(recipientId).map((r) => ({
-    id: opaqueKey(r.id),
+    id: peerPromptKey(r.id),
     senderTitle: r.senderLabel ?? "another session",
     senderSessionId: r.senderSessionId,
     message: peerPromptExcerpt(r.prompt),
@@ -567,7 +569,7 @@ function undeliveredByKey(
 ): PeerPromptRecord | undefined {
   return peerPromptStore
     .listUndeliveredForRecipient(recipientId)
-    .find((r) => opaqueKey(r.id) === key);
+    .find((r) => peerPromptKey(r.id) === key);
 }
 
 /**
@@ -1003,7 +1005,7 @@ function requestClosedError(
   err: PeerPromptRequestClosedError,
   outcome: string,
 ): Error {
-  const keys = err.ids.map((id) => `\`${opaqueKey(id)}\``).join(", ");
+  const keys = err.ids.map((id) => `\`${peerPromptKey(id)}\``).join(", ");
   return new Error(
     `Request ${keys} was answered, settled, withdrawn or closed meanwhile. ${outcome}`,
   );
@@ -2451,7 +2453,7 @@ function cardFor(
 ): PeerPromptCard {
   return {
     direction,
-    messageKey: opaqueKey(message.id),
+    messageKey: peerPromptKey(message.id),
     senderTitle: message.senderLabel ?? "another session",
     ...(recipientTitle ? { recipientTitle } : {}),
     // The other party's session id, so the card can link to that conversation.
@@ -2466,6 +2468,7 @@ function cardFor(
     ...(message.failureReason ? { failureReason: message.failureReason } : {}),
     ...interruptionField(message),
     ...closeReasons(message),
+    ...(direction === "sent" ? withdrawableField(message) : {}),
     state: cardState(message.status),
   };
 }
@@ -2534,7 +2537,7 @@ async function broadcastCardKeyUpdate(
   state: PeerPromptState,
   failureReason?: string,
   interruption?: PeerPromptInterruption,
-  reasons: CloseReasons = {},
+  reasons: CloseReasons & { withdrawable?: boolean } = {},
 ): Promise<void> {
   try {
     const hub = await getHub();
@@ -2558,6 +2561,11 @@ function closeReasons(m: PeerPromptRecord): CloseReasons {
     ...(m.settleReason ? { settledReason: m.settleReason } : {}),
     ...(m.withdrawReason ? { withdrawnReason: m.withdrawReason } : {}),
   };
+}
+
+/** The sender card's withdraw offer, as the store decides it. */
+function withdrawableField(m: PeerPromptRecord): { withdrawable?: true } {
+  return peerPromptStore.isWithdrawable(m.id) ? { withdrawable: true } : {};
 }
 
 /** A batch card's reasons: the first member's of each kind. */
@@ -2606,7 +2614,7 @@ function aggregateCardState(rows: PeerPromptRecord[]): PeerPromptState {
  * retry/lease sweeps) drives its card updates through this single function so
  * none of them can drift out of sync with how a batch is actually rendered.
  * The sender's own per-message card always shows ITS OWN true state at
- * `opaqueKey(m.id)`. The recipient's card is batch-aware: it looks up EVERY
+ * `peerPromptKey(m.id)`. The recipient's card is batch-aware: it looks up EVERY
  * member of `m`'s delivered batch (via the durable `batch_head_id`, complete
  * regardless of any bounded/paginated window) and broadcasts the AGGREGATE
  * state at the batch's shared `batchCardKey`, never `m`'s own individual key —
@@ -2630,11 +2638,11 @@ async function broadcastCardUpdateFor(m: PeerPromptRecord): Promise<void> {
   await Promise.all([
     broadcastCardKeyUpdate(
       m.senderSessionId,
-      opaqueKey(m.id),
+      peerPromptKey(m.id),
       cardState(m.status),
       m.failureReason,
       interruptionOf(m),
-      closeReasons(m),
+      { ...closeReasons(m), ...withdrawableField(m) },
     ),
     broadcastCardKeyUpdate(
       m.recipientSessionId,
@@ -2644,6 +2652,12 @@ async function broadcastCardUpdateFor(m: PeerPromptRecord): Promise<void> {
       aggregateInterruption(rowsForAggregate, aggregateState),
       aggregateCloseReasons(rowsForAggregate),
     ),
+    // An answer lost before admission leaves the requests it was recorded as
+    // answering owed again, and withdrawable: their own cards say so.
+    ...((m.status === "cancelled" || m.status === "failed") &&
+    m.acceptedAt === undefined
+      ? peerPromptStore.listRepliedBy(m.id).map(broadcastCardUpdateFor)
+      : []),
   ]);
 }
 
@@ -2674,7 +2688,7 @@ async function broadcastBatchCardUpdates(batchIds: string[]): Promise<void> {
 
 /** Distinct opaque key for a batch's ONE shared recipient card, never shared with the head row's own per-message key. */
 function batchCardKey(headId: string): string {
-  return opaqueKey(`batch:${headId}`);
+  return peerPromptKey(`batch:${headId}`);
 }
 
 /* ---------------------------- per-peer summary ---------------------------- */
@@ -2740,7 +2754,7 @@ export function peerPromptThreadsFor(
     let thread = byConversation.get(r.conversationId);
     if (!thread) {
       thread = {
-        conversationId: opaqueKey(r.conversationId),
+        conversationId: peerPromptKey(r.conversationId),
         otherPartyTitle: otherPartyTitle(r, direction),
         peerSessionId: peerSessionIdOf(sessionId, r),
         messages: [],
@@ -2766,7 +2780,7 @@ export function peerPromptThreadsFor(
       continue;
     }
     const message: PeerPromptThreadMessage = {
-      id: opaqueKey(r.id),
+      id: peerPromptKey(r.id),
       direction,
       message: peerPromptExcerpt(r.prompt),
       state: cardState(r.status),
@@ -2775,6 +2789,7 @@ export function peerPromptThreadsFor(
       ...(r.failureReason ? { failureReason: r.failureReason } : {}),
       ...interruptionField(r),
       ...closeReasons(r),
+      ...(direction === "sent" ? withdrawableField(r) : {}),
       createdAt: r.createdAt,
     };
     thread.messages.push(message);
@@ -2833,7 +2848,7 @@ export function peerPromptAnchorFor(
   for (const r of rows) {
     const sent = r.senderSessionId === sessionId;
     const headId = r.batchHeadId ?? r.id;
-    const ownKey = sent ? opaqueKey(r.id) : batchCardKey(headId);
+    const ownKey = sent ? peerPromptKey(r.id) : batchCardKey(headId);
     if (ownKey !== messageKey) continue;
     // The peer's copy of the same message. A sent row's copy is the recipient's
     // ONE batch card. A received card is the other way round — every member of
@@ -2842,7 +2857,7 @@ export function peerPromptAnchorFor(
     // look in from that same row, so a batch whose members came from different
     // senders cannot be answered with one member's key in another's log.
     const head = sent ? r : (peerPromptStore.getById(headId) ?? r);
-    const peerKey = sent ? batchCardKey(headId) : opaqueKey(head.id);
+    const peerKey = sent ? batchCardKey(headId) : peerPromptKey(head.id);
     const peerSessionId = peerSessionIdOf(sessionId, head);
     const located = sessionRuntime.locateAnchor(peerSessionId, (entry) =>
       entryCarriesCardKey(entry, peerKey),
@@ -2879,15 +2894,7 @@ function entryCarriesCardKey(entry: SessionLogEntry, key: string): boolean {
  * requester card's `messageKey`, never the raw id.
  */
 export function peerRequestKey(request: Pick<PeerPromptRecord, "id">): string {
-  return opaqueKey(request.id);
-}
-
-/** Stable opaque key for reconciliation that is not the raw routing/thread id. */
-function opaqueKey(id: string): string {
-  let hash = 5381;
-  for (let i = 0; i < id.length; i++)
-    hash = ((hash << 5) + hash + id.charCodeAt(i)) >>> 0;
-  return `k${hash.toString(36)}`;
+  return peerPromptKey(request.id);
 }
 
 /** The session on the OTHER end of a row, whichever end the viewer is on. */

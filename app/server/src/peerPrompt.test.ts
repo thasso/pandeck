@@ -4445,6 +4445,106 @@ describe("the requester withdraws a request (Task-1427)", () => {
     assert.equal(peerPromptStore.getById(message.id)!.status, "withdrawn");
   });
 
+  /**
+   * A request answered by a reply that never reached its sender: `replied`
+   * when the answer was queued, owed again once that answer is lost.
+   */
+  async function lostAnswer(
+    lose: (answerId: string, worker: string, coordinator: string) => void,
+  ) {
+    const coordinator = seed("Coordinator");
+    const worker = seed("Worker");
+    const request = await deliveredRequest(coordinator, worker, "verify");
+    await sendRow(
+      {
+        targetSessionId: coordinator,
+        prompt: "verified",
+        inReplyTo: [peerRequestKey(request)],
+      },
+      ctx(worker),
+    );
+    const answer = peerPromptStore
+      .listUndeliveredForRecipient(coordinator)
+      .find((r) => r.senderSessionId === worker)!;
+    assert.equal(peerPromptStore.getById(request.id)!.status, "replied");
+    assert.equal(peerPromptStore.isWithdrawable(request.id), false);
+    cardUpdates.length = 0;
+    lose(answer.id, worker, coordinator);
+    await flush();
+    return { coordinator, worker, request };
+  }
+
+  for (const [kind, lose] of [
+    [
+      "cancelled",
+      (_answer: string, worker: string, coordinator: string) =>
+        cancelQueuedPeerPrompts({
+          recipientSessionId: coordinator,
+          senderSessionId: worker,
+          reason: "test",
+        }),
+    ],
+    [
+      "permanently failed",
+      (answer: string) => peerPromptStore.markFailed(answer, "gave up"),
+    ],
+  ] as const)
+    it(`withdraws a request whose answer was ${kind} before delivery`, async () => {
+      const { coordinator, worker, request } = await lostAnswer(lose);
+      // Owed again, and withdrawable — said on the card, not left to its state.
+      assert.deepEqual(
+        peerPromptStore.outstandingRepliesBySender().get(coordinator),
+        [worker],
+      );
+      assert.equal(peerPromptStore.isWithdrawable(request.id), true);
+      const history = peerPromptThreadsFor(coordinator)
+        .threads.flatMap((t) => t.messages)
+        .find((m) => m.id === peerRequestKey(request));
+      assert.equal(history?.state, "replied");
+      assert.equal(history?.withdrawable, true);
+      if (kind === "cancelled")
+        assert.ok(
+          cardUpdates.some(
+            (u: any) =>
+              u.sessionId === coordinator &&
+              u.messageKey === peerRequestKey(request) &&
+              u.withdrawable === true,
+          ),
+          "the request's own card learns it is withdrawable",
+        );
+
+      const [row] = rowsOf(
+        await withdraw([peerRequestKey(request)], "not needed", coordinator),
+      );
+      assert.equal(row.kind, "withdraw");
+      assert.equal(peerPromptStore.getById(request.id)!.status, "withdrawn");
+      assert.equal(
+        peerPromptStore.outstandingRepliesBySender().get(coordinator),
+        undefined,
+      );
+    });
+
+  it("keeps a request closed whose answer did reach its sender", async () => {
+    const coordinator = seed("Coordinator");
+    const worker = seed("Worker");
+    const request = await deliveredRequest(coordinator, worker, "verify");
+    await sendRow(
+      {
+        targetSessionId: coordinator,
+        prompt: "verified",
+        inReplyTo: [peerRequestKey(request)],
+      },
+      ctx(worker),
+    );
+    await drainRecipient(coordinator);
+    assert.equal(peerPromptStore.isWithdrawable(request.id), false);
+    await assert.rejects(
+      withdraw([peerRequestKey(request)], "not needed", coordinator),
+      /not an open request you sent/,
+    );
+    assert.equal(peerPromptStore.getById(request.id)!.status, "replied");
+  });
+
   it("the user closes a stuck request from the requester's card", async () => {
     const coordinator = seed("Coordinator");
     const verifier = seed("Verifier");

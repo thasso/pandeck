@@ -6692,6 +6692,9 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
             ...(msg.withdrawnReason !== undefined
               ? { withdrawnReason: msg.withdrawnReason }
               : {}),
+            ...(msg.withdrawable !== undefined
+              ? { withdrawable: msg.withdrawable }
+              : {}),
           },
         },
       };

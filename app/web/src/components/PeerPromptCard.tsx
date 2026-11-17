@@ -87,19 +87,6 @@ const STOPPED_MARK = {
   tone: "muted",
 } as const;
 
-/**
- * States of a sent request whose reply is still to come, so its requester (or
- * the user) may withdraw it: waiting to be delivered, or delivered and open.
- */
-const WITHDRAWABLE_STATES: ReadonlySet<PeerPromptState> = new Set([
-  "queued",
-  "retrying",
-  "delivered",
-  "acknowledged",
-  "completed",
-  "awaiting_response",
-]);
-
 /** Both halves of a peer exchange, collapsed until the reader opens the message. */
 export function PeerPromptCardView({
   card,
@@ -109,7 +96,7 @@ export function PeerPromptCardView({
 }: {
   card: PeerPromptCard;
   onOpenSession?: ((id: string) => void) | undefined;
-  /** Offered on a sent request still waiting for its reply. */
+  /** Offered on a sent card the server marks `withdrawable`. */
   onWithdraw?: ((messageKey: string) => void) | undefined;
   actions?: ReactNode;
 }) {
@@ -126,13 +113,10 @@ export function PeerPromptCardView({
       : undefined;
   const message = typeof card.message === "string" ? card.message : "";
   const stopped = card.interruption === "stopped";
+  // The server's call, never the displayed state: a request answered by a
+  // reply that was lost before delivery reads "Replied" yet is still owed.
   const withdrawable =
-    onWithdraw !== undefined &&
-    sent &&
-    card.responseRequested &&
-    card.messageKey !== "" &&
-    isPeerPromptState(card.state) &&
-    WITHDRAWABLE_STATES.has(card.state);
+    sent && card.withdrawable === true && card.messageKey !== "";
   const status = !isPeerPromptState(card.state)
     ? undefined
     : stopped && card.state === "interrupted"

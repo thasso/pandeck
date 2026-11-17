@@ -1960,6 +1960,13 @@ export interface SessionListItem {
    */
   awaitingRepliesFrom?: string[];
   /**
+   * The requests behind {@link awaitingRepliesFrom}: for each peer listed
+   * there, the keys of the requests it owes (a sent card's `messageKey`),
+   * newest first. What the user closes a stuck request by from the owed-reply
+   * indicator (`withdrawPeerRequest`). Present exactly when that field is.
+   */
+  awaitingReplyKeys?: Record<string, string[]>;
+  /**
    * The requesters still waiting on THIS session after their requests' last
    * idle-edge reminder (`sessionPeerPromptReminderLimit`), by session id,
    * newest request first: a request it neither answered nor settled. Clears
@@ -3199,6 +3206,13 @@ export interface PeerPromptCard {
   /** The reason its requester, or the user, gave for withdrawing it (`withdrawn`). */
   withdrawnReason?: string;
   /**
+   * Sent cards only: its requester (or the user) may still withdraw it — not
+   * yet delivered, delivered and still owed, or answered by a reply that was
+   * lost before delivery. The server decides; the card never infers it from
+   * {@link PeerPromptCard.state}.
+   */
+  withdrawable?: boolean;
+  /**
    * An excerpt of the request this message answers, with " (+N more)" when it
    * answered several. Fixed when the card is created.
    */
@@ -3293,6 +3307,8 @@ export interface PeerPromptThreadMessage {
   settledReason?: string;
   /** The reason its requester, or the user, gave for withdrawing it (`withdrawn`). */
   withdrawnReason?: string;
+  /** Sent messages only: see {@link PeerPromptCard.withdrawable}. */
+  withdrawable?: boolean;
   createdAt: number;
 }
 
@@ -9207,6 +9223,7 @@ export type ServerMessage =
       interruption?: PeerPromptInterruption;
       settledReason?: string;
       withdrawnReason?: string;
+      withdrawable?: boolean;
     }
   /**
    * Response to `resolveTimelineAnchor`. `anchor` is absent when the target no

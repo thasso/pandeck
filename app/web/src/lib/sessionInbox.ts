@@ -152,6 +152,12 @@ export interface SessionInboxCard {
 export interface SpawnTreeStall {
   peers: SessionListItem[];
   askers: SessionListItem[];
+  /**
+   * The one request the chip offers to close, as its requester sent it: the
+   * newest one owed by (or, for an asker, awaited from the root by) the
+   * session the chip names. Absent when the list carries no key for it.
+   */
+  close?: { requesterId: string; key: string };
 }
 
 /**
@@ -219,18 +225,50 @@ export function spawnTreeStall(
     return undefined;
   const newestFirst = (a: SessionListItem, b: SessionListItem) =>
     activityAt(b) - activityAt(a);
-  return {
+  const stall: SpawnTreeStall = {
     peers: peers.sort(newestFirst),
     askers: [...askers.values()].sort(newestFirst),
   };
+  const close = stallClose(stall, scope, root);
+  return close ? { ...stall, close } : stall;
 }
+
+/**
+ * The request a stall chip closes: one the named peer owes a session of this
+ * tree (the first such session, root first), or the named asker's own
+ * request to the root.
+ */
+function stallClose(
+  stall: SpawnTreeStall,
+  scope: readonly SessionListItem[],
+  root: SessionListItem | undefined,
+): SpawnTreeStall["close"] {
+  const peer = stall.peers[0];
+  if (peer) {
+    for (const session of scope) {
+      const key = session.awaitingReplyKeys?.[peer.id]?.[0];
+      if (key) return { requesterId: session.id, key };
+    }
+    return undefined;
+  }
+  const asker = stall.askers[0];
+  const key = asker && root ? asker.awaitingReplyKeys?.[root.id]?.[0] : "";
+  return asker && key ? { requesterId: asker.id, key } : undefined;
+}
+
+/** What a stall chip's close does, said where the user decides. */
+export const STALL_CLOSE_TITLE =
+  "Close this request without a reply; nobody is prompted";
 
 /** What a stall chip draws, as a content key. */
 function stallKey(stall: SpawnTreeStall): string {
   // The two partitions apart: which one names the chip decides its wording.
   const ids = (rows: SessionListItem[]) =>
     rows.map((peer) => `${peer.id}:${peer.title}`).join("\u001f");
-  return `${ids(stall.peers)}\u001e${ids(stall.askers)}`;
+  const close = stall.close
+    ? `${stall.close.requesterId}:${stall.close.key}`
+    : "";
+  return `${ids(stall.peers)}\u001e${ids(stall.askers)}\u001e${close}`;
 }
 
 /**

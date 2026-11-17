@@ -33,6 +33,7 @@ import {
   owedRepliesParts,
   owedRepliesTarget,
   stallLabel,
+  STALL_CLOSE_TITLE,
   stallMore,
   stallParts,
   stallTarget,
@@ -201,6 +202,12 @@ export interface ActiveSessionCardProps {
     errorAt: number | undefined,
     outcomeRevision: number,
   ) => void;
+  /**
+   * Close the stalled request the stall chip names, as its requester's
+   * withdraw would (`withdrawPeerRequest`); the chip offers it only with this.
+   */
+  onWithdrawPeerRequest?:
+    ((requesterId: string, key: string) => void) | undefined;
   onOpenProject?: (projectId: string) => void;
   onOpenInitiative?: ((initiativeId: string) => void) | undefined;
   onOpenTask?: (taskId: string) => void;
@@ -241,6 +248,7 @@ function ActiveSessionCardImpl({
   onOpen,
   onSettle,
   onDismissFailure,
+  onWithdrawPeerRequest,
   onOpenProject,
   onOpenInitiative,
   onArchive,
@@ -584,6 +592,23 @@ function ActiveSessionCardImpl({
                 targetId={stallTarget(card.stall).id}
                 onOpen={onOpen}
               />
+            ) : null}
+            {card.stall?.close && onWithdrawPeerRequest ? (
+              <Badge
+                variant="ghost"
+                render={<button type="button" />}
+                title={STALL_CLOSE_TITLE}
+                aria-label={`Close the stalled request: ${stallLabel(card.stall)}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const close = card.stall?.close;
+                  if (close)
+                    onWithdrawPeerRequest(close.requesterId, close.key);
+                }}
+                className="cursor-pointer"
+              >
+                <X aria-hidden />
+              </Badge>
             ) : null}
             {/* This session's own condition: a requester still waits on
                       it after every reminder it was given. */}

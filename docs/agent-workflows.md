@@ -393,19 +393,27 @@ the outcome:
   way to say "never mind", since a message saying so leaves the request open and
   its addressee reminded. A delivered request becomes `withdrawn` with the
   reason, which both parties' cards show ("Withdrawn: …"); one not yet
-  dispatched is `cancelled` as the queue's Withdraw does. Nothing reaches the
-  addressee's model: its reminders stop, the request leaves both "owes a reply"
-  signals, and a reply naming it by key is refused (an unlinked one still goes
-  out). A request already being dispatched is refused until it arrives; a key
-  that names nothing open is refused with the caller's open requests listed. The
-  user closes a stuck request the same way from the requester's sent card
-  (**Withdraw request**, reason "closed by the user"; `withdrawPeerRequest`).
-  Each message row reserves its own hop, so near the limit the earlier rows go
-  out and the refused one says why. A reply, settle or withdraw naming a request
-  that closed meanwhile writes nothing at all. The row schema is typeless on
-  purpose: pi validates a call against the schema before the tool runs and
-  refuses the whole call on one bad field, so the tool validates each row itself
-  (`app/server/src/tools/CLAUDE.md`).
+  dispatched is `cancelled` as the queue's Withdraw does. A request marked
+  `replied` whose answer was cancelled or failed for good before it was admitted
+  is still owed, so it is withdrawable too; the store checks that the answer
+  never arrived in the same transaction. Nothing reaches the addressee's model:
+  its reminders stop, the request leaves both "owes a reply" signals, and a
+  reply naming it by key is refused (an unlinked one still goes out). A request
+  already being dispatched is refused until it arrives; a key that names nothing
+  open is refused with the caller's open requests listed. The user closes a
+  stuck request the same way (reason "closed by the user";
+  `withdrawPeerRequest`), from either place it shows: the requester's sent card
+  (**Withdraw request**, offered while the server marks the card
+  `withdrawable`), or the owed-reply indicator, which covers the requests no
+  card offers — a `session_spawn` opening prompt has no sent card. The session
+  list carries each owed request's key beside the peer that owes it
+  (`awaitingReplyKeys`), and the stall chip's close withdraws the newest one the
+  chip names. Each message row reserves its own hop, so near the limit the
+  earlier rows go out and the refused one says why. A reply, settle or withdraw
+  naming a request that closed meanwhile writes nothing at all. The row schema
+  is typeless on purpose: pi validates a call against the schema before the tool
+  runs and refuses the whole call on one bad field, so the tool validates each
+  row itself (`app/server/src/tools/CLAUDE.md`).
 
   The same `responseRequested` rows tell the user when a tree needs a poke: each
   session row lists the peers that still owe it a reply — the turn ended without

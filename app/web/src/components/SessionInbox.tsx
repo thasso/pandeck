@@ -194,6 +194,9 @@ interface Props {
     errorAt: number | undefined,
     outcomeRevision: number,
   ) => void;
+  /** Close a stalled request from a card's owed-reply chip. */
+  onWithdrawPeerRequest?:
+    ((requesterId: string, key: string) => void) | undefined;
   onArchive: (id: string, archived: boolean) => void;
   onDeleteSession: (id: string) => void;
   onRenameSession: (id: string) => void;
@@ -265,6 +268,7 @@ export function SessionInbox({
   onSelect,
   onSettle,
   onDismissFailure,
+  onWithdrawPeerRequest,
   onArchive,
   onDeleteSession,
   onRenameSession,
@@ -1065,6 +1069,7 @@ export function SessionInbox({
               onOpen={onSelect}
               onSettle={settleCard}
               onDismissFailure={onDismissFailure}
+              onWithdrawPeerRequest={onWithdrawPeerRequest}
               onOpenProject={onOpenProject}
               onOpenInitiative={onOpenInitiative}
               onOpenTask={onOpenTask}

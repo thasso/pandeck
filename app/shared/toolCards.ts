@@ -230,6 +230,7 @@ export function parsePeerPromptCard(value: unknown): PeerPromptCard | null {
     ...(typeof raw.withdrawnReason === "string" && raw.withdrawnReason
       ? { withdrawnReason: raw.withdrawnReason }
       : {}),
+    ...(raw.withdrawable === true ? { withdrawable: true } : {}),
     ...(typeof raw.replyTo === "string" && raw.replyTo
       ? { replyTo: raw.replyTo }
       : {}),

@@ -57,6 +57,7 @@ describe("sessionListItemAtRest", () => {
       queuedWork: true,
       waitingForSlot: { position: 1 },
       awaitingRepliesFrom: ["peer"],
+      awaitingReplyKeys: { peer: ["k1"] },
       unansweredRequestsFrom: ["requester"],
     };
     expect(sessionListItemAtRest(live)).toEqual(resting());
@@ -86,6 +87,7 @@ describe("sessionListItemAtRest", () => {
         "attention",
         "awaitingInput",
         "awaitingRepliesFrom",
+        "awaitingReplyKeys",
         "isStreaming",
         "providerRetry",
         "queuedWork",

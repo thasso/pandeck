@@ -541,6 +541,7 @@ export function useSessionChat({
           onOpenSession={onOpenSession}
           onToggleSettled={toggleSpawnedSettled}
           onDismissSessionFailure={onDismissSessionFailure}
+          onWithdrawPeerRequest={actions.withdrawPeerRequest}
         />
       ) : undefined,
     [
@@ -551,6 +552,7 @@ export function useSessionChat({
       onOpenSession,
       toggleSpawnedSettled,
       onDismissSessionFailure,
+      actions.withdrawPeerRequest,
       describeSession,
     ],
   );

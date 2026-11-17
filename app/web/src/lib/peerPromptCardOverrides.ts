@@ -23,6 +23,8 @@ interface PeerPromptCardOverride {
   settledReason?: string | undefined;
   /** Why its requester, or the user, withdrew it; cleared the same way. */
   withdrawnReason?: string | undefined;
+  /** Whether its sender may still withdraw it; cleared the same way. */
+  withdrawable?: boolean | undefined;
 }
 
 export type PeerPromptCardOverrides = Record<string, PeerPromptCardOverride>;
@@ -54,6 +56,7 @@ export function seedPeerPromptCardOverridesFromHistory(
         interruption: message.interruption,
         settledReason: message.settledReason,
         withdrawnReason: message.withdrawnReason,
+        withdrawable: message.withdrawable,
       };
     }
   }
@@ -74,6 +77,7 @@ export function applyPeerPromptCardOverride(
     interruption: override.interruption,
     settledReason: override.settledReason,
     withdrawnReason: override.withdrawnReason,
+    withdrawable: override.withdrawable,
   });
 }
 
