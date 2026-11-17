@@ -115,6 +115,21 @@ function tokenLeaseId(payloadSegment: string): string | undefined {
   return v === 1 && isLeaseId(lease) ? lease : undefined;
 }
 
+/**
+ * Whether a bearer is shaped like a lease token: three base64url segments
+ * whose payload names a lease. On a client's model port such a bearer takes
+ * the lease path, valid or not, and never falls back to the machine pool.
+ */
+export function isLeaseShaped(bearer: string | undefined): boolean {
+  if (!bearer) return false;
+  const segments = bearer.split(".");
+  return (
+    segments.length === 3 &&
+    segments.every((s) => SEGMENT_RE.test(s)) &&
+    tokenLeaseId(segments[1]!) !== undefined
+  );
+}
+
 interface Lease {
   binding: LeaseBinding;
   ownership: LeaseOwnership;

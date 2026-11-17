@@ -265,6 +265,46 @@ test("an edge with a remote vault forwards Claude and Codex requests", async () 
   }
 });
 
+test("1424 AC13: a machine lease reaches the remote vault's live leases, and leaves them on revoke", async () => {
+  const v = await vault();
+  const claudeFile = writeAccountFile(v.dir, "claude", "claude-a");
+  const gw = await edge(v.port);
+  await until(linkUp(gw), "the vault link");
+  gw.clients!.putAccount({
+    id: "claude-a",
+    provider: "claude",
+    name: "claude-a",
+    enabled: true,
+    tokenFile: claudeFile,
+    userId: "u1",
+  });
+  const liveLeases = (): string[] =>
+    (
+      JSON.parse(readFileSync(join(v.dir, "vault-inputs.json"), "utf8")) as {
+        liveLeases: string[];
+      }
+    ).liveLeases;
+  const selected = gw.clients!.machinePool.select("u1", {
+    clientId: "c_machine",
+    provider: "claude",
+    keyHash: null,
+  });
+  assert.ok(selected.ok);
+  assert.equal(gw.leases.kindOf(selected.selection.leaseId), "machine");
+  await until(
+    () => liveLeases().includes("claude-a"),
+    "the machine lease in the vault's inputs",
+  );
+  gw.leases.revokeWhere(
+    (record) => record.owner.clientId === "c_machine",
+    "session-ended",
+  );
+  await until(
+    () => !liveLeases().includes("claude-a"),
+    "the revoked machine lease out of the vault's inputs",
+  );
+});
+
 test("link down answers the marked vault-unavailable refusal; a restarted vault serves again", async () => {
   const v = await vault();
   const claudeFile = writeAccountFile(v.dir, "claude", "claude-a");

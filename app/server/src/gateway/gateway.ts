@@ -254,7 +254,13 @@ export async function startGateway(
     stats,
     vault,
   };
-  const forwarder = createForwarder(forwarderDeps);
+
+  const forwarder = createForwarder({
+    ...forwarderDeps,
+    // Model runs on the loopback listener are evidence too, once pools exist.
+    observe: (evidence, status, rawHeaders) =>
+      clients?.machinePool.observe(evidence, status, rawHeaders),
+  });
   const sockets = new Set<net.Socket>();
 
   const server = http.createServer(forwarder.handleRequest);
@@ -287,10 +293,18 @@ export async function startGateway(
         leases,
         profiles,
         needsLogin: () => vault.needsLogin(),
-        forwarder: createForwarder({
-          ...forwarderDeps,
-          clientOf: peerClientId,
-        }),
+        forwarder: (machine) =>
+          createForwarder({
+            ...forwarderDeps,
+            clientOf: peerClientId,
+            machine,
+            observe: (evidence, status, rawHeaders) =>
+              machine.pool.observe(evidence, status, rawHeaders),
+          }),
+        machinePins: state && {
+          restored: state.machinePins,
+          persist: state.persistMachinePins,
+        },
         log,
         ...(options.now ? { now: options.now } : {}),
         vault,

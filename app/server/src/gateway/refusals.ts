@@ -52,6 +52,9 @@ const REVOKE_WORDING: Record<RevokeReason, string> = {
 /** Why a token file gave no usable credential. */
 export type CredentialProblem = "missing" | "unreadable" | "malformed";
 
+/** How a machine pool's provider is named to the user, from the route. */
+type PoolLabel = "Claude" | "OpenAI";
+
 /** How an upstream is named to the user. */
 export type UpstreamLabel =
   "Anthropic" | "ChatGPT" | "the OpenAI-compatible endpoint";
@@ -78,7 +81,22 @@ export type Refusal =
    * A sealing vault that no human has unlocked since it started (Task-1395):
    * no verdict on the login either.
    */
-  | { case: "vault-locked" };
+  | { case: "vault-locked" }
+  /** A machine request (Task-1424): the user has no usable account. */
+  | { case: "machine-pool-empty"; provider: PoolLabel }
+  /**
+   * Every account a machine session can use is tried and benched;
+   * `retryAfterSeconds` comes from the gateway's own benches.
+   */
+  | {
+      case: "machine-session-limited";
+      provider: PoolLabel;
+      retryAfterSeconds: number;
+    }
+  /** A machine request with an `Origin` or a non-loopback `Host`. */
+  | { case: "machine-origin" }
+  /** A machine request's selection changed twice while it waited. */
+  | { case: "machine-retry" };
 
 /** Which provider's error shape a refusal takes. */
 export type RefusalShape = "claude" | "codex";
@@ -95,6 +113,10 @@ const STATUS: Record<Refusal["case"], number> = {
   unreachable: 502,
   "vault-unavailable": 503,
   "vault-locked": 503,
+  "machine-pool-empty": 403,
+  "machine-session-limited": 429,
+  "machine-origin": 403,
+  "machine-retry": 503,
 };
 
 /** Anthropic's error type names, which both shapes use. */
@@ -102,6 +124,7 @@ const ERROR_TYPE: Record<number, string> = {
   401: "authentication_error",
   403: "permission_error",
   404: "not_found_error",
+  429: "rate_limit_error",
   502: "api_error",
   503: "api_error",
 };
@@ -134,14 +157,25 @@ export function refusalText(refusal: Refusal): string {
       return `${GATEWAY_REFUSAL_MARKER} the credential vault is unavailable. Try again shortly.`;
     case "vault-locked":
       return `${GATEWAY_REFUSAL_MARKER} the credential vault is locked until its operator unlocks it. Try again later.`;
+    case "machine-pool-empty":
+      return `${GATEWAY_REFUSAL_MARKER} no ${refusal.provider} account is available to this machine's user. Add or log in to one on the gateway's page.`;
+    case "machine-session-limited":
+      return `${GATEWAY_REFUSAL_MARKER} every ${refusal.provider} account this session can use is rate-limited; retry later.`;
+    case "machine-origin":
+      return `${GATEWAY_REFUSAL_MARKER} model access from this machine is for local tools only.`;
+    case "machine-retry":
+      return `${GATEWAY_REFUSAL_MARKER} this machine's account changed while the request waited; retry.`;
   }
 }
 
-/** The status and provider-shaped JSON body of a refusal. */
+/**
+ * The status and provider-shaped JSON body of a refusal, and its
+ * `retry-after` in whole seconds when it has one.
+ */
 export function refusalResponse(
   refusal: Refusal,
   shape: RefusalShape,
-): { status: number; body: string } {
+): { status: number; body: string; retryAfter?: number } {
   const status = STATUS[refusal.case];
   const type = ERROR_TYPE[status] ?? "api_error";
   const message = refusalText(refusal);
@@ -149,5 +183,11 @@ export function refusalResponse(
     shape === "claude"
       ? { type: "error", error: { type, message } }
       : { error: { type, code: type, message } };
-  return { status, body: JSON.stringify(body) };
+  return {
+    status,
+    body: JSON.stringify(body),
+    ...(refusal.case === "machine-session-limited"
+      ? { retryAfter: refusal.retryAfterSeconds }
+      : {}),
+  };
 }

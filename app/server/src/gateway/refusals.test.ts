@@ -52,3 +52,60 @@ test("1368 AC9: the wording without the marker is not the gateway's", () => {
     false,
   );
 });
+
+test.each([
+  [
+    { case: "machine-pool-empty", provider: "OpenAI" },
+    403,
+    "no OpenAI account is available to this machine's user. Add or log in to one on the gateway's page.",
+  ],
+  [
+    {
+      case: "machine-session-limited",
+      provider: "Claude",
+      retryAfterSeconds: 70,
+    },
+    429,
+    "every Claude account this session can use is rate-limited; retry later.",
+  ],
+  [
+    { case: "machine-origin" },
+    403,
+    "model access from this machine is for local tools only.",
+  ],
+  [
+    { case: "machine-retry" },
+    503,
+    "this machine's account changed while the request waited; retry.",
+  ],
+] as const)(
+  "1424: the machine refusal %j is marked, fixed and in both shapes",
+  (refusal, status, text) => {
+    assert.equal(refusalText(refusal), `Pandeck gateway: ${text}`);
+    assert.equal(isNeedsLoginRefusal(refusalText(refusal)), false);
+    for (const shape of ["claude", "codex"] as const) {
+      const response = refusalResponse(refusal, shape);
+      assert.equal(response.status, status);
+      assert.ok(response.body.includes(`Pandeck gateway: ${text}`));
+      assert.equal(
+        response.retryAfter,
+        refusal.case === "machine-session-limited" ? 70 : undefined,
+      );
+    }
+  },
+);
+
+test("1424: machine-session-limited takes Anthropic's rate-limit type", () => {
+  const { body } = refusalResponse(
+    {
+      case: "machine-session-limited",
+      provider: "Claude",
+      retryAfterSeconds: 1,
+    },
+    "claude",
+  );
+  assert.equal(
+    (JSON.parse(body) as { error: { type: string } }).error.type,
+    "rate_limit_error",
+  );
+});

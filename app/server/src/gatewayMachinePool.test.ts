@@ -1,0 +1,1446 @@
+/**
+ * Machine pools end to end (Task-1424 PR 1, plan v03 with amendments A1-A3):
+ * a standalone harness on an enrolled machine sends the public placeholder,
+ * another bearer or none to its relay (`relay/relay.ts`), and the edge
+ * (`gateway/clientListener.ts`, `gateway/forward.ts`) serves it on an account
+ * of the client's user picked and pinned by `gateway/machinePool.ts`, against
+ * fake Anthropic and ChatGPT upstreams. A fake clock moves benches; a gated
+ * Codex renewal holds a request's credential wait. Fake token files and a
+ * temp `HOME`; every value is fake.
+ */
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import http from "node:http";
+import https from "node:https";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, afterEach, beforeAll, test, vi } from "vitest";
+import type { GatewayOptions, RunningGateway } from "./gateway/gateway.ts";
+
+const home = mkdtempSync(join(tmpdir(), "gateway-machine-home-"));
+process.env.HOME = home;
+
+const { startGateway } = await import("./gateway/gateway.ts");
+const { isLeaseShaped } = await import("./gateway/leases.ts");
+const { enrollRelay, startRelay } = await import("./relay/relay.ts");
+const { startGatewayClientLink } = await import("./gatewayClientLink.ts");
+const { DATA_DIR } = await import("./config.ts");
+const { fakeProcesses, startFakeUpstreams } =
+  await import("./test/gatewayFixtures.ts");
+
+/**
+ * The documented placeholder (`docs/workers.md` "Standalone harnesses"): a
+ * JWT-shaped string a harness accepts as its key. It grants nothing: the
+ * capability is the relay's client certificate.
+ */
+const PLACEHOLDER =
+  "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoicGFuZGVjay1nYXRld2F5In0sInBhbmRlY2siOnsidiI6MSwibWFjaGluZSI6dHJ1ZX19.pandeck";
+
+type Provider = "claude" | "openai-codex";
+const MIN = 60_000;
+const PATH: Record<Provider, string> = {
+  claude: "/anthropic/v1/messages",
+  "openai-codex": "/chatgpt/backend-api/codex/responses",
+};
+const KEY_HEADER: Record<Provider, string> = {
+  claude: "x-claude-code-session-id",
+  "openai-codex": "session-id",
+};
+const MARKER = "Pandeck gateway:";
+const NEEDS_LOGIN_TEXT = "needs a new login";
+
+const access = (id: string): string => `fake-${id}-access`;
+const renewed = (id: string): string => `fake-${id}-renewed`;
+const sha256 = (text: string): string =>
+  createHash("sha256").update(text, "utf8").digest("hex");
+/** The header value a harness session named `name` sends. */
+const sessionKey = (name: string): string => `harness-session-${name}-4f1c`;
+/** The pin file's hash for that session. */
+const pinHash = (name: string): string => sha256(sessionKey(name));
+
+// --- fake clock, upstream answers and the Codex renewal port -------------
+
+let clock = Date.now();
+const now = (): number => clock;
+
+/** One planned upstream answer for an access token; 200 when none is left. */
+interface Answer {
+  status: number;
+  headers?: Record<string, string | string[]>;
+  /** Answers only once this settles. */
+  hold?: Promise<void>;
+}
+const answers = new Map<string, Answer[]>();
+/** Every account's access tokens, for naming who an upstream request spent. */
+const owners = new Map<string, string>();
+
+function plan(id: string, ...planned: Answer[]): void {
+  for (const token of [access(id), renewed(id)])
+    answers.set(token, [...(answers.get(token) ?? []), ...planned]);
+}
+
+const respond = (
+  seen: { headers: http.IncomingHttpHeaders },
+  res: http.ServerResponse,
+): void => {
+  const token = String(seen.headers.authorization ?? "").replace(
+    /^Bearer /,
+    "",
+  );
+  const next = answers.get(token)?.shift();
+  const answer = (): void => {
+    res.writeHead(next?.status ?? 200, {
+      "content-type": "application/json",
+      ...next?.headers,
+    });
+    res.end(
+      next && next.status !== 200
+        ? '{"type":"error","error":{"type":"rate_limit_error","message":"fixture limit"}}'
+        : '{"ok":true}',
+    );
+  };
+  if (next?.hold) void next.hold.then(answer);
+  else answer();
+};
+
+interface Gate {
+  entered: Promise<void>;
+  release: () => void;
+}
+/** Codex renewals held per token file; others renew at once. */
+const gates = new Map<
+  string,
+  Gate & { enter: () => void; open: Promise<void> }
+>();
+/** Token files the renewal port was called for, in order. */
+let renewCalls: string[] = [];
+/** What the next renewal of a file does instead of renewing. */
+const renewRejected = new Set<string>();
+
+function gate(file: string): Gate {
+  let enter!: () => void;
+  let release!: () => void;
+  const entered = new Promise<void>((resolve) => (enter = resolve));
+  const open = new Promise<void>((resolve) => (release = resolve));
+  gates.set(file, { entered, enter, open, release });
+  return { entered, release };
+}
+
+const renewCodex: NonNullable<GatewayOptions["renewCodex"]> = async (file) => {
+  renewCalls.push(file);
+  const held = gates.get(file);
+  if (held) {
+    held.enter();
+    await held.open;
+    gates.delete(file);
+  }
+  if (renewRejected.has(file))
+    return { ok: false, kind: "rejected", code: "400" };
+  const id = [...accountFiles].find(([, f]) => f === file)?.[0];
+  writeToken("openai-codex", file, renewed(id ?? "unknown"), clock + 600 * MIN);
+  return { ok: true };
+};
+
+// --- fixtures ------------------------------------------------------------
+
+let upstreams: Awaited<ReturnType<typeof startFakeUpstreams>>;
+const open: { close(): unknown }[] = [];
+let lines: string[] = [];
+const accountFiles = new Map<string, string>();
+
+beforeAll(async () => {
+  upstreams = await startFakeUpstreams({ claude: respond, codex: respond });
+});
+
+afterEach(async () => {
+  while (open.length) await open.pop()!.close();
+  // AC11: no log line holds the placeholder, a token or a session key.
+  const logged = lines;
+  const keys = [...usedKeys];
+  upstreams.reset();
+  answers.clear();
+  gates.clear();
+  renewCalls = [];
+  renewRejected.clear();
+  usedKeys.clear();
+  lines = [];
+  for (const line of logged) {
+    assert.ok(!line.includes(PLACEHOLDER), `placeholder logged: ${line}`);
+    for (const token of owners.keys())
+      assert.ok(!line.includes(token), `a token is logged: ${line}`);
+    for (const key of keys)
+      assert.ok(
+        !line.includes(key) && !line.includes(sha256(key)),
+        `a session key is logged: ${line}`,
+      );
+  }
+});
+
+afterAll(async () => {
+  await upstreams.close();
+  rmSync(home, { recursive: true, force: true });
+});
+
+function writeToken(
+  provider: Provider,
+  file: string,
+  token: string,
+  expires: number,
+): void {
+  writeFileSync(
+    file,
+    JSON.stringify(
+      provider === "claude"
+        ? {
+            claudeAiOauth: {
+              accessToken: token,
+              refreshToken: `${token}-refresh`,
+              expiresAt: expires,
+            },
+          }
+        : {
+            "openai-codex": {
+              type: "oauth",
+              access: token,
+              refresh: `${token}-refresh`,
+              accountId: `acct-${token}`,
+              expires,
+            },
+          },
+    ),
+  );
+}
+
+const usedKeys = new Set<string>();
+
+interface Reply {
+  status: number;
+  text: string;
+  headers: http.IncomingHttpHeaders;
+  /** The account whose credential the upstream received, if one did. */
+  account: string | undefined;
+}
+
+/** One HTTP request to a relay's loopback port. */
+function rawRequest(
+  port: number,
+  path: string,
+  options: {
+    method?: string;
+    headers?: Record<string, string | string[]>;
+  } = {},
+): Promise<{
+  status: number;
+  text: string;
+  headers: http.IncomingHttpHeaders;
+}> {
+  return new Promise((resolve, reject) => {
+    const request = http.request(
+      {
+        host: "127.0.0.1",
+        port,
+        path,
+        method: options.method ?? "POST",
+        agent: false,
+        headers: { "content-type": "application/json", ...options.headers },
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () =>
+          resolve({
+            status: response.statusCode ?? 0,
+            text: Buffer.concat(chunks).toString("utf8"),
+            headers: response.headers,
+          }),
+        );
+        response.on("error", reject);
+      },
+    );
+    request.on("error", reject);
+    request.end(options.method === "GET" ? undefined : '{"model":"fixture"}');
+  });
+}
+
+/**
+ * A request straight to the edge's model port with the relay's client
+ * certificate, its headers sent exactly as given (repeats and `Host`
+ * included), as the relay's own TLS name check would not let a foreign
+ * `Host` through.
+ */
+function edgeRequest(
+  rig: Rig,
+  machine: Machine,
+  path: string,
+  rawHeaders: string[],
+): Promise<{ status: number; text: string }> {
+  return new Promise((resolve, reject) => {
+    const file = (name: string): string =>
+      readFileSync(join(machine.dir, name), "utf8");
+    const request = https.request({
+      host: "127.0.0.1",
+      port: rig.edge.modelPort,
+      servername: "localhost",
+      key: file("client-key.pem"),
+      cert: file("client-cert.pem"),
+      ca: file("gateway-ca.pem"),
+      path,
+      method: "POST",
+      agent: false,
+      headers: [
+        ...rawHeaders,
+        "authorization",
+        `Bearer ${PLACEHOLDER}`,
+        "content-type",
+        "application/json",
+      ],
+    });
+    request.on("response", (response) => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk: Buffer) => chunks.push(chunk));
+      response.on("end", () =>
+        resolve({
+          status: response.statusCode ?? 0,
+          text: Buffer.concat(chunks).toString("utf8"),
+        }),
+      );
+    });
+    request.on("error", reject);
+    request.end('{"model":"fixture"}');
+  });
+}
+
+interface Machine {
+  relay: Awaited<ReturnType<typeof startRelay>>;
+  clientId: string;
+  dir: string;
+}
+
+interface SendOptions {
+  /** The session key; undefined sends none. */
+  key?: string | undefined;
+  machine?: Machine;
+  /** The bearer; null sends no `authorization`. */
+  bearer?: string | null;
+  headers?: Record<string, string | string[]>;
+  path?: string;
+  method?: string;
+}
+
+/** A gateway edge with fake upstreams, its users, accounts and relays. */
+class Rig {
+  gw!: RunningGateway;
+  readonly stateDir = mkdtempSync(join(DATA_DIR, "machine-edge-"));
+  machines: Machine[] = [];
+  private ports: { modelPort: number; clientPort: number; enrollPort: number } =
+    { modelPort: 0, clientPort: 0, enrollPort: 0 };
+
+  static async start(users: string[] = ["thasso"]): Promise<Rig> {
+    const rig = new Rig();
+    await rig.boot();
+    for (const user of users) rig.edge.registry.addUser(user);
+    open.push({ close: () => rig.gw.close() });
+    return rig;
+  }
+
+  get edge(): NonNullable<RunningGateway["clients"]> {
+    return this.gw.clients!;
+  }
+
+  private async boot(): Promise<void> {
+    this.gw = await startGateway({
+      stateDir: this.stateDir,
+      upstreams: upstreams.overrides,
+      claudeTokenEndpoint: upstreams.tokenEndpoint,
+      renewCodex,
+      processProbe: fakeProcesses().probe,
+      log: (line) => lines.push(line),
+      now,
+      clients: this.ports,
+    });
+    const edge = this.edge;
+    this.ports = {
+      modelPort: edge.modelPort,
+      clientPort: edge.clientPort,
+      enrollPort: edge.enrollPort,
+    };
+  }
+
+  /** Closes the edge and starts it again on the same state and ports. */
+  async restart(): Promise<void> {
+    await this.gw.close();
+    await this.boot();
+  }
+
+  /** A login account of `userId` with a fresh fake token. */
+  account(
+    id: string,
+    provider: Provider,
+    userId = "thasso",
+    options: { enabled?: boolean } = {},
+  ): string {
+    const dir = mkdtempSync(join(DATA_DIR, "machine-acct-"));
+    const file = join(
+      dir,
+      provider === "claude" ? ".credentials.json" : "auth.json",
+    );
+    writeToken(provider, file, access(id), clock + 30 * 24 * 60 * MIN);
+    accountFiles.set(id, file);
+    owners.set(access(id), id);
+    owners.set(renewed(id), id);
+    this.edge.putAccount({
+      id,
+      provider,
+      name: `Account ${id}`,
+      enabled: options.enabled ?? true,
+      tokenFile: file,
+      userId,
+    });
+    return file;
+  }
+
+  setEnabled(id: string, provider: Provider, enabled: boolean): void {
+    const userId = this.edge.registry.ownerOf(id)!;
+    this.edge.putAccount({
+      id,
+      provider,
+      name: `Account ${id}`,
+      enabled,
+      tokenFile: accountFiles.get(id)!,
+      userId,
+    });
+  }
+
+  /** Enrolls a relay for `userId` and starts it. */
+  async machine(userId = "thasso", label = "devbox"): Promise<Machine> {
+    const dir = mkdtempSync(join(tmpdir(), "machine-relay-"));
+    const before = new Set(this.edge.registry.clients().map((c) => c.id));
+    await enrollRelay({
+      stateDir: dir,
+      host: "127.0.0.1",
+      enrollPort: this.edge.enrollPort,
+      caPem: this.edge.caPem,
+      code: this.edge.registry.createCode(userId, label),
+    });
+    const relay = await startRelay({
+      stateDir: dir,
+      port: 0,
+      socketPath: join(dir, "relay.sock"),
+      log: () => {},
+    });
+    open.push({ close: () => rmSync(dir, { recursive: true, force: true }) });
+    open.push(relay);
+    const clientId = this.edge.registry
+      .clients()
+      .find((c) => !before.has(c.id))!.id;
+    const machine = { relay, clientId, dir };
+    this.machines.push(machine);
+    return machine;
+  }
+
+  /** A harness request through a relay; names the account it reached. */
+  async send(provider: Provider, options: SendOptions = {}): Promise<Reply> {
+    const machine = options.machine ?? this.machines[0]!;
+    const seen =
+      provider === "claude" ? upstreams.anthropic : upstreams.chatgpt;
+    const before = seen.length;
+    const headers: Record<string, string | string[]> = {
+      ...options.headers,
+    };
+    if (options.bearer !== null)
+      headers.authorization = `Bearer ${options.bearer ?? PLACEHOLDER}`;
+    if (options.key !== undefined) {
+      usedKeys.add(sessionKey(options.key));
+      headers[KEY_HEADER[provider]] = sessionKey(options.key);
+    }
+    const reply = await rawRequest(
+      machine.relay.port,
+      options.path ?? PATH[provider],
+      {
+        headers,
+        ...(options.method ? { method: options.method } : {}),
+      },
+    );
+    const reached = seen.slice(before);
+    assert.ok(reached.length <= 1, "one request reaches one upstream");
+    const token = String(reached[0]?.headers.authorization ?? "").replace(
+      /^Bearer /,
+      "",
+    );
+    return { ...reply, account: reached[0] ? owners.get(token) : undefined };
+  }
+
+  /** The saved pins, as `machinePins.json` holds them. */
+  pins(): {
+    clientId: string;
+    provider: string;
+    keyHash: string | null;
+    profileId: string;
+    tried: string[];
+  }[] {
+    const file = join(this.stateDir, "machinePins.json");
+    if (!existsSync(file)) return [];
+    return (JSON.parse(readFileSync(file, "utf8")) as { pins: [] }).pins;
+  }
+
+  pinsText(): string {
+    return readFileSync(join(this.stateDir, "machinePins.json"), "utf8");
+  }
+
+  machineLeases(): { leaseId: string; profileId: string; revoked?: string }[] {
+    return this.gw.leases
+      .records()
+      .filter((record) => record.kind === "machine");
+  }
+}
+
+/** A user with Claude accounts `a` and `b` and one relay. */
+async function claudePair(): Promise<Rig> {
+  const rig = await Rig.start();
+  rig.account("a", "claude");
+  rig.account("b", "claude");
+  await rig.machine();
+  return rig;
+}
+
+const long429: Answer = { status: 429, headers: { "retry-after": "120" } };
+
+// --- the placeholder ------------------------------------------------------
+
+test("D4: the placeholder decodes to the documented payload and is not lease-shaped", () => {
+  const [header, payload, signature] = PLACEHOLDER.split(".");
+  const decode = (segment: string): unknown =>
+    JSON.parse(Buffer.from(segment, "base64url").toString("utf8"));
+  assert.deepEqual(decode(header!), { alg: "none", typ: "JWT" });
+  assert.deepEqual(decode(payload!), {
+    "https://api.openai.com/auth": { chatgpt_account_id: "pandeck-gateway" },
+    pandeck: { v: 1, machine: true },
+  });
+  assert.ok(signature!.length > 0);
+  assert.equal(isLeaseShaped(PLACEHOLDER), false);
+  assert.equal(isLeaseShaped(undefined), false);
+  assert.equal(isLeaseShaped("sk-other"), false);
+  const lease = Buffer.from(
+    JSON.stringify({ pandeck: { v: 1, lease: "lease-1" } }),
+  ).toString("base64url");
+  assert.equal(isLeaseShaped(`${header}.${lease}.c2VjcmV0`), true);
+});
+
+// --- AC1, AC2, AC11 -------------------------------------------------------
+
+test("AC1, AC2, AC11: placeholder, other bearers and none are served on the user's accounts, logged by kind and client", async () => {
+  const rig = await Rig.start();
+  rig.account("claude-a", "claude");
+  rig.account("codex-a", "openai-codex");
+  const { clientId } = await rig.machine();
+
+  for (const bearer of [PLACEHOLDER, "sk-ant-other", null] as const) {
+    const reply = await rig.send("claude", { bearer, key: "claude-session" });
+    assert.equal(reply.status, 200);
+    assert.equal(reply.account, "claude-a");
+  }
+  // A key in `x-api-key` never reaches the upstream.
+  await rig.send("claude", { bearer: null, headers: { "x-api-key": "sk-x" } });
+  assert.equal(upstreams.anthropic.at(-1)!.headers["x-api-key"], undefined);
+
+  // pi sends its own `chatgpt-account-id`: it is replaced.
+  const codex = await rig.send("openai-codex", {
+    key: "codex-session",
+    headers: { "chatgpt-account-id": "pi-own-account" },
+  });
+  assert.equal(codex.status, 200);
+  assert.equal(codex.account, "codex-a");
+  const seen = upstreams.chatgpt.at(-1)!.headers;
+  assert.equal(seen.authorization, `Bearer ${access("codex-a")}`);
+  assert.equal(seen["chatgpt-account-id"], `acct-${access("codex-a")}`);
+
+  // No client call granted a lease: every lease is the edge's machine lease.
+  const records = rig.gw.leases.records();
+  assert.ok(records.length > 0);
+  assert.ok(records.every((record) => record.kind === "machine"));
+  assert.ok(records.every((record) => record.owner.clientId === clientId));
+
+  // Every forward line on the client port names kind and client.
+  const forwards = lines.filter((line) =>
+    /^(claude|openai-codex) POST /.test(line),
+  );
+  assert.equal(forwards.length, 5);
+  for (const line of forwards)
+    assert.match(line, new RegExp(` kind=machine client=${clientId} lease=`));
+});
+
+// --- AC3 ------------------------------------------------------------------
+
+test("AC3, AC5, AC6(d)(g), AC9: lease-shaped bearers keep today's path, and every lease kind's model runs are evidence", async () => {
+  const rig = await claudePair();
+  const { relay } = rig.machines[0]!;
+  const linkLines: string[] = [];
+  const link = startGatewayClientLink({
+    socketPath: relay.socketPath,
+    relayPort: relay.port,
+    log: (line) => linkLines.push(line),
+  });
+  open.push(link);
+  assert.equal(await link.ready, true);
+
+  // An engine lease forwards on its own profile, not the pool's pick (a).
+  const engine = await link.grantEngineLease({
+    workerId: undefined,
+    profileId: "b",
+  });
+  owners.set(engine.token, "engine-token");
+  const onB = await rig.send("claude", { bearer: engine.token });
+  assert.equal(onB.status, 200);
+  assert.equal(onB.account, "b");
+  // AC9: a lease request carrying `Origin` behaves as today.
+  const withOrigin = await rig.send("claude", {
+    bearer: engine.token,
+    headers: { origin: "https://evil.example" },
+  });
+  assert.equal(withOrigin.account, "b");
+
+  // A lease-shaped token with a wrong secret is unknown, never the pool's.
+  const [h, p] = engine.token.split(".");
+  const forged = `${h}.${p}.${Buffer.alloc(32, 7).toString("base64url")}`;
+  owners.set(forged, "forged-token");
+  const unknown = await rig.send("claude", { bearer: forged });
+  assert.equal(unknown.status, 401);
+  assert.match(unknown.text, /the gateway does not know this session/);
+  assert.equal(unknown.account, undefined);
+
+  // AC5: a server lease's usage 429 creates no bench, and a count_tokens
+  // 429 neither: a new session still gets `a`.
+  const server = await link.serverAccess("a");
+  owners.set(server.leaseToken, "server-token");
+  plan("a", { status: 429, headers: { "retry-after": "120" } });
+  const usage = await rig.send("claude", {
+    bearer: server.leaseToken,
+    method: "GET",
+    path: "/anthropic/api/oauth/usage",
+  });
+  assert.equal(usage.status, 429);
+  plan("a", long429);
+  const count = await rig.send("claude", {
+    key: "s-count",
+    path: "/anthropic/v1/messages/count_tokens",
+  });
+  assert.equal(count.status, 429);
+  assert.equal((await rig.send("claude", { key: "s-new-1" })).account, "a");
+
+  // A long 429 benches `a`: X moves to `b`, a new session gets `b`.
+  plan("a", long429);
+  assert.equal((await rig.send("claude", { key: "X" })).status, 429);
+  assert.equal((await rig.send("claude", { key: "X" })).account, "b");
+  assert.equal((await rig.send("claude", { key: "s-new-2" })).account, "b");
+  // A 200 on a usage GET does not clear the bench.
+  assert.equal(
+    (
+      await rig.send("claude", {
+        bearer: server.leaseToken,
+        method: "GET",
+        path: "/anthropic/api/oauth/usage",
+      })
+    ).status,
+    200,
+  );
+  assert.equal((await rig.send("claude", { key: "s-new-3" })).account, "b");
+
+  // AC6(d)(g): an engine lease's model-run 2xx on `a` clears its bench; a
+  // new session gets `a` again, X stays on `b`.
+  const engineA = await link.grantEngineLease({
+    workerId: undefined,
+    profileId: "a",
+  });
+  owners.set(engineA.token, "engine-token-a");
+  assert.equal(
+    (await rig.send("claude", { bearer: engineA.token })).account,
+    "a",
+  );
+  assert.equal((await rig.send("claude", { key: "s-new-4" })).account, "a");
+  for (let i = 0; i < 3; i += 1)
+    assert.equal((await rig.send("claude", { key: "X" })).account, "b");
+
+  // A revoked engine lease is refused with today's text, never pooled.
+  rig.gw.leases.revokeWhere(
+    (record) => record.kind === "engine",
+    "session-ended",
+  );
+  const revoked = await rig.send("claude", { bearer: engine.token });
+  assert.equal(revoked.status, 401);
+  assert.match(revoked.text, /model access ended \(the session ended\)/);
+  assert.equal(revoked.account, undefined);
+
+  // Lease lines name their kind too.
+  assert.ok(lines.some((line) => / kind=engine client=/.test(line)));
+  assert.ok(lines.some((line) => / kind=server client=/.test(line)));
+});
+
+// --- AC4 ------------------------------------------------------------------
+
+test("AC4: one session key keeps one account, also across a restart; the pin file holds only hashes", async () => {
+  const rig = await claudePair();
+  rig.account("codex-a", "openai-codex");
+  rig.account("codex-b", "openai-codex");
+  assert.equal((await rig.send("claude", { key: "X" })).account, "a");
+  // A short 429 benches `a` briefly: a new session Y pins `b`.
+  plan("a", { status: 429, headers: { "retry-after": "30" } });
+  assert.equal((await rig.send("claude", { key: "X" })).status, 429);
+  assert.equal((await rig.send("claude", { key: "Y" })).account, "b");
+  clock += 31_000;
+  // Both keep their accounts though `a` ranks first again.
+  assert.equal((await rig.send("claude", { key: "X" })).account, "a");
+  assert.equal((await rig.send("claude", { key: "Y" })).account, "b");
+  // No header: one per-client pin, which the first pick decides.
+  assert.equal((await rig.send("claude")).account, "a");
+  assert.equal((await rig.send("claude")).account, "a");
+  // `/chatgpt` keys by `session-id`.
+  assert.equal(
+    (await rig.send("openai-codex", { key: "X" })).account,
+    "codex-a",
+  );
+
+  await rig.restart();
+  assert.equal((await rig.send("claude", { key: "X" })).account, "a");
+  assert.equal((await rig.send("claude", { key: "Y" })).account, "b");
+  assert.equal(
+    (await rig.send("openai-codex", { key: "X" })).account,
+    "codex-a",
+  );
+
+  const pins = rig.pins();
+  assert.deepEqual(
+    pins.map((pin) => [pin.provider, pin.keyHash, pin.profileId]).sort(),
+    [
+      ["claude", null, "a"],
+      ["claude", pinHash("X"), "a"],
+      ["claude", pinHash("Y"), "b"],
+      ["openai-codex", pinHash("X"), "codex-a"],
+    ].sort(),
+  );
+  // The raw keys are in no file under the state directory.
+  const files = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+      entry.isDirectory()
+        ? files(join(dir, entry.name))
+        : [join(dir, entry.name)],
+    );
+  for (const file of files(rig.stateDir)) {
+    const text = readFileSync(file, "utf8");
+    for (const key of ["X", "Y"])
+      assert.ok(!text.includes(sessionKey(key)), `raw key ${key} in ${file}`);
+    assert.ok(!text.includes(PLACEHOLDER));
+  }
+  assert.equal(
+    statSync(join(rig.stateDir, "machinePins.json")).mode & 0o777,
+    0o600,
+  );
+});
+
+// --- AC5, AC6, AC6c -------------------------------------------------------
+
+test("AC5: a long 429 reaches the harness unchanged and benches the account until its reset", async () => {
+  const rig = await claudePair();
+  plan("a", long429);
+  const limited = await rig.send("claude", { key: "X" });
+  assert.equal(limited.status, 429);
+  assert.equal(limited.headers["retry-after"], "120");
+  assert.match(limited.text, /fixture limit/);
+  assert.equal(limited.account, "a");
+  assert.equal((await rig.send("claude", { key: "new-1" })).account, "b");
+  clock += 121_000;
+  assert.equal((await rig.send("claude", { key: "new-2" })).account, "a");
+});
+
+test("AC5, AC6c: a short 429 benches briefly and keeps the pin and the pin file", async () => {
+  const rig = await claudePair();
+  assert.equal((await rig.send("claude", { key: "X" })).account, "a");
+  const before = rig.pinsText();
+  plan("a", { status: 429, headers: { "retry-after": "30" } });
+  assert.equal((await rig.send("claude", { key: "X" })).status, 429);
+  // A new session avoids `a` while the bench lasts; X stays.
+  assert.equal((await rig.send("claude", { key: "Y" })).account, "b");
+  assert.equal((await rig.send("claude", { key: "X" })).account, "a");
+  assert.equal(
+    JSON.stringify(rig.pins().find((p) => p.keyHash === pinHash("X"))),
+    JSON.stringify(
+      (JSON.parse(before) as { pins: unknown[] }).pins.find(
+        (p) => (p as { keyHash: string }).keyHash === pinHash("X"),
+      ),
+    ),
+  );
+});
+
+test.each([
+  ["retry-after: 0", { "retry-after": "0" }, "a"],
+  ["retry-after: 60", { "retry-after": "60" }, "a"],
+  ["retry-after: 61", { "retry-after": "61" }, "b"],
+  ["no reset header", {}, "b"],
+  [
+    "a repeated retry-after (raw duplicates)",
+    { "retry-after": ["30", "30"] },
+    "b",
+  ],
+] as const)(
+  "AC6c, A3: after a 429 with %s, X's next request reaches %s",
+  async (_name, headers, next) => {
+    const rig = await claudePair();
+    assert.equal((await rig.send("claude", { key: "X" })).account, "a");
+    const before = rig.pins();
+    plan("a", {
+      status: 429,
+      headers: headers as Record<string, string | string[]>,
+    });
+    assert.equal((await rig.send("claude", { key: "X" })).status, 429);
+    if (next === "a")
+      assert.deepEqual(rig.pins(), before, "pin file unchanged");
+    else
+      assert.deepEqual(
+        rig.pins().find((p) => p.keyHash === pinHash("X"))?.tried,
+        ["a"],
+      );
+    assert.equal((await rig.send("claude", { key: "X" })).account, next);
+  },
+);
+
+test("AC6c: a Codex reset 20 s away on /chatgpt keeps the pin", async () => {
+  const rig = await Rig.start();
+  rig.account("ca", "openai-codex");
+  rig.account("cb", "openai-codex");
+  await rig.machine();
+  assert.equal((await rig.send("openai-codex", { key: "X" })).account, "ca");
+  plan("ca", {
+    status: 429,
+    headers: { "x-codex-primary-reset-after-seconds": "20" },
+  });
+  assert.equal((await rig.send("openai-codex", { key: "X" })).status, 429);
+  // A new session avoids `ca` while its short bench lasts; X stays.
+  assert.equal((await rig.send("openai-codex", { key: "Y" })).account, "cb");
+  assert.equal((await rig.send("openai-codex", { key: "X" })).account, "ca");
+  assert.deepEqual(
+    rig.pins().find((p) => p.keyHash === pinHash("X"))?.tried,
+    [],
+  );
+});
+
+test.each([
+  ["(a) at once", async () => {}],
+  ["(b) after a restart", async (rig: Rig) => rig.restart()],
+  [
+    "(c) after A's bench expires",
+    async () => {
+      clock += 6 * MIN;
+    },
+  ],
+] as const)(
+  "AC6 %s: a long 429 moves X to B for good",
+  async (_name, between) => {
+    const rig = await claudePair();
+    plan("a", long429);
+    assert.equal((await rig.send("claude", { key: "X" })).status, 429);
+    await between(rig);
+    assert.equal((await rig.send("claude", { key: "X" })).account, "b");
+    assert.equal((await rig.send("claude", { key: "X" })).account, "b");
+  },
+);
+
+test("AC6(e): after A 429 → B 2xx → B 429, X stays on B, also across a restart", async () => {
+  const rig = await claudePair();
+  plan("a", long429);
+  await rig.send("claude", { key: "X" });
+  assert.equal((await rig.send("claude", { key: "X" })).account, "b");
+  plan("b", long429, long429);
+  const limited = await rig.send("claude", { key: "X" });
+  assert.equal(limited.account, "b");
+  assert.equal(limited.status, 429);
+  // Both tried: X stays on B and gets B's answer, never A's credential.
+  const again = await rig.send("claude", { key: "X" });
+  assert.equal(again.account, "b");
+  assert.equal(again.status, 429);
+  await rig.restart();
+  assert.equal((await rig.send("claude", { key: "X" })).account, "b");
+  assert.deepEqual(rig.pins().find((p) => p.keyHash === pinHash("X"))?.tried, [
+    "a",
+    "b",
+  ]);
+});
+
+test("AC6(f): once A's bench ends, X's next ten requests stay on B", async () => {
+  const rig = await claudePair();
+  plan("a", long429);
+  await rig.send("claude", { key: "X" });
+  clock += 121_000;
+  for (let i = 0; i < 10; i += 1)
+    assert.equal((await rig.send("claude", { key: "X" })).account, "b");
+  // `a` is eligible and ranks first for a new session.
+  assert.equal((await rig.send("claude", { key: "Y" })).account, "a");
+});
+
+// --- AC6b (amendment A1) --------------------------------------------------
+
+test("AC6b: an unusable pin returns to an eligible tried account, else machine-session-limited", async () => {
+  const rig = await claudePair();
+  plan("a", long429);
+  await rig.send("claude", { key: "X" });
+  assert.equal((await rig.send("claude", { key: "X" })).account, "b");
+
+  // A still benched and B disabled: limited, no upstream request.
+  rig.setEnabled("b", "claude", false);
+  clock += 50_000;
+  const limited = await rig.send("claude", { key: "X" });
+  assert.equal(limited.status, 429);
+  assert.equal(limited.account, undefined);
+  assert.equal(limited.headers["retry-after"], "70");
+  assert.match(limited.text, new RegExp(`${MARKER} every Claude account`));
+  assert.ok(
+    lines.some((line) =>
+      / kind=machine client=\S+ refused machine-session-limited 429/.test(line),
+    ),
+  );
+  // Once A's bench ends, X returns to A.
+  clock += 71_000;
+  assert.equal((await rig.send("claude", { key: "X" })).account, "a");
+
+  // After the return, a 429 on A with B re-enabled keeps X on A.
+  rig.setEnabled("b", "claude", true);
+  plan("a", long429, long429);
+  const onA = await rig.send("claude", { key: "X" });
+  assert.equal(onA.account, "a");
+  assert.equal(onA.status, 429);
+  const stillA = await rig.send("claude", { key: "X" });
+  assert.equal(stillA.account, "a");
+  assert.equal(stillA.status, 429);
+});
+
+test("AC6b: after a restart the bench is gone, so the return happens at once", async () => {
+  const rig = await claudePair();
+  plan("a", long429);
+  await rig.send("claude", { key: "X" });
+  assert.equal((await rig.send("claude", { key: "X" })).account, "b");
+  await rig.restart();
+  rig.setEnabled("b", "claude", false);
+  assert.equal((await rig.send("claude", { key: "X" })).account, "a");
+});
+
+// --- AC7 ------------------------------------------------------------------
+
+test.each([
+  ["removed", (rig: Rig) => rig.edge.removeAccount("a")],
+  ["disabled", (rig: Rig) => rig.setEnabled("a", "claude", false)],
+  ["needs a login", () => unlinkSync(accountFiles.get("a")!)],
+] as const)(
+  "AC7: when A is %s, X's next request reaches B",
+  async (_name, change) => {
+    const rig = await claudePair();
+    assert.equal((await rig.send("claude", { key: "X" })).account, "a");
+    change(rig);
+    const moved = await rig.send("claude", { key: "X" });
+    assert.equal(moved.status, 200);
+    assert.equal(moved.account, "b");
+    assert.ok(!moved.text.includes(NEEDS_LOGIN_TEXT));
+  },
+);
+
+test("AC7: revoking the client drops its pins and revokes its machine leases", async () => {
+  const rig = await claudePair();
+  const other = await rig.machine("thasso", "laptop");
+  await rig.send("claude", { key: "X" });
+  await rig.send("claude", { key: "X", machine: other });
+  const { clientId } = rig.machines[0]!;
+  assert.equal(rig.pins().length, 2);
+  rig.edge.registry.revoke(clientId);
+  await vi.waitFor(() => {
+    assert.deepEqual(
+      rig.pins().map((pin) => pin.clientId),
+      [other.clientId],
+    );
+    const leases = JSON.parse(
+      readFileSync(join(rig.stateDir, "leases.json"), "utf8"),
+    ) as {
+      leases: { kind: string; owner: { clientId: string }; revoked?: string }[];
+    };
+    const own = leases.leases.filter((l) => l.owner.clientId === clientId);
+    assert.ok(own.length > 0);
+    assert.ok(own.every((l) => l.kind === "machine" && l.revoked));
+  });
+  // The other client keeps being served.
+  assert.equal(
+    (await rig.send("claude", { key: "X", machine: other })).account,
+    "a",
+  );
+});
+
+// --- AC7b: the final validation --------------------------------------------
+
+/** A user with Codex accounts `ca`, `cb` (and `cc`), X pinned on `ca`. */
+async function codexRace(third = false): Promise<Rig> {
+  const rig = await Rig.start();
+  rig.account("ca", "openai-codex");
+  rig.account("cb", "openai-codex");
+  if (third) rig.account("cc", "openai-codex");
+  await rig.machine();
+  assert.equal((await rig.send("openai-codex", { key: "X" })).account, "ca");
+  return rig;
+}
+
+/** Makes the account's token due, so its next read waits on a renewal. */
+function due(id: string): Gate {
+  const file = accountFiles.get(id)!;
+  writeToken("openai-codex", file, access(id), clock + 30_000);
+  return gate(file);
+}
+
+test.each([
+  ["(b) A is removed", (rig: Rig) => rig.edge.removeAccount("ca")],
+  [
+    "(c) A is disabled",
+    (rig: Rig) => rig.setEnabled("ca", "openai-codex", false),
+  ],
+  [
+    "(d) A needs a login",
+    () => {
+      renewRejected.add(accountFiles.get("ca")!);
+    },
+  ],
+] as const)(
+  "AC7b %s while X's request waits: it is re-selected onto B",
+  async (_name, change) => {
+    const rig = await codexRace();
+    const wait = due("ca");
+    const pending = rig.send("openai-codex", { key: "X" });
+    await wait.entered;
+    change(rig);
+    wait.release();
+    const reply = await pending;
+    assert.equal(reply.status, 200);
+    assert.equal(reply.account, "cb");
+    assert.ok(
+      upstreams.chatgpt.every(
+        (seen, i) =>
+          i === 0 || !String(seen.headers.authorization).includes("fake-ca-"),
+      ),
+      "A's credential never reached the upstream after the change",
+    );
+  },
+);
+
+test("AC7b(a): a client revoked while its request waits gets no upstream answer", async () => {
+  const rig = await codexRace();
+  const wait = due("ca");
+  const pending = rig.send("openai-codex", { key: "X" }).catch(() => ({
+    status: 0,
+    account: undefined,
+  }));
+  await wait.entered;
+  rig.edge.registry.revoke(rig.machines[0]!.clientId);
+  await vi.waitFor(() =>
+    assert.ok(rig.machineLeases().every((l) => l.revoked)),
+  );
+  wait.release();
+  const reply = await pending;
+  assert.notEqual(reply.status, 200);
+  assert.equal(reply.account, undefined);
+  assert.equal(upstreams.chatgpt.length, 1, "only the first request");
+  assert.deepEqual(rig.pins(), []);
+});
+
+test("AC7b(e): X's own long 429 on A while another request of X waits moves that request to B", async () => {
+  const rig = await codexRace();
+  let release429!: () => void;
+  plan("ca", {
+    status: 429,
+    headers: { "retry-after": "120" },
+    hold: new Promise<void>((resolve) => (release429 = resolve)),
+  });
+  // R2 reaches A and is held there; then A's token falls due.
+  const r2 = rig.send("openai-codex", { key: "X" });
+  await vi.waitFor(() => assert.equal(upstreams.chatgpt.length, 2));
+  const wait = due("ca");
+  const r1 = rig.send("openai-codex", { key: "X" });
+  await wait.entered;
+  release429();
+  assert.equal((await r2).status, 429);
+  wait.release();
+  const reply = await r1;
+  assert.equal(reply.status, 200);
+  assert.equal(reply.account, "cb");
+});
+
+test("AC7b(f): a second change during the re-selected wait is refused machine-retry, with no third lookup", async () => {
+  const rig = await codexRace(true);
+  let release429!: () => void;
+  plan("ca", {
+    status: 429,
+    headers: { "retry-after": "120" },
+    hold: new Promise<void>((resolve) => (release429 = resolve)),
+  });
+  const r2 = rig.send("openai-codex", { key: "X" });
+  await vi.waitFor(() => assert.equal(upstreams.chatgpt.length, 2));
+  const waitA = due("ca");
+  const waitB = due("cb");
+  due("cc");
+  const r1 = rig.send("openai-codex", { key: "X" });
+  await waitA.entered;
+  release429();
+  assert.equal((await r2).status, 429);
+  waitA.release();
+  // Re-selected onto B, whose credential wait is held too.
+  await waitB.entered;
+  rig.setEnabled("cb", "openai-codex", false);
+  waitB.release();
+  const reply = await r1;
+  assert.equal(reply.status, 503);
+  assert.match(
+    reply.text,
+    /this machine's account changed while the request waited; retry/,
+  );
+  assert.match(reply.text, new RegExp(MARKER));
+  assert.equal(reply.account, undefined);
+  assert.equal(upstreams.chatgpt.length, 2);
+  assert.ok(
+    !renewCalls.includes(accountFiles.get("cc")!),
+    "no third credential lookup",
+  );
+});
+
+// --- AC8 ------------------------------------------------------------------
+
+test("AC8: no usable account gets the marked 403 naming the gateway's page", async () => {
+  const rig = await Rig.start(["thasso", "noai"]);
+  rig.account("a", "claude", "noai");
+  const machine = await rig.machine("noai");
+  const refused = await rig.send("openai-codex", { machine });
+  assert.equal(refused.status, 403);
+  assert.match(
+    refused.text,
+    /Pandeck gateway: no OpenAI account is available to this machine's user\. Add or log in to one on the gateway's page\./,
+  );
+  assert.equal(refused.account, undefined);
+  assert.equal((await rig.send("claude", { machine })).account, "a");
+  // The Codex error shape on /chatgpt.
+  assert.ok(
+    (JSON.parse(refused.text) as { error: { code: string } }).error.code,
+  );
+});
+
+test("AC8: every account disabled, or every one needing a login, is the same 403, never the needs-login 401", async () => {
+  const rig = await claudePair();
+  rig.setEnabled("a", "claude", false);
+  rig.setEnabled("b", "claude", false);
+  const disabled = await rig.send("claude", { key: "X" });
+  assert.equal(disabled.status, 403);
+  assert.match(disabled.text, /no Claude account is available/);
+  rig.setEnabled("a", "claude", true);
+  rig.setEnabled("b", "claude", true);
+  unlinkSync(accountFiles.get("a")!);
+  unlinkSync(accountFiles.get("b")!);
+  const replies = [];
+  for (let i = 0; i < 3; i += 1)
+    replies.push(await rig.send("claude", { key: "X" }));
+  for (const reply of replies) {
+    assert.ok(!reply.text.includes(NEEDS_LOGIN_TEXT), reply.text);
+    assert.notEqual(reply.status, 401);
+    assert.equal(reply.account, undefined);
+  }
+  assert.equal(replies.at(-1)!.status, 403);
+  assert.match(replies.at(-1)!.text, /no Claude account is available/);
+});
+
+test("AC8: with every account benched, a new session gets the best usable one and its answer", async () => {
+  const rig = await claudePair();
+  plan("a", long429);
+  await rig.send("claude", { key: "X" });
+  plan("b", long429);
+  assert.equal((await rig.send("claude", { key: "X" })).account, "b");
+  plan("a", long429);
+  const fresh = await rig.send("claude", { key: "Z" });
+  assert.equal(fresh.account, "a");
+  assert.equal(fresh.status, 429);
+});
+
+// --- AC9, AC10 ------------------------------------------------------------
+
+test("AC9: a machine request with Origin is refused 403, marked", async () => {
+  const rig = await claudePair();
+  const reply = await rig.send("claude", {
+    headers: { origin: "https://evil.example" },
+  });
+  assert.equal(reply.status, 403);
+  assert.match(
+    reply.text,
+    /Pandeck gateway: model access from this machine is for local tools only/,
+  );
+  assert.equal(reply.account, undefined);
+  assert.equal(rig.machineLeases().length, 0);
+});
+
+test.each([
+  ["Host attacker.example:8797", ["host", "attacker.example:8797"]],
+  ["Host localhost.evil.example", ["host", "localhost.evil.example"]],
+  ["Host 127.0.0.1.nip.io", ["host", "127.0.0.1.nip.io"]],
+  ["Host localhost:80x", ["host", "localhost:80x"]],
+  ["two Host headers", ["host", "localhost", "host", "127.0.0.1"]],
+  ["Origin: null", ["host", "localhost", "origin", "null"]],
+] as const)(
+  "AC9: at the edge, a machine request with %s is refused 403, marked",
+  async (_name, headers) => {
+    const rig = await claudePair();
+    const reply = await edgeRequest(rig, rig.machines[0]!, PATH.claude, [
+      ...headers,
+    ]);
+    assert.equal(reply.status, 403);
+    assert.match(
+      reply.text,
+      /model access from this machine is for local tools only/,
+    );
+    assert.equal(upstreams.anthropic.length, 0);
+    assert.equal(rig.machineLeases().length, 0);
+  },
+);
+
+test("AC9: through the relay, a foreign Host never reaches an upstream", async () => {
+  const rig = await claudePair();
+  const reply = await rig.send("claude", {
+    headers: { host: "attacker.example:8797" },
+  });
+  assert.notEqual(reply.status, 200);
+  assert.equal(reply.account, undefined);
+});
+
+test("a repeated session-key header pins the client's per-provider pin", async () => {
+  const rig = await claudePair();
+  usedKeys.add(sessionKey("R1"));
+  usedKeys.add(sessionKey("R2"));
+  const reply = await edgeRequest(rig, rig.machines[0]!, PATH.claude, [
+    "host",
+    "localhost",
+    "x-claude-code-session-id",
+    sessionKey("R1"),
+    "x-claude-code-session-id",
+    sessionKey("R2"),
+  ]);
+  assert.equal(reply.status, 200);
+  assert.deepEqual(
+    rig.pins().map((pin) => pin.keyHash),
+    [null],
+  );
+});
+
+test.each(["LOCALHOST:8797", "[::1]:80", "127.0.0.1", "localhost"])(
+  "AC9: a loopback Host %s is served",
+  async (host) => {
+    const rig = await claudePair();
+    assert.equal(
+      (await rig.send("claude", { headers: { host } })).account,
+      "a",
+    );
+  },
+);
+
+test("AC10: machine requests reach only the engine routes, never /compat, and WebSockets stay refused", async () => {
+  const rig = await claudePair();
+  rig.account("ca", "openai-codex");
+  for (const [method, path] of [
+    ["GET", "/anthropic/api/oauth/usage"],
+    ["GET", "/chatgpt/backend-api/wham/usage"],
+    ["POST", "/chatgpt/backend-api/wham/rate-limit-reset-credits/consume"],
+    ["POST", "/compat/v1/chat/completions"],
+  ] as const) {
+    const reply = await rig.send(
+      path.startsWith("/anthropic") ? "claude" : "openai-codex",
+      {
+        method,
+        path,
+      },
+    );
+    assert.equal(reply.status, 403, path);
+    assert.equal(reply.account, undefined);
+  }
+  assert.equal(rig.machineLeases().length, 0, "a refused route pins nothing");
+  // A WebSocket upgrade never reaches an upstream.
+  const upgraded = await new Promise<number | "closed">((resolve) => {
+    const request = http.request({
+      host: "127.0.0.1",
+      port: rig.machines[0]!.relay.port,
+      path: PATH["openai-codex"],
+      headers: {
+        connection: "Upgrade",
+        upgrade: "websocket",
+        authorization: `Bearer ${PLACEHOLDER}`,
+        "sec-websocket-version": "13",
+        "sec-websocket-key": Buffer.alloc(16, 1).toString("base64"),
+      },
+    });
+    request.on("upgrade", () => resolve(101));
+    request.on("response", (res) => resolve(res.statusCode ?? 0));
+    request.on("error", () => resolve("closed"));
+    request.end();
+  });
+  assert.notEqual(upgraded, 101);
+  assert.equal(upstreams.chatgpt.length, 0);
+});
+
+// --- AC17, AC18 -----------------------------------------------------------
+
+test("AC17: pools and pins are scoped to the client's user, client and provider", async () => {
+  const rig = await Rig.start(["u1", "u2", "u3"]);
+  rig.account("u1-a", "claude", "u1");
+  rig.account("u1-b", "claude", "u1");
+  rig.account("u1-o", "openai-codex", "u1");
+  rig.account("u2-a", "claude", "u2");
+  rig.account("u2-o", "openai-codex", "u2");
+  rig.account("u3-a", "claude", "u3");
+  const m1 = await rig.machine("u1", "u1-devbox");
+  const m1b = await rig.machine("u1", "u1-laptop");
+  const m2 = await rig.machine("u2", "u2-devbox");
+  const m3 = await rig.machine("u3", "u3-devbox");
+  const key = "same-key";
+  assert.equal(
+    (await rig.send("claude", { key, machine: m1 })).account,
+    "u1-a",
+  );
+  assert.equal(
+    (await rig.send("claude", { key, machine: m2 })).account,
+    "u2-a",
+  );
+  assert.equal(
+    (await rig.send("openai-codex", { key, machine: m1 })).account,
+    "u1-o",
+  );
+  assert.equal(
+    (await rig.send("openai-codex", { key, machine: m2 })).account,
+    "u2-o",
+  );
+  // Two clients of u1 with the same key: a 429 on one moves only that one.
+  assert.equal(
+    (await rig.send("claude", { key, machine: m1b })).account,
+    "u1-a",
+  );
+  plan("u1-a", long429);
+  assert.equal((await rig.send("claude", { key, machine: m1 })).status, 429);
+  assert.equal(
+    (await rig.send("claude", { key, machine: m1 })).account,
+    "u1-b",
+  );
+  clock += 121_000;
+  assert.equal(
+    (await rig.send("claude", { key, machine: m1b })).account,
+    "u1-a",
+  );
+  // A user without an OpenAI account is refused, never served another's.
+  const refused = await rig.send("openai-codex", { key, machine: m3 });
+  assert.equal(refused.status, 403);
+  assert.equal(refused.account, undefined);
+  const pins = rig.pins().filter((pin) => pin.keyHash === pinHash(key));
+  assert.equal(pins.length, 5);
+  assert.equal(
+    new Set(pins.map((pin) => `${pin.clientId}/${pin.provider}`)).size,
+    5,
+  );
+});
+
+test("AC18: OpenCode's x-opencode-session-id pins on /chatgpt; session-id wins when both are sent", async () => {
+  const rig = await Rig.start();
+  rig.account("ca", "openai-codex");
+  rig.account("cb", "openai-codex");
+  await rig.machine();
+  usedKeys.add(sessionKey("Y"));
+  usedKeys.add(sessionKey("S"));
+  const opencode = { "x-opencode-session-id": sessionKey("Y") };
+  assert.equal(
+    (await rig.send("openai-codex", { headers: opencode })).account,
+    "ca",
+  );
+  await rig.send("openai-codex", {
+    headers: { ...opencode, "session-id": sessionKey("S") },
+  });
+  assert.deepEqual(
+    rig
+      .pins()
+      .map((pin) => pin.keyHash)
+      .sort(),
+    [pinHash("S"), pinHash("Y")].sort(),
+  );
+  plan("ca", long429);
+  assert.equal(
+    (await rig.send("openai-codex", { headers: opencode })).status,
+    429,
+  );
+  assert.equal(
+    (await rig.send("openai-codex", { headers: opencode })).account,
+    "cb",
+  );
+});
+
+// --- persistence failures and lifetime ------------------------------------
+
+test("a registry that cannot be read while the response is recorded is logged, and the gateway keeps serving", async () => {
+  const rig = await claudePair();
+  assert.equal((await rig.send("claude", { key: "X" })).account, "a");
+  let release!: () => void;
+  plan("a", {
+    ...long429,
+    hold: new Promise<void>((resolve) => (release = resolve)),
+  });
+  const pending = rig.send("claude", { key: "X" });
+  await vi.waitFor(() => assert.equal(upstreams.anthropic.length, 2));
+  const registryFile = join(rig.stateDir, "clients.json");
+  const saved = readFileSync(registryFile, "utf8");
+  writeFileSync(registryFile, "{not json");
+  release();
+  const limited = await pending;
+  assert.equal(limited.status, 429, "the 429 still reaches the harness");
+  assert.ok(lines.some((line) => /^machine pool evidence failed/.test(line)));
+  writeFileSync(registryFile, saved);
+  // The bench was recorded before the failure: the next request moves.
+  assert.equal((await rig.send("claude", { key: "X" })).account, "b");
+});
+
+test("a pin file that cannot be written inside the response callback keeps the move in memory", async () => {
+  const rig = await claudePair();
+  assert.equal((await rig.send("claude", { key: "X" })).account, "a");
+  const pinsFile = join(rig.stateDir, "machinePins.json");
+  rmSync(pinsFile);
+  mkdirSync(join(pinsFile, "blocked"), { recursive: true });
+  plan("a", long429);
+  assert.equal((await rig.send("claude", { key: "X" })).status, 429);
+  assert.ok(lines.includes("machine pins: save failed; kept in memory"));
+  assert.equal((await rig.send("claude", { key: "X" })).account, "b");
+});
+
+test("a machine lease that cannot be saved refuses that request and the gateway keeps serving", async () => {
+  const rig = await claudePair();
+  const leasesFile = join(rig.stateDir, "leases.json");
+  if (existsSync(leasesFile)) rmSync(leasesFile);
+  mkdirSync(join(leasesFile, "blocked"), { recursive: true });
+  const failed = await rig.send("claude", { key: "X" });
+  assert.equal(failed.status, 500);
+  assert.equal(failed.account, undefined);
+  assert.ok(
+    lines.some((line) => / kind=machine client=\S+ internal error/.test(line)),
+  );
+  rmSync(leasesFile, { recursive: true });
+  assert.equal((await rig.send("claude", { key: "X" })).account, "a");
+});
+
+test("AC13, AC14: machine leases count as live for renewal; a pin idle 7 days is dropped on restart with its lease", async () => {
+  const rig = await claudePair();
+  assert.equal((await rig.send("claude", { key: "X" })).account, "a");
+  assert.equal(rig.gw.leases.hasLiveLease("a"), true);
+  assert.equal(rig.gw.leases.hasLiveLease("b"), false);
+  clock += 7 * 24 * 60 * MIN + 1;
+  await rig.restart();
+  assert.deepEqual(rig.pins(), []);
+  assert.ok(rig.machineLeases().every((lease) => lease.revoked));
+  assert.equal(rig.gw.leases.hasLiveLease("a"), false);
+});

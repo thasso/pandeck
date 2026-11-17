@@ -753,3 +753,40 @@ when sent. It shows in place above the session's composer, or as one toast
 naming the session when the user is elsewhere. A dropped connection retires the
 pending control. The control is offered only on a subscription login, and it is
 disabled with "Available once the current turn ends." while the session runs.
+
+## Gateway machine pools
+
+A standalone harness on an enrolled machine (Claude Code, Codex, pi, OpenCode)
+spends the gateway's accounts through its relay without a lease token
+(Task-1424, `docs/workers.md` "Standalone harnesses"). The edge picks an account
+per harness session from the client's user's pool for the route's provider and
+pins it (`gateway/machinePool.ts`). The ranking is the same function as this
+page's picker, `app/shared/accountRanking.ts`, which imports nothing so the edge
+can use it. What differs from Pandeck's own routing:
+
+- **Evidence.** Benches come only from the model runs the gateway forwards
+  (`POST /v1/messages`, `POST /backend-api/codex/responses`), from any lease
+  kind, Pandeck's engines included. Usage, credit, consume and `count_tokens`
+  answers are never evidence. Pandeck's own sessions do not read these benches.
+- **Resets from headers only.** A 429's stated reset is `retry-after` sent
+  exactly once (whole seconds or an HTTP-date), else on `/chatgpt` the latest
+  valid Codex `x-codex-*-reset-at` or `-reset-after-seconds`. No valid reset
+  benches for `RATE_LIMIT_BENCH_MS` (5 minutes). As here, a past reset creates
+  no bench and a later 429 never shortens one.
+- **Stickiness.** A pin moves only when its account cannot serve: unusable
+  (removed, disabled, needs a login) or a long limit. A reset at most 60 s away
+  (`MACHINE_SHORT_LIMIT_MS`) is short: the 429 passes through, the session
+  stays, and new sessions avoid the account until the reset. Anything later, or
+  no valid reset, is long and moves the session. This keeps the provider's
+  prompt cache on one account; the cost is that a run of short 429s holds a
+  session on its account until the harness gives up. The threshold is a
+  routing-policy value: changing it needs reassessment.
+- **Tried set for the whole session.** A long-limit move never goes back to an
+  account the session left. Only recovery from an unusable account may return to
+  a tried account, and only one whose bench has ended; otherwise the harness
+  gets a marked 429 `machine-session-limited` with `retry-after`.
+- **No usage yet.** The gateway reads no subscription usage, so every candidate
+  ranks with usage unknown: health, bench and stable order decide. Usage-aware
+  ranking (Task-1424 PR 2) will only choose a new session's first account or a
+  forced move's target, never re-pin a session that can still serve.
+- **No enterprise routing.** Enterprise accounts are ordinary candidates.
