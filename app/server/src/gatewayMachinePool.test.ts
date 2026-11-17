@@ -23,6 +23,7 @@ import {
 } from "node:fs";
 import http from "node:http";
 import https from "node:https";
+import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, test, vi } from "vitest";
@@ -274,10 +275,55 @@ function rawRequest(
 }
 
 /**
+ * One HTTP request to a relay's loopback port with its header fields sent
+ * exactly as given, repeats and `Host` included, answering the response's
+ * raw header fields.
+ */
+function relayRaw(
+  machine: Machine,
+  path: string,
+  rawHeaders: string[],
+): Promise<{ status: number; text: string; rawHeaders: string[] }> {
+  return new Promise((resolve, reject) => {
+    const request = http.request(
+      {
+        host: "127.0.0.1",
+        port: machine.relay.port,
+        path,
+        method: "POST",
+        agent: false,
+        headers: [...rawHeaders, "content-type", "application/json"],
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () =>
+          resolve({
+            status: response.statusCode ?? 0,
+            text: Buffer.concat(chunks).toString("utf8"),
+            rawHeaders: response.rawHeaders,
+          }),
+        );
+        response.on("error", reject);
+      },
+    );
+    request.on("error", reject);
+    request.end('{"model":"fixture"}');
+  });
+}
+
+/** The values of every raw field named `name`, in order. */
+function fields(rawHeaders: readonly string[], name: string): string[] {
+  const values: string[] = [];
+  for (let i = 0; i + 1 < rawHeaders.length; i += 2)
+    if (rawHeaders[i]!.toLowerCase() === name) values.push(rawHeaders[i + 1]!);
+  return values;
+}
+
+/**
  * A request straight to the edge's model port with the relay's client
  * certificate, its headers sent exactly as given (repeats and `Host`
- * included), as the relay's own TLS name check would not let a foreign
- * `Host` through.
+ * included): the edge's own checks without the relay in between.
  */
 function edgeRequest(
   rig: Rig,
@@ -321,6 +367,37 @@ function edgeRequest(
   });
 }
 
+/**
+ * A free port below the kernel's ephemeral range (Linux starts it at
+ * 32768): a restart binds its edge ports again, and a parallel test's
+ * `listen(0)` cannot take one of these in between.
+ */
+let nextPort = 20_000 + Math.floor(Math.random() * 10_000);
+async function stablePort(): Promise<number> {
+  for (;;) {
+    const port = nextPort;
+    nextPort = nextPort + 1 >= 32_000 ? 20_000 : nextPort + 1;
+    const free = await new Promise<boolean>((resolve) => {
+      const probe = net.createServer();
+      probe.once("error", () => resolve(false));
+      probe.listen(port, "127.0.0.1", () => probe.close(() => resolve(true)));
+    });
+    if (free) return port;
+  }
+}
+
+function startMachineRelay(
+  dir: string,
+  port: number,
+): ReturnType<typeof startRelay> {
+  return startRelay({
+    stateDir: dir,
+    port,
+    socketPath: join(dir, "relay.sock"),
+    log: () => {},
+  });
+}
+
 interface Machine {
   relay: Awaited<ReturnType<typeof startRelay>>;
   clientId: string;
@@ -348,6 +425,11 @@ class Rig {
 
   static async start(users: string[] = ["thasso"]): Promise<Rig> {
     const rig = new Rig();
+    rig.ports = {
+      modelPort: await stablePort(),
+      clientPort: await stablePort(),
+      enrollPort: await stablePort(),
+    };
     await rig.boot();
     for (const user of users) rig.edge.registry.addUser(user);
     open.push({ close: () => rig.gw.close() });
@@ -377,10 +459,18 @@ class Rig {
     };
   }
 
-  /** Closes the edge and starts it again on the same state and ports. */
+  /**
+   * Closes the edge and starts it again on the same state and ports. Each
+   * relay starts again too, on its own state and port, so no request rides
+   * a pooled connection to the closed edge: these tests are about the
+   * edge's state, not the relay's keep-alive pool.
+   */
   async restart(): Promise<void> {
+    for (const machine of this.machines) await machine.relay.close();
     await this.gw.close();
     await this.boot();
+    for (const machine of this.machines)
+      machine.relay = await startMachineRelay(machine.dir, machine.relay.port);
   }
 
   /** A login account of `userId` with a fresh fake token. */
@@ -422,29 +512,31 @@ class Rig {
     });
   }
 
-  /** Enrolls a relay for `userId` and starts it. */
-  async machine(userId = "thasso", label = "devbox"): Promise<Machine> {
+  /**
+   * Enrolls a relay for `userId` and starts it; `host` is the gateway address
+   * it enrolls with, an IP or a DNS name the edge's certificate holds.
+   */
+  async machine(
+    userId = "thasso",
+    label = "devbox",
+    host = "127.0.0.1",
+  ): Promise<Machine> {
     const dir = mkdtempSync(join(tmpdir(), "machine-relay-"));
     const before = new Set(this.edge.registry.clients().map((c) => c.id));
     await enrollRelay({
       stateDir: dir,
-      host: "127.0.0.1",
+      host,
       enrollPort: this.edge.enrollPort,
       caPem: this.edge.caPem,
       code: this.edge.registry.createCode(userId, label),
     });
-    const relay = await startRelay({
-      stateDir: dir,
-      port: 0,
-      socketPath: join(dir, "relay.sock"),
-      log: () => {},
-    });
+    const relay = await startMachineRelay(dir, await stablePort());
     open.push({ close: () => rmSync(dir, { recursive: true, force: true }) });
-    open.push(relay);
     const clientId = this.edge.registry
       .clients()
       .find((c) => !before.has(c.id))!.id;
     const machine = { relay, clientId, dir };
+    open.push({ close: () => machine.relay.close() });
     this.machines.push(machine);
     return machine;
   }
@@ -1156,6 +1248,40 @@ test("AC8: every account disabled, or every one needing a login, is the same 403
   assert.match(replies.at(-1)!.text, /no Claude account is available/);
 });
 
+test("AC7b, AC8: when both credential waits find a dead login, the first reply is machine-retry and the next is the empty-pool 403", async () => {
+  const rig = await codexRace();
+  for (const id of ["ca", "cb"]) {
+    const file = accountFiles.get(id)!;
+    writeToken("openai-codex", file, access(id), clock + 30_000);
+    renewRejected.add(file);
+  }
+  const first = await rig.send("openai-codex", { key: "X" });
+  assert.equal(first.status, 503);
+  assert.match(
+    first.text,
+    /^\{"error":\{"type":"api_error","code":"api_error","message":"Pandeck gateway: this machine's account changed while the request waited; retry\."\}\}$/,
+  );
+  assert.deepEqual(renewCalls, [
+    accountFiles.get("ca")!,
+    accountFiles.get("cb")!,
+  ]);
+  for (const key of ["X", "Z"]) {
+    const next = await rig.send("openai-codex", { key });
+    assert.equal(next.status, 403, key);
+    assert.match(
+      next.text,
+      /Pandeck gateway: no OpenAI account is available to this machine's user\. Add or log in to one on the gateway's page\./,
+    );
+  }
+  for (const reply of [first]) {
+    assert.ok(!reply.text.includes(NEEDS_LOGIN_TEXT));
+    assert.equal(reply.account, undefined);
+  }
+  // No third credential read, then none at all once the pool is known empty.
+  assert.equal(renewCalls.length, 2);
+  assert.equal(upstreams.chatgpt.length, 1);
+});
+
 test("AC8: with every account benched, a new session gets the best usable one and its answer", async () => {
   const rig = await claudePair();
   plan("a", long429);
@@ -1208,13 +1334,203 @@ test.each([
   },
 );
 
-test("AC9: through the relay, a foreign Host never reaches an upstream", async () => {
+test.each([
+  ["an IP (127.0.0.1)", "127.0.0.1"],
+  ["a DNS name (localhost)", "localhost"],
+] as const)(
+  "AC9, F005: a relay enrolled with %s takes a foreign Host to the edge, which refuses it 403, marked; loopback Hosts are served",
+  async (_name, enrolledHost) => {
+    const rig = await Rig.start();
+    rig.account("a", "claude");
+    const machine = await rig.machine("thasso", "devbox", enrolledHost);
+    for (const host of ["attacker.example:8797", "localhost.evil.example"]) {
+      const reply = await relayRaw(machine, PATH.claude, [
+        "host",
+        host,
+        "authorization",
+        `Bearer ${PLACEHOLDER}`,
+      ]);
+      assert.equal(reply.status, 403, host);
+      const body = JSON.parse(reply.text) as {
+        type: string;
+        error: { type: string; message: string };
+      };
+      assert.equal(body.type, "error");
+      assert.equal(body.error.type, "permission_error");
+      assert.match(
+        body.error.message,
+        /^Pandeck gateway: model access from this machine is for local tools only\.$/,
+      );
+    }
+    assert.equal(upstreams.anthropic.length, 0);
+    assert.equal(rig.machineLeases().length, 0);
+    for (const host of ["localhost", "127.0.0.1:8797", "[::1]"]) {
+      const reply = await relayRaw(machine, PATH.claude, [
+        "host",
+        host,
+        "authorization",
+        `Bearer ${PLACEHOLDER}`,
+      ]);
+      assert.equal(reply.status, 200, host);
+    }
+    assert.equal(upstreams.anthropic.length, 3);
+  },
+);
+
+test("AC9, F004: through the relay, two Host fields are refused 403, marked", async () => {
   const rig = await claudePair();
-  const reply = await rig.send("claude", {
-    headers: { host: "attacker.example:8797" },
+  for (const hosts of [
+    ["localhost", "attacker.example"],
+    ["localhost", "localhost"],
+  ]) {
+    const reply = await relayRaw(rig.machines[0]!, PATH.claude, [
+      ...hosts.flatMap((host) => ["host", host]),
+      "authorization",
+      `Bearer ${PLACEHOLDER}`,
+    ]);
+    assert.equal(reply.status, 403, hosts.join(", "));
+    assert.match(
+      reply.text,
+      /Pandeck gateway: model access from this machine is for local tools only/,
+    );
+  }
+  assert.equal(upstreams.anthropic.length, 0);
+  assert.equal(rig.machineLeases().length, 0);
+});
+
+test.each([
+  [
+    "a repeated x-claude-code-session-id",
+    "claude",
+    ["x-claude-code-session-id", "R1", "x-claude-code-session-id", "R2"],
+  ],
+  [
+    "a repeated session-id",
+    "openai-codex",
+    ["session-id", "R1", "session-id", "R2"],
+  ],
+  [
+    "a repeated x-opencode-session-id",
+    "openai-codex",
+    ["x-opencode-session-id", "R1", "x-opencode-session-id", "R2"],
+  ],
+  [
+    "a repeated session-id beside one x-opencode-session-id",
+    "openai-codex",
+    ["session-id", "R1", "x-opencode-session-id", "R3", "session-id", "R2"],
+  ],
+] as const)(
+  "F004: through the relay, %s pins the client's per-provider pin",
+  async (_name, provider, keyFields) => {
+    const rig = await Rig.start();
+    rig.account("a", "claude");
+    rig.account("ca", "openai-codex");
+    const machine = await rig.machine();
+    const raw = keyFields.map((value, i) =>
+      i % 2 === 1 ? sessionKey(value) : value,
+    );
+    for (const value of keyFields) usedKeys.add(sessionKey(value));
+    const reply = await relayRaw(machine, PATH[provider], [
+      "host",
+      "localhost",
+      "authorization",
+      `Bearer ${PLACEHOLDER}`,
+      ...raw,
+    ]);
+    assert.equal(reply.status, 200);
+    assert.deepEqual(
+      rig.pins().map((pin) => [pin.provider, pin.keyHash]),
+      [[provider, null]],
+    );
+    // One field of the same key is still a session's own pin.
+    const single = await relayRaw(machine, PATH[provider], [
+      "host",
+      "localhost",
+      "authorization",
+      `Bearer ${PLACEHOLDER}`,
+      ...raw.slice(0, 2),
+    ]);
+    assert.equal(single.status, 200);
+    assert.ok(
+      rig.pins().some((pin) => pin.keyHash === sha256(raw[1]!)),
+      "the single field is keyed",
+    );
+  },
+);
+
+test("F004: a request without Host gets the relay's own edge address, as before", async () => {
+  const rig = await claudePair();
+  const machine = rig.machines[0]!;
+  const answer = await new Promise<string>((resolve, reject) => {
+    // HTTP/1.0: the relay closes after its answer; a half-close first would
+    // abort the request.
+    const socket = net.connect(machine.relay.port, "127.0.0.1", () =>
+      socket.write(
+        `POST ${PATH.claude} HTTP/1.0\r\nauthorization: Bearer ${PLACEHOLDER}\r\ncontent-type: application/json\r\ncontent-length: 2\r\n\r\n{}`,
+      ),
+    );
+    const chunks: Buffer[] = [];
+    socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+    socket.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    socket.on("error", reject);
   });
-  assert.notEqual(reply.status, 200);
-  assert.equal(reply.account, undefined);
+  assert.match(answer, /^HTTP\/1\.1 200 /);
+  assert.equal(upstreams.anthropic.length, 1);
+});
+
+test("F004: a repeated ordinary header still reaches the provider as Node joins it", async () => {
+  const rig = await claudePair();
+  const reply = await relayRaw(rig.machines[0]!, PATH.claude, [
+    "host",
+    "localhost",
+    "authorization",
+    `Bearer ${PLACEHOLDER}`,
+    "anthropic-beta",
+    "one",
+    "anthropic-beta",
+    "two",
+  ]);
+  assert.equal(reply.status, 200);
+  assert.equal(upstreams.anthropic[0]!.headers["anthropic-beta"], "one, two");
+  assert.equal(upstreams.anthropic[0]!.headers.host, "api.anthropic.com");
+});
+
+test("AC5, F007: a provider 429's header fields reach the harness unchanged through gateway and relay", async () => {
+  const rig = await claudePair();
+  plan("a", {
+    status: 429,
+    headers: {
+      "retry-after": ["30", "30"],
+      "x-fixture-repeat": ["one", "two"],
+      "set-cookie": ["a=1", "b=2"],
+      "proxy-fixture": "dropped",
+    },
+  });
+  const reply = await relayRaw(rig.machines[0]!, PATH.claude, [
+    "host",
+    "localhost",
+    "authorization",
+    `Bearer ${PLACEHOLDER}`,
+  ]);
+  assert.equal(reply.status, 429);
+  assert.equal(
+    reply.text,
+    '{"type":"error","error":{"type":"rate_limit_error","message":"fixture limit"}}',
+  );
+  assert.deepEqual(fields(reply.rawHeaders, "retry-after"), ["30", "30"]);
+  assert.deepEqual(fields(reply.rawHeaders, "x-fixture-repeat"), [
+    "one",
+    "two",
+  ]);
+  assert.deepEqual(fields(reply.rawHeaders, "content-type"), [
+    "application/json",
+  ]);
+  // The gateway's drop list and hop-by-hop handling are unchanged.
+  assert.deepEqual(fields(reply.rawHeaders, "set-cookie"), []);
+  assert.deepEqual(fields(reply.rawHeaders, "proxy-fixture"), []);
+  assert.ok(fields(reply.rawHeaders, "transfer-encoding").length <= 1);
+  // The pool still read the repeat as no reset: long, so the pin moves.
+  assert.equal((await rig.send("claude")).account, "b");
 });
 
 test("a repeated session-key header pins the client's per-provider pin", async () => {

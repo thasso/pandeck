@@ -1994,7 +1994,12 @@ path above.
 - **The relay** (`relay/`, its own entry and process under Pandeck's server
   account, `node:` only) is the only holder of the client key. It pipes its
   loopback port to the model port and each connection on its 0600 Unix socket to
-  the client-protocol port, understanding neither.
+  the client-protocol port, understanding neither. Model requests and answers
+  keep their header fields as received, in order and with every repeat, without
+  hop-by-hop fields; a request with no `Host` gets the edge's address, as Node
+  would set it. Its TLS checks the edge's certificate for the enrolled address,
+  never a forwarded `Host`: a DNS name is the SNI, and an IP sends none and is
+  matched as an IP (Task-1424 transport amendment).
 - **The server** (`gatewayClientLink.ts`) speaks the client protocol through the
   relay's socket, mirrors the gateway's accounts into the profile registry and
   gives engines the relay's loopback URL. Settings' existing UI drives the
@@ -2078,7 +2083,10 @@ use the gateway's accounts through the local relay (Task-1424 PR 1). The harness
 points its base URL at the relay's loopback port and sends a fixed, public
 placeholder as its key. Any process on the machine can do this; Thasso accepted
 that. The relay's client certificate is the capability, and revoking the machine
-ends access at once. The relay is unchanged.
+ends access at once. The relay changes only in transport (Task-1424 delivery
+amendment, Thasso's decision): it forwards request and response header fields as
+received, repeats included, and verifies the edge by its enrolled address
+whatever the `Host` (above). No route, body or credential handling changes.
 
 - **Placeholder.** One literal, JWT-shaped because pi and Codex accept only
   that, pinned in `gatewayMachinePool.test.ts`:
@@ -2131,8 +2139,9 @@ ends access at once. The relay is unchanged.
   1. is refused 403 `machine-origin` if it carries any `Origin`, or lacks
      exactly one `Host` whose name is `127.0.0.1`, `localhost` or `[::1]` (any
      case, optional port), so a web page cannot spend it, DNS rebinding
-     included. Through the relay a foreign `Host` already fails the relay's TLS
-     name check (502) before the edge;
+     included. Through the relay these reach the edge as sent: a foreign `Host`,
+     or a second one, gets this marked 403 for an IP- or DNS-enrolled relay
+     alike;
   2. reaches only the engine routes: `POST /anthropic/v1/messages`, its
      `count_tokens`, and `POST /chatgpt/backend-api/codex/responses`. No usage,
      credit or consume route, never `/compat`, and WebSocket stays refused;
@@ -2145,6 +2154,10 @@ ends access at once. The relay is unchanged.
      usable, and no needs-login answer. A change re-selects once; a second
      change gives 503 `machine-retry` with no third credential read. No request
      reaches the upstream with a credential that is no longer its selection's.
+     This holds when the second read just found the last usable-looking account
+     needs a login: that request gets the 503, and the next one, whose selection
+     sees the empty pool, gets 403 `machine-pool-empty`. No extra final check
+     runs (AC7b over AC8 for the first request, requester's ruling).
 - **Machine lease.** At most one live per (client, account), granted when a pin
   first lands there and saved in `leases.json`. It has no TTL. It ends when the
   machine is revoked, the account is removed, or no pin of that client uses the
@@ -2158,7 +2171,9 @@ ends access at once. The relay is unchanged.
     the first of these headers present: `x-claude-code-session-id` on
     `/anthropic`; `session-id`, then `x-opencode-session-id` on `/chatgpt`. A
     repeated, empty or over-256-character value counts as no key, and the
-    request uses the client's per-provider pin. The body is never read.
+    request uses the client's per-provider pin; a later header is not tried.
+    Repeats are read from the raw fields, which the relay keeps. The body is
+    never read.
   - `machinePins.json` holds key hashes, account ids, tried sets and last use,
     never a key. It is saved on every pin change, and at most every 10 minutes
     for use alone; a failed save is logged and memory stays in force. An
@@ -2172,10 +2187,12 @@ ends access at once. The relay is unchanged.
 - **Limits.** Each model-run answer (`POST /v1/messages`,
   `POST /backend-api/codex/responses`) from any lease kind is evidence; usage,
   credit, consume and `count_tokens` answers are not. A 2xx clears the account's
-  bench. A 429 passes through unchanged and is classified by its stated reset,
-  read from the upstream's raw headers: `retry-after` sent exactly once (whole
-  seconds or an RFC 9110 HTTP-date), else on `/chatgpt` the latest valid
-  `x-codex-{primary,secondary}-reset-at` or `-reset-after-seconds`.
+  bench. A 429 passes through unchanged, every header field and repeat included
+  (gateway and relay drop only hop-by-hop, `proxy-*` and `set-cookie` fields),
+  and is classified by its stated reset, read from the upstream's raw headers:
+  `retry-after` sent exactly once (whole seconds or an RFC 9110 HTTP-date), else
+  on `/chatgpt` the latest valid `x-codex-{primary,secondary}-reset-at` or
+  `-reset-after-seconds`.
   - Now or past: short, with no bench.
   - Up to 60 s away (`MACHINE_SHORT_LIMIT_MS`, inclusive): short. The account is
     benched until then and new sessions avoid it; the session keeps its pin and

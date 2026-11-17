@@ -171,6 +171,30 @@ function forwardable(
   return out;
 }
 
+/**
+ * A response's raw header fields, in order and with every repeat, without
+ * the names `forwardable` drops: a harness reads a provider's answer
+ * unchanged, a repeated `retry-after` included.
+ */
+function forwardableRaw(
+  rawHeaders: readonly string[],
+  drop: readonly string[],
+): string[] {
+  const listed: string[] = [];
+  for (let i = 0; i + 1 < rawHeaders.length; i += 2)
+    if (rawHeaders[i]!.toLowerCase() === "connection")
+      for (const name of rawHeaders[i + 1]!.split(","))
+        listed.push(name.trim().toLowerCase());
+  const dropped = new Set([...HOP_BY_HOP, ...listed, ...drop]);
+  const out: string[] = [];
+  for (let i = 0; i + 1 < rawHeaders.length; i += 2) {
+    const name = rawHeaders[i]!.toLowerCase();
+    if (!dropped.has(name) && !name.startsWith("proxy-"))
+      out.push(rawHeaders[i]!, rawHeaders[i + 1]!);
+  }
+  return out;
+}
+
 /** A loopback `Host`: exactly these names, any case, an optional port. */
 const LOOPBACK_HOST_RE = /^(?:127\.0\.0\.1|localhost|\[::1\])(?::\d{1,5})?$/i;
 
@@ -631,7 +655,10 @@ export function createForwarder(deps: ForwarderDeps): {
         contained("response bookkeeping", () =>
           onResponse(status, upstreamRes.rawHeaders),
         );
-      res.writeHead(status, forwardable(upstreamRes.headers, ["set-cookie"]));
+      res.writeHead(
+        status,
+        forwardableRaw(upstreamRes.rawHeaders, ["set-cookie"]),
+      );
       res.on("finish", () => done(String(status)));
       upstreamRes.pipe(res);
     });

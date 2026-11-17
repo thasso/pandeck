@@ -4,8 +4,11 @@
  * client's TLS identity and pipes bytes to the gateway edge.
  *
  * - A loopback HTTP listener for model traffic: every request goes to the
- *   edge's model port over mutual TLS, unchanged, lease token included. Both
- *   bodies stream with `pipe`, so a paused engine holds the edge back.
+ *   edge's model port over mutual TLS, unchanged, lease token included. Header
+ *   fields pass both ways as received, repeats included, without hop-by-hop
+ *   ones; the edge's certificate is checked for the enrolled address, never
+ *   a forwarded `Host`. Both bodies stream with `pipe`, so a paused engine
+ *   holds the edge back.
  * - A Unix socket (0600, the relay's account) for the client protocol: each
  *   accepted connection is piped byte for byte to the edge's client port.
  *
@@ -68,18 +71,27 @@ const HOP_BY_HOP = new Set([
   "upgrade",
 ]);
 
-function forwardable(
-  headers: http.IncomingHttpHeaders,
-): http.OutgoingHttpHeaders {
-  const out: http.OutgoingHttpHeaders = {};
-  for (const [name, value] of Object.entries(headers))
-    if (value !== undefined && !HOP_BY_HOP.has(name)) out[name] = value;
+/**
+ * The header fields as received, in order and with every repeat, without
+ * the hop-by-hop ones: the edge reads repeats (a second `Host`, a repeated
+ * session key), and a harness reads a provider's answer unchanged.
+ */
+function forwardable(rawHeaders: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i + 1 < rawHeaders.length; i += 2)
+    if (!HOP_BY_HOP.has(rawHeaders[i]!.toLowerCase()))
+      out.push(rawHeaders[i]!, rawHeaders[i + 1]!);
   return out;
 }
 
-/** The TLS name to check the edge's certificate for; an IP gets no SNI. */
-function tlsName(host: string): { servername?: string } {
-  return net.isIP(host) ? {} : { servername: host };
+/**
+ * The TLS name to check the edge's certificate for: always the enrolled
+ * address, never a forwarded `Host`. A DNS name is the SNI; an IP sends none
+ * (`""`, which Node keeps instead of deriving one from `Host`), so the
+ * certificate is checked against the IP itself.
+ */
+function tlsName(host: string): { servername: string } {
+  return { servername: net.isIP(host) ? "" : host };
 }
 
 function writePrivate(path: string, text: string): void {
@@ -603,6 +615,8 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
     ...tlsName(identity.host),
   };
   const agent = new https.Agent({ keepAlive: true, ...tlsOptions });
+  // What Node would have set for a request that came without a `Host`.
+  const edgeHost = `${net.isIPv6(identity.host) ? `[${identity.host}]` : identity.host}:${identity.modelPort}`;
   const sockets = new Set<net.Socket>();
   const track = (socket: net.Socket): void => {
     sockets.add(socket);
@@ -611,17 +625,22 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
 
   const model = http.createServer((req, res) => {
     const started = Date.now();
+    const headers = forwardable(req.rawHeaders);
+    if (
+      !headers.some((name, i) => i % 2 === 0 && name.toLowerCase() === "host")
+    )
+      headers.push("host", edgeHost);
     const upstream = https.request({
       ...tlsOptions,
       port: identity.modelPort,
       agent,
       method: req.method,
       path: req.url,
-      headers: forwardable(req.headers),
+      headers,
     });
     let settled = false;
     upstream.on("response", (edgeRes) => {
-      res.writeHead(edgeRes.statusCode ?? 502, forwardable(edgeRes.headers));
+      res.writeHead(edgeRes.statusCode ?? 502, forwardable(edgeRes.rawHeaders));
       edgeRes.pipe(res);
       edgeRes.on("error", () => res.destroy());
       edgeRes.on("close", () => {
