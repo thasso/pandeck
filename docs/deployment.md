@@ -1091,7 +1091,9 @@ child-process isolation.
 
 `config/host-tools.json` is the contract that replaces the vendored closure.
 `hostTools.ts` resolves each required binary on PATH, parses its own `--version`
-output and compares against a dotted floor, and `verifyRequiredHostTools()` runs
+output and compares against a dotted floor (a row's `alternatives` give another
+implementation, recognised by its banner, its own floor: uutils coreutils is
+numbered 0.x where GNU coreutils is 9.x), and `verifyRequiredHostTools()` runs
 once in `index.ts` immediately after `assertPromptAssets()` — before the socket
 binds, so a host below the floor fails the boot with every failure named at once
 instead of surfacing inside somebody's first agent turn. Checked ONCE by design:

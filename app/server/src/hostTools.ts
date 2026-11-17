@@ -35,10 +35,23 @@ export interface HostToolRequirement {
   binary: string;
   /** Dotted numeric floor, compared component-wise. */
   minVersion: string;
+  /**
+   * Other implementations of the same tool with their own numbering, e.g.
+   * uutils coreutils (0.x) next to GNU coreutils (9.x). The first entry whose
+   * `match` appears in the version output, case-insensitively, replaces
+   * `minVersion` as the floor.
+   */
+  alternatives?: HostToolAlternative[];
   /** Arguments that make the tool print its version. */
   versionArgs: string[];
   /** Why the server needs it, quoted verbatim in failure messages. */
   reason: string;
+}
+
+/** An implementation recognised by its version banner, with its own floor. */
+interface HostToolAlternative {
+  match: string;
+  minVersion: string;
 }
 
 /** Outcome for one requirement. */
@@ -95,7 +108,31 @@ function isRequirement(value: unknown): value is HostToolRequirement {
     row.minVersion.length > 0 &&
     typeof row.reason === "string" &&
     Array.isArray(row.versionArgs) &&
-    row.versionArgs.every((arg) => typeof arg === "string")
+    row.versionArgs.every((arg) => typeof arg === "string") &&
+    (row.alternatives === undefined ||
+      (Array.isArray(row.alternatives) &&
+        row.alternatives.every(isAlternative)))
+  );
+}
+
+function isAlternative(value: unknown): value is HostToolAlternative {
+  if (typeof value !== "object" || value === null) return false;
+  const row = value as Record<string, unknown>;
+  return (
+    typeof row.match === "string" &&
+    row.match.length > 0 &&
+    typeof row.minVersion === "string" &&
+    row.minVersion.length > 0
+  );
+}
+
+/** The floor that applies to this output: a matching alternative's, else the requirement's. */
+function floorFor(requirement: HostToolRequirement, output: string): string {
+  const lower = output.toLowerCase();
+  return (
+    requirement.alternatives?.find((alt) =>
+      lower.includes(alt.match.toLowerCase()),
+    )?.minVersion ?? requirement.minVersion
   );
 }
 
@@ -195,13 +232,14 @@ export function checkHostTool(requirement: HostToolRequirement): HostToolCheck {
       problem: `found at ${path} but its version output could not be parsed`,
     };
   }
-  if (compareVersions(version, requirement.minVersion) < 0) {
+  const floor = floorFor(requirement, output);
+  if (compareVersions(version, floor) < 0) {
     return {
       requirement,
       ok: false,
       path,
       version,
-      problem: `version ${version} is older than the required ${requirement.minVersion}`,
+      problem: `version ${version} is older than the required ${floor}`,
     };
   }
   return { requirement, ok: true, path, version };
