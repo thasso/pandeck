@@ -136,13 +136,15 @@ and headless one-shot utility runs.
   Guarded by `agentToolAdapter.test.ts`.
 - `toolActivation.ts` owns per-session deferred activation. Exact/query loads
   happen additively inside `find_tools` execute so pi records native deferred
-  definitions. Reopen seeds only names both present in `addedToolNames` and
-  actually called in the transcript. Live sessions retain additive loads unless
-  a user turn follows at least six idle hours, when never-called deferred names
-  are pruned; called/eager/loader/builtin tools survive through the ordinary
-  `mergedActiveToolNames` path. That merge also owns pi's Plan policy: it
-  removes the `edit`/`write` builtins and catalog tools classified with
-  local/external side effects, except `task_manage` for durable Task
+  definitions. Reopen seeds only deferred names the transcript ever declared (pi
+  1.5 `toolsAdded` system messages, or legacy `addedToolNames`) and actually
+  called in it; `toolsRemoved` is ignored because it is pi's availability delta
+  from our own active-set policy, not an unload. Live sessions retain additive
+  loads unless a user turn follows at least six idle hours, when never-called
+  deferred names are pruned; called/eager/loader/builtin tools survive through
+  the ordinary `mergedActiveToolNames` path. That merge also owns pi's Plan
+  policy: it removes the `edit`/`write` builtins and catalog tools classified
+  with local/external side effects, except `task_manage` for durable Task
   organization and `session_spawn` for read-only profile inspection; that tool
   still refuses `spawn`/`propose` against persisted Plan mode. It keeps
   `read`/`bash`/`grep`/`find` and read-only bridge tools, and restores the same

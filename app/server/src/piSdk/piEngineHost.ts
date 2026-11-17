@@ -579,8 +579,8 @@ const startPiSession: PiEngineStart = async (spec, ctx, { sm, cwd, model }) => {
   // definitions mid-session); toolActivation keeps only eager + loaded tools
   // ACTIVE so the initial context stays small, reconciles toolGroup/
   // integration-gate changes, and activates find_tools matches inside the
-  // loader's execute window (pi records addedToolNames → native deferred
-  // loading on supported models).
+  // loader's execute window (pi declares them in a `toolsAdded` system
+  // message → native deferred loading on supported models).
   let sessionRef: AgentSession | undefined;
   // Its background bash and monitor run shell commands: a definition that
   // denies bash denies them too.
@@ -717,8 +717,8 @@ const startPiSession: PiEngineStart = async (spec, ctx, { sm, cwd, model }) => {
     installToolPayloadProbe(session);
     installDynamicToolTurnRefresh(session);
     // Initial active set: eager + find_tools + everything the transcript
-    // already loaded (addedToolNames), gate/pack-filtered — so a reopened
-    // session keeps its loaded tools and a fresh one starts small.
+    // ever loaded and called, gate-filtered — so a reopened session keeps
+    // its loaded tools and a fresh one starts small.
     sessionRef = session;
     activation.initialize(
       loadedToolNamesFromMessages(session.messages),
