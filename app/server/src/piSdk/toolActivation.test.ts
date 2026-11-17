@@ -1,8 +1,9 @@
 /**
  * Tests for the per-session pi tool activation (`toolActivation.ts`):
- * initial eager active set, find_tools additive activation, transcript
- * `addedToolNames` seeding on reopen, and prompt-cache prefix stability across
- * activation (asserted against pi's real buildSystemPrompt).
+ * initial eager active set, find_tools additive activation, transcript seeding
+ * on reopen (pi 1.5 tool declarations and legacy `addedToolNames`), and
+ * prompt-cache prefix stability across activation (asserted against pi's real
+ * buildSystemPrompt).
  */
 import assert from "node:assert/strict";
 import { test } from "vitest";
@@ -279,6 +280,139 @@ test("loadedToolNamesFromMessages reads toolResult addedToolNames only", () => {
     },
   ]);
   assert.deepEqual(names, ["web_search"]);
+});
+
+/** A pi 1.5 tool declaration: `toolsAdded` carries full definitions. */
+const declared = (...names: string[]) =>
+  names.map((name) => ({ name, description: name, parameters: {} }));
+const called = (name: string) => ({
+  role: "assistant",
+  content: [{ type: "toolCall", id: name, name, arguments: {} }],
+});
+
+test("loadedToolNamesFromMessages replays pi 1.5 toolsAdded/toolsRemoved in order", () => {
+  const leading = {
+    role: "system",
+    content: "",
+    sections: { preamble: "p" },
+    toolsAdded: declared("read", "current_time", FIND_TOOLS_NAME),
+  };
+  const load = {
+    role: "system",
+    content: "",
+    toolsAdded: declared("web_search", "web_fetch"),
+  };
+  const remove = {
+    role: "system",
+    content: "",
+    toolsRemoved: [{ name: "web_search" }, { name: "web_fetch" }],
+  };
+  const loadedAndCalled = [
+    leading,
+    { role: "toolResult", toolName: FIND_TOOLS_NAME, content: [] },
+    load,
+    called("web_search"),
+    { role: "toolResult", toolName: "web_search", content: [] },
+  ];
+  // Loaded and called; web_fetch was loaded but never called.
+  assert.deepEqual(loadedToolNamesFromMessages(loadedAndCalled), [
+    FIND_TOOLS_NAME,
+    "web_search",
+  ]);
+  // A later removal drops it, even though the call stays in the transcript.
+  assert.deepEqual(loadedToolNamesFromMessages([...loadedAndCalled, remove]), [
+    FIND_TOOLS_NAME,
+  ]);
+  // A re-add after the removal loads it again.
+  assert.deepEqual(
+    loadedToolNamesFromMessages([
+      ...loadedAndCalled,
+      remove,
+      { role: "system", content: "", toolsAdded: declared("web_search") },
+    ]),
+    [FIND_TOOLS_NAME, "web_search"],
+  );
+  // One message's removals apply before its additions (pi-ai getCurrentTools).
+  assert.deepEqual(
+    loadedToolNamesFromMessages([
+      ...loadedAndCalled,
+      {
+        role: "system",
+        content: "",
+        toolsRemoved: [{ name: "web_search" }],
+        toolsAdded: declared("web_search"),
+      },
+    ]),
+    [FIND_TOOLS_NAME, "web_search"],
+  );
+  // Only system messages declare tools.
+  assert.deepEqual(
+    loadedToolNamesFromMessages([
+      { role: "user", content: "x", toolsAdded: declared("web_search") },
+      called("web_search"),
+    ]),
+    [],
+  );
+});
+
+test("loadedToolNamesFromMessages keeps legacy addedToolNames alongside pi 1.5 declarations", () => {
+  const names = loadedToolNamesFromMessages([
+    {
+      role: "toolResult",
+      toolName: FIND_TOOLS_NAME,
+      addedToolNames: ["web_search"],
+    },
+    called("web_search"),
+    { role: "system", content: "", toolsAdded: declared("kb_write") },
+    called("kb_write"),
+  ]);
+  assert.deepEqual(names, ["web_search", "kb_write"]);
+  // A pi 1.5 removal also drops a name a legacy result loaded.
+  assert.deepEqual(
+    loadedToolNamesFromMessages([
+      {
+        role: "toolResult",
+        toolName: FIND_TOOLS_NAME,
+        addedToolNames: ["web_search"],
+      },
+      called("web_search"),
+      { role: "system", content: "", toolsRemoved: [{ name: "web_search" }] },
+    ]),
+    [],
+  );
+});
+
+test("a pi 1.5 transcript's loaded and called tool stays active on reopen; eager and builtin names are not reopen loads", () => {
+  const eager = eagerToolNamesFor("assistant");
+  assert.equal(eager.has("web_search"), false, "web_search must be deferred");
+  assert.ok(eager.has("current_time"), "current_time must be eager");
+  const seed = loadedToolNamesFromMessages([
+    {
+      role: "system",
+      content: "",
+      sections: { preamble: "p" },
+      toolsAdded: declared("read", "current_time", FIND_TOOLS_NAME),
+    },
+    called(FIND_TOOLS_NAME),
+    called("current_time"),
+    called("read"),
+    { role: "system", content: "", toolsAdded: declared("web_search") },
+    called("web_search"),
+  ]);
+  const applied: Array<ReadonlySet<string>> = [];
+  const activation = assistantActivation(applied, seed);
+  try {
+    assert.ok(applied.at(-1)!.has("web_search"));
+    const reopen = activation
+      .state()
+      .loadEvents.filter((event) => event.via === "reopen");
+    assert.deepEqual(
+      reopen.map((event) => event.names),
+      [["web_search"]],
+    );
+  } finally {
+    activation.dispose();
+  }
 });
 
 test("never-used loads prune only after six idle hours; called tools survive", async () => {

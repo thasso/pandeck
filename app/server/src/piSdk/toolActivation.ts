@@ -10,15 +10,16 @@
  *    server enforces for Claude — see `tools/catalog.ts` `IntegrationToolGates`),
  *    from the snapshot the server handed the engine at open and updates with
  *    `setIntegrationGates`: the engine reads no settings;
- *  - loaded  = names activated during the session (find_tools) plus names
- *    recorded as `addedToolNames` in the reopened transcript, so previously
- *    loaded tools stay active across reopen;
+ *  - loaded  = names activated during the session (find_tools) plus the
+ *    deferred names the reopened transcript still declares and called (see
+ *    `loadedToolNamesFromMessages`), so previously loaded tools stay active
+ *    across reopen;
  *  - active  = usable ∩ (eager ∪ loaded ∪ find_tools) — or simply usable when
  *    deferral is off (the constrained manager variant).
  *
  * Activation is ADDITIVE and happens synchronously inside find_tools' execute
- * window, so pi records `addedToolNames` on that tool result and natively
- * defer-loads the definitions on supported models.
+ * window, so pi declares the definitions in a `toolsAdded` system message at
+ * that point and natively defer-loads them on supported models.
  *
  * System-prompt stability: pi rebuilds the whole system prompt in
  * `setActiveToolsByName`, from the ACTIVE tools' prompt extras. Since Task-282
@@ -130,8 +131,9 @@ export interface PiToolActivation {
   toolNames: ReadonlySet<string>;
   /**
    * Compute + apply the initial active set. `loadedSeed` carries the
-   * transcript's `addedToolNames` on reopen so previously loaded tools stay
-   * active (and stay natively deferred at their original load point).
+   * transcript's loaded tools on reopen so previously loaded tools stay active
+   * (and stay natively deferred at their original load point); names that are
+   * not deferred bridge tools are ignored.
    */
   initialize(loadedSeed: Iterable<string>, usedSeed?: Iterable<string>): void;
   /**
@@ -276,11 +278,21 @@ export function createPiToolActivation(
     piToolUniverse.map((tool) => [tool.name, toolDefinitionChars(tool)]),
   );
 
+  // Only these can be loaded: a reopen seed replays every declared tool,
+  // eager and builtin ones included.
+  const deferredToolNames = new Set(
+    config.agentTools
+      .map((tool) => tool.name)
+      .filter((name) => !config.eagerToolNames.has(name)),
+  );
+
   const activation: PiToolActivation = {
     piToolUniverse,
     toolNames: new Set(piToolUniverse.map((tool) => tool.name)),
     initialize(loadedSeed, usedSeed = []) {
-      const seed = [...loadedSeed];
+      const seed = [...new Set(loadedSeed)].filter((name) =>
+        deferredToolNames.has(name),
+      );
       for (const name of seed) loaded.add(name);
       for (const name of usedSeed) used.add(name);
       if (config.deferToolLoading) recordLoad("reopen", seed);
@@ -395,6 +407,14 @@ export function mergedActiveToolNames(input: {
  * Reopen seed: only names both deferred-loaded and actually called somewhere
  * in the transcript. Reopen is cold by construction, so carrying never-used
  * historical definitions has no cache benefit.
+ *
+ * pi 1.5 records tool-set changes as `system` messages carrying `toolsAdded`
+ * (definitions) and `toolsRemoved` (references); replaying them in order, each
+ * message's removals before its additions (pi-ai `getCurrentTools`), yields the
+ * set the model was last told it may call. Older transcripts recorded loads as
+ * `addedToolNames` on the loader's tool result. The replay also returns eager
+ * and builtin names (the leading and post-compaction system messages declare
+ * the whole set); `initialize` keeps only deferred bridge tools.
  */
 export function loadedToolNamesFromMessages(
   messages: ReadonlyArray<unknown>,
@@ -404,15 +424,31 @@ export function loadedToolNamesFromMessages(
   for (const message of messages) {
     const record = message as {
       role?: unknown;
-      toolName?: unknown;
       addedToolNames?: unknown;
-      content?: unknown;
+      toolsAdded?: unknown;
+      toolsRemoved?: unknown;
     };
+    if (record.role === "system") {
+      for (const name of declaredToolNames(record.toolsRemoved))
+        loaded.delete(name);
+      for (const name of declaredToolNames(record.toolsAdded)) loaded.add(name);
+    }
     if (record.role === "toolResult" && Array.isArray(record.addedToolNames))
       for (const name of record.addedToolNames)
         if (typeof name === "string") loaded.add(name);
   }
   return [...loaded].filter((name) => called.has(name));
+}
+
+/** Names of a system message's `toolsAdded`/`toolsRemoved` entries. */
+function declaredToolNames(tools: unknown): string[] {
+  if (!Array.isArray(tools)) return [];
+  const names: string[] = [];
+  for (const tool of tools) {
+    const name = (tool as { name?: unknown } | null)?.name;
+    if (typeof name === "string") names.push(name);
+  }
+  return names;
 }
 
 /** Every app tool called in a pi transcript, for inspector diagnostics. */

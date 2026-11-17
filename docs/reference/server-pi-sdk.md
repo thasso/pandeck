@@ -136,25 +136,27 @@ and headless one-shot utility runs.
   Guarded by `agentToolAdapter.test.ts`.
 - `toolActivation.ts` owns per-session deferred activation. Exact/query loads
   happen additively inside `find_tools` execute so pi records native deferred
-  definitions. Reopen seeds only names both present in `addedToolNames` and
-  actually called in the transcript. Live sessions retain additive loads unless
-  a user turn follows at least six idle hours, when never-called deferred names
-  are pruned; called/eager/loader/builtin tools survive through the ordinary
-  `mergedActiveToolNames` path. That merge also owns pi's Plan policy: it
-  removes the `edit`/`write` builtins and catalog tools classified with
-  local/external side effects, except `task_manage` for durable Task
-  organization and `session_spawn` for read-only profile inspection; that tool
-  still refuses `spawn`/`propose` against persisted Plan mode. It keeps
-  `read`/`bash`/`grep`/`find` and read-only bridge tools, and restores the same
-  active set when Build returns. The adapter (for an app tool, the server's
-  binding) independently rejects stale/forged calls to a Plan-blocked tool.
-  Adapter execute callbacks track usage. Prompt extras remain absent, so
-  deferred activation and pruning keep the rebuilt system prompt constant. A
-  mode flip deliberately calls `setActiveToolsByName` through that same path; pi
-  rebuilds the prompt, invalidating the prompt-cache prefix once, but the new
-  prompt no longer advertises `edit`/`write` in Plan. The module also serves
-  definition-size/used/load-event diagnostics in `SessionState.toolExposure`;
-  `docs/tool-discovery.md` records the measured cache rationale.
+  definitions. Reopen seeds only deferred names the transcript still declares
+  (pi 1.5 `toolsAdded`/`toolsRemoved` system messages replayed in order, plus
+  legacy `addedToolNames`) and actually called in it. Live sessions retain
+  additive loads unless a user turn follows at least six idle hours, when
+  never-called deferred names are pruned; called/eager/loader/builtin tools
+  survive through the ordinary `mergedActiveToolNames` path. That merge also
+  owns pi's Plan policy: it removes the `edit`/`write` builtins and catalog
+  tools classified with local/external side effects, except `task_manage` for
+  durable Task organization and `session_spawn` for read-only profile
+  inspection; that tool still refuses `spawn`/`propose` against persisted Plan
+  mode. It keeps `read`/`bash`/`grep`/`find` and read-only bridge tools, and
+  restores the same active set when Build returns. The adapter (for an app tool,
+  the server's binding) independently rejects stale/forged calls to a
+  Plan-blocked tool. Adapter execute callbacks track usage. Prompt extras remain
+  absent, so deferred activation and pruning keep the rebuilt system prompt
+  constant. A mode flip deliberately calls `setActiveToolsByName` through that
+  same path; pi rebuilds the prompt, invalidating the prompt-cache prefix once,
+  but the new prompt no longer advertises `edit`/`write` in Plan. The module
+  also serves definition-size/used/load-event diagnostics in
+  `SessionState.toolExposure`; `docs/tool-discovery.md` records the measured
+  cache rationale.
 - `toolPayloadProbe.ts` is the opt-in pi `onPayload` measurement seam. With
   `ASSISTANT_TOOL_PAYLOAD_PROBE_FILE` set, it writes only request sizes, hashes,
   and adjacent common-prefix lengths for `measure:tools`; raw request content is
