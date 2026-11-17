@@ -32,7 +32,7 @@ function devServer() {
 function request(handler: Handler, method: string, url: string) {
   return new Promise<{
     status: number;
-    location?: string;
+    location?: string | undefined;
     body?: unknown;
   }>((resolve, reject) => {
     const req = Object.assign(new EventEmitter(), { method, url });
@@ -61,18 +61,23 @@ function request(handler: Handler, method: string, url: string) {
 }
 
 /** The dev `goTo`, run against a stand-in window; answers where it went. */
-function devGoTo(url: string): string[] {
+async function devGoTo(url: string): Promise<string[]> {
   const went: string[] = [];
-  const window = { location: { assign: (to: string) => went.push(to) } };
-  const goTo = new Function(
-    "window",
-    `${DEV_NAVIGATE.replace("export const goTo =", "return")}`,
-  )(window) as (url: string) => void;
+  vi.stubGlobal("window", {
+    location: { assign: (to: string) => went.push(to) },
+  });
+  const source = Buffer.from(DEV_NAVIGATE).toString("base64");
+  const { goTo } = (await import(
+    /* @vite-ignore */ `data:text/javascript;base64,${source}`
+  )) as { goTo: (url: string) => void };
   goTo(url);
   return went;
 }
 
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
 
 test("the plugin serves only and replaces navigate.ts alone", () => {
   const { plugin } = devServer();
@@ -95,7 +100,7 @@ test("Sign in with Atlassian on the dev page ends on the dev callback, signed in
   const decoded = decodeGatewayUiAtlassianConnectStart(start.body);
   expect(decoded).toBeDefined();
 
-  const went = devGoTo(decoded!.authorizeUrl);
+  const went = await devGoTo(decoded!.authorizeUrl);
   expect(went).toHaveLength(1);
   const target = new URL(went[0]!, "http://localhost:5180");
   // A path on this server: the browser never leaves localhost.
