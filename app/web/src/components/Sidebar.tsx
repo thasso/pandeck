@@ -112,6 +112,8 @@ interface Props {
     errorAt: number | undefined,
     outcomeRevision: number,
   ) => void;
+  /** Close a stalled request from a card's owed-reply chip. */
+  onWithdrawPeerRequest?: (requesterId: string, key: string) => void;
   /** Rename a session from the inbox card's overflow menu. The caller prompts. */
   onRenameSession: (id: string) => void;
   /** Delete a session from the focused row (`#` / Delete). The caller confirms. */
@@ -464,6 +466,7 @@ function SidebarImpl({
   onArchive,
   onSettleSession,
   onDismissSessionFailure,
+  onWithdrawPeerRequest,
   onRenameSession,
   onDeleteSession,
   onLoadArchivedSessions,
@@ -1045,6 +1048,7 @@ function SidebarImpl({
             onSelect={onSelect}
             onSettle={onSettleSession}
             onDismissFailure={onDismissSessionFailure}
+            onWithdrawPeerRequest={onWithdrawPeerRequest}
             onArchive={onArchive}
             onDeleteSession={onDeleteSession}
             onRenameSession={onRenameSession}

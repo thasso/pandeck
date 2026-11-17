@@ -15,6 +15,7 @@ import {
   MessagesSquare,
   RefreshCw,
   TriangleAlert,
+  Undo2,
   type LucideIcon,
 } from "lucide-react";
 import type {
@@ -22,6 +23,7 @@ import type {
   PeerPromptState,
   PeerPromptToolRow,
 } from "@assistant/shared";
+import { Button } from "@/components/ui/button";
 import { activityPreview } from "../lib/activityPreview.ts";
 import { isPeerPromptState } from "../lib/peerPromptCard.ts";
 import { sessionPath } from "../lib/sessionRoutes.ts";
@@ -45,6 +47,7 @@ const STATE_MARK: Record<
   awaiting_response: { label: "Awaiting response", icon: MessageCircle },
   replied: { label: "Replied", icon: MessagesSquare },
   settled: { label: "Settled", icon: CircleCheckBig },
+  withdrawn: { label: "Withdrawn", icon: Undo2, tone: "muted" },
   retrying: {
     label: "Retrying",
     icon: RefreshCw,
@@ -88,10 +91,13 @@ const STOPPED_MARK = {
 export function PeerPromptCardView({
   card,
   onOpenSession,
+  onWithdraw,
   actions,
 }: {
   card: PeerPromptCard;
   onOpenSession?: ((id: string) => void) | undefined;
+  /** Offered on a sent card the server marks `withdrawable`. */
+  onWithdraw?: ((messageKey: string) => void) | undefined;
   actions?: ReactNode;
 }) {
   const sent = card.direction === "sent";
@@ -107,6 +113,10 @@ export function PeerPromptCardView({
       : undefined;
   const message = typeof card.message === "string" ? card.message : "";
   const stopped = card.interruption === "stopped";
+  // The server's call, never the displayed state: a request answered by a
+  // reply that was lost before delivery reads "Replied" yet is still owed.
+  const withdrawable =
+    sent && card.withdrawable === true && card.messageKey !== "";
   const status = !isPeerPromptState(card.state)
     ? undefined
     : stopped && card.state === "interrupted"
@@ -144,6 +154,16 @@ export function PeerPromptCardView({
           />
         </p>
       ) : null}
+      {typeof card.withdrawnReason === "string" && card.withdrawnReason ? (
+        <p className="mt-1 break-words text-xs text-muted-foreground">
+          Withdrawn:{" "}
+          <Markdown
+            inline
+            text={card.withdrawnReason}
+            onOpenSession={onOpenSession}
+          />
+        </p>
+      ) : null}
       {typeof card.failureReason === "string" && card.failureReason ? (
         <ErrorNote className="mt-1" message={card.failureReason} />
       ) : null}
@@ -160,6 +180,18 @@ export function PeerPromptCardView({
         ) : null}
         {card.responseRequested ? <span>Response requested</span> : null}
       </div>
+      {withdrawable && onWithdraw ? (
+        <Button
+          variant="outline"
+          size="xs"
+          className="mt-1"
+          title="Close this request without a reply; the other session is not told"
+          onClick={() => onWithdraw(card.messageKey)}
+        >
+          <Undo2 aria-hidden />
+          Withdraw request
+        </Button>
+      ) : null}
       {actions}
     </ChatActivityRow>
   );
@@ -167,14 +199,18 @@ export function PeerPromptCardView({
 
 /**
  * A `session_send_prompt` result: one card per message it sent, one row per
- * settle naming the requests it closed, and each failed row's error in place.
+ * settle or withdraw naming the requests it closed, and each failed row's
+ * error in place.
  */
 export function PeerPromptToolRowsView({
   rows,
   onOpenSession,
+  onWithdrawRequest,
 }: {
   rows: PeerPromptToolRow[];
   onOpenSession?: ((id: string) => void) | undefined;
+  /** Close one of these sent requests (the viewed session's own). */
+  onWithdrawRequest?: ((messageKey: string) => void) | undefined;
 }) {
   return (
     <div className="flex w-full min-w-0 flex-col gap-1">
@@ -185,6 +221,7 @@ export function PeerPromptToolRowsView({
               key={row.card.messageKey || i}
               card={row.card}
               onOpenSession={onOpenSession}
+              onWithdraw={onWithdrawRequest}
             />
           );
         if (row.kind === "error")
@@ -195,8 +232,8 @@ export function PeerPromptToolRowsView({
             />
           );
         return (
-          <PeerPromptSettleRow
-            key={`settle-${i}`}
+          <PeerPromptClosedRow
+            key={`${row.kind}-${i}`}
             row={row}
             onOpenSession={onOpenSession}
           />
@@ -206,23 +243,42 @@ export function PeerPromptToolRowsView({
   );
 }
 
-function PeerPromptSettleRow({
+/**
+ * A settle or withdraw row: the requests it closed without a reply, each named
+ * by its other party, under the reason it gave.
+ */
+function PeerPromptClosedRow({
   row,
   onOpenSession,
 }: {
-  row: Extract<PeerPromptToolRow, { kind: "settle" }>;
+  row: Extract<PeerPromptToolRow, { kind: "settle" | "withdraw" }>;
   onOpenSession?: ((id: string) => void) | undefined;
 }) {
-  const only = row.settled.length === 1 ? row.settled[0] : undefined;
+  const settle = row.kind === "settle";
+  const requests = settle
+    ? row.settled.map((r) => ({
+        party: r.senderTitle,
+        peerSessionId: r.peerSessionId,
+        message: r.message,
+        beforeDelivery: false,
+      }))
+    : row.withdrawn.map((r) => ({
+        party: r.recipientTitle,
+        peerSessionId: r.peerSessionId,
+        message: r.message,
+        beforeDelivery: r.beforeDelivery === true,
+      }));
+  const verb = settle ? "Settled" : "Withdrawn";
+  const only = requests.length === 1 ? requests[0] : undefined;
   const sessionId = only?.peerSessionId;
   return (
     <ChatActivityRow
-      icon={CircleCheckBig}
-      prefix="Settled"
+      icon={settle ? CircleCheckBig : Undo2}
+      prefix={verb}
       title={
         only
-          ? `request from ${only.senderTitle}`
-          : `${row.settled.length} requests`
+          ? `request ${settle ? "from" : "to"} ${only.party}`
+          : `${requests.length} requests`
       }
       {...(sessionId ? { href: sessionPath(sessionId) } : {})}
       onOpenSource={
@@ -231,13 +287,13 @@ function PeerPromptSettleRow({
       preview={activityPreview(row.reason)}
     >
       <p className="mb-1 break-words text-xs text-muted-foreground">
-        Settled:{" "}
+        {verb}:{" "}
         <Markdown inline text={row.reason} onOpenSession={onOpenSession} />
       </p>
       <ul className="flex flex-col gap-1">
-        {row.settled.map((request, i) => (
+        {requests.map((request, i) => (
           <li key={i} className="break-words">
-            <span className="text-xs">From </span>
+            <span className="text-xs">{settle ? "From " : "To "}</span>
             {request.peerSessionId ? (
               <a
                 href={sessionPath(request.peerSessionId)}
@@ -257,11 +313,17 @@ function PeerPromptSettleRow({
                   onOpenSession(id);
                 }}
               >
-                {request.senderTitle}
+                {request.party}
               </a>
             ) : (
-              <span className="text-xs font-medium">{request.senderTitle}</span>
+              <span className="text-xs font-medium">{request.party}</span>
             )}
+            {request.beforeDelivery ? (
+              <span className="text-xs text-muted-foreground">
+                {" "}
+                (before delivery)
+              </span>
+            ) : null}
             <Markdown
               density="compact"
               text={request.message}

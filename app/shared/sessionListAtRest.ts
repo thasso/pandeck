@@ -20,6 +20,7 @@ export const SESSION_LIST_LIVE_FIELDS = [
   "queuedWork",
   "waitingForSlot",
   "awaitingRepliesFrom",
+  "awaitingReplyKeys",
   "unansweredRequestsFrom",
 ] as const satisfies readonly (keyof SessionListItem)[];
 

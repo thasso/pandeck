@@ -50,6 +50,7 @@ const {
     state: string;
     failureReason?: string;
     settledReason?: string;
+    withdrawnReason?: string;
   }> = [];
   // A trivial ALWAYS-SUCCEEDING adapter/driver for ids no test explicitly
   // registered via `driverFor()` — self-contained (no external class
@@ -171,6 +172,7 @@ const {
   stopPeerPromptDelivery,
   sweepExpiredLeases,
   sweepPeerPromptRetries,
+  withdrawPeerRequestByUser,
   withdrawQueuedPeerPrompt,
 } = await import("./peerPrompt.ts");
 const promptQueue = await import("./promptQueue.ts");
@@ -290,10 +292,12 @@ describe("session_send_prompt tool", () => {
     assert.deepEqual(Object.keys(row.properties).sort(), [
       "inReplyTo",
       "prompt",
+      "reason",
       "responseRequested",
       "settle",
       "targetSessionId",
       "taskId",
+      "withdraw",
     ]);
     const constraints = [
       "type",
@@ -310,6 +314,7 @@ describe("session_send_prompt tool", () => {
     // The types live in the prose, along with both row shapes.
     assert.match(row.description, /targetSessionId, prompt/);
     assert.match(row.description, /\{ inReplyTo, settle \}/);
+    assert.match(row.description, /\{ withdraw, reason \}/);
     assert.match(
       row.properties.inReplyTo.description,
       /^array of request keys/,
@@ -4211,5 +4216,348 @@ describe("explicit reply tracking (Task-942)", () => {
       await drain;
     }
     assert.equal(peerPromptStore.getById(message.id)!.status, "settled");
+  });
+});
+
+describe("the requester withdraws a request (Task-1427)", () => {
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+  async function deliveredRequest(from: string, to: string, prompt: string) {
+    const { message } = await sendPeerPrompt({
+      senderSessionId: from,
+      senderTitle: sessionStore.get(from)?.title ?? "",
+      targetSessionId: to,
+      prompt,
+      responseRequested: true,
+    });
+    await drainRecipient(to);
+    const row = peerPromptStore.getById(message.id)!;
+    assert.equal(row.status, "awaiting_response");
+    return row;
+  }
+  const rowsOf = (result: { details?: unknown }) =>
+    (result.details as { rows: any[] }).rows;
+  const withdraw = (keys: string[], reason: string, sender: string) =>
+    tool().execute({ rows: [{ withdraw: keys, reason }] }, ctx(sender));
+
+  it("closes delivered requests it sent without prompting anyone, and they stop being owed", async () => {
+    const coordinator = seed("Coordinator");
+    const verifier = seed("Verifier");
+    const reviewer = seed("Reviewer");
+    const a = await deliveredRequest(coordinator, verifier, "verify the fix");
+    const b = await deliveredRequest(coordinator, reviewer, "review the diff");
+    const prompted = [verifier, reviewer].map(
+      (id) => driverFor(id).promptOptions.length,
+    );
+    const hops = [a, b].map(
+      (r) => peerPromptStore.getChain(r.chainId)!.nextHop,
+    );
+    assert.equal(peerPromptStore.dueReminderRequests(verifier, 3).length, 1);
+    assert.deepEqual(
+      peerPromptStore.outstandingRepliesBySender().get(coordinator)?.sort(),
+      [reviewer, verifier].sort(),
+    );
+    cardUpdates.length = 0;
+
+    const result = await withdraw(
+      [peerRequestKey(a), peerRequestKey(b)],
+      " no further work needed ",
+      coordinator,
+    );
+    await flush();
+    const [row] = rowsOf(result);
+    assert.equal(row.kind, "withdraw");
+    assert.equal(row.reason, "no further work needed");
+    assert.deepEqual(
+      row.withdrawn.map((r: any) => [
+        r.recipientTitle,
+        r.peerSessionId,
+        r.message,
+        r.beforeDelivery,
+      ]),
+      [
+        ["Verifier", verifier, "verify the fix", undefined],
+        ["Reviewer", reviewer, "review the diff", undefined],
+      ],
+    );
+    for (const r of [a, b]) {
+      const closed = peerPromptStore.getById(r.id)!;
+      assert.equal(closed.status, "withdrawn");
+      assert.equal(closed.withdrawReason, "no further work needed");
+    }
+    // No hop, no message, no turn for either addressee.
+    assert.deepEqual(
+      [a, b].map((r) => peerPromptStore.getChain(r.chainId)!.nextHop),
+      hops,
+    );
+    for (const id of [verifier, reviewer]) await drainRecipient(id);
+    assert.deepEqual(
+      [verifier, reviewer].map((id) => driverFor(id).promptOptions.length),
+      prompted,
+    );
+    // Reminders stop and nobody owes the coordinator a reply any more.
+    assert.equal(peerPromptStore.dueReminderRequests(verifier, 3).length, 0);
+    assert.equal(
+      peerPromptStore.outstandingRepliesBySender().get(coordinator),
+      undefined,
+    );
+    assert.equal(
+      peerPromptStore.outstandingResponseRequestCount(coordinator),
+      0,
+    );
+    // Both parties' cards say withdrawn, with the reason.
+    for (const id of [coordinator, verifier])
+      assert.ok(
+        cardUpdates.some(
+          (u) =>
+            u.sessionId === id &&
+            u.state === "withdrawn" &&
+            u.withdrawnReason === "no further work needed",
+        ),
+        `${id}'s card shows the withdraw`,
+      );
+    const message = peerPromptThreadsFor(coordinator)
+      .threads.flatMap((t) => t.messages)
+      .find((m) => m.id === peerRequestKey(a));
+    assert.equal(message?.state, "withdrawn");
+    assert.equal(message?.withdrawnReason, "no further work needed");
+
+    // The addressee can no longer answer it by key, and is told why.
+    await assert.rejects(
+      sendRow(
+        {
+          targetSessionId: coordinator,
+          prompt: "done",
+          inReplyTo: [peerRequestKey(a)],
+        },
+        ctx(verifier),
+      ),
+      /answered, settled, withdrawn or closed/,
+    );
+    // Withdrawn once, never again.
+    await assert.rejects(
+      withdraw([peerRequestKey(a)], "again", coordinator),
+      /not an open request you sent/,
+    );
+  });
+
+  it("cancels a request not yet delivered, as the queue's withdraw does", async () => {
+    const coordinator = seed("Coordinator");
+    const child = seed("Child");
+    const { message } = await sendPeerPrompt({
+      senderSessionId: coordinator,
+      targetSessionId: child,
+      prompt: "start on it",
+      responseRequested: true,
+    });
+    const result = await withdraw(
+      [peerRequestKey(message)],
+      "plan changed",
+      coordinator,
+    );
+    const [row] = rowsOf(result);
+    assert.equal(row.withdrawn[0].beforeDelivery, true);
+    const closed = peerPromptStore.getById(message.id)!;
+    assert.equal(closed.status, "cancelled");
+    assert.equal(
+      closed.failureReason,
+      "Withdrawn before delivery: plan changed",
+    );
+    await drainRecipient(child);
+    assert.equal(driverFor(child).promptOptions.length, 0);
+  });
+
+  it("refuses what is not its own open request, all or nothing, and names the ones it could withdraw", async () => {
+    const me = seed("Me");
+    const other = seed("Other");
+    const third = seed("Third");
+    const mine = await deliveredRequest(me, other, "my question");
+    // From a third session: one from `other` would be inferred as the reply.
+    const theirs = await deliveredRequest(third, me, "their question");
+    const answered = await deliveredRequest(me, other, "answered already");
+    peerPromptStore.markReplied(answered.id, "elsewhere");
+
+    for (const key of [peerRequestKey(theirs), peerRequestKey(answered)])
+      await assert.rejects(
+        withdraw([peerRequestKey(mine), key], "never mind", me),
+        (err: Error) =>
+          /is not an open request you sent/.test(err.message) &&
+          err.message.includes(
+            `Your open requests: \`${peerRequestKey(mine)}\` to Other.`,
+          ),
+      );
+    assert.equal(peerPromptStore.getById(mine.id)!.status, "awaiting_response");
+    assert.equal(
+      peerPromptStore.getById(theirs.id)!.status,
+      "awaiting_response",
+    );
+    await assert.rejects(
+      withdraw([peerRequestKey(mine)], "x".repeat(201), me),
+      /200-character limit \(201\)/,
+    );
+    const rows = rowsOf(
+      await tool().execute(
+        {
+          rows: [
+            { withdraw: [peerRequestKey(mine)] },
+            { withdraw: "k1", reason: "r" },
+            { withdraw: [peerRequestKey(mine)], reason: "r", settle: "s" },
+            { targetSessionId: other, prompt: "p", reason: "r" },
+            { withdraw: [peerRequestKey(mine)], reason: "done" },
+          ],
+        },
+        ctx(me),
+      ),
+    );
+    assert.deepEqual(
+      rows.map((r: any) => r.kind),
+      ["error", "error", "error", "error", "withdraw"],
+    );
+    assert.match(rows[0].error, /withdraw row needs reason/);
+    assert.match(rows[1].error, /withdraw must be a non-empty array/);
+    assert.match(rows[2].error, /withdraw row takes only withdraw and reason/);
+    assert.match(rows[3].error, /Unknown row field\(s\) reason/);
+    assert.equal(peerPromptStore.getById(mine.id)!.status, "withdrawn");
+  });
+
+  it("a turn end never overwrites a request withdrawn during its turn", async () => {
+    const asker = seed("Asker");
+    const worker = seed("Worker");
+    const driver = driverFor(worker);
+    const release = driver.holdTurns();
+    const { message } = await sendPeerPrompt({
+      senderSessionId: asker,
+      targetSessionId: worker,
+      prompt: "do the thing",
+      responseRequested: true,
+    });
+    const drain = drainRecipient(worker);
+    try {
+      const deadline = Date.now() + 5_000;
+      while (!driver.isRunning) {
+        if (Date.now() > deadline) throw new Error("the turn never started");
+        await new Promise((r) => setTimeout(r, 2));
+      }
+      await withdraw([peerRequestKey(message)], "not needed", asker);
+    } finally {
+      release();
+      await drain;
+    }
+    assert.equal(peerPromptStore.getById(message.id)!.status, "withdrawn");
+  });
+
+  /**
+   * A request answered by a reply that never reached its sender: `replied`
+   * when the answer was queued, owed again once that answer is lost.
+   */
+  async function lostAnswer(
+    lose: (answerId: string, worker: string, coordinator: string) => void,
+  ) {
+    const coordinator = seed("Coordinator");
+    const worker = seed("Worker");
+    const request = await deliveredRequest(coordinator, worker, "verify");
+    await sendRow(
+      {
+        targetSessionId: coordinator,
+        prompt: "verified",
+        inReplyTo: [peerRequestKey(request)],
+      },
+      ctx(worker),
+    );
+    const answer = peerPromptStore
+      .listUndeliveredForRecipient(coordinator)
+      .find((r) => r.senderSessionId === worker)!;
+    assert.equal(peerPromptStore.getById(request.id)!.status, "replied");
+    assert.equal(peerPromptStore.isWithdrawable(request.id), false);
+    cardUpdates.length = 0;
+    lose(answer.id, worker, coordinator);
+    await flush();
+    return { coordinator, worker, request };
+  }
+
+  for (const [kind, lose] of [
+    [
+      "cancelled",
+      (_answer: string, worker: string, coordinator: string) =>
+        cancelQueuedPeerPrompts({
+          recipientSessionId: coordinator,
+          senderSessionId: worker,
+          reason: "test",
+        }),
+    ],
+    [
+      "permanently failed",
+      (answer: string) => peerPromptStore.markFailed(answer, "gave up"),
+    ],
+  ] as const)
+    it(`withdraws a request whose answer was ${kind} before delivery`, async () => {
+      const { coordinator, worker, request } = await lostAnswer(lose);
+      // Owed again, and withdrawable — said on the card, not left to its state.
+      assert.deepEqual(
+        peerPromptStore.outstandingRepliesBySender().get(coordinator),
+        [worker],
+      );
+      assert.equal(peerPromptStore.isWithdrawable(request.id), true);
+      const history = peerPromptThreadsFor(coordinator)
+        .threads.flatMap((t) => t.messages)
+        .find((m) => m.id === peerRequestKey(request));
+      assert.equal(history?.state, "replied");
+      assert.equal(history?.withdrawable, true);
+      if (kind === "cancelled")
+        assert.ok(
+          cardUpdates.some(
+            (u: any) =>
+              u.sessionId === coordinator &&
+              u.messageKey === peerRequestKey(request) &&
+              u.withdrawable === true,
+          ),
+          "the request's own card learns it is withdrawable",
+        );
+
+      const [row] = rowsOf(
+        await withdraw([peerRequestKey(request)], "not needed", coordinator),
+      );
+      assert.equal(row.kind, "withdraw");
+      assert.equal(peerPromptStore.getById(request.id)!.status, "withdrawn");
+      assert.equal(
+        peerPromptStore.outstandingRepliesBySender().get(coordinator),
+        undefined,
+      );
+    });
+
+  it("keeps a request closed whose answer did reach its sender", async () => {
+    const coordinator = seed("Coordinator");
+    const worker = seed("Worker");
+    const request = await deliveredRequest(coordinator, worker, "verify");
+    await sendRow(
+      {
+        targetSessionId: coordinator,
+        prompt: "verified",
+        inReplyTo: [peerRequestKey(request)],
+      },
+      ctx(worker),
+    );
+    await drainRecipient(coordinator);
+    assert.equal(peerPromptStore.isWithdrawable(request.id), false);
+    await assert.rejects(
+      withdraw([peerRequestKey(request)], "not needed", coordinator),
+      /not an open request you sent/,
+    );
+    assert.equal(peerPromptStore.getById(request.id)!.status, "replied");
+  });
+
+  it("the user closes a stuck request from the requester's card", async () => {
+    const coordinator = seed("Coordinator");
+    const verifier = seed("Verifier");
+    const request = await deliveredRequest(coordinator, verifier, "verify");
+    // Only the sender's own requests: the verifier's side cannot close it.
+    assert.throws(
+      () => withdrawPeerRequestByUser(verifier, peerRequestKey(request)),
+      /not an open request you sent/,
+    );
+    withdrawPeerRequestByUser(coordinator, peerRequestKey(request));
+    const closed = peerPromptStore.getById(request.id)!;
+    assert.equal(closed.status, "withdrawn");
+    assert.equal(closed.withdrawReason, "closed by the user");
+    assert.equal(peerPromptStore.dueReminderRequests(verifier, 3).length, 0);
   });
 });

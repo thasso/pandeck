@@ -25,6 +25,7 @@ import {
   stallParts,
   stallTarget,
   stallTitle,
+  STALL_CLOSE_TITLE,
   sessionStatusBadge,
   type SessionInboxCard,
   type SpawnedSessionsView,
@@ -103,6 +104,12 @@ export interface SpawnedSessionsLedgeProps {
     errorAt: number | undefined,
     outcomeRevision: number,
   ) => void;
+  /**
+   * Close the stalled request the stall line names, as its requester's
+   * withdraw would; the line offers it only with this.
+   */
+  onWithdrawPeerRequest?:
+    ((requesterId: string, key: string) => void) | undefined;
 }
 
 /**
@@ -140,6 +147,7 @@ export function SpawnedSessionsLedge({
   onOpenSession,
   onToggleSettled,
   onDismissSessionFailure,
+  onWithdrawPeerRequest,
   describeSession,
 }: SpawnedSessionsLedgeProps) {
   const working = view.counts.working > 0;
@@ -170,6 +178,18 @@ export function SpawnedSessionsLedge({
         ) : null}
         {stallMore(view.stall) ? <span>{stallMore(view.stall)}</span> : null}
       </Button>
+      {view.stall.close && onWithdrawPeerRequest ? (
+        <IconButton
+          size="icon-xs"
+          label={`${STALL_CLOSE_TITLE}: ${stallLabel(view.stall)}`}
+          onClick={() => {
+            const close = view.stall?.close;
+            if (close) onWithdrawPeerRequest(close.requesterId, close.key);
+          }}
+        >
+          <X aria-hidden />
+        </IconButton>
+      ) : null}
     </div>
   ) : null;
   // A chat that spawned nothing can still be owed a reply by a session it

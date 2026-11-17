@@ -286,6 +286,52 @@ describe("peerPromptToolRowsOf", () => {
     ).toBeNull();
   });
 
+  it("parses a withdraw row, dropping requests it cannot name", () => {
+    const rows = peerPromptToolRowsOf(
+      candidate({
+        renderKind: "sessionPeerPrompt",
+        version: 2,
+        rows: [
+          {
+            kind: "withdraw",
+            reason: "found it myself",
+            withdrawn: [
+              { recipientTitle: "Verifier", peerSessionId: "v", message: "a" },
+              { recipientTitle: "", message: "b", beforeDelivery: true },
+              { recipientTitle: "Broken" },
+            ],
+          },
+          { kind: "withdraw", reason: "nothing parsable", withdrawn: [{}] },
+          { kind: "withdraw", reason: 1, withdrawn: [] },
+        ],
+      }),
+    );
+    expect(rows).toEqual([
+      {
+        kind: "withdraw",
+        reason: "found it myself",
+        withdrawn: [
+          { recipientTitle: "Verifier", peerSessionId: "v", message: "a" },
+          {
+            recipientTitle: "another session",
+            message: "b",
+            beforeDelivery: true,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("keeps a withdrawn reason only as a string", () => {
+    const base = { direction: "sent", message: "m", state: "withdrawn" };
+    expect(
+      parsePeerPromptCard({ ...base, withdrawnReason: "not needed" }),
+    ).toMatchObject({ withdrawnReason: "not needed", state: "withdrawn" });
+    expect(
+      parsePeerPromptCard({ ...base, withdrawnReason: 1 }),
+    ).not.toHaveProperty("withdrawnReason");
+  });
+
   it("keeps a settled reason and a reply excerpt only as strings", () => {
     const base = { direction: "sent", message: "m", state: "settled" };
     expect(

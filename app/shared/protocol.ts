@@ -1960,6 +1960,13 @@ export interface SessionListItem {
    */
   awaitingRepliesFrom?: string[];
   /**
+   * The requests behind {@link awaitingRepliesFrom}: for each peer listed
+   * there, the keys of the requests it owes (a sent card's `messageKey`),
+   * newest first. What the user closes a stuck request by from the owed-reply
+   * indicator (`withdrawPeerRequest`). Present exactly when that field is.
+   */
+  awaitingReplyKeys?: Record<string, string[]>;
+  /**
    * The requesters still waiting on THIS session after their requests' last
    * idle-edge reminder (`sessionPeerPromptReminderLimit`), by session id,
    * newest request first: a request it neither answered nor settled. Clears
@@ -3140,6 +3147,7 @@ export type PeerPromptState =
   | "awaiting_response"
   | "replied"
   | "settled"
+  | "withdrawn"
   | "retrying"
   | "interrupted"
   | "cancelled"
@@ -3195,6 +3203,15 @@ export interface PeerPromptCard {
   interruption?: PeerPromptInterruption;
   /** The reason its recipient gave for closing it without an answer (`settled`). */
   settledReason?: string;
+  /** The reason its requester, or the user, gave for withdrawing it (`withdrawn`). */
+  withdrawnReason?: string;
+  /**
+   * Sent cards only: its requester (or the user) may still withdraw it — not
+   * yet delivered, delivered and still owed, or answered by a reply that was
+   * lost before delivery. The server decides; the card never infers it from
+   * {@link PeerPromptCard.state}.
+   */
+  withdrawable?: boolean;
   /**
    * An excerpt of the request this message answers, with " (+N more)" when it
    * answered several. Fixed when the card is created.
@@ -3213,14 +3230,31 @@ export interface PeerPromptSettledRequest {
   message: string;
 }
 
+/** A request a `session_send_prompt` withdraw row closed, as its card names it. */
+export interface PeerPromptWithdrawnRequest {
+  /** The addressee's title. */
+  recipientTitle: string;
+  /** The addressee's session, so the row can link to it. */
+  peerSessionId?: string;
+  /** An excerpt of the request. */
+  message: string;
+  /** Withdrawn before delivery: it was cancelled and never reached the addressee. */
+  beforeDelivery?: boolean;
+}
+
 /**
  * One row of a `session_send_prompt` result (payload `version: 2`): a message
- * it sent, the requests a settle closed, or why that row failed. Rows are
- * independent, so a failed row sits beside the ones that went through.
+ * it sent, the requests a settle or withdraw closed, or why that row failed.
+ * Rows are independent, so a failed row sits beside the ones that went through.
  */
 export type PeerPromptToolRow =
   | { kind: "message"; card: PeerPromptCard }
   | { kind: "settle"; reason: string; settled: PeerPromptSettledRequest[] }
+  | {
+      kind: "withdraw";
+      reason: string;
+      withdrawn: PeerPromptWithdrawnRequest[];
+    }
   | { kind: "error"; index: number; error: string };
 
 /**
@@ -3271,6 +3305,10 @@ export interface PeerPromptThreadMessage {
   interruption?: PeerPromptInterruption;
   /** The reason its recipient gave for closing it without an answer (`settled`). */
   settledReason?: string;
+  /** The reason its requester, or the user, gave for withdrawing it (`withdrawn`). */
+  withdrawnReason?: string;
+  /** Sent messages only: see {@link PeerPromptCard.withdrawable}. */
+  withdrawable?: boolean;
   createdAt: number;
 }
 
@@ -7779,6 +7817,12 @@ export type ClientMessage =
   /** Withdraw a peer prompt before delivery; its sender's card says cancelled. */
   | { type: "withdrawQueuedPeerPrompt"; sessionId: string; id: string }
   /**
+   * The user closes a request `sessionId` SENT ({@link PeerPromptCard.messageKey}
+   * of its sent card) that still waits for its reply: `withdrawn`, or
+   * `cancelled` when it was not delivered yet. Its addressee is not prompted.
+   */
+  | { type: "withdrawPeerRequest"; sessionId: string; id: string }
+  /**
    * Have the session finish handling the background updates whose earlier
    * turn did not ({@link SessionState.unhandledBackgroundUpdates}): one new
    * turn with a bounded reference to them, oldest first. Refused while the
@@ -9178,6 +9222,8 @@ export type ServerMessage =
       failureReason?: string;
       interruption?: PeerPromptInterruption;
       settledReason?: string;
+      withdrawnReason?: string;
+      withdrawable?: boolean;
     }
   /**
    * Response to `resolveTimelineAnchor`. `anchor` is absent when the target no

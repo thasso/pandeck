@@ -165,6 +165,17 @@ describe("applyPeerPromptCardOverridesToMessages", () => {
       settledReason: "applied it",
     });
     expect(parsed.rows[3]).toEqual(payload.rows[3]);
+    // A withdraw patches the same card and replaces the settle's reason.
+    const withdrawn = applyPeerPromptCardOverridesToMessages(next, {
+      k5: { state: "withdrawn", withdrawnReason: "not needed" },
+    })[0]!.blocks[0]!;
+    const rows =
+      withdrawn.kind === "tool" ? JSON.parse(withdrawn.output).rows : [];
+    expect(rows[2].card).toMatchObject({
+      state: "withdrawn",
+      withdrawnReason: "not needed",
+    });
+    expect(rows[2].card).not.toHaveProperty("settledReason");
     // Nothing to patch keeps the very same list.
     expect(
       applyPeerPromptCardOverridesToMessages(messages, {

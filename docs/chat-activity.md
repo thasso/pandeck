@@ -36,6 +36,11 @@ retain visible text. Failure details can wait inside the body, but the failure
 indicator cannot. Background updates retain their distinct completed, failed,
 stopped, lost, and activity states. Omitted-update counts remain visible.
 
+A sent request the server marks `withdrawable` (still to be delivered, still
+owed, or answered by a reply lost before delivery) offers **Withdraw request**
+inside its expanded body; the card then reads "Withdrawn" with the reason, on
+both parties' sides.
+
 Copy and fork actions belong inside the expanded incoming activity body, not on
 another line below a collapsed row. Background command/output details and the
 registry action also remain inside. Closed rows do not mount those bodies or

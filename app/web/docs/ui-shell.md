@@ -538,16 +538,21 @@ archived, settled or gone owes nothing here — the user put it down; a peer the
 user took over still owes until it answers or is settled. A forwarded report on
 another chain than its handoff (the user prompted the forwarding peer in
 between, closing its chains), a forward of two or more hops, or a peer released
-with a plain message stays owed until that peer is settled or the request
-expires (30 days). The other way round, a peer that asked a sibling something on
-their shared chain is cleared by that sibling's own report, as if it had handed
-the work on. The composer ledge says the same for the chat on screen, judged
-over the tree that chat's card would fold — for a chat deep in a tree, its own
-subtree, so a coordinator still working above it does not hide its line though
-the top card shows no chip — a peer the user took over or a run's role is not
-this chat's work — and a chat that spawned no one but asked an existing session
-for a reply shows that line alone. A settled tree is on the shelf and raises
-nothing; one kept up by an unsettled peer still shows its chip.
+with a plain message stays owed until that peer is settled, the request is
+withdrawn, or it expires (30 days). A stuck request is closed from the stall
+chip itself: its ✕ (offered when the list carries the request's key,
+`awaitingReplyKeys`) withdraws the newest request the chip names, as the
+requester would, and prompts nobody; the chat's ledge line offers the same. The
+requester's sent card offers **Withdraw request** too. The other way round, a
+peer that asked a sibling something on their shared chain is cleared by that
+sibling's own report, as if it had handed the work on. The composer ledge says
+the same for the chat on screen, judged over the tree that chat's card would
+fold — for a chat deep in a tree, its own subtree, so a coordinator still
+working above it does not hide its line though the top card shows no chip — a
+peer the user took over or a run's role is not this chat's work — and a chat
+that spawned no one but asked an existing session for a reply shows that line
+alone. A settled tree is on the shelf and raises nothing; one kept up by an
+unsettled peer still shows its chip.
 
 The other direction is the owing session's OWN condition. A request it neither
 answered nor settled after its last reply reminder (`unansweredRequestsFrom`,

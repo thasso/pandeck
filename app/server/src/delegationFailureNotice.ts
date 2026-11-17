@@ -216,6 +216,7 @@ function unanswered(m: PeerPromptRecord): boolean {
     m.responseRequested &&
     m.status !== "replied" &&
     m.status !== "settled" &&
+    m.status !== "withdrawn" &&
     m.status !== "cancelled" &&
     m.status !== "expired" &&
     m.status !== "completed"

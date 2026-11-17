@@ -125,6 +125,8 @@ interface Props {
   /** Answer an agent's status suggestion from the transcript (see `ToolRenderContext`). */
   onApplyTaskStatusSuggestion?:
     ((task: { id: string; status: TaskStatus }) => void) | undefined;
+  /** Close a request this session sent, from its sent card (see `ToolRenderContext`). */
+  onWithdrawPeerRequest?: ((messageKey: string) => void) | undefined;
   models?: ModelOption[] | undefined;
   defaultModel?: ModelOption | undefined;
   defaultThinkingLevel?: ThinkingLevel | undefined;
@@ -460,6 +462,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   onOpenWorktree,
   onRetryWorktreeProvision,
   onApplyTaskStatusSuggestion,
+  onWithdrawPeerRequest,
   models,
   defaultModel,
   defaultThinkingLevel,
@@ -512,6 +515,7 @@ export const AssistantMessage = memo(function AssistantMessage({
     ...(onApplyTaskStatusSuggestion !== undefined
       ? { onApplyTaskStatusSuggestion }
       : {}),
+    ...(onWithdrawPeerRequest !== undefined ? { onWithdrawPeerRequest } : {}),
     ...(onOpenSession !== undefined ? { onOpenSession } : {}),
     ...(models !== undefined ? { models } : {}),
     ...(defaultModel !== undefined ? { defaultModel } : {}),

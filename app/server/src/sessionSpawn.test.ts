@@ -19,7 +19,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type {
   ApprovalCard,
@@ -114,6 +114,7 @@ const { sessionAgent } = await import("./agents/sessionAgent.ts");
 const { buildClaudeSdkQueryOptions } = await import("./claudeSdk/options.ts");
 
 const { peerPromptStore } = await import("./db/peerPromptStore.ts");
+const { canonicalPiSessionPath } = await import("./sessionStorage.ts");
 const peerPromptModule = await import("./peerPrompt.ts");
 const { startHeldDirectPeers, waitingForSlotByChild } =
   await import("./heldDirectPeers.ts");
@@ -136,6 +137,8 @@ let createFails: string | undefined;
 /** Runs inside the pi model lookup: the last await before creation. */
 let duringPiLookup: (() => void) | undefined;
 let deliverFails = false;
+/** Hand each opening prompt to the REAL peer-prompt engine after recording it. */
+let realDelivery = false;
 /** Runs inside the recorded delivery, before it is recorded. */
 let beforeDeliver: (() => void) | undefined;
 /** Awaited at the start of creation, by row title: an in-flight creation. */
@@ -359,6 +362,7 @@ beforeEach(() => {
   recorded = { claude: [], pi: [], delivered: [], events: [] };
   createFails = undefined;
   deliverFails = false;
+  realDelivery = false;
   duringPiLookup = undefined;
   beforeCreate = undefined;
   const standIn = (sessionId: string) =>
@@ -427,6 +431,14 @@ beforeEach(() => {
       beforeDeliver?.();
       if (deliverFails) throw new Error("delivery exploded");
       recorded.delivered.push({ ...input });
+      if (realDelivery) {
+        // The stand-in engines write no transcript; a real target has one.
+        const transcript = canonicalPiSessionPath(input.targetSessionId);
+        mkdirSync(dirname(transcript), { recursive: true });
+        writeFileSync(transcript, "");
+        await peerPromptModule.sendPeerPrompt({ ...input });
+        return;
+      }
       // A held opening prompt is what the start pass reads, so it is stored as
       // the real delivery would store it.
       if (input.hold)
@@ -1831,6 +1843,68 @@ test("approval can hand a proposed user-owned row to the coordinator without cre
       .spawnedParentsByChildIds([String(delivered.targetSessionId)])
       .get(String(delivered.targetSessionId))?.ownership,
   ).toBe("coordinator");
+});
+
+test("the user closes a spawned child's opening request from the owed-reply indicator (Task-1427)", async () => {
+  // Spawn openers are requests the coordinator never sees a card for: the
+  // owed-reply indicator, fed by the session list, is where they are closed.
+  approveRuntimes();
+  silentDrains();
+  peerPromptModule.setPeerPromptAutoDeliverForTests(false);
+  realDelivery = true;
+  const { listSessions } = await import("./sessions.ts");
+  try {
+    await spawnDirect([{ ...row({ title: "Direct" }), profileId: "pr_terra" }]);
+    const { card } = await propose([
+      row({ title: "Proposed", responseRequested: true }),
+    ]);
+    await resolveApproval(card.id, "approved");
+    const children = recorded.delivered.map((d) => String(d.targetSessionId));
+    expect(children).toHaveLength(2);
+    // Each opener delivered, and its turn ended without the answer.
+    const openers = children.map((child) => {
+      const opener = peerPromptStore
+        .listUndeliveredForRecipient(child)
+        .find((r) => r.senderSessionId === SENDER)!;
+      expect(opener.responseRequested).toBe(true);
+      peerPromptStore.claimNext(child, "test-drain", 1_000);
+      peerPromptStore.markAdmitted(opener.id);
+      peerPromptStore.markCompleted(opener.id);
+      return opener;
+    });
+    // The list shows a session once it holds a conversation.
+    sessionStore.upsert({
+      id: SENDER,
+      harness: "pi",
+      agentType: "developer",
+      messageCount: 2,
+    });
+    const sender = () =>
+      listSessions([], () => Date.now()).find((s) => s.id === SENDER);
+    expect(sender()?.awaitingRepliesFrom?.sort()).toEqual([...children].sort());
+    const keys = sender()?.awaitingReplyKeys ?? {};
+    for (const [i, child] of children.entries()) {
+      expect(keys[child]).toEqual([
+        peerPromptModule.peerRequestKey(openers[i]!),
+      ]);
+      peerPromptModule.withdrawPeerRequestByUser(SENDER, keys[child]![0]!);
+      const closed = peerPromptStore.getById(openers[i]!.id)!;
+      expect(closed.status).toBe("withdrawn");
+      expect(closed.withdrawReason).toBe("closed by the user");
+    }
+    expect(sender()?.awaitingRepliesFrom).toBeUndefined();
+    expect(sender()?.awaitingReplyKeys).toBeUndefined();
+  } finally {
+    sessionStore.upsert({
+      id: SENDER,
+      harness: "pi",
+      agentType: "developer",
+      messageCount: 0,
+    });
+    realDelivery = false;
+    peerPromptModule.setPeerPromptAutoDeliverForTests(true);
+    peerPromptModule.setHubForTests(undefined);
+  }
 });
 
 test("a direct row may opt out of grant inheritance, fixed on its edge before delivery", async () => {

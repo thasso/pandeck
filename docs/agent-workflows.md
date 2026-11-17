@@ -387,12 +387,33 @@ the outcome:
   from any requester, without a message: each becomes `settled` with the reason,
   which the requester's card shows ("Settled: …"). Nothing reaches the
   requester's model and no hop is spent, so a settle works at the hop limit too.
-  Each message row reserves its own hop, so near the limit the earlier rows go
-  out and the refused one says why. A reply or settle naming a request that
-  closed meanwhile writes nothing at all. The row schema is typeless on purpose:
-  pi validates a call against the schema before the tool runs and refuses the
-  whole call on one bad field, so the tool validates each row itself
-  (`app/server/src/tools/CLAUDE.md`).
+  The REQUESTER's side is a withdraw row (`{ withdraw, reason }`,
+  [Task-1427](pa://task/1427)): it closes requests the caller SENT, named by the
+  `messageKey` each send returned, when their answer is no longer needed — the
+  way to say "never mind", since a message saying so leaves the request open and
+  its addressee reminded. A delivered request becomes `withdrawn` with the
+  reason, which both parties' cards show ("Withdrawn: …"); one not yet
+  dispatched is `cancelled` as the queue's Withdraw does. A request marked
+  `replied` whose answer was cancelled or failed for good before it was admitted
+  is still owed, so it is withdrawable too; the store checks that the answer
+  never arrived in the same transaction. Nothing reaches the addressee's model:
+  its reminders stop, the request leaves both "owes a reply" signals, and a
+  reply naming it by key is refused (an unlinked one still goes out). A request
+  already being dispatched is refused until it arrives; a key that names nothing
+  open is refused with the caller's open requests listed. The user closes a
+  stuck request the same way (reason "closed by the user";
+  `withdrawPeerRequest`), from either place it shows: the requester's sent card
+  (**Withdraw request**, offered while the server marks the card
+  `withdrawable`), or the owed-reply indicator, which covers the requests no
+  card offers — a `session_spawn` opening prompt has no sent card. The session
+  list carries each owed request's key beside the peer that owes it
+  (`awaitingReplyKeys`), and the stall chip's close withdraws the newest one the
+  chip names. Each message row reserves its own hop, so near the limit the
+  earlier rows go out and the refused one says why. A reply, settle or withdraw
+  naming a request that closed meanwhile writes nothing at all. The row schema
+  is typeless on purpose: pi validates a call against the schema before the tool
+  runs and refuses the whole call on one bad field, so the tool validates each
+  row itself (`app/server/src/tools/CLAUDE.md`).
 
   The same `responseRequested` rows tell the user when a tree needs a poke: each
   session row lists the peers that still owe it a reply — the turn ended without
@@ -432,13 +453,13 @@ the outcome:
   most `sessionPeerPromptReminderLimit` times (Settings → Peer runtimes, 1 to
   10, default 3), counted when its reminder turn is appended; after the last one
   it becomes the inbox condition above instead, which clears on a reply, a
-  settle or the request's expiry and never on a timer. The reminder is the idle
-  edge's LAST step: it never resumes a cold session, never runs at boot, waits
-  out a Stop (a stopped request is reminded after Resume), gives way to anything
-  else owed and offers the edge again after it, and is not followed by another
-  reminder until the session has taken some other turn. Its turn continues the
-  reminded request's causal chain and spends no hop itself, so it cannot carry a
-  loop past the hop limit.
+  settle, a withdraw or the request's expiry and never on a timer. The reminder
+  is the idle edge's LAST step: it never resumes a cold session, never runs at
+  boot, waits out a Stop (a stopped request is reminded after Resume), gives way
+  to anything else owed and offers the edge again after it, and is not followed
+  by another reminder until the session has taken some other turn. Its turn
+  continues the reminded request's causal chain and spends no hop itself, so it
+  cannot carry a loop past the hop limit.
 
 - **Subagents** means only the Claude SDK's native subagents
   ([glossary](glossary.md)). The PA-owned subagent registry

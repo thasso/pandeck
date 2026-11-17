@@ -38,6 +38,7 @@ export type PeerPromptStatus =
   | "awaiting_response"
   | "replied"
   | "settled"
+  | "withdrawn"
   | "retryable_failed"
   | "interrupted"
   | "cancelled"
@@ -72,6 +73,7 @@ const TERMINAL_STATUSES: PeerPromptStatus[] = [
   "completed",
   "replied",
   "settled",
+  "withdrawn",
   "failed",
   "interrupted",
   "cancelled",
@@ -79,8 +81,8 @@ const TERMINAL_STATUSES: PeerPromptStatus[] = [
 ];
 
 /**
- * A delivered request not yet closed: what an answer marks `replied` and a
- * settle marks `settled`. Its turn may still be running.
+ * A delivered request not yet closed: what an answer marks `replied`, a settle
+ * `settled` and a withdraw `withdrawn`. Its turn may still be running.
  */
 const OPEN_REQUEST_STATUSES: PeerPromptStatus[] = [
   "admitted",
@@ -126,6 +128,8 @@ export interface PeerPromptRecord {
   repliedByMessageId?: string;
   /** Why the recipient closed this request without answering it (`settled`). */
   settleReason?: string;
+  /** Why its sender, or the user, withdrew this request (`withdrawn`). */
+  withdrawReason?: string;
   /** Idle-edge reminder turns this request was listed in (`peerPrompt.ts`). */
   reminderCount: number;
   nextAttemptAt?: number;
@@ -180,6 +184,7 @@ interface Row {
   reply_to_message_id: string | null;
   replied_by_message_id: string | null;
   settle_reason: string | null;
+  withdraw_reason: string | null;
   reminder_count: number;
   created_at_ms: number;
   updated_at_ms: number;
@@ -252,6 +257,7 @@ function map(r: Row): PeerPromptRecord {
       ? { repliedByMessageId: r.replied_by_message_id }
       : {}),
     ...(r.settle_reason ? { settleReason: r.settle_reason } : {}),
+    ...(r.withdraw_reason ? { withdrawReason: r.withdraw_reason } : {}),
     reminderCount: r.reminder_count,
     createdAt: r.created_at_ms,
     updatedAt: r.updated_at_ms,
@@ -783,6 +789,7 @@ type TransitionPatch = Partial<{
   repliedAt: number;
   repliedByMessageId: string;
   settleReason: string;
+  withdrawReason: string;
   /** A request's reply deadline, restarted when a held opening prompt starts. */
   expiresAt: number | null;
   bumpAttempts: boolean;
@@ -869,6 +876,10 @@ function transitionInTxn(
   if (patch.settleReason !== undefined) {
     sets.push("settle_reason = ?");
     params.push(patch.settleReason);
+  }
+  if (patch.withdrawReason !== undefined) {
+    sets.push("withdraw_reason = ?");
+    params.push(patch.withdrawReason);
   }
   if (patch.expiresAt !== undefined) {
     sets.push("expires_at_ms = ?");
@@ -1703,6 +1714,139 @@ function markSettled(
   }
 }
 
+/** Statuses a sender may still recall without its recipient reading it. */
+const WITHDRAWABLE_UNDELIVERED: PeerPromptStatus[] = [
+  "held",
+  "queued",
+  "retryable_failed",
+];
+
+/**
+ * A `replied` request whose answer never reached its sender: the answer was
+ * cancelled or failed for good before it was admitted. `replied` is written
+ * when the answer is QUEUED, so such a request is still owed
+ * ({@link OUTSTANDING_REPLIES_SQL}) and its sender may withdraw it. Both
+ * answer statuses are closed, so the fact cannot change once true.
+ */
+const LOST_ANSWER_SQL = `EXISTS (
+  SELECT 1 FROM peer_prompts a
+   WHERE a.id = peer_prompts.replied_by_message_id
+     AND a.status IN ('cancelled', 'failed') AND a.accepted_at_ms IS NULL)`;
+
+function answerLost(row: Row): boolean {
+  if (row.status !== "replied" || !row.replied_by_message_id) return false;
+  const answer = getRow(row.replied_by_message_id);
+  return (
+    answer !== undefined &&
+    (answer.status === "cancelled" || answer.status === "failed") &&
+    answer.accepted_at_ms == null
+  );
+}
+
+/**
+ * The sender closes what it sent and no longer needs, all or nothing in one
+ * transaction: a row not yet dispatched is `cancelled` (as the user's queue
+ * withdraw does, the reason as its `failureReason`), a delivered request still
+ * open — or `replied` by an answer that was lost before admission — is
+ * `withdrawn` with `reason`. A row that is not the sender's, is being
+ * dispatched, or is no longer open rolls every one back with
+ * {@link PeerPromptRequestClosedError}.
+ */
+function withdrawFromSender(
+  senderSessionId: string,
+  ids: readonly string[],
+  reason: string,
+  now = Date.now(),
+): PeerPromptRecord[] {
+  const db = getDb();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const closed = ids.filter((id) => {
+      const row = getRow(id);
+      if (!row || row.sender_session_id !== senderSessionId) return true;
+      if (WITHDRAWABLE_UNDELIVERED.includes(row.status))
+        return !transitionInTxn(
+          db,
+          id,
+          WITHDRAWABLE_UNDELIVERED,
+          "cancelled",
+          {
+            failureReason: `Withdrawn before delivery: ${reason}`,
+            leaseOwner: null,
+            leaseExpiresAt: null,
+            nextAttemptAt: null,
+          },
+          now,
+        );
+      if (row.response_requested !== 1) return true;
+      // Read in this transaction: the answer's closed status cannot change.
+      const from: PeerPromptStatus[] = answerLost(row)
+        ? ["replied"]
+        : OPEN_REQUEST_STATUSES;
+      return !transitionInTxn(
+        db,
+        id,
+        from,
+        "withdrawn",
+        { withdrawReason: reason },
+        now,
+      );
+    });
+    if (closed.length > 0) throw new PeerPromptRequestClosedError(closed);
+    db.exec("COMMIT");
+    return ids.map((id) => map(getRow(id)!));
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
+
+/**
+ * What a sender may still withdraw: its undelivered prompts (a `dispatching`
+ * one included, so the caller can say it is being delivered), its delivered
+ * requests still open and unexpired, and the unexpired ones whose answer was
+ * lost before admission. Served by `peer_prompts_sender_idx`.
+ */
+function withdrawableFrom(
+  senderSessionId: string,
+  now = Date.now(),
+): PeerPromptRecord[] {
+  const open = OPEN_REQUEST_STATUSES.map(() => "?").join(", ");
+  return (
+    getDb()
+      .prepare(
+        `SELECT * FROM peer_prompts
+          WHERE sender_session_id = ?
+            AND (status IN ('held', 'queued', 'retryable_failed', 'dispatching')
+              OR (response_requested = 1
+                AND (expires_at_ms IS NULL OR expires_at_ms > ?)
+                AND (status IN (${open})
+                  OR (status = 'replied' AND ${LOST_ANSWER_SQL}))))
+          ORDER BY queue_seq`,
+      )
+      .all(
+        senderSessionId,
+        now,
+        ...(OPEN_REQUEST_STATUSES as never[]),
+      ) as unknown as Row[]
+  ).map(map);
+}
+
+/**
+ * Whether the sender may still withdraw this row now: the same rule as
+ * {@link withdrawableFrom}, minus a row being dispatched (refused until it
+ * lands). Projected on the sender's card, so the UI never derives it from the
+ * displayed state.
+ */
+function isWithdrawable(id: string, now = Date.now()): boolean {
+  const row = getRow(id);
+  if (!row) return false;
+  if (WITHDRAWABLE_UNDELIVERED.includes(row.status)) return true;
+  if (row.response_requested !== 1) return false;
+  if (row.expires_at_ms !== null && row.expires_at_ms <= now) return false;
+  return OPEN_REQUEST_STATUSES.includes(row.status) || answerLost(row);
+}
+
 /* ------------------------------- reads ----------------------------------- */
 
 const getById = (id: string): PeerPromptRecord | undefined => {
@@ -2060,7 +2204,7 @@ export const OUTSTANDING_REPLIES_SQL = `
        AND o.status = 'replied' AND o.response_requested = 1
        AND (o.expires_at_ms IS NULL OR o.expires_at_ms > ?)
   )
-  SELECT DISTINCT o.sender_session_id, o.recipient_session_id
+  SELECT o.id, o.sender_session_id, o.recipient_session_id
     FROM owed o
    WHERE NOT EXISTS (
            SELECT 1 FROM peer_prompts r
@@ -2081,7 +2225,7 @@ export const OUTSTANDING_REPLIES_SQL = `
               AND r.queue_seq > f.queue_seq
               AND (r.accepted_at_ms IS NOT NULL OR r.status = 'interrupted')
          )
-   ORDER BY o.sender_session_id, o.recipient_session_id`;
+   ORDER BY o.sender_session_id, o.recipient_session_id, o.queue_seq DESC`;
 
 /**
  * For every sender, the peers that still OWE it a reply: a `responseRequested`
@@ -2138,15 +2282,32 @@ export const OUTSTANDING_REPLIES_SQL = `
  * apart, and the tree reads as done though the owed peer never answered.
  */
 function outstandingRepliesBySender(now = Date.now()): Map<string, string[]> {
+  const bySender = new Map<string, string[]>();
+  for (const [sender, owed] of outstandingReplyRequestsBySender(now))
+    bySender.set(sender, [...owed.keys()]);
+  return bySender;
+}
+
+/**
+ * The same read with the requests themselves: for every sender, each peer
+ * that owes it a reply and the ids of the requests it owes, newest first.
+ * What lets the user close a request from the owed-reply indicator.
+ */
+function outstandingReplyRequestsBySender(
+  now = Date.now(),
+): Map<string, Map<string, string[]>> {
   const rows = getDb().prepare(OUTSTANDING_REPLIES_SQL).all(now, now) as {
+    id: string;
     sender_session_id: string;
     recipient_session_id: string;
   }[];
-  const bySender = new Map<string, string[]>();
+  const bySender = new Map<string, Map<string, string[]>>();
   for (const row of rows) {
-    const recipients = bySender.get(row.sender_session_id);
-    if (recipients) recipients.push(row.recipient_session_id);
-    else bySender.set(row.sender_session_id, [row.recipient_session_id]);
+    let owed = bySender.get(row.sender_session_id);
+    if (!owed) bySender.set(row.sender_session_id, (owed = new Map()));
+    const ids = owed.get(row.recipient_session_id);
+    if (ids) ids.push(row.id);
+    else owed.set(row.recipient_session_id, [row.id]);
   }
   return bySender;
 }
@@ -2575,6 +2736,9 @@ export const peerPromptStore = {
   recordAdmission,
   markReplied,
   markSettled,
+  withdrawFromSender,
+  withdrawableFrom,
+  isWithdrawable,
   markInterrupted,
   interruptAsTold,
   markRetryable,
@@ -2609,6 +2773,7 @@ export const peerPromptStore = {
   activeTurnCount,
   outstandingResponseRequestCount,
   outstandingRepliesBySender,
+  outstandingReplyRequestsBySender,
   listByConversation,
   listByChain,
   listByParticipant,
