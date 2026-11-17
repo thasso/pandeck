@@ -1123,6 +1123,63 @@ async function whenAll(paths: string[], what: string): Promise<void> {
   }
 }
 
+/**
+ * Runs each `call` (an expression on the registry `r`, after `setup`) in its
+ * own process, with every writer's locked change provably overlapping the
+ * others'. Each child loads and builds its registry, says it is ready and
+ * waits for the go. This test holds the registry's lock (a fake lock wait)
+ * until every writer's `pause` seam says it waits at the lock, so whatever a
+ * writer does before its locked change sees the state from before the race,
+ * and no writer writes before all have started. Answers each call's JSON.
+ */
+async function raceAtLock(
+  dir: string,
+  writers: { setup?: string; call: string }[],
+): Promise<unknown[]> {
+  const lock = join(dir, "clients.json.lock");
+  const go = join(dir, "race-go");
+  const marks = writers.map((_, i) => ({
+    ready: join(dir, `race-ready-${i}`),
+    waiting: join(dir, `race-waiting-${i}`),
+  }));
+  writeFileSync(lock, "test\n", { mode: 0o600 });
+  const runs = writers.map(async ({ setup = "", call }, i) => {
+    const { ready, waiting } = marks[i]!;
+    const { stdout } = await child(
+      `import { existsSync, readFileSync, writeFileSync } from "node:fs";
+       import { ClientRegistry } from ${JSON.stringify(moduleUrl)};
+       const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+       const pause = (ms) => {
+         if (!existsSync(${JSON.stringify(waiting)})) writeFileSync(${JSON.stringify(waiting)}, "");
+         sleep(ms);
+       };
+       const r = new ClientRegistry(${JSON.stringify(dir)}, Date.now, () => {}, pause);
+       ${setup}
+       writeFileSync(${JSON.stringify(ready)}, "");
+       while (!existsSync(${JSON.stringify(go)})) sleep(5);
+       console.log(JSON.stringify(${call}));`,
+    );
+    return JSON.parse(stdout) as unknown;
+  });
+  // A child that fails before the go must not leave this test waiting.
+  const settled = Promise.allSettled(runs);
+  try {
+    await whenAll(
+      marks.map((mark) => mark.ready),
+      "every writer ready",
+    );
+    writeFileSync(go, "");
+    await whenAll(
+      marks.map((mark) => mark.waiting),
+      "every writer at the lock",
+    );
+  } finally {
+    unlinkSync(lock);
+  }
+  await settled;
+  return Promise.all(runs);
+}
+
 test("across processes, a page sign-in and an automatic approval for one new subject make exactly one user, and both name it", async () => {
   const { dir, registry } = fixture();
   const rounds = [0, 1, 2].map((i) => ({
@@ -1133,61 +1190,24 @@ test("across processes, a page sign-in and an automatic approval for one new sub
   }));
   const input = join(dir, "race-input.json");
   writeFileSync(input, JSON.stringify(rounds), { mode: 0o600 });
-  // The writers overlap by construction. Each child loads and builds its
-  // registry, says it is ready, and waits for the go. This test holds the
-  // registry's lock (a fake lock wait) until every writer's lock wait has
-  // begun, so whatever a writer does before its locked change sees the state
-  // from before the race, and every locked change runs after both have
-  // started.
-  const lock = join(dir, "clients.json.lock");
-  const go = join(dir, "race-go");
-  writeFileSync(lock, "test\n", { mode: 0o600 });
   const writers = rounds.flatMap((_, i) =>
-    (["signIn", "auto"] as const).map((kind) => ({
-      i,
-      kind,
-      ready: join(dir, `race-ready-${i}-${kind}`),
-      waiting: join(dir, `race-waiting-${i}-${kind}`),
+    (["signIn", "auto"] as const).map((kind) => ({ i, kind })),
+  );
+  const raw = await raceAtLock(
+    dir,
+    writers.map(({ i, kind }) => ({
+      setup: `const round = JSON.parse(readFileSync(${JSON.stringify(input)}, "utf8"))[${i}];
+       const identity = { issuer: ${JSON.stringify(GOOGLE)}, subject: round.subject, email: round.email };`,
+      call:
+        kind === "signIn"
+          ? "r.signIn(identity)"
+          : "r.approveAutomatically(round.requestId, { ...identity, tokenHash: round.tokenHash, notAfter: Date.now() + 600000 }, { maxPendingCodes: 4, maxClients: 16 })",
     })),
   );
-  const runs = writers.map(async ({ i, kind, ready, waiting }) => {
-    const { stdout } = await child(
-      `import { existsSync, readFileSync, writeFileSync } from "node:fs";
-       import { ClientRegistry } from ${JSON.stringify(moduleUrl)};
-       const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-       const round = JSON.parse(readFileSync(${JSON.stringify(input)}, "utf8"))[${i}];
-       const pause = (ms) => {
-         if (!existsSync(${JSON.stringify(waiting)})) writeFileSync(${JSON.stringify(waiting)}, "");
-         sleep(ms);
-       };
-       const r = new ClientRegistry(${JSON.stringify(dir)}, Date.now, () => {}, pause);
-       const identity = { issuer: ${JSON.stringify(GOOGLE)}, subject: round.subject, email: round.email };
-       writeFileSync(${JSON.stringify(ready)}, "");
-       while (!existsSync(${JSON.stringify(go)})) sleep(5);
-       console.log(JSON.stringify(${JSON.stringify(kind)} === "signIn"
-         ? r.signIn(identity)
-         : r.approveAutomatically(round.requestId, { ...identity, tokenHash: round.tokenHash, notAfter: Date.now() + 600000 }, { maxPendingCodes: 4, maxClients: 16 })));`,
-    );
-    return {
-      i,
-      kind,
-      answer: JSON.parse(stdout) as { userId: string; status?: string },
-    };
-  });
-  try {
-    await whenAll(
-      writers.map((writer) => writer.ready),
-      "every writer ready",
-    );
-    writeFileSync(go, "");
-    await whenAll(
-      writers.map((writer) => writer.waiting),
-      "every writer at the lock",
-    );
-  } finally {
-    unlinkSync(lock);
-  }
-  const answers = await Promise.all(runs);
+  const answers = writers.map((writer, n) => ({
+    ...writer,
+    answer: raw[n] as { userId: string; status?: string },
+  }));
   for (const round of rounds.map((_, i) => i)) {
     const users = usersWith(registry, rounds[round]!.subject);
     assert.equal(users.length, 1, `round ${round}: one user`);
@@ -1216,18 +1236,13 @@ test("across processes, competing automatic approvals with one token: exactly on
     JSON.stringify({ requestIds, tokenHash: sha256(FAKE_OWNER_TOKEN) }),
     { mode: 0o600 },
   );
-  const outcomes = await Promise.all(
-    requestIds.map(async (_, i) => {
-      const { stdout } = await child(
-        `import { readFileSync } from "node:fs";
-         import { ClientRegistry } from ${JSON.stringify(moduleUrl)};
-         const { requestIds, tokenHash } = JSON.parse(readFileSync(${JSON.stringify(input)}, "utf8"));
-         const r = new ClientRegistry(${JSON.stringify(dir)});
-         console.log(JSON.stringify(r.approveAutomatically(requestIds[${i}], { issuer: ${JSON.stringify(GOOGLE)}, subject: "FAKE_sub-owner", email: "owner@example.test", tokenHash, notAfter: Date.now() + 600000 }, { maxPendingCodes: 4, maxClients: 16 }).status));`,
-      );
-      return JSON.parse(stdout) as string;
-    }),
-  );
+  const outcomes = (await raceAtLock(
+    dir,
+    requestIds.map((_, i) => ({
+      setup: `const { requestIds, tokenHash } = JSON.parse(readFileSync(${JSON.stringify(input)}, "utf8"));`,
+      call: `r.approveAutomatically(requestIds[${i}], { issuer: ${JSON.stringify(GOOGLE)}, subject: "FAKE_sub-owner", email: "owner@example.test", tokenHash, notAfter: Date.now() + 600000 }, { maxPendingCodes: 4, maxClients: 16 }).status`,
+    })),
+  )) as string[];
   assert.deepEqual([...outcomes].sort(), [
     "already_used",
     "already_used",
