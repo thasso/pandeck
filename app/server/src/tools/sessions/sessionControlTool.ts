@@ -134,12 +134,8 @@ function makeSessionControlTool() {
           targetSessionId,
           "made enterprise-only",
         );
-        if (runtime().isRunning(targetSessionId))
-          throw new Error(
-            `Session ${targetSessionId} is running; require an enterprise account once its turn ends.`,
-          );
         return textResult(
-          requireSessionEnterprise(targetSessionId)
+          requireSessionEnterprise(targetSessionId, runtime())
             ? `${targetSessionId} already requires an enterprise account; nothing changed.`
             : `${targetSessionId} now requires an enterprise account. Its next prompt moves it to an eligible enterprise account first, or is refused when none is available. This cannot be undone.`,
         );

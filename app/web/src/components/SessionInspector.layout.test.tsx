@@ -179,6 +179,55 @@ describe("SessionInspector layout", () => {
     expect(asked).toEqual(["s1"]);
   });
 
+  it("disables Require enterprise account while the session runs, with a hint", async () => {
+    const props = {
+      ...base,
+      credentialProfile: { name: "Personal", provider: "claude" as const },
+      enterpriseAccountAvailable: true,
+      onRequireEnterprise: () => {},
+    };
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    mounted = { host, root };
+    const show = (isStreaming: boolean) =>
+      act(async () =>
+        root.render(
+          <DialogProvider>
+            <SessionInspector
+              {...props}
+              sessions={[
+                {
+                  id: "s1",
+                  title: "Session",
+                  ...(isStreaming ? { isStreaming } : {}),
+                } as SessionListItem,
+              ]}
+            />
+          </DialogProvider>,
+        ),
+      );
+    const button = () =>
+      [...host.querySelectorAll<HTMLButtonElement>("button")].find(
+        (item) => item.textContent?.trim() === "Require enterprise account",
+      );
+    const hint = "Available once the current turn ends.";
+
+    await show(true);
+    expect(button()).toBeDefined();
+    expect(button()!.disabled).toBe(true);
+    expect(host.textContent).toContain(hint);
+    const describedBy = button()!.getAttribute("aria-describedby");
+    expect(
+      describedBy && document.getElementById(describedBy)?.textContent,
+    ).toBe(hint);
+
+    await show(false);
+    expect(button()!.disabled).toBe(false);
+    expect(button()!.hasAttribute("aria-describedby")).toBe(false);
+    expect(host.textContent).not.toContain(hint);
+  });
+
   it("lists no actions: the session header's menu holds them", () => {
     const html = render({ ...base, relatedTasks: [task(1)] });
     expect(html).toContain("Tasks");

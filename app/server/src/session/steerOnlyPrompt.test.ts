@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, test } from "vitest";
+import { afterAll, test, vi } from "vitest";
 import type {
   AdapterEvent,
   AgentRunResult,
@@ -275,7 +275,7 @@ test("a refused steer frees its request id for the fallback delivery", async () 
   await retry;
 });
 
-test("requiring enterprise while a personal-account turn runs keeps steering into it and refuses the next turn", async () => {
+test("a running session cannot be made enterprise-only; once idle it can, and its next turn and steer are refused", async () => {
   const { createCredentialProfile } = await import("../credentialProfiles.ts");
   const { sessionStore } = await import("../db/sessionStore.ts");
   const { requireSessionEnterprise } = await import("../sessionAccount.ts");
@@ -295,8 +295,15 @@ test("requiring enterprise while a personal-account turn runs keeps steering int
   await startTurn(live as never);
   bound.isRunning = true;
   try {
-    assert.equal(requireSessionEnterprise(id), false);
-    // The admitted run keeps its account: both steer forms still join it.
+    // Marking waits for the turn to end, so no message can be sent into a
+    // running turn after the requirement: nothing races the admission check.
+    assert.throws(
+      () => requireSessionEnterprise(id, runtime),
+      new RegExp(
+        `^Error: Session ${id} is running; require an enterprise account once its turn ends\\.$`,
+      ),
+    );
+    assert.equal(sessionStore.get(id)?.requiresEnterprise, undefined);
     await promptRuntimeSessionWithRuntime(runtime, bound, "steer only", {
       steer: true,
       steerOnly: true,
@@ -305,8 +312,9 @@ test("requiring enterprise while a personal-account turn runs keeps steering int
     assert.ok(sent.some((s) => s.text.endsWith("steer only")));
 
     release();
-    await Promise.resolve();
+    await vi.waitFor(() => assert.equal(runtime.isRunning(id), false));
     bound.isRunning = false;
+    assert.equal(requireSessionEnterprise(id, runtime), false);
     // The next turn is where the requirement applies, and its refusal says
     // what is actually true of the bound account.
     await assert.rejects(
@@ -314,7 +322,6 @@ test("requiring enterprise while a personal-account turn runs keeps steering int
       /requires an enterprise account, but its bound account Personal steer is not marked as enterprise/,
     );
     assert.ok(!userTexts(runtime, id).includes("next turn"));
-    // A steer that has no admitted run to join is held to the same rule.
     await assert.rejects(
       promptRuntimeSessionWithRuntime(runtime, bound, "late steer", {
         steer: true,
@@ -322,6 +329,47 @@ test("requiring enterprise while a personal-account turn runs keeps steering int
       /requires an enterprise account/,
     );
     assert.ok(!userTexts(runtime, id).includes("late steer"));
+  } finally {
+    release();
+    await runtime.disposeSession(id);
+    sessionStore.remove(id);
+  }
+});
+
+test("a steer into a running turn on a non-enterprise account of an enterprise-only session is refused, as before", async () => {
+  const { createCredentialProfile } = await import("../credentialProfiles.ts");
+  const { sessionStore } = await import("../db/sessionStore.ts");
+  const profile = createCredentialProfile({
+    name: "Unmarked mid-run",
+    provider: "claude",
+  });
+  const id = "steer-enterprise-required-running";
+  sessionStore.upsert({
+    id,
+    harness: "pi",
+    agentType: "assistant",
+    credentialProfileId: profile.id,
+  });
+  const { runtime, live, sent, driver, release } = harnessed(id, true);
+  const bound = { ...driver, credentialProfileId: profile.id };
+  await startTurn(live as never);
+  bound.isRunning = true;
+  // The turn was admitted before the requirement held for its account (its
+  // enterprise tag was removed mid-run, say); every steer still passes the
+  // admission check, whichever form it takes.
+  sessionStore.requireEnterprise(id);
+  try {
+    for (const options of [
+      { steer: true, steerOnly: true },
+      { steer: true },
+    ] as const) {
+      await assert.rejects(
+        promptRuntimeSessionWithRuntime(runtime, bound, "steer", options),
+        /its bound account Unmarked mid-run is not marked as enterprise/,
+      );
+    }
+    assert.ok(!userTexts(runtime, id).includes("steer"));
+    assert.ok(!sent.some((s) => s.text.endsWith("steer")));
   } finally {
     release();
     await runtime.disposeSession(id);

@@ -274,18 +274,21 @@ every supplied field before one metadata write and publication. A session's
 `requiresEnterprise` is durable, defaults to false and survives restore and
 forks. After creation it can only be turned on, never cleared: by the user's
 "Require enterprise account" on the inspector's Account row
-(`setSessionRequiresEnterprise`, refused for deleted and non-user sessions,
-allowed while a turn runs), by an owning coordinator's `session_control`
-`require_enterprise` on its idle direct child, and by cybersecurity-refusal
-recovery (below). Both manual paths share `requireSessionEnterprise`, which also
-refuses a session bound to a non-enterprise account that is no subscription
-login: that account alone serves its models, so the session could never move and
-every later turn would be refused. The inspector offers the action only on a
-subscription login, when an enabled enterprise account of the same provider
-exists. Like a requirement set at creation, a later one is inherited by children
-the session spawns and excludes it from memory capture. Regular sessions may
-choose enterprise or personal accounts. The enterprise requirement constrains
-the account executing the session and automatically derived work. Neither normal
+(`setSessionRequiresEnterprise`, refused for deleted and non-user sessions), by
+an owning coordinator's `session_control` `require_enterprise` on its direct
+child, and by cybersecurity-refusal recovery (below). Both manual paths share
+`requireSessionEnterprise`. It marks only an idle session: while a turn runs
+(the session runtime's running state) it refuses with "require an enterprise
+account once its turn ends", so the requirement is never set under a running
+turn. It also refuses a session bound to a non-enterprise account that is no
+subscription login: that account alone serves its models, so the session could
+never move and every later turn would be refused. The inspector offers the
+action only on a subscription login, when an enabled enterprise account of the
+same provider exists, and disables it with a short hint while the session runs.
+Like a requirement set at creation, a later one is inherited by children the
+session spawns and excludes it from memory capture. Regular sessions may choose
+enterprise or personal accounts. The enterprise requirement constrains the
+account executing the session and automatically derived work. Neither normal
 ranking nor degradation may select a personal account. An explicit personal pick
 is refused when the requirement is set. This is an account constraint, not
 end-to-end data confinement.
@@ -297,12 +300,11 @@ append. A turn starting on a disabled bound account, or an enterprise-required
 session's turn starting on a non-enterprise one, first moves the session; see
 [Live account switching](#live-account-switching). Enterprise flag changes apply
 to runs and one-shots admitted after the change; an already admitted run may
-finish, and a genuine steer into it (the facade and the runtime both still see
-it running) skips the check. A refusal names what is true: the bound account is
-missing, or names it as not marked as enterprise. Policy is not rechecked inside
-provider engines. Manual compaction on both engines checks the same enterprise
-assertion at the shared host-command entry, before flushing memory or making its
-model call.
+finish, but every steer into it passes the check like any other prompt. A
+refusal names what is true: the bound account is missing, or names it as not
+marked as enterprise. Policy is not rechecked inside provider engines. Manual
+compaction on both engines checks the same enterprise assertion at the shared
+host-command entry, before flushing memory or making its model call.
 
 Enterprise scope follows work the session starts automatically. Spawned peers
 inherit `requiresEnterprise: true`, including approval-delayed creation. An

@@ -59,17 +59,27 @@ export function assertSessionAccountSwitch(
 /**
  * The user's or an owning coordinator's one-way "Require enterprise account":
  * from now on only enterprise accounts may run the session, and its next turn
- * moves it to one first (`moveOffDisabledAccount`). A running turn keeps its
- * account. Only user sessions qualify, and not one bound to a non-enterprise
- * account that is no subscription login (it could never move). The caller owns
- * any further authority checks and list publication.
+ * moves it to one first (`moveOffDisabledAccount`). Only an idle user session
+ * qualifies, and not one bound to a non-enterprise account that is no
+ * subscription login (it could never move). A running session is refused, so
+ * every message sent into a running turn was sent before the requirement and
+ * every later one passes the admission check. `runtime` is the caller's view of
+ * the session runtime. The caller owns any further authority checks and list
+ * publication.
  * Answers whether the session already required it.
  */
-export function requireSessionEnterprise(sessionId: string): boolean {
+export function requireSessionEnterprise(
+  sessionId: string,
+  runtime: { isRunning(sessionId: string): boolean },
+): boolean {
   const row = sessionStore.get(sessionId);
   if (!row) throw new Error("Session does not exist or was deleted.");
   if (row.scope !== "user")
     throw new Error("Only a user session can require an enterprise account.");
+  if (runtime.isRunning(sessionId))
+    throw new Error(
+      `Session ${sessionId} is running; require an enterprise account once its turn ends.`,
+    );
   if (row.requiresEnterprise) return true;
   // Only a subscription login ever moves; any other account alone serves its
   // models, so requiring enterprise of one that is not would refuse every turn.

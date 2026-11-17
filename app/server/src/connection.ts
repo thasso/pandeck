@@ -1213,9 +1213,8 @@ export class Connection implements Viewer {
 
       case "setSessionRequiresEnterprise":
         try {
-          // Running sessions may be marked: the current turn keeps its
-          // account and the next one moves first.
-          requireSessionEnterprise(msg.sessionId);
+          // Refused while the session runs; its next turn moves first.
+          requireSessionEnterprise(msg.sessionId, sessionRuntime);
           publishSessionRowsNow();
         } catch (err) {
           this.send({

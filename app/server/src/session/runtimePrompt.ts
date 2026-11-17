@@ -340,17 +340,15 @@ async function deliverWithRuntime(
   receipt: PromptDeliveryReceipt,
 ): Promise<void> {
   const { admit, accountRecovery, ...options } = facadeOptions;
-  // A genuine steer joins a run admitted earlier; both owners must still
-  // consider that run live. Nothing awaits between the last such check and the
-  // runtime's own steer decision, so it cannot become a fresh turn.
-  const joinsAdmittedRun = () =>
-    options.steer === true &&
-    driver.isRunning &&
-    runtime.get(driver.sessionId)?.isRunning === true;
   const assertRecoveryAdmission = () => {
     // Keep the idle edge reserved without blocking a genuine steer into the
-    // admitted continuation.
-    if (joinsAdmittedRun()) return;
+    // admitted continuation. Both owners must still consider that run live.
+    if (
+      options.steer &&
+      driver.isRunning &&
+      runtime.get(driver.sessionId)?.isRunning
+    )
+      return;
     assertAccountRecoveryAdmission(driver.sessionId, accountRecovery);
   };
   assertRecoveryAdmission();
@@ -407,9 +405,7 @@ async function deliverWithRuntime(
     // `admit`, which must stay the last check: a peer admission reserves its
     // delivery, and a refusal after that reservation could strand the prompt.
     accountMove?.usable();
-    // An enterprise requirement set while a run is admitted applies from the
-    // next turn: steering into that run stays allowed.
-    if (!joinsAdmittedRun()) assertSessionEnterpriseAccount(driver);
+    assertSessionEnterpriseAccount(driver);
     admit?.();
     const live = ensureRuntimeSessionWithRuntime(runtime, driver);
     if (accountMove) live.appendNotice(accountMove.notice);

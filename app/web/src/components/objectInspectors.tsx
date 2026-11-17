@@ -1,5 +1,5 @@
 import { runtimeLabel } from "./common/runtimeLabel.ts";
-import { useMemo, type ReactNode } from "react";
+import { useId, useMemo, type ReactNode } from "react";
 import {
   Archive,
   ArchiveRestore,
@@ -1663,6 +1663,7 @@ export function SessionInspector({
               worktreeStatus={worktreeStatus}
               credentialProfile={credentialProfile}
               requiresEnterprise={requiresEnterprise}
+              running={listItem?.isStreaming === true}
               onRequireEnterprise={
                 sessionId &&
                 onRequireEnterprise &&
@@ -1844,6 +1845,7 @@ function withPeerPrompts(
  */
 function SessionDetails({
   requiresEnterprise,
+  running,
   onRequireEnterprise,
   waiting,
   peerTurnCap,
@@ -1866,6 +1868,8 @@ function SessionDetails({
   credentialProfile: { name: string } | undefined;
   /** Only enterprise accounts may run it; nothing clears this. */
   requiresEnterprise: boolean;
+  /** A turn is running: the server refuses the requirement until it ends. */
+  running: boolean;
   /** Offered only when it would change something and could be honored. */
   onRequireEnterprise: (() => void) | undefined;
   model: { id: string; name?: string; provider: string } | undefined;
@@ -1874,6 +1878,7 @@ function SessionDetails({
 }) {
   const onAct = useInspectorAct();
   const dialogs = useDialogs();
+  const runningHintId = useId();
   const requireEnterprise = onRequireEnterprise
     ? async () => {
         const confirmed = await dialogs.confirm({
@@ -1998,11 +2003,23 @@ function SessionDetails({
                 variant="ghost"
                 size="sm"
                 className={`${PROPERTY_TRIGGER} justify-start text-muted-foreground`}
+                disabled={running}
+                aria-describedby={running ? runningHintId : undefined}
                 onClick={() => void requireEnterprise()}
               >
                 <ShieldCheck aria-hidden />
                 Require enterprise account
               </Button>
+              {running ? (
+                <>
+                  <span aria-hidden />
+                  <PropertyText className="text-xs text-muted-foreground">
+                    <span id={runningHintId}>
+                      Available once the current turn ends.
+                    </span>
+                  </PropertyText>
+                </>
+              ) : null}
             </>
           ) : null}
         </>

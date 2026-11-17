@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import type { ServerMessage } from "@assistant/shared";
 const { Connection } = await import("./connection.ts");
 const { hub } = await import("./hub.ts");
@@ -7,6 +7,8 @@ const { sessionStore } = await import("./db/sessionStore.ts");
 const { validateClientMessage } = await import("./validateClientMessage.ts");
 const { sessionRowIn, sessionTopicViewer } =
   await import("./test/sessionListClient.ts");
+
+const idle = { isRunning: () => false };
 
 test("inspector command makes a session enterprise-only and refuses deleted and internal sessions", async () => {
   const id = "requires-enterprise-command";
@@ -83,6 +85,60 @@ test("inspector command makes a session enterprise-only and refuses deleted and 
   }
 });
 
+test("inspector command refuses a running session and leaves it unmarked until its turn ends", async () => {
+  const { FakeRuntimeDriver } = await import("./test/fakeRuntimeDriver.ts");
+  const { promptRuntimeSession } = await import("./session/runtimePrompt.ts");
+  const { sessionRuntime } = await import("./session/runtimeInstance.ts");
+  const id = "requires-enterprise-running";
+  sessionStore.upsert({
+    id,
+    harness: "pi",
+    agentType: "assistant",
+    messageCount: 2,
+  });
+  const driver = new FakeRuntimeDriver(id);
+  const release = driver.holdTurns();
+  const sent: ServerMessage[] = [];
+  const connection = new Connection({
+    OPEN: 1,
+    readyState: 1,
+    send: (raw: string) => sent.push(JSON.parse(raw)),
+  } as never);
+  try {
+    const turn = promptRuntimeSession(driver, "long turn");
+    await vi.waitFor(() => assert.equal(sessionRuntime.isRunning(id), true));
+    await connection.handle({
+      type: "setSessionRequiresEnterprise",
+      sessionId: id,
+    });
+    assert.equal(sessionStore.get(id)?.requiresEnterprise, undefined);
+    assert.ok(
+      sent.some(
+        (msg) =>
+          msg.type === "error" &&
+          msg.message ===
+            `Session ${id} is running; require an enterprise account once its turn ends.` &&
+          msg.target?.type === "session" &&
+          msg.target.id === id,
+      ),
+    );
+
+    release();
+    await turn;
+    assert.equal(sessionRuntime.isRunning(id), false);
+    await connection.handle({
+      type: "setSessionRequiresEnterprise",
+      sessionId: id,
+    });
+    assert.equal(sessionStore.get(id)?.requiresEnterprise, true);
+  } finally {
+    release();
+    connection.dispose();
+    await sessionRuntime.disposeSession(id);
+    sessionStore.remove(id);
+  }
+});
+
 test("a session bound to a personal endpoint account is refused, since it could never move", async () => {
   const { createCredentialProfile, patchCredentialProfile } =
     await import("./credentialProfiles.ts");
@@ -144,12 +200,12 @@ test("a session bound to a personal endpoint account is refused, since it could 
     });
 
     // An endpoint already enterprise, or a subscription login, may be marked.
-    assert.equal(requireSessionEnterprise(onEnterprise), false);
+    assert.equal(requireSessionEnterprise(onEnterprise, idle), false);
     assertSessionEnterpriseAccount({
       sessionId: onEnterprise,
       credentialProfileId: enterprise.id,
     });
-    assert.equal(requireSessionEnterprise(onLogin), false);
+    assert.equal(requireSessionEnterprise(onLogin, idle), false);
     assert.throws(
       () =>
         assertSessionEnterpriseAccount({
