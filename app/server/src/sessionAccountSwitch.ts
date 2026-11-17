@@ -9,6 +9,7 @@ import { loginEnded } from "./providerErrors.ts";
 import {
   credentialProfileById,
   credentialProfileHasCredential,
+  type CredentialProfile,
 } from "./credentialProfiles.ts";
 import { assertSessionAccountSwitch } from "./sessionAccount.ts";
 import { sessionStore } from "./db/sessionStore.ts";
@@ -60,7 +61,8 @@ interface Controller {
   prepare: (ticket?: AccountRecoveryTicket) => void;
 }
 const controllers = new WeakMap<LiveRuntimeSession, Controller>();
-function signature(selection: Selection | undefined): string {
+/** A model selection's identity: a move is refused once it changes. */
+export function selectionSignature(selection: Selection | undefined): string {
   return JSON.stringify({
     model: selection?.model
       ? { provider: selection.model.provider, id: selection.model.id }
@@ -147,34 +149,21 @@ export async function moveOffDisabledAccount(
     );
   const eligible = () => {
     if (
-      signature(driver.modelSelection?.()) !== signature(selected) ||
+      selectionSignature(driver.modelSelection?.()) !==
+        selectionSignature(selected) ||
       readAccountHealth(target.id, credentialProfileHasCredential(target.id))
         .state === "needs-login" ||
       readAccountBench(target.id, model.id)
     )
       throw unavailable();
   };
-  const enterprise = requiresEnterprise
-    ? { requireEnterprise: true as const }
-    : {};
-  // Only this pre-turn move may rebind a session with no native history:
-  // nothing has run on the source account yet this turn.
-  await driver.switchAccount(
-    target.id,
-    () => {
-      admit();
-      assertSessionAccountSwitch(
-        driver.id,
-        source.id,
-        target.id,
-        source.provider,
-        enterprise,
-      );
-      eligible();
-    },
-    { allowWithoutHistory: true, ...enterprise },
-  );
-  movedBeforeTurn.set(driver.id, source.id);
+  await switchIdleSessionAccount(driver, {
+    source,
+    targetId: target.id,
+    requiresEnterprise,
+    admit,
+    eligible,
+  });
   const usable = () => {
     const profile = credentialProfileById(target.id);
     const row = sessionStore.get(driver.id);
@@ -194,6 +183,47 @@ export async function moveOffDisabledAccount(
       : `Switched from ${source.name} to ${target.name} — this session requires an enterprise account.`,
     usable,
   };
+}
+
+/**
+ * The engine switch of an idle session whose next turn has not started: the
+ * pre-turn move and the user's or a coordinator's explicit move. `admit` is
+ * the caller's authority and admission, `eligible` its target check; both run
+ * at every engine step up to the binding commit. Only such a move may rebind
+ * a session with no native history, since nothing has run on the source
+ * account yet. The next run that starts counts as moved.
+ */
+export async function switchIdleSessionAccount(
+  driver: RuntimePromptDriver,
+  move: {
+    source: Pick<CredentialProfile, "id" | "provider">;
+    targetId: string;
+    requiresEnterprise: boolean;
+    admit: () => void;
+    eligible: () => void;
+  },
+): Promise<void> {
+  if (!driver.switchAccount)
+    throw new Error("This session cannot switch accounts.");
+  const enterprise = move.requiresEnterprise
+    ? { requireEnterprise: true as const }
+    : {};
+  await driver.switchAccount(
+    move.targetId,
+    () => {
+      move.admit();
+      assertSessionAccountSwitch(
+        driver.id,
+        move.source.id,
+        move.targetId,
+        move.source.provider,
+        enterprise,
+      );
+      move.eligible();
+    },
+    { allowWithoutHistory: true, ...enterprise },
+  );
+  movedBeforeTurn.set(driver.id, move.source.id);
 }
 
 /** Called immediately before runtime.prompt, after asynchronous admission. */
@@ -286,7 +316,7 @@ export function installAccountRecovery(
       live.isRunning ||
       live.stopGeneration !== recovery.attempt.stopGeneration ||
       !sessionStore.get(driver.id) ||
-      signature(driver.modelSelection?.()) !== recovery.signature
+      selectionSignature(driver.modelSelection?.()) !== recovery.signature
     )
       throw new Error(
         "The session changed before account recovery could resume.",
@@ -553,7 +583,7 @@ export function installAccountRecovery(
           failure: { ...ended.failure, failure: facts },
         },
         selection,
-        signature: signature(selection),
+        signature: selectionSignature(selection),
         releaseAdmission,
       };
       // Reservation is synchronous, before run waiters/idle queues. The native

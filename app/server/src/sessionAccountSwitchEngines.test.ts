@@ -1691,3 +1691,324 @@ test("real Claude store moves a fresh session that requires enterprise before it
     profiles.setCredentialProfileEnabled(e, false);
   }
 });
+
+/* --------------- an explicit move of a session not loaded --------------- */
+
+const { moveSessionAccount } = await import("./sessionAccountMove.ts");
+const { hub } = await import("./hub.ts");
+
+test("an explicit move opens an evicted Claude session, copies its history and resumes it on the target", async () => {
+  const a = account("claude", "Cold Claude A");
+  const b = account("claude", "Cold Claude B");
+  const providerId = randomUUID();
+  const project = "-account-move-cold";
+  const from = join(profiles.claudeConfigDir(a), "projects", project);
+  mkdirSync(from, { recursive: true });
+  const queries: ClaudeQueryParams[] = [];
+  const seam: ClaudeSdkSeam = {
+    query(params) {
+      queries.push(params);
+      return {
+        async *[Symbol.asyncIterator]() {
+          if (typeof params.prompt !== "string") {
+            const iterator = params.prompt[Symbol.asyncIterator]();
+            const input = await iterator.next();
+            if (queries.length === 1)
+              writeFileSync(
+                join(from, `${providerId}.jsonl`),
+                JSON.stringify(input.value) + "\n",
+              );
+            await iterator.return?.();
+          }
+          yield {
+            type: "system",
+            subtype: "init",
+            session_id: providerId,
+            uuid: randomUUID(),
+          } as ClaudeSdkMessage;
+          yield {
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            session_id: providerId,
+            uuid: randomUUID(),
+            total_cost_usd: 0,
+            modelUsage: {},
+          } as unknown as ClaudeSdkMessage;
+        },
+      };
+    },
+  };
+  const internals = claudeSdkStore as unknown as {
+    seam: () => Promise<ClaudeSdkSeam>;
+    evictIdle: (session: unknown) => boolean;
+  };
+  const factory = vi.spyOn(internals, "seam").mockResolvedValue(seam);
+  const id = randomUUID();
+  try {
+    const live = await createSession({
+      harness: "claude-sdk",
+      id,
+      agentType: "assistant",
+      credentialProfileId: a,
+      modelId: "sonnet",
+      thinkingLevel: "medium",
+      title: "Cold Claude",
+    });
+    await promptRuntimeSessionWithRuntime(sessionRuntime, live, "First turn");
+    await vi.waitFor(() => assert.equal(live.isRunning, false));
+    assert.ok(internals.evictIdle(live), "evicted while idle");
+    assert.equal(hub.getLiveById(id), undefined);
+
+    assert.deepEqual(
+      await moveSessionAccount({
+        sessionId: id,
+        targetProfileId: b,
+        by: "user",
+        authorize: () => {},
+      }),
+      { from: "Cold Claude A", to: "Cold Claude B" },
+    );
+    assert.equal(sessionStore.get(id)?.credentialProfileId, b);
+    const to = join(profiles.claudeConfigDir(b), "projects", project);
+    assert.match(
+      readFileSync(join(to, `${providerId}.jsonl`), "utf8"),
+      /First turn/,
+    );
+    assert.equal(existsSync(join(from, `${providerId}.jsonl`)), false);
+
+    const moved = hub.getLiveById(id) as typeof live;
+    assert.equal(moved.credentialProfileId, b);
+    await promptRuntimeSessionWithRuntime(sessionRuntime, moved, "Next turn");
+    const last = queries.at(-1)!;
+    assert.equal(last.options?.resume, providerId);
+    assert.equal(
+      last.options?.env?.CLAUDE_CONFIG_DIR,
+      profiles.claudeConfigDir(b),
+    );
+    assert.ok(
+      JSON.stringify(sessionRuntime.get(id)!.clientTimeline()).includes(
+        "Switched from Cold Claude A to Cold Claude B — chosen by you.",
+      ),
+    );
+  } finally {
+    factory.mockRestore();
+    await sessionRuntime.disposeSession(id);
+    claudeSdkStore.remove(id);
+    profiles.setCredentialProfileEnabled(a, false);
+    profiles.setCredentialProfileEnabled(b, false);
+  }
+});
+
+test("an explicit move reopens an evicted pi session on the target with its history", async () => {
+  const a = account("openai-codex", "Cold Pi A");
+  const b = account("openai-codex", "Cold Pi B");
+  const calls: { profile: string; context: Context }[] = [];
+  const internals = piStore as unknown as {
+    openEngine: (
+      spec: PiEngineOpenSpec,
+    ) => Promise<{ engine: PiEngineHandle; info: unknown }>;
+  };
+  const original = internals.openEngine.bind(piStore);
+  const factory = vi
+    .spyOn(internals, "openEngine")
+    .mockImplementation(async (spec) => {
+      const opened = await original(spec);
+      const session = nativePiSessionForTests(opened.engine);
+      const profile = spec.credentialProfileId;
+      session.setAutoRetryEnabled(false);
+      session.agent.streamFunction = (model, context) => {
+        calls.push({ profile, context: structuredClone(context) });
+        const message: AssistantMessage = {
+          role: "assistant",
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          content: [{ type: "text", text: "Answer" }],
+          stopReason: "stop",
+          timestamp: Date.now(),
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
+          },
+        };
+        const stream = createAssistantMessageEventStream();
+        queueMicrotask(() => {
+          stream.push({ type: "start", partial: message });
+          stream.push({ type: "done", reason: "stop", message });
+          stream.end();
+        });
+        return stream;
+      };
+      return opened;
+    });
+  let id: string | undefined;
+  try {
+    const live = await createSession({
+      harness: "pi",
+      agentType: "assistant",
+      credentialProfileId: a,
+      model: await piModelForAccount(a, "openai-codex", "gpt-5.5"),
+      thinkingLevel: "off",
+      title: "Cold pi",
+    });
+    id = live.id;
+    await promptRuntimeSessionWithRuntime(
+      sessionRuntime,
+      live,
+      "Cold question",
+    );
+    piStore.evict(id);
+    assert.equal(hub.getLiveById(id), undefined);
+
+    await moveSessionAccount({
+      sessionId: id,
+      targetProfileId: b,
+      by: "coordinator",
+      authorize: () => {},
+    });
+    assert.equal(sessionStore.get(id)?.credentialProfileId, b);
+    const moved = hub.getLiveById(id) as typeof live;
+    assert.equal(moved.credentialProfileId, b);
+    await promptRuntimeSessionWithRuntime(sessionRuntime, moved, "Warm again");
+    const last = calls.at(-1)!;
+    assert.equal(last.profile, b);
+    assert.match(JSON.stringify(last.context.messages), /Cold question/);
+    assert.ok(
+      JSON.stringify(sessionRuntime.get(id)!.clientTimeline()).includes(
+        "Switched from Cold Pi A to Cold Pi B — chosen by its coordinating session.",
+      ),
+    );
+  } finally {
+    factory.mockRestore();
+    if (id) {
+      await sessionRuntime.disposeSession(id);
+      piStore.evict(id);
+    }
+    profiles.setCredentialProfileEnabled(a, false);
+    profiles.setCredentialProfileEnabled(b, false);
+  }
+});
+
+test("a cold pi move whose load fails still wakes the queued work it refused", async () => {
+  const { canonicalPiSessionPath } = await import("./sessionStorage.ts");
+  const { dirname } = await import("node:path");
+  const queue = await import("./promptQueue.ts");
+  const { promptQueueStore } = await import("./db/promptQueueStore.ts");
+  const { assertAccountRecoveryAdmission } =
+    await import("./session/runtime/accountRecoveryAdmission.ts");
+  const { setDeliveryWake } = await import("./deliveryWake.ts");
+  const a = account("openai-codex", "Failed cold A");
+  const b = account("openai-codex", "Failed cold B");
+  const id = randomUUID();
+  const file = canonicalPiSessionPath(id);
+  mkdirSync(dirname(file), { recursive: true });
+  const at = new Date().toISOString();
+  writeFileSync(
+    file,
+    [
+      { type: "session", version: 3, id, timestamp: at, cwd: tmp },
+      {
+        type: "model_change",
+        id: "model",
+        parentId: null,
+        timestamp: at,
+        provider: "openai-codex",
+        modelId: "gpt-5.5",
+      },
+      {
+        type: "message",
+        id: "user",
+        parentId: "model",
+        timestamp: at,
+        message: { role: "user", content: "prior prompt", timestamp: at },
+      },
+    ]
+      .map((row) => JSON.stringify(row))
+      .join("\n") + "\n",
+  );
+  sessionStore.upsert({
+    id,
+    harness: "pi",
+    agentType: "assistant",
+    provider: "openai-codex",
+    model: "gpt-5.5",
+    credentialProfileId: a,
+  });
+  type PiLive = import("./piSdk/PiLiveSession.ts").PiLiveSession;
+  let entered!: (driver: PiLive) => void;
+  const ready = new Promise<PiLive>((resolve) => {
+    entered = resolve;
+  });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const wakes: string[] = [];
+  lifecycle.setSessionIdleHook((wakeId) => {
+    if (wakeId === id) wakes.push("idle");
+  });
+  setDeliveryWake((wakeId) => {
+    if (wakeId === id) wakes.push("wake");
+  });
+  // piStore tracks the driver before its integration-gate catch-up resolves;
+  // a failed catch-up evicts it and throws, so the move's load fails while a
+  // queue drain already reached the tracked driver.
+  const internals = piStore as unknown as {
+    catchUpIntegrationGates(live: PiLive, gates: unknown): Promise<unknown>;
+  };
+  const catchup = vi
+    .spyOn(internals, "catchUpIntegrationGates")
+    .mockImplementationOnce(async (live) => {
+      entered(live);
+      await gate;
+      piStore.evict(live.key);
+      throw new Error("injected integration-gate catch-up failure");
+    });
+  queue.setPromptQueueHost({
+    live: (sessionId) => hub.getLiveById(sessionId) as never,
+    publish: () => {},
+    reportError: () => {},
+    yieldToOthers: () => {},
+  });
+  try {
+    const move = moveSessionAccount({
+      sessionId: id,
+      targetProfileId: b,
+      by: "user",
+      authorize: () => {},
+    });
+    const rejected = assert.rejects(move, /could not be loaded/);
+    const driver = await ready;
+    queue.queuePrompt(id, { text: "queued during the failed load" });
+    await queue.drainPromptQueue(id, () => true, driver);
+    assert.equal(promptQueueStore.list(id).length, 1, "refused as busy");
+    // Queueing woke the scheduler itself; only the release's own wake counts.
+    wakes.length = 0;
+    release();
+    await rejected;
+    assertAccountRecoveryAdmission(id);
+    assert.equal(sessionRuntime.isBusy(id), false);
+    assert.equal(sessionStore.get(id)?.credentialProfileId, a);
+    assert.equal(promptQueueStore.list(id).length, 1);
+    assert.deepEqual(wakes, ["wake"], "the release re-offers delivery once");
+  } finally {
+    release();
+    catchup.mockRestore();
+    lifecycle.setSessionIdleHook(undefined);
+    setDeliveryWake(undefined);
+    piStore.evict(id);
+    profiles.setCredentialProfileEnabled(a, false);
+    profiles.setCredentialProfileEnabled(b, false);
+  }
+});

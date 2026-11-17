@@ -11,6 +11,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
 import type {
   ProjectRecord,
+  SessionAccountMoveTarget,
   SessionListItem,
   TaskSummary,
   WorktreeRecord,
@@ -20,6 +21,7 @@ import {
   sessionInspectorActions,
 } from "./objectInspectors.tsx";
 import { DialogProvider } from "./common/dialogs.tsx";
+import { failed, loading, ready, type LoadState } from "../lib/loadState.ts";
 
 const openers = {
   onOpenTask: () => {},
@@ -226,6 +228,164 @@ describe("SessionInspector layout", () => {
     expect(button()!.disabled).toBe(false);
     expect(button()!.hasAttribute("aria-describedby")).toBe(false);
     expect(host.textContent).not.toContain(hint);
+  });
+
+  describe("Move to another account", () => {
+    const subscription = { name: "Personal", provider: "claude" as const };
+    const label = "Move to another account";
+    const mount = () => {
+      const host = document.createElement("div");
+      document.body.append(host);
+      const root = createRoot(host);
+      mounted = { host, root };
+      return { host, root };
+    };
+    const control = (
+      over: Partial<{
+        targets: LoadState<SessionAccountMoveTarget[]> | undefined;
+        pending: boolean;
+        onOpen: () => void;
+        onPick: (id: string) => void;
+      }> = {},
+    ) => ({
+      targets: undefined,
+      pending: false,
+      onOpen: () => {},
+      onPick: () => {},
+      ...over,
+    });
+    const show = (
+      root: Root,
+      accountMove: ReturnType<typeof control>,
+      isStreaming = false,
+      credentialProfile: {
+        name: string;
+        provider: "claude" | "openai-compatible";
+      } | null = subscription,
+    ) =>
+      act(async () =>
+        root.render(
+          <SessionInspector
+            {...base}
+            sessions={[
+              {
+                id: "s1",
+                title: "Session",
+                ...(isStreaming ? { isStreaming } : {}),
+              } as SessionListItem,
+            ]}
+            {...(credentialProfile ? { credentialProfile } : {})}
+            accountMove={accountMove}
+          />,
+        ),
+      );
+    const trigger = (host: HTMLElement) =>
+      [...host.querySelectorAll<HTMLButtonElement>("button")].find((item) =>
+        item.textContent?.includes(label),
+      );
+    const open = async (host: HTMLElement) => {
+      await act(async () => {
+        trigger(host)!.click();
+        await Promise.resolve();
+      });
+      return document.querySelector<HTMLElement>('[role="menu"]');
+    };
+
+    it("is offered only on a subscription account", async () => {
+      const { host, root } = mount();
+      await show(root, control());
+      expect(trigger(host)).toBeDefined();
+      await show(root, control(), false, {
+        name: "Team LLM",
+        provider: "openai-compatible",
+      });
+      expect(trigger(host)).toBeUndefined();
+      await show(root, control(), false, null);
+      expect(trigger(host)).toBeUndefined();
+    });
+
+    it("is disabled while the session runs, with the shared hint", async () => {
+      const { host, root } = mount();
+      await show(root, control(), true);
+      expect(trigger(host)!.disabled).toBe(true);
+      const describedBy = trigger(host)!.getAttribute("aria-describedby");
+      expect(
+        describedBy && document.getElementById(describedBy)?.textContent,
+      ).toBe("Available once the current turn ends.");
+      await show(root, control());
+      expect(trigger(host)!.disabled).toBe(false);
+      expect(host.textContent).not.toContain(
+        "Available once the current turn ends.",
+      );
+    });
+
+    it("asks for the accounts when opened and states loading, empty and failure", async () => {
+      const { host, root } = mount();
+      let opened = 0;
+      const onOpen = () => {
+        opened += 1;
+      };
+      await show(root, control({ onOpen }));
+      let menu = await open(host);
+      expect(opened).toBe(1);
+      expect(menu?.querySelector('[role="status"]')?.textContent).toContain(
+        "Loading accounts…",
+      );
+      await show(root, control({ onOpen, targets: loading() }));
+      expect(
+        document.querySelector('[role="menu"] [role="status"]')?.textContent,
+      ).toContain("Loading accounts…");
+      await show(root, control({ onOpen, targets: ready([]) }));
+      menu = document.querySelector('[role="menu"]');
+      expect(menu?.textContent).toContain(
+        "No other account can run this session's model.",
+      );
+      await show(
+        root,
+        control({ onOpen, targets: failed("The accounts could not be read.") }),
+      );
+      menu = document.querySelector('[role="menu"]');
+      expect(menu?.textContent).toContain("The accounts could not be read.");
+      const retry = [...menu!.querySelectorAll("button")].find((button) =>
+        /retry/i.test(button.textContent ?? ""),
+      );
+      expect(retry).toBeDefined();
+      await act(async () => retry!.click());
+      expect(opened).toBe(2);
+    });
+
+    it("lists the eligible accounts and sends the one picked", async () => {
+      const { host, root } = mount();
+      const picked: string[] = [];
+      await show(
+        root,
+        control({
+          targets: ready([
+            { id: "cp-b", name: "Account B", enterprise: false },
+            { id: "cp-w", name: "Work", enterprise: true },
+          ]),
+          onPick: (id) => picked.push(id),
+        }),
+      );
+      await open(host);
+      const items = [
+        ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+      ];
+      expect(items.map((item) => item.textContent)).toEqual([
+        "Account B",
+        "Workenterprise",
+      ]);
+      await act(async () => items[1]!.click());
+      expect(picked).toEqual(["cp-w"]);
+    });
+
+    it("shows the move in flight on its control", async () => {
+      const { host, root } = mount();
+      await show(root, control({ pending: true }));
+      const button = trigger(host)!;
+      expect(button.getAttribute("aria-busy")).toBe("true");
+      expect(button.disabled).toBe(true);
+    });
   });
 
   it("lists no actions: the session header's menu holds them", () => {

@@ -165,6 +165,55 @@ function compareUsage(
   );
 }
 
+/**
+ * One account's routing facts for a model: whether its official model snapshot
+ * offers the model (and the thinking level), its cached usage and the bench on
+ * that model. Automatic and an explicit move judge these same facts.
+ */
+export async function gatherAccountCandidate(
+  profile: RoutingProfile,
+  request: Pick<AccountPickRequest, "model" | "thinkingLevel">,
+): Promise<AccountCandidate> {
+  const models = profile.enabled
+    ? await modelsForAccount(profile).catch(() => [])
+    : [];
+  const model = models.find(
+    (option) =>
+      option.provider === request.model.provider &&
+      option.id === request.model.modelId,
+  );
+  // Usage and benches speak only for subscription logins; any other
+  // account ranks on its own state alone.
+  const kind = profile.provider;
+  const subscription = isSubscriptionAccountKind(kind);
+  let usage: UsageIndicator | null = null;
+  try {
+    if (profile.enabled && subscription)
+      usage = cachedUsageIndicator({ id: profile.id, provider: kind });
+  } catch {
+    // A malformed best-effort cache is missing usage, not a failed start.
+  }
+  const bench = subscription
+    ? readAccountBench(profile.id, request.model.modelId)
+    : undefined;
+  return {
+    profile,
+    ...(bench
+      ? {
+          limited: {
+            until: bench.until,
+            ...(bench.model ? { model: bench.model } : {}),
+          },
+        }
+      : {}),
+    offersModel:
+      !!model &&
+      (request.thinkingLevel === undefined ||
+        supportedThinkingLevelsForModel(model).includes(request.thinkingLevel)),
+    usage,
+  };
+}
+
 /** Gather official per-account model snapshots and cached usage, then rank. */
 export async function pickAccount(
   request: AccountPickRequest,
@@ -177,48 +226,7 @@ export async function pickAccount(
       !request.excludeProfileIds?.includes(profile.id),
   );
   const candidates = await Promise.all(
-    profiles.map(async (profile): Promise<AccountCandidate> => {
-      const models = profile.enabled
-        ? await modelsForAccount(profile).catch(() => [])
-        : [];
-      const model = models.find(
-        (option) =>
-          option.provider === request.model.provider &&
-          option.id === request.model.modelId,
-      );
-      // Usage and benches speak only for subscription logins; any other
-      // account ranks on its own state alone.
-      const kind = profile.provider;
-      const subscription = isSubscriptionAccountKind(kind);
-      let usage: UsageIndicator | null = null;
-      try {
-        if (profile.enabled && isSubscriptionAccountKind(kind))
-          usage = cachedUsageIndicator({ id: profile.id, provider: kind });
-      } catch {
-        // A malformed best-effort cache is missing usage, not a failed start.
-      }
-      const bench = subscription
-        ? readAccountBench(profile.id, request.model.modelId)
-        : undefined;
-      return {
-        profile,
-        ...(bench
-          ? {
-              limited: {
-                until: bench.until,
-                ...(bench.model ? { model: bench.model } : {}),
-              },
-            }
-          : {}),
-        offersModel:
-          !!model &&
-          (request.thinkingLevel === undefined ||
-            supportedThinkingLevelsForModel(model).includes(
-              request.thinkingLevel,
-            )),
-        usage,
-      };
-    }),
+    profiles.map((profile) => gatherAccountCandidate(profile, request)),
   );
   return rankAccountCandidates(
     candidates,

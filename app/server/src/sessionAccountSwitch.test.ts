@@ -22,7 +22,20 @@ vi.mock("./harnesses/models.ts", () => ({
     offers.has(id)
       ? [{ ...offers.get(id), name: "Test model", reasoning: false }]
       : [],
+  accountOffersModel: async (id: string, provider: string, model: string) =>
+    offers.get(id)?.provider === provider && offers.get(id)?.id === model,
+  // A stored session's model, as the session list reads it without a harness.
+  storedSessionModelOption: (
+    _harness: string,
+    provider: string | undefined,
+    id: string | undefined,
+  ) =>
+    provider && id
+      ? { provider, id, name: "Test model", reasoning: false }
+      : undefined,
 }));
+// The move host is injected per test; the app's runtime is never built here.
+vi.mock("./session/runtimeInstance.ts", () => ({ sessionRuntime: {} }));
 const tmp = mkdtempSync(join(tmpdir(), "session-account-switch-"));
 process.env.ASSISTANT_CWD = tmp;
 process.env.DATA_DIR = join(tmp, "data");
@@ -43,6 +56,7 @@ const { formatLocalDateTime } = await import("./googleTime.ts");
 const usageCache = await import("./usageCache.ts");
 const { usageProfileForSession } = await import("./harnesses/usage.ts");
 const health = await import("./accountHealth.ts");
+const { setDeliveryWake } = await import("./deliveryWake.ts");
 const { installGatewayLink } = await import("./gatewayLink.ts");
 type GatewayLink = import("./gatewayLink.ts").GatewayLink;
 health.initializeAccountHealth({
@@ -64,6 +78,9 @@ const runtimes: { runtime: InstanceType<typeof SessionRuntime>; id: string }[] =
   [];
 afterEach(async () => {
   vi.restoreAllMocks();
+  // The explicit-move section's seams (declared with it, below).
+  setAccountMoveHostForTests(undefined);
+  leases.resetSessionRunLeasesForTests();
   for (const { runtime, id } of runtimes.splice(0))
     await runtime.disposeSession(id);
   for (const id of created.splice(0))
@@ -1095,6 +1112,671 @@ test("pi keeps a refused turn's move for the encrypted-reasoning retry of the ne
     /caller refused admission/,
   );
   assert.deepEqual(s.moves, [b]);
+  await s.send();
+  assert.equal(drops, 1);
+  assert.deepEqual(
+    s.calls.map((call) => [call.profileId, call.continuation]),
+    [
+      [b, false],
+      [b, true],
+    ],
+  );
+});
+
+/* ------------------------------------------------------------------------ *
+ * An explicit move (Task-1415): the user's pick in the inspector, or an
+ * owning coordinator's `move_account`, through `moveSessionAccount`.
+ * ------------------------------------------------------------------------ */
+
+const { moveSessionAccount, accountMoveTargets, setAccountMoveHostForTests } =
+  await import("./sessionAccountMove.ts");
+const { assertAccountRecoveryAdmission, reserveAccountRecovery: reserve } =
+  await import("./session/runtime/accountRecoveryAdmission.ts");
+const leases = await import("./session/sessionRunLease.ts");
+const { beginRuntimeProviderTurn } = await import("./session/runtimePrompt.ts");
+
+/** Route the move through this fixture's runtime; `acquire` opens it. */
+function host(
+  s: ReturnType<typeof setup>,
+  acquire: () => Promise<RuntimePromptDriver | undefined> = async () =>
+    s.driver,
+) {
+  setAccountMoveHostForTests({
+    runtime: s.runtime,
+    resident: async () => (s.runtime.get(s.id) ? s.driver : undefined),
+    acquire,
+    publishRows: async () => {},
+  });
+}
+
+function pick(
+  s: ReturnType<typeof setup>,
+  target: string,
+  over: Partial<Parameters<typeof moveSessionAccount>[0]> = {},
+) {
+  return moveSessionAccount({
+    sessionId: s.id,
+    targetProfileId: target,
+    by: "user",
+    authorize: () => {},
+    ...over,
+  });
+}
+
+const RUNNING = "This session is running; move it once its turn ends.";
+const BUSY =
+  "This session is starting a turn or already moving; try again once it is idle.";
+
+/** Nothing the move held is still held: a new turn and a new move may start. */
+function released(s: ReturnType<typeof setup>) {
+  assert.equal(s.runtime.isBusy(s.id), false, "harness admission released");
+  assertAccountRecoveryAdmission(s.id);
+  leases.assertSessionRunnable(s.id);
+}
+
+function markers(s: ReturnType<typeof setup>): string[] {
+  return (JSON.stringify(s.runtime.get(s.id)?.clientTimeline() ?? []).match(
+    /Switched from [^"]*/g,
+  ) ?? []) as string[];
+}
+
+/** The model a session that is not loaded names, as its stored row holds it. */
+function stored(s: ReturnType<typeof setup>, account: string) {
+  const model = offers.get(account)!;
+  sessionStore.upsert({
+    id: s.id,
+    harness: sessionStore.get(s.id)!.harness,
+    agentType: "assistant",
+    provider: model.provider,
+    model: model.id,
+    thinkingLevel: "off",
+  });
+}
+
+const otherKind = (harness: Harness): Harness =>
+  harness === "pi" ? "claude-sdk" : "pi";
+
+for (const harness of engines) {
+  test(`${harness} an explicit move rebinds an idle loaded session at once`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    const s = setup(harness, a, [undefined, undefined]);
+    host(s);
+    await s.send();
+    assert.deepEqual(await pick(s, b), { from: "A", to: "B" });
+    assert.equal(sessionStore.get(s.id)?.credentialProfileId, b);
+    assert.deepEqual(s.moves, [b]);
+    assert.deepEqual(s.switchOptions, [{ allowWithoutHistory: true }]);
+    assert.deepEqual(markers(s), ["Switched from A to B — chosen by you."]);
+    released(s);
+    await s.send();
+    assert.deepEqual(
+      s.calls.map((call) => call.profileId),
+      [a, b],
+    );
+  });
+
+  test(`${harness} a coordinator's move says so in its marker`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    const s = setup(harness, a, []);
+    host(s);
+    await pick(s, b, { by: "coordinator" });
+    assert.deepEqual(markers(s), [
+      "Switched from A to B — chosen by its coordinating session.",
+    ]);
+  });
+
+  test(`${harness} a session that is not loaded is opened for the move`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    const s = setup(harness, a, [undefined]);
+    let opened = 0;
+    host(s, async () => {
+      opened += 1;
+      return s.driver;
+    });
+    assert.equal(s.runtime.get(s.id), undefined);
+    await pick(s, b);
+    assert.equal(opened, 1);
+    assert.equal(sessionStore.get(s.id)?.credentialProfileId, b);
+    released(s);
+    await s.send();
+    assert.deepEqual(
+      s.calls.map((call) => call.profileId),
+      [b],
+    );
+  });
+
+  test.each(["missing", "throws", "released"] as const)(
+    `${harness} a session that cannot be opened is refused and holds nothing; acquisition %s`,
+    async (failure) => {
+      const a = account(harness, "A");
+      const b = account(harness, "B");
+      const s = setup(harness, a, [undefined]);
+      host(s, async () => {
+        if (failure === "throws") throw new Error("disk is gone");
+        return failure === "missing"
+          ? undefined
+          : ({ ...s.driver, released: true } as RuntimePromptDriver);
+      });
+      await assert.rejects(pick(s, b), {
+        message: "This session could not be loaded for the move.",
+      });
+      assert.equal(sessionStore.get(s.id)?.credentialProfileId, a);
+      released(s);
+      host(s);
+      await pick(s, b);
+      assert.equal(sessionStore.get(s.id)?.credentialProfileId, b);
+    },
+  );
+
+  test(`${harness} the move marker is display only: its failure changes nothing`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    const s = setup(harness, a, [undefined, undefined]);
+    host(s);
+    await s.send();
+    const live = s.runtime.get(s.id)!;
+    vi.spyOn(live, "appendNotice").mockImplementation(() => {
+      throw new Error("log is full");
+    });
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    assert.deepEqual(await pick(s, b), { from: "A", to: "B" });
+    assert.equal(sessionStore.get(s.id)?.credentialProfileId, b);
+    assert.deepEqual(warning.mock.calls, [
+      ["[account-move] Could not append the move marker."],
+    ]);
+    released(s);
+  });
+
+  test(`${harness} moves between personal and enterprise accounts without touching the requirement`, async () => {
+    const a = account(harness, "A");
+    const e = account(harness, "Work", true);
+    const s = setup(harness, a, []);
+    host(s);
+    await pick(s, e);
+    assert.equal(sessionStore.get(s.id)?.credentialProfileId, e);
+    assert.equal(sessionStore.get(s.id)?.requiresEnterprise, undefined);
+    await pick(s, a);
+    assert.equal(sessionStore.get(s.id)?.credentialProfileId, a);
+    assert.deepEqual(s.switchOptions, [
+      { allowWithoutHistory: true },
+      { allowWithoutHistory: true },
+    ]);
+  });
+
+  test(`${harness} an enterprise-only session moves only to enterprise accounts`, async () => {
+    const e1 = account(harness, "Work", true);
+    const e2 = account(harness, "Work 2", true);
+    const personal = account(harness, "Personal");
+    const s = setup(harness, e1, [], true);
+    stored(s, e1);
+    host(s);
+    const listed = (await accountMoveTargets(s.id)).map(({ id }) => id);
+    assert.ok(listed.includes(e2));
+    assert.ok(!listed.includes(personal));
+    await assert.rejects(pick(s, personal), {
+      message:
+        "This session requires an enterprise account, and Personal is not one.",
+    });
+    await pick(s, e2);
+    assert.equal(sessionStore.get(s.id)?.credentialProfileId, e2);
+    assert.equal(sessionStore.get(s.id)?.requiresEnterprise, true);
+    assert.deepEqual(s.switchOptions, [
+      { allowWithoutHistory: true, requireEnterprise: true },
+    ]);
+  });
+
+  test(`${harness} each ineligible target is refused with its own reason, binding unchanged`, async () => {
+    const a = account(harness, "A");
+    const disabled = account(harness, "Off");
+    profiles.setCredentialProfileEnabled(disabled, false);
+    const other = account(otherKind(harness), "Other kind");
+    const unoffered = account(harness, "No model");
+    offers.delete(unoffered);
+    const login = account(harness, "Logged out");
+    health.reportAccountRunFailure(
+      login,
+      { kind: "auth", loginDeath: true },
+      offers.get(login)!.provider,
+      health.observeAccountHealth(login),
+    );
+    const benched = account(harness, "Benched");
+    health.reportAccountRunFailure(
+      benched,
+      { kind: "quota" },
+      offers.get(benched)!.provider,
+      health.observeAccountHealth(benched),
+    );
+    const s = setup(harness, a, []);
+    host(s);
+    const model = offers.get(a)!.id;
+    for (const [target, reason] of [
+      [a, /^This session already runs on A\.$/],
+      ["cp_missing", /^The chosen account no longer exists\.$/],
+      [disabled, /^Off is disabled\.$/],
+      [other, /^Other kind is not the same kind of account as A\.$/],
+      [unoffered, new RegExp(`^No model does not offer ${model} at`)],
+      [login, /^Logged out needs login\.$/],
+      [benched, new RegExp(`^Benched has reached its ${model} limit until `)],
+    ] as const) {
+      await assert.rejects(pick(s, target), { message: reason }, target);
+      assert.equal(sessionStore.get(s.id)?.credentialProfileId, a);
+      released(s);
+    }
+    assert.deepEqual(s.moves, []);
+    const listed = (await accountMoveTargets(s.id)).map(({ id }) => id);
+    for (const excluded of [a, disabled, other, unoffered, login, benched])
+      assert.ok(!listed.includes(excluded), excluded);
+  });
+
+  test(`${harness} a disabled source may still move off`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    const s = setup(harness, a, []);
+    host(s);
+    profiles.setCredentialProfileEnabled(a, false);
+    await pick(s, b);
+    assert.equal(sessionStore.get(s.id)?.credentialProfileId, b);
+  });
+
+  test(`${harness} benches judge the session's own model, as Automatic does`, async () => {
+    const a = account(harness, "A");
+    const [own, unrelated] =
+      harness === "pi" ? ["gpt-5.5", "gpt-5.4-mini"] : ["sonnet", "opus"];
+    const bench = (
+      id: string,
+      limitModel: string | undefined,
+      resetAtMs: number,
+    ) =>
+      health.reportAccountRunFailure(
+        id,
+        { kind: "quota", resetAtMs, ...(limitModel ? { limitModel } : {}) },
+        offers.get(id)!.provider,
+        health.observeAccountHealth(id),
+      );
+    const now = Date.now();
+    // The session model's bench ends sooner than another model's: the
+    // account's single displayed bench names the other, yet it is excluded.
+    const hidden = account(harness, "Hidden");
+    bench(hidden, own, now + 3_600_000);
+    bench(hidden, unrelated, now + 7_200_000);
+    const elsewhere = account(harness, "Elsewhere");
+    bench(elsewhere, unrelated, now + 3_600_000);
+    const whole = account(harness, "Whole");
+    bench(whole, undefined, now + 3_600_000);
+    const expired = account(harness, "Expired");
+    bench(expired, own, now + 40);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const s = setup(harness, a, []);
+    stored(s, a);
+    host(s);
+    const listed = (await accountMoveTargets(s.id)).map(({ id }) => id);
+    assert.ok(!listed.includes(hidden), "hidden matching bench");
+    assert.ok(listed.includes(elsewhere), "unrelated bench only");
+    assert.ok(!listed.includes(whole), "account-wide bench");
+    assert.ok(listed.includes(expired), "expired bench");
+    await assert.rejects(pick(s, hidden), /limit until/);
+    await pick(s, elsewhere);
+    assert.equal(sessionStore.get(s.id)?.credentialProfileId, elsewhere);
+  });
+
+  test(`${harness} a busy session is refused: running, or a prompt admitted but not yet running`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    const s = setup(harness, a, []);
+    host(s);
+    const admitted = s.runtime.admitPrompt(s.id);
+    await assert.rejects(pick(s, b), { message: BUSY });
+    admitted();
+    assert.equal(sessionStore.get(s.id)?.credentialProfileId, a);
+    released(s);
+    host(s, async () => ({ ...s.driver, isRunning: true }));
+    await assert.rejects(pick(s, b), { message: RUNNING });
+    assert.equal(sessionStore.get(s.id)?.credentialProfileId, a);
+    released(s);
+    host(s);
+    await pick(s, b);
+    assert.equal(sessionStore.get(s.id)?.credentialProfileId, b);
+  });
+
+  test(`${harness} while a move holds the session, no turn starts; queued work waits for its idle edge`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    const s = setup(harness, a, [undefined, undefined]);
+    host(s);
+    await s.send();
+    let release!: () => void;
+    let entered = false;
+    s.gate(() => {
+      entered = true;
+      return new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    });
+    const moving = pick(s, b);
+    await vi.waitFor(() => assert.ok(entered));
+    const before = s.runtime.get(s.id)!.clientTimeline().length;
+    await assert.rejects(s.send(), (error: unknown) => {
+      assert.ok(error instanceof SessionBusyError);
+      assert.equal((error as Error).name, "AccountSwitchInProgressError");
+      return true;
+    });
+    await assert.rejects(
+      beginRuntimeProviderTurn(s.driver, {
+        kind: "system",
+        source: "account-switch",
+      }),
+      { name: "AccountSwitchInProgressError" },
+    );
+    // Slash commands open their synthetic turn behind this same typed-busy
+    // check, and a queued row stays queued on SessionBusyError.
+    assert.throws(() => assertAccountRecoveryAdmission(s.id), SessionBusyError);
+    // A second move finds the first one's admission, which is no run.
+    await assert.rejects(pick(s, b), { message: BUSY });
+    assert.equal(s.runtime.get(s.id)!.clientTimeline().length, before);
+    assert.equal(s.calls.length, 1);
+    const idle = vi.spyOn(s.runtime.get(s.id)!, "notifyIdle");
+    release();
+    await moving;
+    assert.equal(idle.mock.calls.length, 1, "idle re-offered after release");
+    released(s);
+    await s.send();
+    assert.deepEqual(
+      s.calls.map((call) => call.profileId),
+      [a, b],
+    );
+  });
+
+  test(`${harness} a failover reservation refuses the move and stays its owner's`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    const s = setup(harness, a, []);
+    host(s);
+    const ticket = reserve(s.id);
+    try {
+      await assert.rejects(pick(s, b), {
+        name: "AccountSwitchInProgressError",
+      });
+      assertAccountRecoveryAdmission(s.id, ticket);
+      assert.equal(s.runtime.isBusy(s.id), false);
+    } finally {
+      const { releaseAccountRecovery } =
+        await import("./session/runtime/accountRecoveryAdmission.ts");
+      releaseAccountRecovery(s.id, ticket);
+    }
+    assert.equal(sessionStore.get(s.id)?.credentialProfileId, a);
+  });
+
+  test(`${harness} a model or effort change during the move refuses it`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    const s = setup(harness, a, []);
+    host(s);
+    const original = s.driver.modelSelection!;
+    s.gate(async () => {
+      s.driver.modelSelection = () => ({
+        ...original(),
+        thinkingLevel: "high",
+      });
+    });
+    await assert.rejects(pick(s, b), {
+      message: "This session's model or effort changed during the move.",
+    });
+    assert.equal(sessionStore.get(s.id)?.credentialProfileId, a);
+    released(s);
+  });
+
+  test(`${harness} a target that loses its login mid-move keeps the binding`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    const s = setup(harness, a, []);
+    host(s);
+    s.gate(async () =>
+      health.reportAccountRunFailure(
+        b,
+        { kind: "auth", loginDeath: true },
+        offers.get(b)!.provider,
+        health.observeAccountHealth(b),
+      ),
+    );
+    await assert.rejects(pick(s, b), { message: "B needs login." });
+    assert.equal(sessionStore.get(s.id)?.credentialProfileId, a);
+    released(s);
+  });
+
+  test(`${harness} losing authority before the commit refuses the move`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    const s = setup(harness, a, []);
+    host(s);
+    let owned = true;
+    s.gate(async () => {
+      owned = false;
+    });
+    await assert.rejects(
+      pick(s, b, {
+        by: "coordinator",
+        authorize: () => {
+          if (!owned) throw new Error("taken over");
+        },
+      }),
+      { message: "taken over" },
+    );
+    assert.equal(sessionStore.get(s.id)?.credentialProfileId, a);
+    assert.deepEqual(s.moves, []);
+    released(s);
+  });
+
+  test(`${harness} a worktree hold refuses the move, and nothing leaks once it lifts`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    const s = setup(harness, a, [undefined]);
+    host(s);
+    leases.setSessionWorktreeResolverForTests((id) =>
+      id === s.id ? "wt-move" : undefined,
+    );
+    const lift = leases.reserveWorktreeForRemoval(
+      "wt-move",
+      "This worktree is being removed.",
+    )!;
+    await assert.rejects(pick(s, b), {
+      message: "This worktree is being removed.",
+    });
+    assert.equal(s.runtime.isBusy(s.id), false);
+    assertAccountRecoveryAdmission(s.id);
+    lift();
+    await s.send();
+    await pick(s, b);
+    assert.equal(sessionStore.get(s.id)?.credentialProfileId, b);
+    released(s);
+    // The lease the move held is gone: a removal may take the worktree again.
+    const again = leases.reserveWorktreeForRemoval("wt-move", "again");
+    assert.ok(again);
+    again();
+  });
+
+  test(`${harness} a throwing engine switch is refused and releases everything`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    const s = setup(harness, a, [undefined]);
+    host(s);
+    s.gate(async () => {
+      throw new Error("Background work still holds this session's host.");
+    });
+    await assert.rejects(pick(s, b), {
+      message: "Background work still holds this session's host.",
+    });
+    assert.equal(sessionStore.get(s.id)?.credentialProfileId, a);
+    released(s);
+    s.gate(async () => {});
+    await pick(s, b);
+    assert.equal(sessionStore.get(s.id)?.credentialProfileId, b);
+  });
+
+  test(`${harness} a session of another scope, deleted, unbound or on an endpoint cannot move`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    const unbound = setup(harness, a, [], false, false);
+    host(unbound);
+    await assert.rejects(pick(unbound, b), {
+      message: "This session has no account to move from.",
+    });
+    await assert.rejects(accountMoveTargets(unbound.id), {
+      message: "This session has no account to move from.",
+    });
+    const endpoint = profiles.createCredentialProfile({
+      name: "Team LLM",
+      provider: "openai-compatible",
+    });
+    created.push(endpoint.id);
+    offers.set(endpoint.id, { provider: endpoint.id, id: "llama3" });
+    const onEndpoint = setup("pi", endpoint.id, []);
+    host(onEndpoint);
+    await assert.rejects(pick(onEndpoint, b), {
+      message:
+        "Team LLM is the only account that serves this session's model, so the session cannot move.",
+    });
+    const deleted = setup(harness, a, []);
+    host(deleted);
+    sessionStore.markDeleted(deleted.id);
+    await assert.rejects(pick(deleted, b), {
+      message: "Session does not exist or was deleted.",
+    });
+  });
+
+  // Work refused as busy while the move held the session (a queued row, a peer
+  // delivery) waits for one re-offer at release, however the move ended: the
+  // bound runtime's idle edge, or a wake by id when no live runtime remains.
+  test.each([
+    "success",
+    "acquisition missing",
+    "acquisition throws",
+    "released driver",
+    "no switchAccount",
+    "engine switch throws",
+    "model change",
+    "authority loss",
+    "target needs login",
+    "harness torn down mid-move",
+  ] as const)(
+    `${harness} every exit after the holds re-offers delivery exactly once: %s`,
+    async (exit) => {
+      const a = account(harness, "A");
+      const b = account(harness, "B");
+      const s = setup(harness, a, []);
+      let owned = true;
+      host(s, async () => {
+        if (exit === "acquisition throws") throw new Error("disk is gone");
+        if (exit === "acquisition missing") return undefined;
+        if (exit === "released driver")
+          return { ...s.driver, released: true } as RuntimePromptDriver;
+        if (exit === "no switchAccount") {
+          const { switchAccount: _unused, ...rest } = s.driver;
+          return rest;
+        }
+        return s.driver;
+      });
+      s.gate(async () => {
+        if (exit === "engine switch throws") throw new Error("engine refused");
+        if (exit === "model change")
+          s.driver.modelSelection = () => ({
+            model: offers.get(a),
+            thinkingLevel: "high",
+          });
+        if (exit === "authority loss") owned = false;
+        if (exit === "target needs login")
+          health.reportAccountRunFailure(
+            b,
+            { kind: "auth", loginDeath: true },
+            offers.get(b)!.provider,
+            health.observeAccountHealth(b),
+          );
+        if (exit === "harness torn down mid-move") {
+          // What a harness store does when its engine is lost: the session
+          // stays, its runtime goes.
+          s.runtime.closeForTeardown(s.id);
+          await s.runtime.releaseHarness(s.id);
+          throw new Error("engine lost");
+        }
+      });
+      const wakes: string[] = [];
+      lifecycle.setSessionIdleHook((id) => {
+        if (id === s.id) wakes.push("idle");
+      });
+      setDeliveryWake((id, reminders) => {
+        if (id === s.id) wakes.push(`wake reminders=${reminders}`);
+      });
+      try {
+        const moving = pick(s, b, {
+          authorize: () => {
+            if (!owned) throw new Error("taken over");
+          },
+        });
+        if (exit === "success") await moving;
+        else await assert.rejects(moving);
+        released(s);
+        assert.equal(
+          sessionStore.get(s.id)?.credentialProfileId,
+          exit === "success" ? b : a,
+        );
+        assert.deepEqual(
+          wakes,
+          exit.startsWith("acquisition") ||
+            exit === "released driver" ||
+            exit === "no switchAccount" ||
+            exit === "harness torn down mid-move"
+            ? ["wake reminders=true"]
+            : ["idle"],
+        );
+      } finally {
+        lifecycle.setSessionIdleHook(undefined);
+        setDeliveryWake(undefined);
+      }
+    },
+  );
+
+  test(`${harness} a move refused before its holds wakes nothing, and a deleted session is not woken`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    const s = setup(harness, a, []);
+    const wakes: string[] = [];
+    setDeliveryWake((id) => {
+      if (id === s.id) wakes.push("wake");
+    });
+    try {
+      const admitted = s.runtime.admitPrompt(s.id);
+      host(s);
+      await assert.rejects(pick(s, b), { message: BUSY });
+      admitted();
+      host(s, async () => {
+        sessionStore.markDeleted(s.id);
+        return undefined;
+      });
+      await assert.rejects(pick(s, b));
+      assert.deepEqual(wakes, []);
+    } finally {
+      setDeliveryWake(undefined);
+    }
+  });
+}
+
+test("pi counts the run after an explicit move as moved for its encrypted-reasoning retry", async () => {
+  const a = account("pi", "A");
+  const b = account("pi", "B");
+  const s = setup("pi", a, [
+    { kind: "server", encryptedReasoningRejected: true },
+    undefined,
+  ]);
+  let drops = 0;
+  s.driver.dropEncryptedReasoning = async (admit) => {
+    admit();
+    drops += 1;
+    return true;
+  };
+  host(s);
+  await pick(s, b);
   await s.send();
   assert.equal(drops, 1);
   assert.deepEqual(

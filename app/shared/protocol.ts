@@ -7037,6 +7037,13 @@ export type BackgroundWorkStopOutcome =
   | "stop-unconfirmed"
   | "unknown";
 
+/** An account an idle session may move to right now. */
+export interface SessionAccountMoveTarget {
+  id: string;
+  name: string;
+  enterprise: boolean;
+}
+
 /**
  * The answer to a human `stopBackgroundWork`/`stopAllBackgroundWork`. It exists
  * to retire the browser's PENDING control state and to explain a wait; every
@@ -7828,6 +7835,26 @@ export type ClientMessage =
    * next turn moves it to one first; nothing clears the requirement.
    */
   | { type: "setSessionRequiresEnterprise"; sessionId: string }
+  /**
+   * The accounts an idle session could move to right now, judged on the
+   * server by the same rules as the move; answered by
+   * `sessionAccountMoveTargets` with the same `requestId`.
+   */
+  | {
+      type: "listSessionAccountMoveTargets";
+      sessionId: string;
+      requestId: string;
+    }
+  /**
+   * Move an idle session to another account of the same kind at once, loading
+   * it when it is not resident; answered by `sessionAccountMoveAnswer`.
+   */
+  | {
+      type: "moveSessionAccount";
+      sessionId: string;
+      credentialProfileId: string;
+      requestId: string;
+    }
   /**
    * Set the scope of the session's OWN grants named in `keys`: true also
    * covers the sessions it starts, false keeps them to this session. Keys the
@@ -8883,6 +8910,25 @@ export type ServerMessage =
     }
   /** Control feedback for a human Stop; the rows themselves travel as events. */
   | ({ type: "backgroundWorkStopAnswer" } & BackgroundWorkStopAnswer)
+  /** The answer to `listSessionAccountMoveTargets`. */
+  | ({
+      type: "sessionAccountMoveTargets";
+      requestId: string;
+      sessionId: string;
+    } & (
+      | { accounts: SessionAccountMoveTarget[]; error?: undefined }
+      | { error: string; accounts?: undefined }
+    ))
+  /**
+   * The answer to `moveSessionAccount`: no `error` means the session moved
+   * (its row arrives through the session list); `error` is why it did not.
+   */
+  | {
+      type: "sessionAccountMoveAnswer";
+      requestId: string;
+      sessionId: string;
+      error?: string;
+    }
   /**
    * The whole `usage` topic snapshot: one narrow indicator per enabled account
    * (`docs/usage.md`). Sent on subscribe and re-sent whenever the server-side

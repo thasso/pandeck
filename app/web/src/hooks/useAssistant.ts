@@ -93,6 +93,7 @@ import type {
   PromptAttachment,
   PromptQueueCommand,
   ServerMessage,
+  SessionAccountMoveTarget,
   TimelineAnchorTarget,
   StateEventsMessage,
   BackgroundWorkItemSummary,
@@ -201,9 +202,11 @@ import {
 import {
   beginLoad,
   dataOf,
+  failed,
   failFrom,
   idle,
   isPending,
+  loading,
   ready,
   type LoadState,
 } from "../lib/loadState.ts";
@@ -598,6 +601,21 @@ export interface UIState {
   backgroundStopPending: string[];
   backgroundStopAllPending: string[];
   /**
+   * The accounts the open account picker may offer, as the server judged
+   * them; only the answer to the latest request lands.
+   */
+  accountMoveTargets: {
+    sessionId: string;
+    requestId: string;
+    targets: LoadState<SessionAccountMoveTarget[]>;
+  } | null;
+  /**
+   * PENDING CONTROL STATE ONLY: session id → the request id of the account
+   * move this browser sent and has not had answered. Its answer retires it;
+   * a refusal arrives as the session's failure (`lib/messageArrival.ts`).
+   */
+  accountMovePending: Record<string, string>;
+  /**
    * Owners whose last Stop-all left a retained host open because an ordinary
    * prompted turn is still inside its safe boundary. The wait is shown; it is
    * never rendered as a completed close.
@@ -973,6 +991,8 @@ const emptyInitial: UIState = {
   backgroundWorkTruncated: false,
   backgroundStopPending: [],
   backgroundStopAllPending: [],
+  accountMoveTargets: null,
+  accountMovePending: {},
   backgroundHostCloseWaiting: [],
   sessionListFresh: false,
   taskListFresh: false,
@@ -2014,6 +2034,12 @@ type Action =
 
   /** A human Stop left this browser; the server's answer retires it. */
   | { kind: "backgroundStopSent"; itemId?: string; ownerSessionId?: string }
+  | {
+      kind: "accountMoveTargetsRequested";
+      sessionId: string;
+      requestId: string;
+    }
+  | { kind: "accountMoveSent"; sessionId: string; requestId: string }
   | { kind: "optimisticWorktreeRemove"; worktreeId: string }
   | {
       kind: "optimisticPullRequestCardAction";
@@ -5370,6 +5396,30 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       ? { ...state, archivedReadFlight: null }
       : state;
 
+  if (action.kind === "accountMoveTargetsRequested")
+    return {
+      ...state,
+      accountMoveTargets: {
+        sessionId: action.sessionId,
+        requestId: action.requestId,
+        targets: loading(),
+      },
+    };
+  if (action.kind === "accountMoveSent")
+    // The move is the session's own send, so like a prompt it retires that
+    // session's earlier failure (a refused move a retry may now fix); its
+    // answer never does, which could erase a newer failure.
+    return {
+      ...state,
+      accountMovePending: {
+        ...state.accountMovePending,
+        [action.sessionId]: action.requestId,
+      },
+      sessionFailures: withoutSessionFailure(
+        state.sessionFailures,
+        action.sessionId,
+      ),
+    };
   if (action.kind === "backgroundStopSent") {
     return {
       ...state,
@@ -5734,6 +5784,24 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
         ? state.modelsRefreshRequestId
         : null,
       reloading: connected ? null : state.reloading,
+      // A move or list sent on the closed socket is never answered. The
+      // pending control retires without claiming an outcome; the session row
+      // that arrives on reconnect shows where the session runs.
+      ...(action.connected
+        ? {}
+        : {
+            accountMovePending: {},
+            accountMoveTargets:
+              state.accountMoveTargets &&
+              isPending(state.accountMoveTargets.targets)
+                ? {
+                    ...state.accountMoveTargets,
+                    targets: failed(
+                      "The connection was lost before the accounts arrived.",
+                    ),
+                  }
+                : state.accountMoveTargets,
+          }),
     };
   }
   const msg = action.msg;
@@ -5778,6 +5846,29 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       ...state,
       viewCleared: { sessionId: msg.sessionId, reason: msg.reason },
     };
+  // The inspector's account picker answers about the session it inspects,
+  // which need not be the one on screen: above the viewed-session guard.
+  if (msg.type === "sessionAccountMoveTargets") {
+    // Only the latest request's answer: an older one may describe another
+    // session or a list the picker has since re-asked for.
+    if (state.accountMoveTargets?.requestId !== msg.requestId) return state;
+    return {
+      ...state,
+      accountMoveTargets: {
+        ...state.accountMoveTargets,
+        targets:
+          msg.error !== undefined ? failed(msg.error) : ready(msg.accounts),
+      },
+    };
+  }
+  if (msg.type === "sessionAccountMoveAnswer") {
+    // Control feedback only: the row arrives through the session list, and a
+    // refusal becomes the session's failure in `reduceAssistantState`.
+    if (state.accountMovePending[msg.sessionId] !== msg.requestId) return state;
+    const accountMovePending = { ...state.accountMovePending };
+    delete accountMovePending[msg.sessionId];
+    return { ...state, accountMovePending };
+  }
   // Drop streamed events addressed to a session we're no longer viewing. The
   // server tags every turn event with its sessionId; the snapshot in `history`
   // is authoritative, so late deltas from a session we switched away from (or
@@ -6868,6 +6959,10 @@ export interface AssistantActions {
   setSessionPeerTurnCap: (sessionId: string, cap: number | null) => void;
   /** One-way: only enterprise accounts run the session from its next turn. */
   requireSessionEnterprise: (sessionId: string) => void;
+  /** Ask the server which accounts the idle session could move to now. */
+  listSessionAccountMoveTargets: (sessionId: string) => void;
+  /** Move the idle session to that account right away. */
+  moveSessionAccount: (sessionId: string, credentialProfileId: string) => void;
   /**
    * Stop one background item, or everything one session owns, under HUMAN
    * authorization. The server calls the supervisor's Stop service directly; the
@@ -8784,6 +8879,21 @@ export function useAssistant({
       },
       requireSessionEnterprise: (sessionId) => {
         send({ type: "setSessionRequiresEnterprise", sessionId });
+      },
+      listSessionAccountMoveTargets: (sessionId) => {
+        const requestId = createClientId();
+        dispatch({ kind: "accountMoveTargetsRequested", sessionId, requestId });
+        send({ type: "listSessionAccountMoveTargets", sessionId, requestId });
+      },
+      moveSessionAccount: (sessionId, credentialProfileId) => {
+        const requestId = createClientId();
+        dispatch({ kind: "accountMoveSent", sessionId, requestId });
+        send({
+          type: "moveSessionAccount",
+          sessionId,
+          credentialProfileId,
+          requestId,
+        });
       },
       setSpawnOwnership: (id, ownership) => {
         const requestId = trackMutation(

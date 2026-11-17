@@ -3,6 +3,7 @@ import { useId, useMemo, type ReactNode } from "react";
 import {
   Archive,
   ArchiveRestore,
+  ArrowRightLeft,
   BookOpen,
   Check,
   CheckCircle2,
@@ -55,6 +56,7 @@ import {
   type WorktreeGitStatus,
   type WorktreeRecord,
   type WorktreeReviewSet,
+  type SessionAccountMoveTarget,
 } from "@assistant/shared";
 import { ownedBySessionTree } from "@assistant/shared/sessionTreeWorktrees";
 import type { Task } from "../lib/backlogTree.ts";
@@ -100,6 +102,12 @@ import {
   isPending,
   type LoadState,
 } from "../lib/loadState.ts";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu.tsx";
 // Free of the `diff/` stack on purpose (see worktree/CLAUDE.md), so the review
 // roster can live in this main-bundle module.
 import { worktreeReviewThreads } from "./worktree/worktreeReview.tsx";
@@ -1517,6 +1525,7 @@ export function SessionInspector({
   sessionId,
   onSetPeerTurnCap,
   onRequireEnterprise,
+  accountMove,
   enterpriseAccountAvailable = false,
   originTask,
   relatedTasks,
@@ -1551,6 +1560,12 @@ export function SessionInspector({
   onRequireEnterprise?: ((sessionId: string) => void) | undefined;
   /** An enabled enterprise account of the session's account provider exists. */
   enterpriseAccountAvailable?: boolean | undefined;
+  /**
+   * "Move to another account": the server's list for this session (undefined
+   * until asked), whether a move is in flight, and the two requests. Absent
+   * where the session has no row yet.
+   */
+  accountMove?: AccountMoveControl | undefined;
   originTask?: TaskBackRef | undefined;
   relatedTasks: TaskSummary[];
   /** Session-scoped task progress merged into the inspector's single Tasks section. */
@@ -1674,6 +1689,16 @@ export function SessionInspector({
                 enterpriseAccountAvailable &&
                 !requiresEnterprise
                   ? () => onRequireEnterprise(sessionId)
+                  : undefined
+              }
+              accountMove={
+                sessionId &&
+                accountMove &&
+                credentialProfile &&
+                // Only a subscription login ever moves; any other account
+                // alone serves its models (the server refuses those too).
+                isSubscriptionAccountKind(credentialProfile.provider)
+                  ? accountMove
                   : undefined
               }
               model={model}
@@ -1838,6 +1863,92 @@ function withPeerPrompts(
   ];
 }
 
+/** What the Account row's "Move to another account" needs from the app. */
+interface AccountMoveControl {
+  /** The server's eligible accounts for this session; undefined until asked. */
+  targets: LoadState<SessionAccountMoveTarget[]> | undefined;
+  /** A move this browser sent is not answered yet. */
+  pending: boolean;
+  /** Ask the server for the accounts (on every open). */
+  onOpen: () => void;
+  /** Move to that account right away. */
+  onPick: (credentialProfileId: string) => void;
+}
+
+/**
+ * The accounts an idle session could move to, as the server judged them
+ * when the menu opened. Picking one moves the session at once (it is
+ * reversible); its failure reaches the user as the session's failure, so
+ * this control shows only that it is busy.
+ */
+function AccountMovePicker({
+  control,
+  running,
+  hintId,
+}: {
+  control: AccountMoveControl;
+  running: boolean;
+  hintId: string;
+}) {
+  const { targets } = control;
+  const accounts = targets ? dataOf(targets) : undefined;
+  const error = targets ? errorOf(targets) : undefined;
+  return (
+    <DropdownMenu
+      onOpenChange={(open) => {
+        if (open) control.onOpen();
+      }}
+    >
+      <DropdownMenuTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="sm"
+            className={`${PROPERTY_TRIGGER} justify-start text-muted-foreground`}
+            disabled={running}
+            busy={control.pending}
+            aria-describedby={running ? hintId : undefined}
+          />
+        }
+      >
+        <ArrowRightLeft aria-hidden />
+        Move to another account
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-64">
+        {error !== undefined ? (
+          <ErrorNote message={error} onRetry={control.onOpen} />
+        ) : !targets || isPending(targets) || !accounts ? (
+          <div
+            role="status"
+            className="flex items-center gap-2 px-2 py-1.5 text-sm text-muted-foreground"
+          >
+            <Spinner size="sm" />
+            Loading accounts…
+          </div>
+        ) : accounts.length === 0 ? (
+          <EmptyBox variant="inline">
+            No other account can run this session&apos;s model.
+          </EmptyBox>
+        ) : (
+          accounts.map((account) => (
+            <DropdownMenuItem
+              key={account.id}
+              onClick={() => control.onPick(account.id)}
+            >
+              <span className="min-w-0 truncate">{account.name}</span>
+              {account.enterprise ? (
+                <span className="ml-auto text-xs text-muted-foreground">
+                  enterprise
+                </span>
+              ) : null}
+            </DropdownMenuItem>
+          ))
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 /**
  * A session's Details: where it runs (its project and worktree, each opening
  * its object) and on what (the account fixed at the first prompt, the model
@@ -1847,6 +1958,7 @@ function SessionDetails({
   requiresEnterprise,
   running,
   onRequireEnterprise,
+  accountMove,
   waiting,
   peerTurnCap,
   onSetPeerTurnCap,
@@ -1872,6 +1984,8 @@ function SessionDetails({
   running: boolean;
   /** Offered only when it would change something and could be honored. */
   onRequireEnterprise: (() => void) | undefined;
+  /** Offered only for a session bound to a subscription login. */
+  accountMove: AccountMoveControl | undefined;
   model: { id: string; name?: string; provider: string } | undefined;
   thinkingLevel: ThinkingLevel | undefined;
   openers: ObjectOpeners;
@@ -1996,6 +2110,16 @@ function SessionDetails({
               <span className="text-muted-foreground"> · enterprise only</span>
             ) : null}
           </PropertyText>
+          {accountMove ? (
+            <>
+              <span aria-hidden />
+              <AccountMovePicker
+                control={accountMove}
+                running={running}
+                hintId={runningHintId}
+              />
+            </>
+          ) : null}
           {requireEnterprise ? (
             <>
               <span aria-hidden />
@@ -2010,16 +2134,16 @@ function SessionDetails({
                 <ShieldCheck aria-hidden />
                 Require enterprise account
               </Button>
-              {running ? (
-                <>
-                  <span aria-hidden />
-                  <PropertyText className="text-xs text-muted-foreground">
-                    <span id={runningHintId}>
-                      Available once the current turn ends.
-                    </span>
-                  </PropertyText>
-                </>
-              ) : null}
+            </>
+          ) : null}
+          {running && (accountMove || requireEnterprise) ? (
+            <>
+              <span aria-hidden />
+              <PropertyText className="text-xs text-muted-foreground">
+                <span id={runningHintId}>
+                  Available once the current turn ends.
+                </span>
+              </PropertyText>
             </>
           ) : null}
         </>

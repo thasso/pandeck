@@ -490,14 +490,19 @@ export class LiveRuntimeSession {
     );
   }
 
-  /** Re-offer the idle edge after an asynchronous admission reservation releases. */
-  notifyIdle(): void {
-    if (this.tornDown || this.isRunning) return;
+  /**
+   * Re-offer the idle edge after an asynchronous admission reservation
+   * releases. False when this runtime offered none: it was torn down, or a run
+   * that owns its own idle edge is live.
+   */
+  notifyIdle(): boolean {
+    if (this.tornDown || this.isRunning) return false;
     try {
       idleHook?.(this.sessionId);
     } catch {
       /* best-effort */
     }
+    return true;
   }
 
   /** Host-owned display text, kept out of every provider's native context. */
