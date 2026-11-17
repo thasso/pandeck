@@ -26,6 +26,7 @@
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { devboxApproval, type DevboxEndpoints } from "./gateway/devboxProof.ts";
 import { startGateway, type RunningGateway } from "./gateway/gateway.ts";
 import { LoginRefusal, type LoginActor } from "./gateway/logins.ts";
 import type { CodexRenewPort } from "./gateway/renewal.ts";
@@ -50,6 +51,7 @@ import {
 } from "./gatewayWeb/clients.ts";
 import {
   GatewayWebConfigError,
+  admittedEmail,
   loadGatewayWebConfig,
   type AtlassianPreset,
 } from "./gatewayWeb/config.ts";
@@ -313,6 +315,11 @@ export interface EdgeExtras {
   uiNow?: () => number;
   /** Tests only, as `oidcTestOptions`: tools in place of the real ones. */
   tools?: EdgeTools;
+  /**
+   * Tests only, as `oidcTestOptions`: where a devbox proof reaches Google's
+   * two hosts (their names, URLs and TLS names stay the real ones).
+   */
+  devboxEndpoints?: DevboxEndpoints;
 }
 
 export interface RunningEdge {
@@ -371,6 +378,20 @@ export async function startEdge(
       // connect Jira; new API tokens are refused on page and client.
       ...(ui?.atlassian?.clientId !== undefined
         ? { atlassianSignIn: true }
+        : {}),
+      // Zero-click enrollment (Task-1410 PR2): a devbox's Google token for
+      // Coder's client, admitted by the page's own allow rule, approves its
+      // request; the users it finds or creates are the page issuer's. One
+      // verifier, so one bound on proofs in flight, per edge process.
+      ...(ui?.coder?.automaticApproval
+        ? {
+            devboxApproval: devboxApproval({
+              issuer: ui.oidc.issuer,
+              googleClientId: ui.coder.googleClientId,
+              admit: (claims) => admittedEmail(ui.allow, claims),
+              endpoints: extras.devboxEndpoints,
+            }),
+          }
         : {}),
     },
     ...(vault

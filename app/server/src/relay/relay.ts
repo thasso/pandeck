@@ -279,10 +279,31 @@ export async function enrollRelay(options: RelayEnrollment): Promise<string> {
 export type MachineKind = "devbox" | "laptop" | "other";
 
 /** What the person approving needs: the link and the code. Nothing secret. */
+/**
+ * Why the gateway left a devbox's start to the page (Task-1410 PR2), from
+ * its fixed set; nothing else about the proof is answered.
+ */
+const AUTOMATIC_REFUSED = [
+  "not_configured",
+  "token_rejected",
+  "not_admitted",
+  "claim_pending",
+  "already_used",
+  "limit",
+  "unavailable",
+] as const;
+type AutomaticRefused = (typeof AUTOMATIC_REFUSED)[number];
+
 export interface ApprovalPrompt {
   verificationUri: string;
   userCode: string;
   expiresInSeconds: number;
+  /**
+   * With a devbox proof: why it did not approve the request, the gateway's
+   * fixed reason, or `unavailable` when the start with it failed and was
+   * sent again without it.
+   */
+  automaticRefused?: AutomaticRefused;
 }
 
 /** Time for the approval loop; tests pass a virtual one. */
@@ -307,6 +328,13 @@ export interface RelayApprovalEnrollment extends EnrollTarget {
   kind?: MachineKind;
   /** Called once the request is open: show the link and code to a person. */
   onPrompt(prompt: ApprovalPrompt): void;
+  /**
+   * A devbox's proof of its owner (Task-1410 PR2): the owner's Google access
+   * token, sent with the start only, never written or logged.
+   */
+  devbox?: { googleAccessToken: string };
+  /** Called instead of `onPrompt` when the gateway approved at once. */
+  onAutomatic?(): void;
   /** Aborting (SIGINT) stops the wait; nothing is written. */
   signal?: AbortSignal;
   /** Test seam: a virtual clock. */
@@ -341,6 +369,8 @@ function decodeStartAnswer(body: unknown) {
     verificationUri,
     expiresInSeconds,
     intervalSeconds,
+    approval,
+    automaticRefused,
   } = (body ?? {}) as Record<string, unknown>;
   if (
     typeof requestId !== "string" ||
@@ -361,6 +391,11 @@ function decodeStartAnswer(body: unknown) {
     verificationUri,
     expiresInSeconds: expiresInSeconds as number,
     intervalSeconds: intervalSeconds as number,
+    // A gateway before Task-1410 PR2 answers no `approval`: the browser.
+    automatic: approval === "automatic",
+    automaticRefused: AUTOMATIC_REFUSED.find(
+      (reason) => reason === automaticRefused,
+    ),
   };
 }
 
@@ -376,6 +411,12 @@ function decodeStartAnswer(body: unknown) {
  * expired, revoked or unknown request, or when `signal` aborts. Its files
  * are written only after a 200, so a stopped or refused enrollment leaves
  * none.
+ *
+ * With `devbox` (Task-1410 PR2) the start carries the owner's proof. When the
+ * gateway answers `approval: "automatic"` there is no prompt and the first
+ * poll goes at once; otherwise the prompt gets the reason. A start with the
+ * proof that times out, fails on the network or answers 5xx is sent once more
+ * at once without it; an abort is never retried.
  */
 export async function enrollRelayByApproval(
   options: RelayApprovalEnrollment,
@@ -385,18 +426,37 @@ export async function enrollRelayByApproval(
   const { signal } = options;
   signal?.throwIfAborted();
   const secrets = machineSecrets();
-  const started = await postEnroll(
-    options,
-    "/enroll/start",
-    {
-      publicKeyPem: secrets.publicKeyPem,
-      mcpTokenHash: secrets.mcpTokenHash,
-      name: options.name,
-      kind: options.kind ?? "other",
-    },
-    timeoutMs,
-    signal,
-  );
+  const request = {
+    publicKeyPem: secrets.publicKeyPem,
+    mcpTokenHash: secrets.mcpTokenHash,
+    name: options.name,
+    kind: options.kind ?? "other",
+  };
+  const startWithout = () =>
+    postEnroll(options, "/enroll/start", request, timeoutMs, signal);
+  let started: EnrollAnswer | undefined;
+  let proofDropped = false;
+  if (options.devbox) {
+    try {
+      started = await postEnroll(
+        options,
+        "/enroll/start",
+        {
+          ...request,
+          devbox: { googleAccessToken: options.devbox.googleAccessToken },
+        },
+        timeoutMs,
+        signal,
+      );
+    } catch (err) {
+      // A cancel ends here; a timeout or a network failure is retried.
+      if (signal?.aborted || !(err instanceof Error)) throw err;
+    }
+    if (started === undefined || started.status >= 500) {
+      proofDropped = true;
+      started = await startWithout();
+    }
+  } else started = await startWithout();
   if (started.status !== 200)
     throw new ApprovalEnrollmentError(
       "refused",
@@ -405,15 +465,21 @@ export async function enrollRelayByApproval(
   const start = decodeStartAnswer(started.body);
   const deadline =
     clock.now() + start.expiresInSeconds * 1000 + DEADLINE_GRACE_MS;
-  options.onPrompt({
-    verificationUri: start.verificationUri,
-    userCode: start.userCode,
-    expiresInSeconds: start.expiresInSeconds,
-  });
+  const automatic = !proofDropped && start.automatic;
+  const refused = proofDropped ? "unavailable" : start.automaticRefused;
+  if (automatic) options.onAutomatic?.();
+  else
+    options.onPrompt({
+      verificationUri: start.verificationUri,
+      userCode: start.userCode,
+      expiresInSeconds: start.expiresInSeconds,
+      ...(options.devbox && refused ? { automaticRefused: refused } : {}),
+    });
 
   let interval = start.intervalSeconds * 1000;
   let backoff = BACKOFF_FIRST_MS;
-  let wait = interval;
+  // Approved already: collect at once.
+  let wait = automatic ? 0 : interval;
   const expired = () =>
     new ApprovalEnrollmentError(
       "expired",
@@ -422,7 +488,8 @@ export async function enrollRelayByApproval(
   for (;;) {
     const left = deadline - clock.now();
     if (left <= 0) throw expired();
-    await clock.sleep(Math.min(wait, left), signal);
+    if (wait > 0) await clock.sleep(Math.min(wait, left), signal);
+    else signal?.throwIfAborted();
     const remaining = deadline - clock.now();
     if (remaining <= 0) throw expired();
     let answer: EnrollAnswer;

@@ -11,6 +11,7 @@ import {
   PollLimiter,
   decodePoll,
   decodeStart,
+  registryRefused,
 } from "./enrollmentApproval.ts";
 
 const p256 = () =>
@@ -75,6 +76,67 @@ test("a start needs a P-256 key, a lowercase hex token hash, a shown name and a 
     { ...valid, kind: null },
   ])
     assert.equal(decodeStart(bad), undefined, JSON.stringify(bad));
+});
+
+test("a start's devbox proof is optional: a Google access token of 1-2048 printable ASCII characters, else the start is malformed", () => {
+  const publicKeyPem = p256();
+  const valid = { publicKeyPem, mcpTokenHash: hash, name: "n", kind: "devbox" };
+  const plain = { publicKeyPem, mcpTokenHash: hash, name: "n", kind: "devbox" };
+  // Absent: the start as before, no token field at all.
+  assert.deepEqual(decodeStart(valid), plain);
+  assert.ok(!("devboxToken" in decodeStart(valid)!));
+  const token = "FAKE_owner-google-access-token";
+  assert.deepEqual(
+    decodeStart({ ...valid, devbox: { googleAccessToken: token } }),
+    { ...plain, devboxToken: token },
+  );
+  // The longest token, and every printable ASCII character.
+  const longest = "x".repeat(2048);
+  assert.equal(
+    decodeStart({ ...valid, devbox: { googleAccessToken: longest } })
+      ?.devboxToken,
+    longest,
+  );
+  const printable = Array.from({ length: 94 }, (_, i) =>
+    String.fromCharCode(0x21 + i),
+  ).join("");
+  assert.equal(
+    decodeStart({ ...valid, devbox: { googleAccessToken: printable } })
+      ?.devboxToken,
+    printable,
+  );
+  for (const devbox of [
+    { googleAccessToken: "" },
+    { googleAccessToken: "x".repeat(2049) },
+    { googleAccessToken: "FAKE token" },
+    { googleAccessToken: "FAKE\ttoken" },
+    { googleAccessToken: "FAKE\ntoken" },
+    { googleAccessToken: "FAKE\u0000token" },
+    { googleAccessToken: "FAKE\u007ftoken" },
+    { googleAccessToken: "FAKE_tökén" },
+    { googleAccessToken: 7 },
+    {},
+    null,
+    "FAKE_owner-google-access-token",
+    [token],
+  ])
+    assert.equal(
+      decodeStart({ ...valid, devbox }),
+      undefined,
+      JSON.stringify(devbox),
+    );
+});
+
+test("a refused automatic approval answers a fixed reason: an expired proof is a rejected token, a request gone meanwhile unavailable", () => {
+  assert.equal(registryRefused("expired"), "token_rejected");
+  assert.equal(registryRefused("unknown"), "unavailable");
+  for (const status of [
+    "claim_pending",
+    "limit",
+    "already_used",
+    "unavailable",
+  ] as const)
+    assert.equal(registryRefused(status), status);
 });
 
 test("a poll needs a request id of 32 base64url bytes", () => {

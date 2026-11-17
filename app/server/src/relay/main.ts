@@ -6,7 +6,11 @@
  * - `enroll --approve --name <text> [--kind devbox|laptop|other]
  *   --state-dir <dir> --gateway <host:enrollPort> --ca <pem file>`: prints a
  *   link and a code to approve in the gateway page, then waits (Task-1410);
- *   Ctrl-C stops it and writes nothing
+ *   Ctrl-C stops it and writes nothing. With `--owner-token-file <0600 file
+ *   | ->` (`-` is stdin) a devbox sends its owner's Google access token as
+ *   proof and, when the gateway approves at once, prints "Approved
+ *   automatically." instead of the link (Task-1410 PR2); an empty token
+ *   means the link
  * - `run --state-dir <dir> --port <loopback port> --socket <path>`
  *
  * It runs as Pandeck's server account, so agents can read neither its key
@@ -21,13 +25,13 @@ import {
   type ApprovalPrompt,
   type MachineKind,
 } from "./relay.ts";
-import { readEnrollmentCode } from "./enrollmentCode.ts";
+import { readEnrollmentCode, readOwnerToken } from "./enrollmentCode.ts";
 
 const KINDS: readonly string[] = ["devbox", "laptop", "other"];
 
 function usage(): never {
   console.error(
-    "usage: relay enroll --state-dir <dir> --gateway <host:port> --ca <pem file> [--code-file <0600 file>]\n       enrollment reads stdin unless --code-file is given\n       relay enroll --approve --name <text> [--kind devbox|laptop|other] --state-dir <dir> --gateway <host:port> --ca <pem file>\n       relay run --state-dir <dir> --port <port> --socket <path>",
+    "usage: relay enroll --state-dir <dir> --gateway <host:port> --ca <pem file> [--code-file <0600 file>]\n       enrollment reads stdin unless --code-file is given\n       relay enroll --approve --name <text> [--kind devbox|laptop|other] [--owner-token-file <0600 file | ->] --state-dir <dir> --gateway <host:port> --ca <pem file>\n       relay run --state-dir <dir> --port <port> --socket <path>",
   );
   process.exit(2);
 }
@@ -43,6 +47,11 @@ function showPrompt(prompt: ApprovalPrompt): void {
   const minutes = Math.round(prompt.expiresInSeconds / 60);
   console.log(
     [
+      ...(prompt.automaticRefused
+        ? [
+            `Automatic approval declined (${prompt.automaticRefused}); approve in the browser instead.`,
+          ]
+        : []),
       "To enroll this machine, open this link where you are signed in to the gateway:",
       `  ${prompt.verificationUri}`,
       `Check that the page shows the code ${prompt.userCode}, then approve.`,
@@ -59,6 +68,7 @@ const { values } = parseArgs({
     gateway: { type: "string" },
     ca: { type: "string" },
     "code-file": { type: "string" },
+    "owner-token-file": { type: "string" },
     approve: { type: "boolean" },
     name: { type: "string" },
     kind: { type: "string" },
@@ -74,6 +84,16 @@ if (command === "enroll" && values.approve) {
     usage();
   if (values.kind !== undefined && !KINDS.includes(values.kind)) usage();
   const { host, port } = hostPort(values.gateway);
+  const ownerTokenFile = values["owner-token-file"];
+  let googleAccessToken: string | undefined;
+  try {
+    googleAccessToken =
+      ownerTokenFile === undefined ? undefined : readOwnerToken(ownerTokenFile);
+  } catch (err) {
+    // Our own refusal, or the open's (a symlink, a missing file): no content.
+    console.error(err instanceof Error ? err.message : "Unreadable token.");
+    process.exit(1);
+  }
   const stop = new AbortController();
   process.once("SIGINT", () => stop.abort());
   process.once("SIGTERM", () => stop.abort());
@@ -86,6 +106,8 @@ if (command === "enroll" && values.approve) {
       name: values.name,
       ...(values.kind ? { kind: values.kind as MachineKind } : {}),
       onPrompt: showPrompt,
+      ...(googleAccessToken ? { devbox: { googleAccessToken } } : {}),
+      onAutomatic: () => console.log("Approved automatically."),
       signal: stop.signal,
     });
     console.log(`enrolled as client ${clientId}`);
@@ -99,7 +121,14 @@ if (command === "enroll" && values.approve) {
     process.exit(1);
   }
 } else if (command === "enroll") {
-  if (!values.gateway || !values.ca || values.name || values.kind) usage();
+  if (
+    !values.gateway ||
+    !values.ca ||
+    values.name ||
+    values.kind ||
+    values["owner-token-file"]
+  )
+    usage();
   const { host, port } = hostPort(values.gateway);
   const clientId = await enrollRelay({
     stateDir,

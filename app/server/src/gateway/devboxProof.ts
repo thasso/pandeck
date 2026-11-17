@@ -44,7 +44,7 @@ const EMAIL_SCOPES = new Set([
 ]);
 
 /** Where to connect instead of Google's hosts (tests): never the URL. */
-interface DevboxEndpoints {
+export interface DevboxEndpoints {
   connect: { host: string; port: number };
   ca?: string | string[];
 }
@@ -339,4 +339,45 @@ export async function verifyDevboxProof(
     deps.signal?.removeEventListener("abort", onCallerAbort);
     deps.slots.release();
   }
+}
+
+/**
+ * Zero-click approval as the enrollment port uses it: the issuer a proven
+ * owner is a user of (the page's), and a verification against the caller's
+ * clock (the registry's) that ends with the caller's connection.
+ */
+export interface DevboxApproval {
+  issuer: string;
+  verify(
+    token: string,
+    context: { now(): number; signal: AbortSignal },
+  ): Promise<DevboxProofResult>;
+}
+
+/**
+ * The edge's `DevboxApproval`: one `ProofSlots` for every verification it
+ * runs, so build it once per edge process.
+ */
+export function devboxApproval(options: {
+  issuer: string;
+  googleClientId: string;
+  admit(claims: Record<string, unknown>): string | undefined;
+  endpoints?: DevboxEndpoints | undefined;
+  timeouts?: DevboxProofDeps["timeouts"];
+}): DevboxApproval {
+  const slots = new ProofSlots();
+  const { googleClientId, admit, endpoints, timeouts } = options;
+  return {
+    issuer: options.issuer,
+    verify: (token, { now, signal }) =>
+      verifyDevboxProof(token, {
+        googleClientId,
+        admit,
+        now,
+        slots,
+        signal,
+        ...(endpoints ? { endpoints } : {}),
+        ...(timeouts ? { timeouts } : {}),
+      }),
+  };
 }
