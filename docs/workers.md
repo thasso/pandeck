@@ -2188,11 +2188,21 @@ whatever the `Host` (above). No route, body or credential handling changes.
   `POST /backend-api/codex/responses`) from any lease kind is evidence; usage,
   credit, consume and `count_tokens` answers are not. A 2xx clears the account's
   bench. A 429 passes through unchanged, every header field and repeat included
-  (gateway and relay drop only hop-by-hop, `proxy-*` and `set-cookie` fields),
-  and is classified by its stated reset, read from the upstream's raw headers:
-  `retry-after` sent exactly once (whole seconds or an RFC 9110 HTTP-date), else
-  on `/chatgpt` the latest valid `x-codex-{primary,secondary}-reset-at` or
-  `-reset-after-seconds`.
+  (gateway and relay drop only hop-by-hop, `proxy-*` and `set-cookie` fields).
+  The decision reads only the upstream's raw headers, never a body.
+  - On `/anthropic` a 429 is a limit only when Anthropic states one:
+    `anthropic-ratelimit-unified-status: rejected` or a valid `retry-after`,
+    each sent exactly once. Any other 429 is no evidence: no bench, no tried
+    mark, no pin move, and an existing bench stays as it was. Anthropic answers
+    a subscription request that lacks Claude Code's system prompt (Claude Code's
+    startup `quota_check` probe) with such a bare 429 (Task-1428). Every
+    `/chatgpt` 429 is evidence.
+  - A limit is classified by its stated reset: `retry-after` sent exactly once
+    (whole seconds or an RFC 9110 HTTP-date), else the route's own reset: on
+    `/chatgpt` the latest valid `x-codex-{primary,secondary}-reset-at` or
+    `-reset-after-seconds`, on `/anthropic` `anthropic-ratelimit-unified-reset`
+    (epoch seconds, sent exactly once), so a weekly limit benches until its real
+    reset.
   - Now or past: short, with no bench.
   - Up to 60 s away (`MACHINE_SHORT_LIMIT_MS`, inclusive): short. The account is
     benched until then and new sessions avoid it; the session keeps its pin and

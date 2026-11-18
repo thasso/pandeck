@@ -154,6 +154,13 @@ function answer(
 
 const LONG = ["retry-after", "120"];
 const SHORT = ["retry-after", "30"];
+/** Anthropic's statement that a request hit a subscription limit. */
+const REJECTED = ["anthropic-ratelimit-unified-status", "rejected"];
+/** Anthropic's stated reset, in epoch seconds. */
+const unifiedReset = (at: number): string[] => [
+  "anthropic-ratelimit-unified-reset",
+  String(at / 1000),
+];
 
 describe("session keys", () => {
   test("Claude Code's header keys /anthropic; the hash, never the key, is returned", () => {
@@ -279,32 +286,52 @@ describe("reset classification (A3)", () => {
       true,
       now + 60 * MINUTE,
     ],
-    ["no retry-after", "claude", [], true, now + RATE_LIMIT_BENCH_MS],
     [
-      "retry-after: abc",
+      "a stated limit with no reset",
       "claude",
+      REJECTED,
+      true,
+      now + RATE_LIMIT_BENCH_MS,
+    ],
+    [
+      "a stated limit with retry-after: abc",
+      "claude",
+      [...REJECTED, "retry-after", "abc"],
+      true,
+      now + RATE_LIMIT_BENCH_MS,
+    ],
+    [
+      "a stated limit with retry-after: -5",
+      "claude",
+      [...REJECTED, "retry-after", "-5"],
+      true,
+      now + RATE_LIMIT_BENCH_MS,
+    ],
+    [
+      "a stated limit with retry-after: 1.5",
+      "claude",
+      [...REJECTED, "retry-after", "1.5"],
+      true,
+      now + RATE_LIMIT_BENCH_MS,
+    ],
+    [
+      "a stated limit with a repeated retry-after",
+      "claude",
+      [...REJECTED, "retry-after", "10", "Retry-After", "10"],
+      true,
+      now + RATE_LIMIT_BENCH_MS,
+    ],
+    [
+      "no reset on /chatgpt",
+      "openai-codex",
+      [],
+      true,
+      now + RATE_LIMIT_BENCH_MS,
+    ],
+    [
+      "retry-after: abc on /chatgpt",
+      "openai-codex",
       ["retry-after", "abc"],
-      true,
-      now + RATE_LIMIT_BENCH_MS,
-    ],
-    [
-      "retry-after: -5",
-      "claude",
-      ["retry-after", "-5"],
-      true,
-      now + RATE_LIMIT_BENCH_MS,
-    ],
-    [
-      "retry-after: 1.5",
-      "claude",
-      ["retry-after", "1.5"],
-      true,
-      now + RATE_LIMIT_BENCH_MS,
-    ],
-    [
-      "a repeated retry-after",
-      "claude",
-      ["retry-after", "10", "Retry-After", "10"],
       true,
       now + RATE_LIMIT_BENCH_MS,
     ],
@@ -316,9 +343,16 @@ describe("reset classification (A3)", () => {
       now + 20 * SECOND,
     ],
     [
-      "the same header on /anthropic",
+      "the same header on /anthropic, with a stated limit",
       "claude",
-      ["x-codex-primary-reset-after-seconds", "20"],
+      [...REJECTED, "x-codex-primary-reset-after-seconds", "20"],
+      true,
+      now + RATE_LIMIT_BENCH_MS,
+    ],
+    [
+      "Anthropic's reset on /chatgpt",
+      "openai-codex",
+      [...REJECTED, ...unifiedReset(now + 20 * SECOND)],
       true,
       now + RATE_LIMIT_BENCH_MS,
     ],
@@ -383,6 +417,285 @@ describe("reset classification (A3)", () => {
 
   test("the threshold is 60 s", () => {
     assert.equal(MACHINE_SHORT_LIMIT_MS, 60_000);
+  });
+});
+
+describe("Anthropic limit evidence (Task-1428)", () => {
+  const now = T0;
+  const STATUS = "anthropic-ratelimit-unified-status";
+  const RESET = "anthropic-ratelimit-unified-reset";
+  const weekly = now + 3 * DAY;
+
+  // A 429 on /anthropic states a limit only through the unified status
+  // `rejected` or a valid retry-after; anything else is not evidence.
+  const notEvidence: [string, string[]][] = [
+    ["a bare 429", []],
+    ["status allowed", [STATUS, "allowed"]],
+    ["status allowed_warning", [STATUS, "allowed_warning"]],
+    ["an empty status", [STATUS, ""]],
+    ["a repeated status", [STATUS, "rejected", STATUS, "rejected"]],
+    ["a reset without a stated limit", [RESET, String(weekly / 1000)]],
+    [
+      "an allowed status with a reset",
+      [STATUS, "allowed", RESET, String(weekly / 1000)],
+    ],
+    ["retry-after: abc", ["retry-after", "abc"]],
+    ["retry-after: -5", ["retry-after", "-5"]],
+    ["a repeated retry-after", ["retry-after", "10", "Retry-After", "10"]],
+    ["an invalid HTTP-date", ["retry-after", "Tue, 17 Nov 2026 12:00:30 PST"]],
+  ];
+  for (const [name, headers] of notEvidence)
+    test(`${name} is not limit evidence`, () => {
+      assert.equal(classifyReset("claude", headers, now), null);
+    });
+
+  const stated: [
+    string,
+    string[],
+    { long: boolean; benchUntil: number | undefined },
+  ][] = [
+    [
+      "a weekly reset is long, benched until it",
+      [...REJECTED, ...unifiedReset(weekly)],
+      { long: true, benchUntil: weekly },
+    ],
+    [
+      "a reset 30 s away is short",
+      [...REJECTED, ...unifiedReset(now + 30 * SECOND)],
+      { long: false, benchUntil: now + 30 * SECOND },
+    ],
+    [
+      "a reset 60 s away is short (inclusive)",
+      [...REJECTED, ...unifiedReset(now + MINUTE)],
+      { long: false, benchUntil: now + MINUTE },
+    ],
+    [
+      "a reset 61 s away is long",
+      [...REJECTED, ...unifiedReset(now + 61 * SECOND)],
+      { long: true, benchUntil: now + 61 * SECOND },
+    ],
+    [
+      "a past reset is short with no bench",
+      [...REJECTED, ...unifiedReset(now - SECOND)],
+      { long: false, benchUntil: undefined },
+    ],
+    [
+      "a fractional reset is read like Codex's",
+      [...REJECTED, RESET, String(now / 1000 + 600.5)],
+      { long: true, benchUntil: now + 600_500 },
+    ],
+    [
+      "header names and the status value are case-insensitive, values trimmed",
+      [
+        "Anthropic-RateLimit-Unified-Status",
+        " Rejected ",
+        "Anthropic-RateLimit-Unified-Reset",
+        ` ${weekly / 1000} `,
+      ],
+      { long: true, benchUntil: weekly },
+    ],
+    [
+      "a valid retry-after alone states a limit",
+      ["retry-after", "120"],
+      { long: true, benchUntil: now + 120 * SECOND },
+    ],
+    [
+      "a valid retry-after wins over the unified reset, as over Codex's",
+      [...REJECTED, "retry-after", "30", ...unifiedReset(weekly)],
+      { long: false, benchUntil: now + 30 * SECOND },
+    ],
+    [
+      "an invalid retry-after falls to the unified reset",
+      [...REJECTED, "retry-after", "soon", ...unifiedReset(weekly)],
+      { long: true, benchUntil: weekly },
+    ],
+  ];
+  for (const [name, headers, expected] of stated)
+    test(`a stated limit: ${name}`, () => {
+      assert.deepEqual(classifyReset("claude", headers, now), expected);
+    });
+
+  for (const value of [
+    "soon",
+    "-5",
+    "1e9",
+    "Infinity",
+    "",
+    "Tue, 17 Nov 2026 12:00:30 GMT",
+  ])
+    test(`a stated limit with the unified reset ${JSON.stringify(value)} falls back to the 5 minute bench`, () => {
+      assert.deepEqual(
+        classifyReset("claude", [...REJECTED, RESET, value], now),
+        {
+          long: true,
+          benchUntil: now + RATE_LIMIT_BENCH_MS,
+        },
+      );
+    });
+
+  test("a repeated unified reset falls back to the 5 minute bench", () => {
+    assert.deepEqual(
+      classifyReset(
+        "claude",
+        [...REJECTED, ...unifiedReset(weekly), ...unifiedReset(weekly)],
+        now,
+      ),
+      { long: true, benchUntil: now + RATE_LIMIT_BENCH_MS },
+    );
+  });
+
+  // A signed-in Claude Code weekly-limit answer as captured (Task-1430
+  // evidence, 2026-11-18): retry-after agrees with the unified reset.
+  const capturedReset = 1_795_060_800;
+  const capturedRetryAfter = 59_120;
+  const captured = [
+    STATUS,
+    "rejected",
+    RESET,
+    String(capturedReset),
+    "retry-after",
+    String(capturedRetryAfter),
+    "anthropic-ratelimit-unified-representative-claim",
+    "seven_day",
+    "anthropic-ratelimit-unified-7d-status",
+    "rejected",
+    "anthropic-ratelimit-unified-5h-status",
+    "allowed",
+    "x-should-retry",
+    "true",
+  ];
+  const capturedAt = (capturedReset - capturedRetryAfter) * SECOND;
+
+  test("the captured weekly limit is long, benched until its stated reset", () => {
+    const expected = { long: true, benchUntil: capturedReset * SECOND };
+    assert.deepEqual(classifyReset("claude", captured, capturedAt), expected);
+    // The unified reset alone names the same instant.
+    const withoutRetryAfter = captured.filter(
+      (_, i) => captured[i - (i % 2)] !== "retry-after",
+    );
+    assert.equal(withoutRetryAfter.length, captured.length - 2);
+    assert.deepEqual(
+      classifyReset("claude", withoutRetryAfter, capturedAt),
+      expected,
+    );
+  });
+
+  test("the captured weekly limit moves the pin and benches past 5 minutes", () => {
+    const f = fixture();
+    f.clock.now = capturedAt;
+    const ref = claudeRef("X");
+    answer(f.pool, served(f.pool.select("u1", ref)), 429, captured);
+    assert.equal(profileOf(f.pool.select("u1", ref)), "claude-b");
+    assert.deepEqual(f.pool.records()[0]!.tried, ["claude-a"]);
+    f.clock.now = capturedReset * SECOND - SECOND;
+    assert.equal(profileOf(f.pool.select("u1", claudeRef("N1"))), "claude-b");
+    f.clock.now = capturedReset * SECOND;
+    assert.equal(profileOf(f.pool.select("u1", claudeRef("N2"))), "claude-a");
+  });
+
+  test("/chatgpt is unchanged: a 429 with no reset is still long", () => {
+    assert.deepEqual(classifyReset("openai-codex", [], now), {
+      long: true,
+      benchUntil: now + RATE_LIMIT_BENCH_MS,
+    });
+  });
+
+  test("a bare 429 on a pinned session: no bench, no tried mark, no pin move, no save", () => {
+    const f = fixture();
+    const ref = claudeRef("X");
+    const x = served(f.pool.select("u1", ref));
+    assert.equal(x.binding.profileId, "claude-a");
+    const saved = f.saves.length;
+    const before = f.pool.records();
+    answer(f.pool, x, 429, []);
+    answer(f.pool, x, 429, [STATUS, "allowed"]);
+    assert.equal(f.saves.length, saved);
+    assert.deepEqual(f.pool.records(), before);
+    assert.equal(profileOf(f.pool.select("u1", ref)), "claude-a");
+    assert.deepEqual(f.pool.records()[0]!.tried, []);
+    // No bench: a new session still ranks claude-a first.
+    assert.equal(profileOf(f.pool.select("u1", claudeRef("Y"))), "claude-a");
+  });
+
+  test("a bare 429 from a stale selection adds nothing to the tried set", () => {
+    const f = fixture();
+    const ref = claudeRef("X");
+    const first = served(f.pool.select("u1", ref));
+    answer(f.pool, first, 429, REJECTED);
+    assert.equal(profileOf(f.pool.select("u1", ref)), "claude-b");
+    const onB = served(f.pool.select("u1", ref));
+    answer(f.pool, onB, 429, []);
+    assert.deepEqual(f.pool.records()[0]!.tried, ["claude-a"]);
+    assert.equal(profileOf(f.pool.select("u1", ref)), "claude-b");
+  });
+
+  test("a bare 429 on the lease path benches nothing and moves no pin", () => {
+    const f = fixture();
+    assert.equal(profileOf(f.pool.select("u1", claudeRef("X"))), "claude-a");
+    f.pool.observe({ provider: "claude", profileId: "claude-a" }, 429, []);
+    assert.equal(profileOf(f.pool.select("u1", claudeRef("X"))), "claude-a");
+    assert.equal(profileOf(f.pool.select("u1", claudeRef("Y"))), "claude-a");
+    assert.deepEqual(f.pool.records()[0]!.tried, []);
+  });
+
+  test("a bare 429 neither clears nor shortens an active bench", () => {
+    const f = fixture();
+    f.pool.observe({ provider: "claude", profileId: "claude-a" }, 429, LONG);
+    f.pool.observe({ provider: "claude", profileId: "claude-a" }, 429, []);
+    f.clock.now += 119 * SECOND;
+    assert.equal(profileOf(f.pool.select("u1", claudeRef("N1"))), "claude-b");
+    f.clock.now += SECOND;
+    assert.equal(profileOf(f.pool.select("u1", claudeRef("N2"))), "claude-a");
+  });
+
+  test("a weekly limit benches until its stated reset, not 5 minutes", () => {
+    const f = fixture();
+    const ref = claudeRef("X");
+    answer(f.pool, served(f.pool.select("u1", ref)), 429, [
+      ...REJECTED,
+      ...unifiedReset(weekly),
+    ]);
+    assert.equal(profileOf(f.pool.select("u1", ref)), "claude-b");
+    assert.deepEqual(f.pool.records()[0]!.tried, ["claude-a"]);
+    f.clock.now += RATE_LIMIT_BENCH_MS + SECOND;
+    assert.equal(profileOf(f.pool.select("u1", claudeRef("N1"))), "claude-b");
+    f.clock.now = weekly - SECOND;
+    assert.equal(profileOf(f.pool.select("u1", claudeRef("N2"))), "claude-b");
+    f.clock.now = weekly;
+    assert.equal(profileOf(f.pool.select("u1", claudeRef("N3"))), "claude-a");
+  });
+
+  test("a weekly limit on the lease path moves a pin on its next select", () => {
+    const f = fixture();
+    assert.equal(profileOf(f.pool.select("u1", claudeRef("X"))), "claude-a");
+    f.pool.observe({ provider: "claude", profileId: "claude-a" }, 429, [
+      ...REJECTED,
+      ...unifiedReset(weekly),
+    ]);
+    assert.equal(profileOf(f.pool.select("u1", claudeRef("X"))), "claude-b");
+    assert.deepEqual(f.pool.records()[0]!.tried, ["claude-a"]);
+  });
+
+  test("a stated reset 30 s away keeps the pin and the tried set", () => {
+    const f = fixture();
+    const ref = claudeRef("X");
+    const saved = f.saves.length;
+    answer(f.pool, served(f.pool.select("u1", ref)), 429, [
+      ...REJECTED,
+      ...unifiedReset(now + 30 * SECOND),
+    ]);
+    assert.equal(f.saves.length, saved + 1, "only the new pin's save");
+    assert.equal(profileOf(f.pool.select("u1", ref)), "claude-a");
+    assert.deepEqual(f.pool.records()[0]!.tried, []);
+    assert.equal(profileOf(f.pool.select("u1", claudeRef("Y"))), "claude-b");
+  });
+
+  test("/chatgpt is unchanged: a 429 with no reset moves the pin", () => {
+    const f = fixture();
+    const ref = codexRef("X");
+    answer(f.pool, served(f.pool.select("u1", ref)), 429, []);
+    assert.equal(profileOf(f.pool.select("u1", ref)), "codex-d");
+    assert.deepEqual(f.pool.records()[0]!.tried, ["codex-c"]);
   });
 });
 
@@ -532,7 +845,7 @@ describe("HTTP-date forms (A3, F001)", () => {
     assert.deepEqual(f.pool.records()[0]!.tried, []);
   });
 
-  test("F001: date forms that are not valid HTTP-dates stay unknown, so long", () => {
+  test("F001: date forms that are not valid HTTP-dates stay unknown, so a stated limit is long", () => {
     const unknown = { long: true, benchUntil: now + RATE_LIMIT_BENCH_MS };
     for (const value of [
       "Tuesday, 17-Nov-26 12:00:30 PST",
@@ -549,7 +862,7 @@ describe("HTTP-date forms (A3, F001)", () => {
       "2026-11-17T12:00:30Z",
     ])
       assert.deepEqual(
-        classifyReset("claude", ["retry-after", value], now),
+        classifyReset("claude", [...REJECTED, "retry-after", value], now),
         unknown,
         value,
       );
@@ -557,7 +870,7 @@ describe("HTTP-date forms (A3, F001)", () => {
     assert.deepEqual(
       classifyReset(
         "claude",
-        ["retry-after", rfc850, "Retry-After", rfc850],
+        [...REJECTED, "retry-after", rfc850, "Retry-After", rfc850],
         now,
       ),
       unknown,
@@ -696,7 +1009,11 @@ describe("observe and stickiness (A2, A3)", () => {
 
   for (const [name, headers] of [
     ["retry-after: 61", ["retry-after", "61"]],
-    ["no reset header", []],
+    ["a stated limit with no reset", REJECTED],
+    [
+      "a stated limit with a weekly reset",
+      [...REJECTED, ...unifiedReset(T0 + 3 * DAY)],
+    ],
   ] as const)
     test(`AC6c: ${name} moves the pin at once and saves the tried set`, () => {
       const f = fixture();

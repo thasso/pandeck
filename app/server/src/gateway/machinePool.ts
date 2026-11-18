@@ -15,6 +15,8 @@
  *   it; only recovery from an unusable pin may return to a tried account, and
  *   only an eligible one.
  * - Benches are per profile and in memory, fed only by model-run responses.
+ *   On `/anthropic` a 429 is evidence only when Anthropic states a limit
+ *   (Task-1428): a bare 429 passes through and changes nothing.
  *
  * The ranking is Pandeck's (`accountRanking.ts`) with usage unknown. Pins and
  * tried sets persist through `persist`; the raw session key never leaves
@@ -37,7 +39,7 @@ import {
 
 /** A reset at most this far away is short: the pin stays. */
 export const MACHINE_SHORT_LIMIT_MS = 60_000;
-/** A 429 without a valid reset benches for this long (Pandeck's fallback). */
+/** A stated limit without a valid reset benches this long (Pandeck's fallback). */
 export const RATE_LIMIT_BENCH_MS = 5 * 60_000;
 /** A pin unused this long is dropped. */
 export const PIN_IDLE_MS = 7 * 24 * 60 * 60_000;
@@ -69,6 +71,14 @@ const CODEX_RESET_AFTER = [
   "x-codex-secondary-reset-after-seconds",
   "x-codex-primary-reset-after-seconds",
 ];
+
+/**
+ * Anthropic's unified rate-limit headers, read on `/anthropic` only: the
+ * status `rejected` states a subscription limit, and the reset is its end in
+ * epoch seconds.
+ */
+const ANTHROPIC_STATUS = "anthropic-ratelimit-unified-status";
+const ANTHROPIC_RESET = "anthropic-ratelimit-unified-reset";
 
 /** Usage is unknown to the gateway, so these thresholds never apply. */
 const NO_USAGE_THRESHOLDS = {
@@ -130,7 +140,7 @@ export function pinKeyOf(
   return null;
 }
 
-/** How a 429's stated reset classifies (amendment A3). */
+/** How a stated limit's reset classifies (amendment A3). */
 export interface ResetClass {
   /** Long moves the pin; an unknown reset is long. */
   long: boolean;
@@ -252,6 +262,17 @@ function utcInstant(
   return new Date(instant).getUTCDate() === day ? instant : undefined;
 }
 
+/** A header's epoch-seconds value, sent exactly once, as milliseconds. */
+function epochSecondsReset(
+  rawHeaders: readonly string[],
+  name: string,
+): number | undefined {
+  const value = onlyValue(rawHeaders, name);
+  if (value === undefined || !DECIMAL_RE.test(value)) return undefined;
+  const reset = Number(value) * 1000;
+  return Number.isFinite(reset) ? reset : undefined;
+}
+
 function retryAfterReset(
   rawHeaders: readonly string[],
   now: number,
@@ -283,20 +304,34 @@ function codexReset(
   return resets.length ? Math.max(...resets) : undefined;
 }
 
+/** Whether Anthropic states a limit: the unified status `rejected`, once. */
+function anthropicRejected(rawHeaders: readonly string[]): boolean {
+  return onlyValue(rawHeaders, ANTHROPIC_STATUS)?.toLowerCase() === "rejected";
+}
+
 /**
- * Classifies a model-run 429 by its stated reset: `retry-after` sent once,
- * else on `/chatgpt` the latest valid Codex reset. A reset now or past is
- * short with no bench; up to `MACHINE_SHORT_LIMIT_MS` short; beyond, long.
- * No valid reset is long, benched `RATE_LIMIT_BENCH_MS`.
+ * Classifies a model-run 429 by its stated reset, from headers only, or null
+ * when it is no limit evidence. On `/anthropic` a 429 states a limit only
+ * with the unified status `rejected` or a valid `retry-after`; a bare one
+ * (Anthropic's answer to a subscription request without Claude Code's system
+ * prompt, Task-1428) is null. Every `/chatgpt` 429 is evidence.
+ *
+ * The reset is `retry-after` sent once, else the route's own: on `/chatgpt`
+ * the latest valid Codex reset, on `/anthropic` the unified reset. A reset now
+ * or past is short with no bench; up to `MACHINE_SHORT_LIMIT_MS` short;
+ * beyond, long. No valid reset is long, benched `RATE_LIMIT_BENCH_MS`.
  */
 export function classifyReset(
   provider: LeaseProvider,
   rawHeaders: readonly string[],
   now: number,
-): ResetClass {
-  const reset =
-    retryAfterReset(rawHeaders, now) ??
-    (provider === "openai-codex" ? codexReset(rawHeaders, now) : undefined);
+): ResetClass | null {
+  const retryAfter = retryAfterReset(rawHeaders, now);
+  let reset: number | undefined;
+  if (provider === "claude") {
+    if (retryAfter === undefined && !anthropicRejected(rawHeaders)) return null;
+    reset = retryAfter ?? epochSecondsReset(rawHeaders, ANTHROPIC_RESET);
+  } else reset = retryAfter ?? codexReset(rawHeaders, now);
   if (reset === undefined)
     return { long: true, benchUntil: now + RATE_LIMIT_BENCH_MS };
   const remaining = reset - now;
@@ -452,9 +487,10 @@ export class MachinePool {
 
   /**
    * Records a model-run response from any lease kind, once its headers
-   * arrive. A 429 benches the profile; a long one also moves the session's
-   * pin, if it still names the profile, to the best eligible untried account.
-   * A 2xx clears the bench. Never throws for a failed save.
+   * arrive. A 429 that states a limit (`classifyReset`) benches the profile;
+   * a long one also moves the session's pin, if it still names the profile,
+   * to the best eligible untried account. A 2xx clears the bench; any other
+   * answer changes nothing. Never throws for a failed save.
    */
   observe(
     evidence: {
@@ -474,6 +510,7 @@ export class MachinePool {
     }
     if (status !== 429) return;
     const reset = classifyReset(evidence.provider, rawHeaders, now);
+    if (!reset) return;
     if (reset.benchUntil !== undefined) {
       const active = this.bench(profileId);
       this.benches.set(
