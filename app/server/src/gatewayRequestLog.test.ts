@@ -521,6 +521,52 @@ test("a client revoked while its request waits keeps the record it was admitted 
   assert.equal(requestLines().length, 1);
 });
 
+test.each([
+  [
+    "renamed",
+    (gw: RunningGateway, tokenFile: string) =>
+      gw.clients!.putAccount({
+        id: "a",
+        provider: "claude",
+        name: "Account a renamed",
+        enabled: true,
+        tokenFile,
+        userId: "thasso",
+      }),
+  ],
+  ["removed", (gw: RunningGateway) => gw.clients!.removeAccount("a")],
+] as const)(
+  "an account %s while its request streams stays the account the record spent",
+  async (_change, change) => {
+    const gw = await startEdge();
+    const tokenFile = account(gw, "a", "thasso");
+    const m = await machine(gw, "thasso", "devbox");
+    const own = gw.leases.grant(
+      { profileId: "a", provider: "claude", tokenFile },
+      { kind: "engine", owner: { workerId: "w1", clientId: m.clientId } },
+    );
+    let release!: () => void;
+    mode = {
+      kind: "hold",
+      until: new Promise((resolve) => (release = resolve)),
+    };
+    const viaMachine = send(gw, m, "/anthropic/v1/messages");
+    const viaLease = send(gw, m, "/anthropic/v1/messages", {
+      headers: { authorization: `Bearer ${own.token}` },
+    });
+    await vi.waitFor(() => assert.equal(upstreams.anthropic.length, 2));
+    change(gw, tokenFile);
+    release();
+    assert.equal((await viaMachine).status, 200);
+    assert.equal((await viaLease).status, 200);
+    await vi.waitFor(() => assert.equal(recordsOf(gw, "thasso").length, 2));
+    for (const record of recordsOf(gw, "thasso")) {
+      assert.equal(record.outcome, "forwarded");
+      assert.equal(record.account, "Account a");
+    }
+  },
+);
+
 test("users see only their own clients' records", async () => {
   const gw = await startEdge();
   gw.clients!.registry.addUser("other");
@@ -566,7 +612,7 @@ test("the seen set survives a restart; the epoch does not", async () => {
   });
 });
 
-test("/mcp: each answered or refused request is one record and one line, with no token, query or JSON-RPC content", async () => {
+test("/mcp: each answered or refused request is one record and one line, classed by its status, with no token, query or JSON-RPC content", async () => {
   const gw = await startEdge(upstreams.overrides, undefined, true);
   const m = await machine(gw, "thasso", "devbox");
   const token = gw.clients!.registry.setMcpToken(m.clientId);
@@ -593,18 +639,25 @@ test("/mcp: each answered or refused request is one record and one line, with no
     headers: { authorization: `Bearer pgmcp_${SENTINEL}` },
     body: rpc,
   });
+  const badVersion = await send(gw, m, "/mcp", {
+    headers: { ...auth, "mcp-protocol-version": "1999-01-01" },
+    body: rpc,
+  });
+  assert.equal(answered.status, 200);
   assert.equal(notAllowed.status, 405);
   assert.equal(origin.status, 403);
   assert.equal(noToken.status, 401);
-  await vi.waitFor(() => assert.equal(recordsOf(gw, "thasso").length, 4));
+  assert.equal(badVersion.status, 400);
+  await vi.waitFor(() => assert.equal(recordsOf(gw, "thasso").length, 5));
   const records = recordsOf(gw, "thasso");
   assert.deepEqual(
     records.map((r) => [r.method, r.status, r.outcome, r.reason]),
     [
-      ["POST", answered.status, "forwarded", undefined],
-      ["GET", 405, "forwarded", undefined],
+      ["POST", 200, "forwarded", undefined],
+      ["GET", 405, "refused", "method-not-allowed"],
       ["POST", 403, "refused", "mcp-origin"],
       ["POST", 401, "refused", "mcp-token"],
+      ["POST", 400, "refused", "bad-request"],
     ],
   );
   for (const record of records) {
@@ -612,19 +665,25 @@ test("/mcp: each answered or refused request is one record and one line, with no
     assert.equal(record.path, "/mcp");
     assert.equal(record.pathKey, "/mcp");
     assert.equal(record.clientCredential, "other");
-    assert.equal(record.requestBytes, 0);
     assert.equal(record.account, undefined);
     assert.equal(record.session, undefined);
     assert.deepEqual(record.client, { id: m.clientId, label: "devbox" });
   }
+  // Measured, never assumed: the answered request's body and answer.
+  assert.equal(records[0]!.requestBytes, Buffer.byteLength(rpc));
   assert.equal(records[0]!.responseBytes, Buffer.byteLength(answered.text));
+  assert.ok(records[0]!.responseBytes > 0);
+  // A gate refuses before the body is read.
+  assert.equal(records[2]!.requestBytes, 0);
+  assert.equal(records[3]!.requestBytes, 0);
   assert.equal(records[2]!.responseBytes, Buffer.byteLength(origin.text));
+  assert.equal(records[4]!.responseBytes, Buffer.byteLength(badVersion.text));
   const stored = JSON.stringify(records);
   for (const secret of [SENTINEL, token, "tools/call", "jsonrpc"])
     assert.ok(!stored.includes(secret), secret);
   // One line each, written by its record; none holds the token.
   const mcpLines = requestLines().filter((line) => line.includes('"/mcp"'));
-  assert.equal(mcpLines.length, 4);
+  assert.equal(mcpLines.length, 5);
   assert.ok(lines.every((line) => !line.includes(token)));
   assert.ok(!lines.some((line) => line.startsWith("mcp refused")));
   assert.match(
@@ -632,6 +691,37 @@ test("/mcp: each answered or refused request is one record and one line, with no
     new RegExp(
       `^- POST "/mcp" kind=- client=${m.clientId} refused mcp-token 401 \\d+ms outcome=refused via=gateway$`,
     ),
+  );
+  assert.match(
+    mcpLines[1]!,
+    / refused method-not-allowed 405 \d+ms outcome=refused via=gateway$/,
+  );
+});
+
+test("/mcp: an upload over the cap is one refused record, too-large", async () => {
+  const gw = await startEdge(upstreams.overrides, undefined, true);
+  const m = await machine(gw, "thasso", "devbox");
+  const token = gw.clients!.registry.setMcpToken(m.clientId);
+  const body = `{"pad":"${"x".repeat(1024 * 1024)}"}`;
+  // The edge answers before the upload ends and then closes the connection,
+  // so the client may see the answer or a reset; the record is the edge's.
+  await send(gw, m, "/mcp", {
+    headers: { authorization: `Bearer ${token}` },
+    body,
+  }).catch(() => undefined);
+  await vi.waitFor(() => assert.equal(recordsOf(gw, "thasso").length, 1));
+  const [record] = recordsOf(gw, "thasso");
+  assert.deepEqual(
+    [record!.outcome, record!.reason, record!.status],
+    ["refused", "too-large", 413],
+  );
+  assert.ok(record!.requestBytes > 1024 * 1024);
+  assert.ok(record!.requestBytes <= Buffer.byteLength(body));
+  assert.ok(record!.responseBytes > 0);
+  assert.ok(!JSON.stringify(record).includes("xxxx"));
+  assert.equal(
+    requestLines().filter((line) => line.includes('"/mcp"')).length,
+    1,
   );
 });
 

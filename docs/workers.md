@@ -2261,35 +2261,47 @@ client. The forwarder's once-guard (`Trace.end`) writes both, so a request that
 ends twice records once. That includes `/mcp` and the client listener's own
 refusals: what the listener answers itself it hands to the forwarder's
 `observeLocal`, which records once when the answer closes; everything else goes
-to `handleRequest`, never both.
+to `handleRequest`, never both. From admission the request's own `close`
+listener owns its end: a client that closes during the credential wait is
+recorded `failed` at once, and a credential, refusal or error that settles later
+writes no answer, no second record and contacts no upstream.
 
 - **Record** (`GatewayUiRequest` in `shared/gatewayUi.ts`): `seq` and `epoch`;
   `at`; the client's `{id, label}`; `via` (`gateway`; the relay, PR2, adds
-  `relay` with its `rid`); `host` (the route's upstream, `""` when none
-  matched), `method`, `path` (pathname only, cut to 200 characters) and
-  `pathKey`; `status` (what the client was answered, `null` if none); `outcome`
-  and `reason`; `account` (the registry name, set only once the lease is the
-  client's own or the pool picked it); `session` (the first 12 hex of the
-  session key's SHA-256, provider routes only); `clientCredential` (`none`,
-  `placeholder`, `lease` or `other`, from `authorization`, `x-api-key` and
-  `proxy-authorization`, every repeat, the most sensitive winning;
-  `requestCredential.ts`) and `clientCookie`; `requestBytes` (body bytes read
-  toward the upstream, 0 for a refusal), `responseBytes` (body bytes sent to the
-  client, a refusal's body included), `durationMs`; `firstSeen`. No record holds
-  a header value, credential, lease token, query, body or raw session key: the
-  log copies only these fields.
+  `relay` with its `rid`; on the model port PR2a adds the validated `rid` to the
+  `AdmittedClient` that `clientListener.ts` `serveModel` builds, and
+  `forward.ts` `startTrace` copies it into the entry; PR1 sets none); `host`
+  (the route's upstream, `""` when none matched), `method`, `path` (pathname
+  only, cut to 200 characters) and `pathKey`; `status` (what the client was
+  answered, `null` if none); `outcome` and `reason`; `account` (the registry
+  name, set only once the lease is the client's own or the pool picked it);
+  `session` (the first 12 hex of the session key's SHA-256, provider routes
+  only); `clientCredential` (`none`, `placeholder`, `lease` or `other`, from
+  `authorization`, `x-api-key` and `proxy-authorization`, every repeat, the most
+  sensitive winning; `requestCredential.ts`) and `clientCookie`; `requestBytes`
+  (body bytes read from the client, 0 for a refusal), `responseBytes` (body
+  bytes sent to the client, a refusal's body included), `durationMs`;
+  `firstSeen`. A forwarded body passes one counting Transform each way, lengths
+  only. No record holds a header value, credential, lease token, query, body or
+  raw session key: the log copies only these fields.
 - **Outcomes.** `forwarded` with the upstream's status; `refused` with the
   refusal case as `reason` (a WebSocket upgrade's is `upgrade`); `failed` with a
   Node error code, `unreachable`, `upstream-truncated` (after the headers,
-  status kept) or `internal-error`. A client that closes first is `forwarded`
-  once headers were sent, else `failed`, with `reason=client-closed`. `observed`
-  and `overflow` are the relay's (PR2).
-- **Answered by the edge.** `/mcp` and the listener's refusals have `host` `""`,
-  no account or session, and `requestBytes` 0 (no body goes toward an upstream);
-  `responseBytes` counts what the handler wrote. An answered `/mcp` request is
-  `forwarded` with its status, whatever the handler answered; its gate's
-  refusals are `refused` with `mcp-origin` (403) or `mcp-token` (401). No tool
-  name, JSON-RPC method or other content is recorded.
+  status kept) or `internal-error`. A client that closes before its answer ended
+  is `failed` with `reason=client-closed`, its status kept once headers were
+  sent (`null` before), never a success. `observed` and `overflow` are the
+  relay's (PR2).
+- **Answered by the edge.** `/mcp` and the listener's refusals have `host` `""`
+  and no account or session. `requestBytes` counts the body's `data` chunks
+  whoever reads them (`req.emit` is wrapped, so the handler's reads are
+  unchanged), `responseBytes` what the handler wrote; lengths only. A gate's
+  refusal is `refused` with `mcp-origin` (403) or `mcp-token` (401) and counts
+  no body. An answer ended in full is classed by its status: below 400
+  `forwarded`; 4xx `refused` (`bad-request` 400, `method-not-allowed` 405,
+  `too-large` 413, else `client-error`); 5xx `failed` (`internal-error` 500,
+  `timeout` 504, else `server-error`). An answer not ended is `failed`, status
+  `null` before headers: `aborted` when the handler destroyed it, else
+  `client-closed`. No tool name, JSON-RPC method or other content is recorded.
 - **Line.** Today's forward line plus `outcome=` and `via=gateway`; no session
   tag. A request without a resolvable client gets the line only: on the loopback
   listener, and on the model port when the registry cannot be read
@@ -2299,8 +2311,10 @@ to `handleRequest`, never both.
   random `epoch` per start: a restart empties it and old cursors mean nothing.
   `firstSeen` marks the first record for a host, method and `pathKey`; those
   identities (and nothing else) persist in `stateDir/seenRequests.json`, capped
-  at 4,096. Past the cap a new identity is flagged once per start and not
-  stored, with one log line; an unreadable file starts empty.
+  at 4,096. Past the cap a new identity is flagged but not stored, with one log
+  line. Memory stays bounded: the unstored identities remembered in memory are
+  capped at 4,096 too, so past that a repeat may be flagged again. An unreadable
+  file starts empty.
 - **Reads.** `RequestLog.since(userId, epoch, afterSeq, limit)` answers the
   user's records after `afterSeq` in `epoch`, oldest first, at most min(limit,
   500), from the oldest kept when the epoch is absent or another. The page reads

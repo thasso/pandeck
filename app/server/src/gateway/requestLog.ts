@@ -13,8 +13,10 @@
  *   in a projection.
  * - The seen set holds `(host, method, pathKey)` and nothing else. It persists
  *   in `stateDir` as `seenRequests.json`, at most `SEEN_CAPACITY` entries. Past
- *   that a new identity is flagged once per start but not stored, with one log
- *   line. An unreadable file starts an empty set and is replaced on the next
+ *   that a new identity is flagged but not stored, with one log line. Memory
+ *   stays bounded: the unstored identities kept in memory are capped at
+ *   `SEEN_CAPACITY` too, so past both caps a repeat may be flagged again. An
+ *   unreadable file starts an empty set and is replaced on the next
  *   new identity; a failed write keeps memory and is retried by the next.
  * - `since` answers one user's records after a cursor, oldest first, at most
  *   `PAGE_LIMIT`. A cursor from another epoch reads from the start.
@@ -38,7 +40,11 @@ export interface RequestEntry {
   /** Registry metadata of the authenticated client. */
   client: { id: string; label: string };
   via: RequestVia;
-  /** The relay's request id (PR2a). */
+  /**
+   * The relay's request id (PR2a). Its hook: PR2a adds the validated id to
+   * the `AdmittedClient` that `clientListener.ts` `serveModel` builds, and
+   * `forward.ts` `startTrace` copies it here. PR1 sets none.
+   */
   rid?: string;
   /** Epoch milliseconds the request started. */
   at: number;
@@ -250,7 +256,10 @@ export function createRequestLog(options: {
       log("request log: seen set unreadable; starting empty");
     }
   const seen = new Set(stored.map(identityKey));
-  /** Identities past the cap: flagged once per start, never stored. */
+  /**
+   * Identities past the cap, flagged and never stored; bounded too, so past
+   * this cap a repeat may be flagged again.
+   */
   const unstored = new Set<string>();
   let capNoted = false;
   let writeFailed = false;
