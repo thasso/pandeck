@@ -253,6 +253,7 @@ async function startUi(fake = fakeAccounts()) {
       connect: () =>
         Promise.reject(new IntegrationsRefusal("tools_unavailable")),
     },
+    requests: { since: () => ({ epoch: "", requests: [] }) },
     clients: {
       list: () => [],
       createCode: () => {

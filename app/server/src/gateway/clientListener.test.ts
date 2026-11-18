@@ -1151,7 +1151,10 @@ async function listenerWith(
       leases: new LeaseTable(),
       profiles: new ProfileRegistry(),
       needsLogin: () => [],
-      forwarder: () => ({ handleRequest: (_req, res) => res.end() }),
+      forwarder: () => ({
+        handleRequest: (_req, res) => res.end(),
+        observeLocal: () => ({ refuse: () => {} }),
+      }),
       log: () => {},
       vault: vault.port,
       tools,

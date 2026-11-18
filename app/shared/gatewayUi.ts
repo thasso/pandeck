@@ -260,6 +260,80 @@ export interface GatewayUiEnrollmentDecideRequest {
   approve: boolean;
 }
 
+/** How a logged request ended (`docs/workers.md` "Request log"). */
+export const GATEWAY_UI_REQUEST_OUTCOMES = [
+  "forwarded",
+  "refused",
+  "observed",
+  "failed",
+  "overflow",
+] as const;
+export type GatewayUiRequestOutcome =
+  (typeof GATEWAY_UI_REQUEST_OUTCOMES)[number];
+
+/** The class of the credential a client sent; never a value. */
+const GATEWAY_UI_CLIENT_CREDENTIALS = [
+  "none",
+  "placeholder",
+  "lease",
+  "other",
+] as const;
+type GatewayUiClientCredential = (typeof GATEWAY_UI_CLIENT_CREDENTIALS)[number];
+
+/**
+ * One request a client of the user sent the gateway (Task-1430 C3). Never a
+ * header value, query, body, token, lease id or raw session key.
+ */
+export interface GatewayUiRequest {
+  /** Increasing within one `epoch`. */
+  seq: number;
+  /** The edge's start: when it changes, earlier cursors mean nothing. */
+  epoch: string;
+  /** Epoch milliseconds the request started. */
+  at: number;
+  client: { id: string; label: string };
+  via: "gateway" | "relay";
+  /** The relay's request id. */
+  rid?: string;
+  /** The logical upstream host; `""` when no route matched. */
+  host: string;
+  method: string;
+  /** Pathname only, at most 200 characters. */
+  path: string;
+  /** The matched template, else the path; first-seen is keyed on it. */
+  pathKey: string;
+  /** What the client was answered, or null when it got no status. */
+  status: number | null;
+  outcome: GatewayUiRequestOutcome;
+  /** A fixed code: a refusal case, an error code or a fixed word. */
+  reason?: string;
+  /** Only on `overflow` and `relay-restarted` notes. */
+  count?: number;
+  /** Machine requests on token routes only: whether evidence lists it. */
+  listed?: boolean;
+  /** The account's registry name. */
+  account?: string;
+  /** The first 12 hex of the session key's SHA-256. */
+  session?: string;
+  clientCredential: GatewayUiClientCredential;
+  clientCookie: boolean;
+  requestBytes: number;
+  responseBytes: number;
+  durationMs: number;
+  /** The first request with this host, method and `pathKey`. */
+  firstSeen: boolean;
+}
+
+/**
+ * `GET /api/requests?epoch=&after=`: the session user's requests after the
+ * cursor, oldest first, at most 500. A cursor from another epoch reads from
+ * the oldest kept.
+ */
+export interface GatewayUiRequests {
+  epoch: string;
+  requests: GatewayUiRequest[];
+}
+
 /** Every mutation sends this header with the value `1` (and its Origin). */
 export const GATEWAY_UI_CSRF_HEADER = "x-gateway-ui";
 
@@ -520,4 +594,101 @@ export function decodeGatewayUiEnrollmentRequest(
     createdAt,
     expiresAt,
   };
+}
+
+const isCount = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+
+const isText = (value: unknown): value is string => typeof value === "string";
+
+const isBoolean = (value: unknown): value is boolean =>
+  typeof value === "boolean";
+
+/** Absent, or passes `check`. */
+const optional = <T>(
+  value: unknown,
+  check: (value: unknown) => value is T,
+): value is T | undefined => value === undefined || check(value);
+
+/** A well-formed `GatewayUiRequest`, or undefined. */
+function decodeGatewayUiRequest(value: unknown): GatewayUiRequest | undefined {
+  if (!isRecord(value) || !isRecord(value.client)) return undefined;
+  const v = value;
+  const client = value.client;
+  if (
+    !isCount(v.seq) ||
+    !isText(v.epoch) ||
+    typeof v.at !== "number" ||
+    !Number.isFinite(v.at) ||
+    !isText(client.id) ||
+    !isText(client.label) ||
+    (v.via !== "gateway" && v.via !== "relay") ||
+    !optional(v.rid, isText) ||
+    !isText(v.host) ||
+    !isText(v.method) ||
+    !isText(v.path) ||
+    !isText(v.pathKey) ||
+    (v.status !== null && !isCount(v.status)) ||
+    !GATEWAY_UI_REQUEST_OUTCOMES.includes(
+      v.outcome as GatewayUiRequestOutcome,
+    ) ||
+    !optional(v.reason, isText) ||
+    !optional(v.count, isCount) ||
+    !optional(v.listed, isBoolean) ||
+    !optional(v.account, isText) ||
+    !optional(v.session, isText) ||
+    !GATEWAY_UI_CLIENT_CREDENTIALS.includes(
+      v.clientCredential as GatewayUiClientCredential,
+    ) ||
+    !isBoolean(v.clientCookie) ||
+    !isCount(v.requestBytes) ||
+    !isCount(v.responseBytes) ||
+    !isCount(v.durationMs) ||
+    !isBoolean(v.firstSeen)
+  )
+    return undefined;
+  return {
+    seq: v.seq,
+    epoch: v.epoch,
+    at: v.at,
+    client: { id: client.id, label: client.label },
+    via: v.via,
+    ...(v.rid === undefined ? {} : { rid: v.rid }),
+    host: v.host,
+    method: v.method,
+    path: v.path,
+    pathKey: v.pathKey,
+    status: v.status,
+    outcome: v.outcome as GatewayUiRequestOutcome,
+    ...(v.reason === undefined ? {} : { reason: v.reason }),
+    ...(v.count === undefined ? {} : { count: v.count }),
+    ...(v.listed === undefined ? {} : { listed: v.listed }),
+    ...(v.account === undefined ? {} : { account: v.account }),
+    ...(v.session === undefined ? {} : { session: v.session }),
+    clientCredential: v.clientCredential as GatewayUiClientCredential,
+    clientCookie: v.clientCookie,
+    requestBytes: v.requestBytes,
+    responseBytes: v.responseBytes,
+    durationMs: v.durationMs,
+    firstSeen: v.firstSeen,
+  };
+}
+
+/** A well-formed `GatewayUiRequests`, or undefined. */
+export function decodeGatewayUiRequests(
+  value: unknown,
+): GatewayUiRequests | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.epoch !== "string" ||
+    !Array.isArray(value.requests)
+  )
+    return undefined;
+  const requests: GatewayUiRequest[] = [];
+  for (const entry of value.requests as unknown[]) {
+    const request = decodeGatewayUiRequest(entry);
+    if (!request) return undefined;
+    requests.push(request);
+  }
+  return { epoch: value.epoch, requests };
 }

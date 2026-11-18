@@ -86,7 +86,7 @@ import {
 } from "./clientRegistry.ts";
 import type { DevboxApproval } from "./devboxProof.ts";
 import type { CredentialOutcome, EdgeTools } from "./edgeTools.ts";
-import type { MachineAccess } from "./forward.ts";
+import type { AdmittedClient, LocalAnswer, MachineAccess } from "./forward.ts";
 import { MachinePool, type MachinePinRecord } from "./machinePool.ts";
 import { LoginRefusal, type LoginActor } from "./logins.ts";
 import {
@@ -224,7 +224,13 @@ interface ClientListenerDeps {
     handleRequest: (
       req: http.IncomingMessage,
       res: http.ServerResponse,
+      admitted: AdmittedClient,
     ) => void;
+    observeLocal: (
+      req: http.IncomingMessage,
+      res: http.ServerResponse,
+      admitted?: AdmittedClient,
+    ) => LocalAnswer;
   };
   /** The saved machine pins and their writer; without them, memory only. */
   machinePins?:
@@ -895,6 +901,7 @@ export async function startClientListener(
     res: http.ServerResponse,
     client: GatewayClient,
     tools: EdgeTools,
+    answer: LocalAnswer,
   ): void => {
     const refuse = (
       status: number,
@@ -910,15 +917,16 @@ export async function startClientListener(
       });
       res.end(body);
     };
+    // The request's line, written by its record, names the refusal.
     if (req.headers.origin !== undefined) {
-      log(`mcp refused for client ${client.id}: origin header`);
+      answer.refuse("mcp-origin");
       return refuse(403, "origin not allowed");
     }
     const bearer = /^Bearer ([A-Za-z0-9_-]{1,200})$/.exec(
       req.headers.authorization ?? "",
     )?.[1];
     if (!bearer || !mcpTokenMatches(client, bearer)) {
-      log(`mcp refused for client ${client.id}: no valid token`);
+      answer.refuse("mcp-token");
       return refuse(401, "mcp token required", {
         "www-authenticate": "Bearer",
       });
@@ -955,13 +963,39 @@ export async function startClientListener(
     req: http.IncomingMessage,
     res: http.ServerResponse,
   ): void => {
+    // Every request is observed once: here when the listener answers it
+    // itself, else by the forwarder. Without a resolved client, a line only.
     let client: GatewayClient | undefined;
     try {
       client = activeClient(req.socket);
     } catch {
+      const previous = authenticated.get(req.socket);
+      forwarder
+        .observeLocal(
+          req,
+          res,
+          previous && {
+            id: previous.id,
+            label: previous.label,
+            userId: previous.userId,
+          },
+        )
+        .refuse("registry-unavailable");
       return json(res, 503, { error: "client registry unavailable" });
     }
     if (!client) {
+      const previous = authenticated.get(req.socket);
+      forwarder
+        .observeLocal(
+          req,
+          res,
+          previous && {
+            id: previous.id,
+            label: previous.label,
+            userId: previous.userId,
+          },
+        )
+        .refuse("forbidden");
       const { status, body } = refusalResponse({ case: "forbidden" }, "claude");
       res.writeHead(status, {
         "content-type": "application/json",
@@ -973,9 +1007,21 @@ export async function startClientListener(
     }
     // Without tools `/mcp` is an unknown path to the forwarder, as before.
     // The path only, without parsing: a malformed target must not throw here.
+    // The client as admitted now: its record survives a revocation meanwhile.
+    const admitted = {
+      id: client.id,
+      label: client.label,
+      userId: client.userId,
+    };
     if (deps.tools && (req.url ?? "").split("?")[0] === "/mcp")
-      return mcpGate(req, res, client, deps.tools);
-    forwarder.handleRequest(req, res);
+      return mcpGate(
+        req,
+        res,
+        client,
+        deps.tools,
+        forwarder.observeLocal(req, res, admitted),
+      );
+    forwarder.handleRequest(req, res, admitted);
   };
   const model = tls.createServer(mutualTls, (socket) => {
     track(socket);

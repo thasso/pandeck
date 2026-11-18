@@ -35,6 +35,7 @@ import {
   type IntegrationsRefusalCode,
 } from "./integrations.ts";
 import type { AtlassianPreset } from "./config.ts";
+import type { GatewayWebRequests } from "./requests.ts";
 import { startGatewayWeb } from "./server.ts";
 
 const EDGE_ISSUER = "https://issuer.test";
@@ -232,9 +233,16 @@ function fakeSettings() {
     decideEnrollment: (userId, userCode, approve) =>
       record("decideEnrollment", userId, userCode, approve),
   };
+  const requests: GatewayWebRequests = {
+    since: (userId, epoch, after) => {
+      record("since", userId, epoch, after);
+      return { epoch: "e".repeat(32), requests: [] };
+    },
+  };
   return {
     integrations,
     clients,
+    requests,
     calls,
     fail: (err: Error | undefined) => (failWith = err),
     delaySet: (ms: number) => (setDelayMs = ms),
@@ -273,6 +281,7 @@ async function startUi(
     accounts: NO_ACCOUNTS,
     integrations: fake.integrations,
     clients: fake.clients,
+    requests: fake.requests,
     log: (line) => logs.push(line),
     oidcTestOptions: { allowInsecureRequests: true },
     ...(testIdleMs ? { testIdleMs } : {}),
@@ -322,6 +331,8 @@ const ROUTES: ["GET" | "POST", string, unknown?][] = [
   ["POST", "/api/clients/revoke", { clientId: "c1" }],
   ["POST", "/api/clients/mcp-token", { clientId: "c1" }],
   ["POST", "/api/clients/mcp-token/revoke", { clientId: "c1" }],
+  // A query names no user: only the cursor is read (Task-1430).
+  ["GET", "/api/requests?userId=u2"],
 ];
 
 test("T4 every new route answers 401 signed_out without a session, and its POSTs need Origin and the header", async () => {
@@ -961,4 +972,115 @@ test("T5 two users over the real seam: clients, MCP tokens, limits and the Atlas
     assert.equal(carrying.length, 1, "a secret outside its creating answer");
     for (const line of logs) assert.ok(!line.includes(secret), line);
   }
+});
+
+test("Task-1430: /api/requests answers only the session user's clients' records, whatever the query says", async () => {
+  const {
+    edge,
+    port,
+    signIn: signInEdge,
+  } = await edgeWithUi(
+    fakeTools(() =>
+      Promise.resolve({ ok: true, displayName: "Person", accountId: "acc-1" }),
+    ),
+  );
+  const registry = edge.gateway.clients!.registry;
+  const log = edge.gateway.requests!;
+  const a = await signInEdge("subject-a");
+  const b = await signInEdge("subject-b");
+  const enroll = async (cookie: string, id: string) => {
+    const coded = await api(port, cookie, "POST", "/api/clients/code", {
+      label: `${id} laptop`,
+    });
+    const client = registry.redeem(json(coded).code as string, (pending) => ({
+      id,
+      userId: pending.userId,
+      label: pending.label,
+      fingerprint: `fp-${id}`,
+      createdAt: 1_000,
+    }));
+    assert.ok(client);
+    return client;
+  };
+  const clientA = await enroll(a, "client-a");
+  const clientB = await enroll(b, "client-b");
+  assert.notEqual(clientA.userId, clientB.userId);
+  const entry = (client: typeof clientA, path: string) => ({
+    userId: client.userId,
+    client: { id: client.id, label: client.label },
+    via: "gateway" as const,
+    at: 1,
+    host: "api.anthropic.com",
+    method: "POST",
+    path,
+    status: 200,
+    outcome: "forwarded" as const,
+    clientCredential: "placeholder" as const,
+    clientCookie: false,
+    requestBytes: 1,
+    responseBytes: 2,
+    durationMs: 3,
+  });
+  log.record(entry(clientA, "/v1/messages"));
+  log.record(entry(clientB, "/v1/b-only"));
+  log.record(entry(clientA, "/v1/messages/count_tokens"));
+
+  const read = async (cookie: string, query = "") => {
+    const answer = await api(port, cookie, "GET", `/api/requests${query}`);
+    assert.equal(answer.status, 200, query);
+    assert.equal(answer.headers["cache-control"], "no-store");
+    return json(answer) as {
+      epoch: string;
+      requests: { seq: number; path: string; client: { id: string } }[];
+    };
+  };
+  const ofA = await read(a);
+  assert.equal(ofA.epoch, log.epoch);
+  assert.deepEqual(
+    ofA.requests.map((r) => [r.seq, r.path, r.client.id]),
+    [
+      [1, "/v1/messages", "client-a"],
+      [3, "/v1/messages/count_tokens", "client-a"],
+    ],
+  );
+  for (const record of ofA.requests) assert.ok(!("userId" in record));
+  // B names A's user in the query, in every spelling: still only B's.
+  for (const query of [
+    `?userId=${clientA.userId}`,
+    `?user=${clientA.userId}&userId=${clientA.userId}`,
+    `?epoch=${log.epoch}&after=0&userId=${clientA.userId}`,
+  ])
+    assert.deepEqual(
+      (await read(b, query)).requests.map((r) => r.client.id),
+      ["client-b"],
+      query,
+    );
+  // The cursor: after a seq in this epoch; another epoch reads from the start.
+  assert.deepEqual(
+    (await read(a, `?epoch=${log.epoch}&after=1`)).requests.map((r) => r.seq),
+    [3],
+  );
+  assert.deepEqual(
+    (await read(a, `?epoch=${"0".repeat(32)}&after=3`)).requests.map(
+      (r) => r.seq,
+    ),
+    [1, 3],
+  );
+  for (const query of [
+    "?after=-1",
+    "?after=1.5",
+    "?after=01",
+    "?after=1&after=2",
+    "?epoch=XYZ",
+    `?epoch=${log.epoch}&epoch=${log.epoch}`,
+  ]) {
+    const answer = await api(port, a, "GET", `/api/requests${query}`);
+    assert.equal(answer.status, 400, query);
+    assert.deepEqual(json(answer), { error: "bad_request" });
+  }
+  assert.equal(
+    (await api(port, undefined, "GET", "/api/requests")).status,
+    401,
+  );
+  assert.equal((await api(port, a, "POST", "/api/requests", {})).status, 404);
 });

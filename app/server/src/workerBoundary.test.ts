@@ -562,6 +562,9 @@ const GATEWAY_EDGE = [
   "machinePool",
   // The edge's VaultPort over gateway-vault/1.1.
   "remoteVault",
+  // The client model port's request log and its credential classes (Task-1430).
+  "requestCredential",
+  "requestLog",
   "upstreams",
   // The user-scoped account and login operations both renderers call.
   "userOperations",

@@ -10,12 +10,12 @@ Contract: `docs/workers.md` "The gateway's sign-in and UI".
   rule runs before the registry sees an identity.
 - Every non-GET/HEAD needs `Origin` equal to `publicOrigin` and
   `x-gateway-ui: 1`.
-- Accounts and logins come only through the injected `GatewayWebAccounts`
-  (`accounts.ts`), the Atlassian credential through `GatewayWebIntegrations`
-  (`integrations.ts`), clients and MCP tokens through `GatewayWebClients`
-  (`clients.ts`), users through `users.ts`. A session is the actor of its
-  logins; every table removal (`Sessions.onEnded`) ends them. The browser gets a
-  login's fixed reason code, never driver or vault text.
+- Each comes only through its injected port: accounts and logins
+  (`accounts.ts`), the Atlassian credential (`integrations.ts`), clients and MCP
+  tokens (`clients.ts`), the user's request records (`requests.ts`), users
+  (`users.ts`). A session is the actor of its logins; every table removal
+  (`Sessions.onEnded`) ends them. The browser gets a login's fixed reason code,
+  never driver or vault text.
 - An enrollment code or MCP token appears only in the answer that creates it;
   the Atlassian token in no answer.
 - On the page, a machine's enrollment request is decided only by its session's

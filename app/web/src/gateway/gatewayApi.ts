@@ -16,6 +16,7 @@ import {
   decodeGatewayUiLogin,
   decodeGatewayUiLoginStart,
   decodeGatewayUiMcpToken,
+  decodeGatewayUiRequests,
   GATEWAY_UI_CSRF_HEADER,
   type GatewayUiAccount,
   type GatewayUiAtlassian,
@@ -28,6 +29,7 @@ import {
   type GatewayUiLoginStart,
   type GatewayUiLoginStartRequest,
   type GatewayUiMcpToken,
+  type GatewayUiRequests,
 } from "@assistant/shared/gatewayUi";
 
 export class GatewayApiError extends Error {
@@ -201,4 +203,21 @@ export async function decideEnrollment(
   approve: boolean,
 ): Promise<void> {
   await post("/api/enrollments/decide", { userCode, approve });
+}
+
+/**
+ * The signed-in user's request records after `after` in `epoch` (Task-1430),
+ * oldest first, at most 500. Without an epoch, or with another one, the
+ * answer starts from the oldest kept and names the current epoch.
+ */
+export async function fetchRequests(
+  epoch: string | undefined,
+  after: number,
+  signal: AbortSignal,
+): Promise<GatewayUiRequests> {
+  const query = new URLSearchParams({ after: String(after) });
+  if (epoch !== undefined) query.set("epoch", epoch);
+  return decoded(
+    decodeGatewayUiRequests(await get(`/api/requests?${query}`, signal)),
+  );
 }

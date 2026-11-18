@@ -30,12 +30,22 @@
  * logged and never reaches the response.
  *
  * A log line names the provider, method, pathname (no query), lease id, outcome
- * and duration; on a client's port also the lease kind and the client id. No
- * line holds a credential, lease token, session key, query or body.
+ * and duration, then the outcome's class and `via=gateway`; on a client's port
+ * also the lease kind and the client id. No line holds a credential, lease
+ * token, session key, query or body. On a client's port the same request also
+ * becomes one record in the request log (`requestLog.ts`), which writes the
+ * line. Each body passes one counting Transform (`req → count → upstream`,
+ * `upstream → count → res`) that reads only a chunk's length; backpressure
+ * crosses it as any pipe's, and an error or close on either side destroys
+ * every link. From admission the request's own `close` listener owns its
+ * end: a client that closes during the credential wait is recorded failed at
+ * once, and what settles later neither answers nor contacts the upstream. A
+ * client that closes before its answer ended is failed, its status kept.
  */
 import http from "node:http";
 import https from "node:https";
-import type { Duplex } from "node:stream";
+import { performance } from "node:perf_hooks";
+import { Transform, type Duplex } from "node:stream";
 import type { CompatTarget, CompatUpstream } from "./compatUpstream.ts";
 import {
   isLeaseShaped,
@@ -51,6 +61,11 @@ import {
   type MachinePool,
   type MachineSelection,
 } from "./machinePool.ts";
+import {
+  classifyClientCredential,
+  hasClientCookie,
+} from "./requestCredential.ts";
+import type { RequestEntry, RequestLog, RequestOutcome } from "./requestLog.ts";
 import {
   refusalResponse,
   type Refusal,
@@ -105,6 +120,115 @@ interface ForwarderDeps {
   machine?: MachineAccess | undefined;
   /** Model-run evidence from any lease kind, for the pool's benches. */
   observe?: MachinePool["observe"] | undefined;
+  /** On a client's port: where each admitted request's record goes. */
+  requests?: RequestRecorder | undefined;
+}
+
+/** The request log and the registry name of an account, for records. */
+interface RequestRecorder {
+  log: Pick<RequestLog, "record">;
+  accountName: (profileId: string) => string | undefined;
+}
+
+/**
+ * The client a request came from, as the client listener admitted it at the
+ * request's start: a revocation while it waits does not lose its record.
+ */
+export interface AdmittedClient {
+  id: string;
+  label: string;
+  userId: string;
+}
+
+/** A request the client listener answers itself, being observed. */
+export interface LocalAnswer {
+  /** Marks the answer a local refusal, `reason` a fixed code. */
+  refuse(reason: string): void;
+}
+
+/** A body chunk's length as `write` and `end` take it, else 0. */
+function chunkBytes(chunk: unknown, encoding: unknown): number {
+  if (typeof chunk === "string")
+    return Buffer.byteLength(
+      chunk,
+      typeof encoding === "string" && Buffer.isEncoding(encoding)
+        ? encoding
+        : "utf8",
+    );
+  return chunk instanceof Uint8Array ? chunk.byteLength : 0;
+}
+
+/**
+ * Counts the body bytes a local handler writes to `res`: its own `write` and
+ * `end` read each chunk's length and pass every call on unchanged.
+ */
+function countAnswer(res: http.ServerResponse, add: (n: number) => void): void {
+  const { write, end } = res;
+  res.write = ((...args: unknown[]) => {
+    add(chunkBytes(args[0], args[1]));
+    return Reflect.apply(write, res, args) as boolean;
+  }) as typeof res.write;
+  res.end = ((...args: unknown[]) => {
+    add(chunkBytes(args[0], args[1]));
+    return Reflect.apply(end, res, args) as http.ServerResponse;
+  }) as typeof res.end;
+}
+
+/**
+ * A pass-through link that adds each chunk's length and keeps nothing: its
+ * buffer is a Transform's, so a slow reader still holds the writer back.
+ */
+function byteCounter(add: (n: number) => void): Transform {
+  return new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      add(chunk.length);
+      callback(null, chunk);
+    },
+  });
+}
+
+/**
+ * Counts the body bytes read from `req`, by whichever reader: its `emit`
+ * reads each `data` chunk's length and passes every event on unchanged, so
+ * the stream's mode and its reader's flow stay as they were.
+ */
+function countRead(req: http.IncomingMessage, add: (n: number) => void): void {
+  const { emit } = req;
+  req.emit = ((event: string | symbol, ...args: unknown[]) => {
+    if (event === "data") add(chunkBytes(args[0], undefined));
+    return Reflect.apply(emit, req, [event, ...args]) as boolean;
+  }) as typeof req.emit;
+}
+
+/** A queued pipelined response can have headers but no socket to send them. */
+function sentStatus(res: http.ServerResponse): number | null {
+  return res.headersSent && (res.socket !== null || res.writableFinished)
+    ? res.statusCode
+    : null;
+}
+
+/** Fixed reasons for the statuses a local answer is known to send. */
+const LOCAL_REASONS: Readonly<Record<number, string>> = {
+  400: "bad-request",
+  405: "method-not-allowed",
+  413: "too-large",
+  500: "internal-error",
+  504: "timeout",
+};
+
+/** A local answer sent in full, classed by its status. */
+function answerEnding(status: number): Ending {
+  if (status < 400)
+    return { text: String(status), outcome: "forwarded", status };
+  const refused = status < 500;
+  const reason =
+    LOCAL_REASONS[status] ?? (refused ? "client-error" : "server-error");
+  return {
+    text: `${refused ? "refused" : "failed"} ${reason} ${status}`,
+    outcome: refused ? "refused" : "failed",
+    status,
+    reason,
+  };
 }
 
 /** What the machine path needs from the client listener. */
@@ -117,12 +241,50 @@ export interface MachineAccess {
   userOf: (req: http.IncomingMessage) => string | undefined;
 }
 
-/** How a request's log line ends: its outcome, lease and the lease's kind. */
-type Done = (
-  outcome: string,
-  leaseId?: string,
-  kind?: LeaseOwnership["kind"],
-) => void;
+/** How a request ended, for its log line and its record. */
+interface Ending {
+  /** The line's outcome as before: `200`, `refused forbidden 403`, … */
+  text: string;
+  outcome: RequestOutcome;
+  /** What the client was answered, or null when it got no status. */
+  status: number | null;
+  /** A fixed code, never request or upstream text. */
+  reason?: string;
+}
+
+/**
+ * One request's bookkeeping. `end` takes effect once, whichever path ends
+ * the request first; the counters only grow until then.
+ */
+interface Trace {
+  /** The machine path's; otherwise the held lease's kind. */
+  kind?: LeaseOwnership["kind"];
+  /**
+   * Marks `profileId` the account the request spends, once it is the
+   * client's own: its registry label is read now, so a profile renamed or
+   * removed while the request streams does not change the record. A
+   * re-selection calls it again; the last call names the account.
+   */
+  spend(profileId: string): void;
+  /** The lease the request holds, once known: a client-close line names it. */
+  leaseId?: string;
+  /** The logical upstream host; `""` before one is known. */
+  host: string;
+  /** The status sent to the client, once its headers are written. */
+  status?: number;
+  /** Request body bytes read from the client toward the upstream. */
+  requestBytes: number;
+  /** Response body bytes sent to the client, a local refusal's included. */
+  responseBytes: number;
+  /** Whether `end` already took effect. */
+  readonly ended: boolean;
+  /** Holds a completed answer until its forwarded upload has finished. */
+  waitForUpload(): () => void;
+  /** A completed answer, pending the upload if one is still in flight. */
+  answered(ending: Ending, leaseId?: string): void;
+  /** A terminal failure, or an answer whose whole lifecycle is settled. */
+  end(ending: Ending, leaseId?: string): void;
+}
 
 /** Where a request goes once it is allowed, credential included. */
 interface Destination {
@@ -219,10 +381,12 @@ function bearerOf(header: string | undefined): string | undefined {
   return header ? /^Bearer +(\S+)$/i.exec(header)?.[1] : undefined;
 }
 
+const CODE_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
+
 /** A Node error code for the log and refusal text, never an error message. */
 function errorCode(err: unknown): string {
   const code = (err as { code?: unknown } | undefined)?.code;
-  return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code)
+  return typeof code === "string" && CODE_RE.test(code)
     ? code
     : "connection failed";
 }
@@ -256,13 +420,27 @@ function refusalCase(refusal: Refusal): string {
 }
 
 export function createForwarder(deps: ForwarderDeps): {
-  handleRequest: (req: http.IncomingMessage, res: http.ServerResponse) => void;
+  /** `admitted`: on a client's port, the client the listener admitted. */
+  handleRequest: (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    admitted?: AdmittedClient,
+  ) => void;
   handleUpgrade: (req: http.IncomingMessage, socket: Duplex) => void;
+  observeLocal: (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    admitted?: AdmittedClient,
+  ) => LocalAnswer;
 } {
   const { leases, log, agent, httpAgent, compat, stats } = deps;
   const loggedClients = new Set<string>();
 
-  /** Logs the first request of each distinct client, bounded and quoted. */
+  /**
+   * Logs the first request of each distinct client, bounded and quoted.
+   * Loopback only: on a client's port these headers are the client's own
+   * text, and its request is identified by its record (Task-1430).
+   */
   function noteClient(headers: http.IncomingHttpHeaders): void {
     const userAgent = headerText(headers["user-agent"]);
     const originator = headerText(headers.originator);
@@ -276,31 +454,154 @@ export function createForwarder(deps: ForwarderDeps): {
   }
 
   /**
-   * One log line per request, written once whichever path ends it. On a
-   * client's port it names the lease kind (the held lease's unless given)
-   * and the client.
+   * One line per request, and on a client's port one record, written once
+   * whichever path ends it. On a client's port the line names the lease kind
+   * (the held lease's unless the machine path set it) and the client. What
+   * the record needs of the request is read here, at its start: the
+   * admitted client, the credential's class, whether a cookie came and the
+   * session key's hash prefix, never a value.
    */
-  function requestLog(
+  function startTrace(
     req: http.IncomingMessage,
     route: Route | undefined,
-  ): Done {
+    admitted: AdmittedClient | undefined,
+  ): Trace {
     const started = Date.now();
+    const elapsedStart = performance.now();
     const url = req.url ?? "";
     const pathname = route?.pathname ?? url.split("?")[0] ?? "";
     const clientId = deps.clientOf?.(req);
-    let logged = false;
-    return (outcome, leaseId, kind) => {
-      if (logged) return;
-      logged = true;
-      const lease = leaseId ? ` lease=${leaseId}` : "";
-      const leaseKind =
-        kind ?? (leaseId === undefined ? undefined : leases.kindOf(leaseId));
-      const client = deps.clientOf
-        ? ` kind=${leaseKind ?? "-"} client=${clientId ?? "-"}`
-        : "";
-      log(
-        `${route?.upstream.provider ?? "-"} ${req.method} ${quoted(pathname, LOGGED_PATH_CHARS)}${client}${lease} ${outcome} ${Date.now() - started}ms`,
-      );
+    const { requests } = deps;
+    const recording = requests && admitted;
+    const credential = recording
+      ? {
+          clientCredential: classifyClientCredential(req.rawHeaders),
+          clientCookie: hasClientCookie(req.rawHeaders),
+        }
+      : undefined;
+    const session =
+      recording && route?.upstream.kind === "provider"
+        ? pinKeyOf(route.upstream.provider, req.rawHeaders)?.slice(0, 12)
+        : undefined;
+    let ended = false;
+    let waitingForUpload = false;
+    let answer: { ending: Ending; leaseId: string | undefined } | undefined;
+    let account: string | undefined;
+    const trace: Trace = {
+      host: route?.upstream.kind === "provider" ? route.upstream.host : "",
+      requestBytes: 0,
+      responseBytes: 0,
+      get ended() {
+        return ended;
+      },
+      spend(profileId) {
+        if (!requests || !admitted || ended) return;
+        try {
+          account = requests.accountName(profileId);
+        } catch (err) {
+          account = undefined;
+          log(`request account lookup failed (${errorCode(err)})`);
+        }
+      },
+      waitForUpload() {
+        waitingForUpload = true;
+        return () => {
+          waitingForUpload = false;
+          if (answer) trace.end(answer.ending, answer.leaseId);
+        };
+      },
+      answered(ending, leaseId = trace.leaseId) {
+        if (ended) return;
+        if (waitingForUpload) answer = { ending, leaseId };
+        else trace.end(ending, leaseId);
+      },
+      end(ending, leaseId = trace.leaseId) {
+        if (ended) return;
+        ended = true;
+        answer = undefined;
+        const durationMs = Math.max(
+          0,
+          Math.round(performance.now() - elapsedStart),
+        );
+        const lease = leaseId ? ` lease=${leaseId}` : "";
+        const leaseKind =
+          trace.kind ??
+          (leaseId === undefined ? undefined : leases.kindOf(leaseId));
+        const client = deps.clientOf
+          ? ` kind=${leaseKind ?? "-"} client=${clientId ?? "-"}`
+          : "";
+        const line = `${route?.upstream.provider ?? "-"} ${req.method} ${quoted(pathname, LOGGED_PATH_CHARS)}${client}${lease} ${ending.text} ${durationMs}ms outcome=${ending.outcome} via=gateway`;
+        if (!requests || !admitted || !credential) return log(line);
+        const entry: RequestEntry = {
+          userId: admitted.userId,
+          client: { id: admitted.id, label: admitted.label },
+          via: "gateway",
+          at: started,
+          host: trace.host,
+          method: req.method ?? "",
+          path: pathname,
+          status: ending.status,
+          outcome: ending.outcome,
+          ...(ending.reason === undefined ? {} : { reason: ending.reason }),
+          ...(account === undefined ? {} : { account }),
+          ...(session === undefined ? {} : { session }),
+          ...credential,
+          requestBytes: trace.requestBytes,
+          responseBytes: trace.responseBytes,
+          durationMs,
+        };
+        try {
+          requests.log.record(entry, line);
+        } catch (err) {
+          log(line);
+          log(`request record failed (${errorCode(err)})`);
+        }
+      },
+    };
+    return trace;
+  }
+
+  /**
+   * Ends a request whose client closed before its answer was complete: failed,
+   * with the status already sent if any. A no-op once the request ended.
+   */
+  function clientClosed(res: http.ServerResponse, trace: Trace): void {
+    if (trace.ended) return;
+    stats.clientClosed += 1;
+    trace.end({
+      text: "client closed",
+      outcome: "failed",
+      status: sentStatus(res),
+      reason: "client-closed",
+    });
+    if (!res.destroyed) res.destroy();
+  }
+
+  /**
+   * Whether the request is over before this step: its client closed (recorded
+   * now if its `close` has not run yet) or another path ended it. A step that
+   * finds it over writes nothing and contacts no upstream.
+   */
+  function gone(res: http.ServerResponse, trace: Trace): boolean {
+    if (res.destroyed) clientClosed(res, trace);
+    return trace.ended;
+  }
+
+  /** The ending of a local refusal: its case, an upgrade's as `upgrade`. */
+  function refusalEnding(refusal: Refusal, status: number): Ending {
+    const text = `refused ${refusalCase(refusal)} ${status}`;
+    if (refusal.case === "unreachable")
+      return {
+        text,
+        outcome: "failed",
+        status,
+        reason: CODE_RE.test(refusal.reason) ? refusal.reason : "unreachable",
+      };
+    return {
+      text,
+      outcome: "refused",
+      status,
+      reason: refusal.case === "websocket" ? "upgrade" : refusal.case,
     };
   }
 
@@ -308,10 +609,12 @@ export function createForwarder(deps: ForwarderDeps): {
     res: http.ServerResponse,
     shape: RefusalShape,
     refusal: Refusal,
-    done: Done,
+    trace: Trace,
     leaseId?: string,
   ): void {
+    if (gone(res, trace)) return;
     stats.refused += 1;
+    if (leaseId !== undefined) trace.leaseId = leaseId;
     const { status, body, retryAfter } = refusalResponse(refusal, shape);
     res.writeHead(status, {
       "content-type": "application/json",
@@ -320,8 +623,12 @@ export function createForwarder(deps: ForwarderDeps): {
         ? {}
         : { "retry-after": String(retryAfter) }),
     });
+    trace.status = status;
+    trace.responseBytes += Buffer.byteLength(body);
+    res.once("finish", () =>
+      trace.answered(refusalEnding(refusal, status), leaseId),
+    );
     res.end(body);
-    done(`refused ${refusalCase(refusal)} ${status}`, leaseId);
   }
 
   /** Runs response bookkeeping; a throw is logged, never answered. */
@@ -337,36 +644,34 @@ export function createForwarder(deps: ForwarderDeps): {
     req: http.IncomingMessage,
     res: http.ServerResponse,
     route: Route | undefined,
-    done: Done,
+    trace: Trace,
   ): Promise<void> {
-    if (!route) return refuse(res, "claude", { case: "unknown-prefix" }, done);
+    if (!route) return refuse(res, "claude", { case: "unknown-prefix" }, trace);
     const shape = shapeOf(route);
     const bearer = bearerOf(req.headers.authorization);
     const clientId = deps.clientOf?.(req);
     // A client's request without a lease-shaped bearer is its machine's.
     if (deps.machine && clientId !== undefined && !isLeaseShaped(bearer))
-      return serveMachine(req, res, route, clientId, deps.machine, done).catch(
-        (err: unknown) => {
-          // Named here so the line keeps its kind; answered by the caller.
-          done(`internal error (${errorCode(err)})`, undefined, "machine");
-          throw err;
-        },
-      );
+      // Its kind is on the trace, so the caller's internal-error line keeps it.
+      return serveMachine(req, res, route, clientId, deps.machine, trace);
     const refuseLease = (lease: Extract<LeaseCheck, { ok: false }>): void =>
       lease.refusal === "revoked"
         ? refuse(
             res,
             shape,
             { case: "revoked-lease", reason: lease.reason },
-            done,
+            trace,
             lease.leaseId,
           )
-        : refuse(res, shape, { case: "unknown-lease" }, done);
+        : refuse(res, shape, { case: "unknown-lease" }, trace);
     const lease = leases.verify(bearer);
     if (!lease.ok) return refuseLease(lease);
     const { leaseId, binding } = lease;
+    trace.leaseId = leaseId;
     if (leases.clientOf(leaseId) !== clientId)
-      return refuse(res, shape, { case: "forbidden" }, done, leaseId);
+      return refuse(res, shape, { case: "forbidden" }, trace, leaseId);
+    // Only the client's own lease names its account in the record.
+    trace.spend(binding.profileId);
     const { upstream } = route;
     if (upstream.kind === "compat") {
       // An engine or server lease of an OpenAI-compatible profile, never a
@@ -376,19 +681,20 @@ export function createForwarder(deps: ForwarderDeps): {
         (kind !== "engine" && kind !== "server") ||
         binding.provider !== "openai-compatible"
       )
-        return refuse(res, shape, { case: "forbidden" }, done, leaseId);
+        return refuse(res, shape, { case: "forbidden" }, trace, leaseId);
       const target = compat.current(binding.profileId);
       if (!target)
-        return refuse(res, shape, { case: "compat-unset" }, done, leaseId);
+        return refuse(res, shape, { case: "compat-unset" }, trace, leaseId);
+      trace.host = target.host;
       if (!isCompatAllowed(route, req.method, target.basePath))
-        return refuse(res, shape, { case: "forbidden" }, done, leaseId);
+        return refuse(res, shape, { case: "forbidden" }, trace, leaseId);
       return send(
         req,
         res,
         route,
         compatDestination(target),
         shape,
-        done,
+        trace,
         leaseId,
       );
     }
@@ -397,21 +703,23 @@ export function createForwarder(deps: ForwarderDeps): {
       binding.provider !== upstream.provider ||
       !isAllowed(route, req.method, leases.kindOf(leaseId))
     )
-      return refuse(res, shape, { case: "forbidden" }, done, leaseId);
+      return refuse(res, shape, { case: "forbidden" }, trace, leaseId);
     // A renewal may come first; a dead login is refused without upstream.
     const credential = await deps.vault.credentialFor(binding);
+    // A client gone while it waited was recorded then; nothing more is sent.
+    if (gone(res, trace)) return;
     // A revocation that arrived while it waited takes effect now.
     const still = leases.verify(bearer);
     if (!still.ok) return refuseLease(still);
     if (!credential.ok)
-      return refuse(res, shape, credentialRefusal(credential), done, leaseId);
+      return refuse(res, shape, credentialRefusal(credential), trace, leaseId);
     send(
       req,
       res,
       route,
       providerDestination(req, route, upstream, binding, credential),
       shape,
-      done,
+      trace,
       leaseId,
     );
   }
@@ -428,20 +736,20 @@ export function createForwarder(deps: ForwarderDeps): {
     route: Route,
     clientId: string,
     machine: MachineAccess,
-    logDone: Done,
+    trace: Trace,
   ): Promise<void> {
     const shape = shapeOf(route);
-    const done: Done = (outcome, leaseId) =>
-      logDone(outcome, leaseId, "machine");
+    // Every line of a machine request names its kind, an internal error's too.
+    trace.kind = "machine";
     if (!isLoopbackOnly(req.rawHeaders))
-      return refuse(res, shape, { case: "machine-origin" }, done);
+      return refuse(res, shape, { case: "machine-origin" }, trace);
     const { upstream } = route;
     // Never `/compat`, and only the engine routes.
     if (
       upstream.kind !== "provider" ||
       !isAllowed(route, req.method, "machine")
     )
-      return refuse(res, shape, { case: "forbidden" }, done);
+      return refuse(res, shape, { case: "forbidden" }, trace);
     const { provider } = upstream;
     const label = provider === "claude" ? "Claude" : "OpenAI";
     const pin = {
@@ -452,7 +760,7 @@ export function createForwarder(deps: ForwarderDeps): {
     for (let attempt = 0; ; attempt += 1) {
       const userId = machine.userOf(req);
       if (userId === undefined)
-        return refuse(res, shape, { case: "forbidden" }, done);
+        return refuse(res, shape, { case: "forbidden" }, trace);
       const outcome = machine.pool.select(userId, pin);
       if (!outcome.ok)
         return refuse(
@@ -465,14 +773,17 @@ export function createForwarder(deps: ForwarderDeps): {
                 provider: label,
                 retryAfterSeconds: outcome.retryAfterSeconds,
               },
-          done,
+          trace,
         );
       const { selection } = outcome;
       const { leaseId, binding } = selection;
+      trace.leaseId = leaseId;
+      trace.spend(binding.profileId);
       const credential = await deps.vault.credentialFor(binding);
+      if (gone(res, trace)) return;
       // The final validation: what changed while it waited takes effect now.
       if (machine.userOf(req) !== userId)
-        return refuse(res, shape, { case: "forbidden" }, done, leaseId);
+        return refuse(res, shape, { case: "forbidden" }, trace, leaseId);
       // A dead login is a changed selection, never the vault's 401 here.
       const current =
         machine.pool.isCurrent(selection) &&
@@ -481,10 +792,16 @@ export function createForwarder(deps: ForwarderDeps): {
           credential.refusal.case !== "needs-login");
       if (!current) {
         if (attempt === 0) continue;
-        return refuse(res, shape, { case: "machine-retry" }, done, leaseId);
+        return refuse(res, shape, { case: "machine-retry" }, trace, leaseId);
       }
       if (!credential.ok)
-        return refuse(res, shape, credentialRefusal(credential), done, leaseId);
+        return refuse(
+          res,
+          shape,
+          credentialRefusal(credential),
+          trace,
+          leaseId,
+        );
       return send(
         req,
         res,
@@ -498,7 +815,7 @@ export function createForwarder(deps: ForwarderDeps): {
           selection,
         ),
         shape,
-        done,
+        trace,
         leaseId,
       );
     }
@@ -585,20 +902,21 @@ export function createForwarder(deps: ForwarderDeps): {
     route: Route,
     destination: Destination,
     shape: RefusalShape,
-    done: Done,
+    trace: Trace,
     leaseId: string,
   ): void {
-    if (res.destroyed) {
-      stats.clientClosed += 1;
-      return done("client closed", leaseId);
-    }
+    if (gone(res, trace)) return;
     forward(
       req,
       res,
       route,
       destination,
-      (outcome) => done(outcome, leaseId),
-      (refusal) => refuse(res, shape, refusal, done, leaseId),
+      trace,
+      (ending) =>
+        ending.outcome === "forwarded"
+          ? trace.answered(ending, leaseId)
+          : trace.end(ending, leaseId),
+      (refusal) => refuse(res, shape, refusal, trace, leaseId),
     );
   }
 
@@ -607,11 +925,16 @@ export function createForwarder(deps: ForwarderDeps): {
     res: http.ServerResponse,
     route: Route,
     destination: Destination,
-    done: (outcome: string) => void,
+    trace: Trace,
+    done: (ending: Ending) => void,
     refuseLocally: (refusal: Refusal) => void,
   ): void {
     const { options } = destination;
     let ended: "client" | "upstream" | undefined;
+    // Each body passes one counting link; every link below is torn down with
+    // the request, whichever side ends it.
+    const countIn = byteCounter((n) => (trace.requestBytes += n));
+    const countOut = byteCounter((n) => (trace.responseBytes += n));
 
     const upstreamReq = (destination.secure ? https : http).request({
       ...options,
@@ -629,18 +952,32 @@ export function createForwarder(deps: ForwarderDeps): {
       },
     });
 
+    // Construction can throw before there is an upload lifetime to wait for.
+    const uploaded = trace.waitForUpload();
+
     /** The upstream failed after headers: the engine sees a truncated stream. */
     const failAfterHeaders = (err?: unknown): void => {
-      if (ended) return;
+      if (ended || trace.ended) return;
       ended = "upstream";
       stats.upstreamErrors += 1;
+      countIn.destroy();
+      countOut.destroy();
       res.destroy();
-      done(`upstream error after headers (${errorCode(err)})`);
+      const code = errorCode(err);
+      done({
+        text: `upstream error after headers (${code})`,
+        outcome: "failed",
+        status: sentStatus(res),
+        reason: CODE_RE.test(code) ? code : "upstream-truncated",
+      });
     };
 
     upstreamReq.on("response", (upstreamRes) => {
-      if (ended) {
+      if (ended || trace.ended || res.destroyed) {
+        ended = "client";
         upstreamRes.destroy();
+        cancel();
+        clientClosed(res, trace);
         return;
       }
       // An abort surfaces as `close` before `complete`; the error adds nothing.
@@ -659,16 +996,42 @@ export function createForwarder(deps: ForwarderDeps): {
         status,
         forwardableRaw(upstreamRes.rawHeaders, ["set-cookie"]),
       );
-      res.on("finish", () => done(String(status)));
-      upstreamRes.pipe(res);
+      trace.status = status;
+      res.on("finish", () =>
+        done({ text: String(status), outcome: "forwarded", status }),
+      );
+      countOut.on("error", (err) => failAfterHeaders(err));
+      upstreamRes.pipe(countOut).pipe(res);
     });
 
+    // Node can detach an early finished response before the incomplete
+    // IncomingMessage gets a close event. Its socket still owns that upload.
+    const uploadClosed = (): void => {
+      if (!upstreamReq.writableFinished && !trace.ended) {
+        cancel();
+        clientClosed(res, trace);
+      }
+    };
+    req.socket.once("close", uploadClosed);
+    upstreamReq.once("finish", () => {
+      req.socket.off("close", uploadClosed);
+      uploaded();
+    });
+    upstreamReq.once("close", () => {
+      req.socket.off("close", uploadClosed);
+      // A peer that stops reading before upload finish cannot receive more
+      // bytes. Settle this failed lifetime even if its answer already finished.
+      if (!upstreamReq.writableFinished && !ended && !trace.ended)
+        failAfterHeaders();
+    });
     upstreamReq.on("error", (err) => {
-      if (ended) return;
+      if (ended || trace.ended) return;
       if (res.headersSent) return failAfterHeaders(err);
       ended = "upstream";
       stats.upstreamErrors += 1;
-      req.unpipe(upstreamReq);
+      req.unpipe(countIn);
+      countIn.destroy();
+      uploaded();
       refuseLocally({
         case: "unreachable",
         upstream: destination.label,
@@ -676,29 +1039,70 @@ export function createForwarder(deps: ForwarderDeps): {
       });
     });
 
-    // A client that closes first is a normal end (an engine stops reading
-    // once it has the answer): cancel the upstream, log no upstream error.
-    res.on("close", () => {
-      if (ended || res.writableFinished) return;
-      ended = "client";
-      stats.clientClosed += 1;
+    // A client that closes before its answer ended (an engine may stop
+    // reading early): the request's own close listener records it failed;
+    // here every link toward and from the upstream is cancelled, and no
+    // upstream error is logged.
+    const cancel = (): void => {
       upstreamReq.destroy();
-      done("client closed");
+      countIn.destroy();
+      countOut.destroy();
+    };
+    res.on("close", () => {
+      setTimeout(() => {
+        if (ended || res.writableFinished) return;
+        ended = "client";
+        cancel();
+      }, 10);
     });
-    res.on("error", () => upstreamReq.destroy());
-    req.on("error", () => upstreamReq.destroy());
-    req.pipe(upstreamReq);
+    res.on("error", cancel);
+    req.on("error", () => {
+      cancel();
+      clientClosed(res, trace);
+    });
+    req.on("close", () => {
+      if (!req.complete) {
+        cancel();
+        clientClosed(res, trace);
+      }
+    });
+    countIn.on("error", () => upstreamReq.destroy());
+    req.pipe(countIn).pipe(upstreamReq);
   }
 
   return {
-    handleRequest(req, res) {
-      noteClient(req.headers);
+    handleRequest(req, res, admitted) {
+      if (!admitted) noteClient(req.headers);
       const route = routeFor(req.url ?? "");
-      const done = requestLog(req, route);
-      handle(req, res, route, done).catch((err: unknown) => {
-        done(`internal error (${errorCode(err)})`);
-        if (res.headersSent) res.destroy();
-        else res.writeHead(500).end();
+      const trace = startTrace(req, route, admitted);
+      // The request's end belongs to this trace from admission on: a client
+      // that closes during any wait is recorded at once, and whatever settles
+      // later finds it ended. An answer handed over in full is not a close.
+      res.once("close", () => {
+        setTimeout(() => {
+          if (trace.ended) return;
+          // Its finish handler owns a completed answer, including one still
+          // waiting for upload completion. Close must not publish it early.
+          if (!res.writableFinished) clientClosed(res, trace);
+        }, 10);
+      });
+      handle(req, res, route, trace).catch((err: unknown) => {
+        if (gone(res, trace)) return;
+        const sent = res.headersSent;
+        const ending: Ending = {
+          text: `internal error (${errorCode(err)})`,
+          outcome: "failed",
+          status: sent ? sentStatus(res) : 500,
+          reason: "internal-error",
+        };
+        if (sent) {
+          trace.end(ending);
+          res.destroy();
+        } else {
+          trace.status = 500;
+          res.once("finish", () => trace.answered(ending));
+          res.writeHead(500).end();
+        }
       });
     },
 
@@ -706,15 +1110,96 @@ export function createForwarder(deps: ForwarderDeps): {
     handleUpgrade(req, socket) {
       noteClient(req.headers);
       const route = routeFor(req.url ?? "");
-      const done = requestLog(req, route);
+      const trace = startTrace(req, route, undefined);
       stats.refused += 1;
       const refusal: Refusal = { case: "websocket" };
       const { status, body } = refusalResponse(refusal, shapeOf(route));
       socket.on("error", () => socket.destroy());
+      trace.status = status;
+      trace.responseBytes += Buffer.byteLength(body);
+      socket.once("finish", () => trace.end(refusalEnding(refusal, status)));
+      socket.once("close", () => {
+        if (!socket.writableFinished)
+          trace.end({
+            text: "client closed",
+            outcome: "failed",
+            status: null,
+            reason: "client-closed",
+          });
+      });
       socket.end(
         `HTTP/1.1 ${status} ${http.STATUS_CODES[status]}\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\nconnection: close\r\n\r\n${body}`,
       );
-      done(`refused ${refusalCase(refusal)} ${status}`);
+    },
+
+    /**
+     * A client-port request the listener answers itself (`/mcp`, its own
+     * refusals): one line and, with `admitted`, one record, written once
+     * when the answer closes. Nothing is read from the request but its
+     * method, path and credential class. Both byte counts are lengths only:
+     * `requestBytes` from the request's `data` events, whoever reads them
+     * (its `emit` is wrapped, so no listener changes how the handler reads),
+     * `responseBytes` from the handler's `write` and `end`.
+     *
+     * An answer completed at `finish` is classed by its status: below 400
+     * forwarded, 4xx refused, 5xx failed, each with a fixed reason. An
+     * answer closed before completion, even after `end`, is failed, its
+     * status null before headers: `aborted` when the handler destroyed it,
+     * else `client-closed`. A completed gate's `refuse` wins over its status.
+     */
+    observeLocal(req, res, admitted) {
+      const trace = startTrace(req, undefined, admitted);
+      let refused: string | undefined;
+      let destroyedHere = false;
+      // A gate refuses before the body is read: what Node discards after
+      // its answer is not the request's.
+      countRead(req, (n) => {
+        if (refused === undefined) trace.requestBytes += n;
+      });
+      countAnswer(res, (n) => (trace.responseBytes += n));
+      const { destroy } = res;
+      // The handler's own teardown while its client is still connected; a
+      // destroy after the client went away is that client's close.
+      res.destroy = ((...args: unknown[]) => {
+        if (!req.socket.destroyed) destroyedHere = true;
+        return Reflect.apply(destroy, res, args) as http.ServerResponse;
+      }) as typeof res.destroy;
+      const finish = (): void => {
+        if (trace.ended) return;
+        const status = res.headersSent ? res.statusCode : null;
+        if (status !== null) trace.status = status;
+        if (refused !== undefined)
+          return trace.end({
+            text: `refused ${refused} ${status ?? "-"}`,
+            outcome: "refused",
+            status,
+            reason: refused,
+          });
+        if (status === null) return;
+        trace.end(answerEnding(status));
+      };
+      res.once("finish", finish);
+      // Allow an already-scheduled finish to run before the failure fallback.
+      // Close alone never proves completion, regardless of the reply's status.
+      res.once("close", () => {
+        setTimeout(() => {
+          if (trace.ended) return;
+          const status = sentStatus(res);
+          if (status !== null) trace.status = status;
+          const reason = destroyedHere ? "aborted" : "client-closed";
+          trace.end({
+            text: reason === "aborted" ? "aborted" : "client closed",
+            outcome: "failed",
+            status,
+            reason,
+          });
+        }, 10);
+      });
+      return {
+        refuse(reason) {
+          refused = reason;
+        },
+      };
     },
   };
 }

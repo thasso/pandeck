@@ -37,6 +37,7 @@ import {
   type UserOperations,
 } from "./gateway/userOperations.ts";
 import type { EdgeTools } from "./gateway/edgeTools.ts";
+import { PAGE_LIMIT, type RequestLog } from "./gateway/requestLog.ts";
 import type { IntegrationClients } from "./gateway/integrationClients.ts";
 import type { LoginDrivers } from "./gateway/vaultPort.ts";
 import { createEdgeTools } from "./gatewayTools/index.ts";
@@ -49,6 +50,7 @@ import {
   ClientsRefusal,
   type GatewayWebClients,
 } from "./gatewayWeb/clients.ts";
+import type { GatewayWebRequests } from "./gatewayWeb/requests.ts";
 import {
   GatewayWebConfigError,
   admittedEmail,
@@ -246,6 +248,25 @@ function webIntegrations(operations: UserOperations): GatewayWebIntegrations {
 }
 
 /** The page's clients over the edge's user-scoped operations. */
+/**
+ * The session user's records from the request log: the log's projection,
+ * which never holds a user id, at most `PAGE_LIMIT` per answer.
+ */
+function webRequests(log: RequestLog | undefined): GatewayWebRequests {
+  return {
+    since: (userId, epoch, after) => {
+      if (!log) throw new Error("The edge has no request log.");
+      const { epoch: current, records } = log.since(
+        userId,
+        epoch,
+        after,
+        PAGE_LIMIT,
+      );
+      return { epoch: current, requests: records };
+    },
+  };
+}
+
 function webClients(operations: UserOperations): GatewayWebClients {
   const call = <T>(run: () => T): T => {
     try {
@@ -417,6 +438,7 @@ export async function startEdge(
           accounts: webAccounts(edge.userOperations),
           integrations: webIntegrations(edge.userOperations),
           clients: webClients(edge.userOperations),
+          requests: webRequests(gateway.requests),
           log: (line) => console.log(`[gateway] ${line}`),
           ...(options.bindHost ? { bindHost: options.bindHost } : {}),
           ...(extras.oidcTestOptions
