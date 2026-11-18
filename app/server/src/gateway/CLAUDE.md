@@ -13,11 +13,12 @@ Contract: `docs/workers.md` "Credentials" and ADR-0005.
   lease to its pool's pick of the client user's registry accounts; a grant binds
   provider and, for a login, token file from the registry, never from the
   request.
-- State goes only to `stateDir`, through `privateJsonFile.ts`. It holds hashes
-  and paths (lease secrets and enrollment codes hashed), never a token, lease
-  token or pushed key; its only keys are TLS keys (edge, vault link). Each
-  compatible profile's pushed endpoint and key live in memory only, and a lease
-  reaches only its own profile's pair. A client lease, only its client.
+- State goes only to `stateDir`, through `privateJsonFile.ts`. It holds hashes,
+  paths and the request log's seen set (lease secrets and enrollment codes
+  hashed), never a token, lease token or pushed key; its only keys are TLS keys
+  (edge, vault link). Each compatible profile's pushed endpoint and key live in
+  memory only, and a lease reaches only its own profile's pair. A client lease,
+  only its client.
 - Only renewal writes token files, in the profile's writer lane: Claude's under
   the CLI's locks with compare-and-swap and a same-directory rename that never
   creates a directory, Codex's only through the injected pi port's lock-fenced

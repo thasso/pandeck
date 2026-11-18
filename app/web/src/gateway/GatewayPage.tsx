@@ -22,6 +22,10 @@ import {
   type GatewayAtlassianProps,
 } from "./GatewayAtlassian.tsx";
 import { GatewayClients, type GatewayClientsProps } from "./GatewayClients.tsx";
+import {
+  GatewayRequests,
+  type GatewayRequestsProps,
+} from "./GatewayRequests.tsx";
 import logoUrl from "../../public/icon.svg";
 import { LogOut } from "lucide-react";
 
@@ -61,12 +65,14 @@ export interface GatewayPageProps {
   atlassian?: GatewayAtlassianProps | undefined;
   /** The signed-in user's clients and MCP tokens (Task-1405). */
   clients?: GatewayClientsProps | undefined;
+  /** The signed-in user's clients' request log (Task-1430). */
+  requests?: GatewayRequestsProps | undefined;
 }
 
 /**
- * The gateway's own page (Task-1402, Task-1405): sign in with the
- * deployment's provider, see who you are, your accounts, your Jira credential
- * and your clients, sign out. Its own entry, served by the
+ * The gateway's own page (Task-1402, Task-1405, Task-1430): sign in with
+ * the deployment's provider, see who you are, your accounts, your Jira
+ * credential, your clients and their requests, sign out. Its own entry, served by the
  * edge; no Pandeck store, socket, router or token.
  */
 export function GatewayPage({
@@ -76,6 +82,7 @@ export function GatewayPage({
   accounts,
   atlassian,
   clients,
+  requests,
 }: GatewayPageProps) {
   return (
     <div className="flex min-h-svh flex-col bg-background text-foreground">
@@ -150,6 +157,9 @@ export function GatewayPage({
         ) : null}
         {state.kind === "signedIn" && clients ? (
           <GatewayClients {...clients} />
+        ) : null}
+        {state.kind === "signedIn" && requests ? (
+          <GatewayRequests {...requests} />
         ) : null}
       </main>
     </div>

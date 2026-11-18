@@ -227,6 +227,7 @@ async function startUi() {
         Promise.reject(new IntegrationsRefusal("tools_unavailable")),
     },
     clients: fake.clients,
+    requests: { since: () => ({ epoch: "", requests: [] }) },
     log: (line) => logs.push(line),
     now: () => now,
     oidcTestOptions: { allowInsecureRequests: true },

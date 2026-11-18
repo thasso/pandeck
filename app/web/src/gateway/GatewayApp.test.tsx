@@ -16,6 +16,7 @@ import { GatewayApp } from "./GatewayApp.tsx";
 let root: Root | undefined;
 let host: HTMLDivElement;
 const fetchMock = vi.fn<typeof fetch>();
+const EPOCH = "e".repeat(32);
 
 function answer(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -113,7 +114,7 @@ test("a 503 or a malformed answer shows the unavailable state", async () => {
   }
 });
 
-test("signed in: Accounts, Jira and Clients each load; signed out none is fetched", async () => {
+test("signed in: Accounts, Jira, Clients and Requests each load; signed out none is fetched", async () => {
   const paths = () => fetchMock.mock.calls.map(([input]) => String(input));
   fetchMock.mockResolvedValueOnce(answer(401, { error: "signed_out" }));
   await render("/");
@@ -146,6 +147,8 @@ test("signed in: Accounts, Jira and Clients each load; signed out none is fetche
             ],
           }),
         );
+      case "/api/requests?after=0":
+        return Promise.resolve(answer(200, { epoch: EPOCH, requests: [] }));
       default:
         return Promise.resolve(answer(404, {}));
     }
@@ -159,11 +162,12 @@ test("signed in: Accounts, Jira and Clients each load; signed out none is fetche
     "/api/clients",
     "/api/integrations/atlassian",
     "/api/me",
+    "/api/requests?after=0",
   ]);
   const sections = [...host.querySelectorAll("section")].map((section) =>
     section.getAttribute("aria-label"),
   );
-  expect(sections).toEqual(["Accounts", "Jira", "Clients"]);
+  expect(sections).toEqual(["Accounts", "Jira", "Clients", "Requests"]);
   expect(host.textContent).toContain("x.atlassian.net");
   expect(host.textContent).toContain("Laptop");
 });
@@ -190,6 +194,8 @@ function signedInRoutes() {
         );
       case "/api/clients":
         return Promise.resolve(answer(200, { clients: [] }));
+      case "/api/requests?after=0":
+        return Promise.resolve(answer(200, { epoch: EPOCH, requests: [] }));
       default:
         return Promise.resolve(answer(404, { error: "not_found" }));
     }

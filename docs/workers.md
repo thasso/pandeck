@@ -2239,15 +2239,62 @@ whatever the `Host` (above). No route, body or credential handling changes.
   changed selection.
 
 - **Logs.** Every forward line on a client's port names
-  `kind=<engine|server|machine>` and `client=<id>`. No line holds the
-  placeholder, a session key or its hash, a token, a query or a body. A failure
-  while recording an answer (a registry read, a pin save) is logged with a fixed
-  line and never changes the answer.
+  `kind=<engine|server|machine>` and `client=<id>`, and every forward line ends
+  `outcome=<outcome> via=gateway` ("Request log"). No line holds the
+  placeholder, a session key or its hash, a token, a query or a body; only a
+  request record holds the session tag. A failure while recording an answer (a
+  registry read, a pin save) is logged with a fixed line and never changes the
+  answer.
 - **Encrypted reasoning.** After a move between accounts, a Codex, pi or
   OpenCode conversation that carries encrypted reasoning may be refused by the
   new account. Pandeck rewrites history on the driver side for its own sessions
   (`sessionAccountSwitch.ts`); the gateway never edits a body, so the user
   starts a new session.
+
+#### Request log
+
+Every model request on a client's port gets one structured record and one log
+line (Task-1430 PR1, `gateway/requestLog.ts`), whatever its ending: forwarded,
+refused locally, unreachable, cut off after the headers, or closed by the
+client. The forwarder's once-guard (`Trace.end`) writes both, so a request that
+ends twice records once.
+
+- **Record** (`GatewayUiRequest` in `shared/gatewayUi.ts`): `seq` and `epoch`;
+  `at`; the client's `{id, label}`; `via` (`gateway`; the relay, PR2, adds
+  `relay` with its `rid`); `host` (the route's upstream, `""` when none
+  matched), `method`, `path` (pathname only, cut to 200 characters) and
+  `pathKey`; `status` (what the client was answered, `null` if none); `outcome`
+  and `reason`; `account` (the registry name, set only once the lease is the
+  client's own or the pool picked it); `session` (the first 12 hex of the
+  session key's SHA-256, provider routes only); `clientCredential` (`none`,
+  `placeholder`, `lease` or `other`, from `authorization`, `x-api-key` and
+  `proxy-authorization`, every repeat, the most sensitive winning;
+  `requestCredential.ts`) and `clientCookie`; `requestBytes` (body bytes read
+  toward the upstream, 0 for a refusal), `responseBytes` (body bytes sent to the
+  client, a refusal's body included), `durationMs`; `firstSeen`. No record holds
+  a header value, credential, lease token, query, body or raw session key: the
+  log copies only these fields.
+- **Outcomes.** `forwarded` with the upstream's status; `refused` with the
+  refusal case as `reason` (a WebSocket upgrade's is `upgrade`); `failed` with a
+  Node error code, `unreachable`, `upstream-truncated` (after the headers,
+  status kept) or `internal-error`. A client that closes first is `forwarded`
+  once headers were sent, else `failed`, with `reason=client-closed`. `observed`
+  and `overflow` are the relay's (PR2).
+- **Line.** Today's forward line plus `outcome=` and `via=gateway`; no session
+  tag. Requests on the loopback listener have no client: line only.
+- **Not recorded:** `/mcp`, and requests the client listener refuses before the
+  forwarder (no certificate, revoked client, unknown port).
+- **Retention.** A ring of the last 5,000 records of all users, in memory, and a
+  random `epoch` per start: a restart empties it and old cursors mean nothing.
+  `firstSeen` marks the first record for a host, method and `pathKey`; those
+  identities (and nothing else) persist in `stateDir/seenRequests.json`, capped
+  at 4,096. Past the cap a new identity is flagged once per start and not
+  stored, with one log line; an unreadable file starts empty.
+- **Reads.** `RequestLog.since(userId, epoch, afterSeq, limit)` answers the
+  user's records after `afterSeq` in `epoch`, oldest first, at most min(limit,
+  500), from the oldest kept when the epoch is absent or another. The page reads
+  it through `GET /api/requests` ("The gateway's sign-in and UI"), the user only
+  from the session.
 
 #### Tools on the edge
 
@@ -2672,6 +2719,14 @@ preset).
     `POST /api/clients/mcp-token {clientId}` → `{token}`, replacing an earlier
     one; `POST /api/clients/mcp-token/revoke {clientId}` → 204. Another user's
     client, a missing or a revoked one is `404 unknown_client`, alike.
+  - `GET /api/requests[?epoch=<32 hex>&after=<seq>]` →
+    `{epoch, requests: [GatewayUiRequest]}`, the session user's clients' records
+    only ("Request log"); any other parameter, a `userId` included, is ignored,
+    and a malformed cursor is `400 bad_request`. The page's Requests section
+    reads it every 5 s while the page is visible, starts over when the epoch
+    changes, keeps the newest 2,000 records and renders at most 200 rows. It
+    marks `firstSeen` (New) and `listed === false` (Unlisted), and filters by
+    either and by outcome.
   - Page bounds: a code is refused (`409 limit_reached`, nothing written) when
     the user has 4 unexpired codes, or when active clients plus unexpired codes
     reach 16, counted inside the registry's write lock. A pending code thus

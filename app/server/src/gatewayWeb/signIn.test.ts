@@ -207,6 +207,7 @@ async function startUi(
     accounts: NO_ACCOUNTS,
     integrations: NO_INTEGRATIONS,
     clients: NO_CLIENTS,
+    requests: { since: () => ({ epoch: "", requests: [] }) },
     log: (line) => logs.push(line),
     now: () => clock,
     oidcTestOptions: provider.oidcTestOptions ?? {

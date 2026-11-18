@@ -6,7 +6,8 @@
  * the Atlassian credential (`/api/integrations/*`, `GatewayWebIntegrations`;
  * with an Atlassian OAuth client, "Sign in with Atlassian": a POST start
  * answering the authorize URL and `/auth/atlassian/callback`, Task-1411),
- * clients and MCP tokens (`/api/clients*`, `GatewayWebClients`), machines'
+ * clients and MCP tokens (`/api/clients*`, `GatewayWebClients`), the user's
+ * clients' requests (`GET /api/requests`, `GatewayWebRequests`), machines'
  * enrollment requests (`/api/enrollments/*`, Task-1410: looked up and decided
  * by user code under a per-user and global budget, `enrollmentBudget.ts`) and
  * the gateway page's built files. An enrollment code or MCP token is only in
@@ -43,6 +44,7 @@ import {
   type GatewayUiLoginStart,
   type GatewayUiMcpToken,
   type GatewayUiMe,
+  type GatewayUiRequests,
   type GatewayUiSigninCode,
 } from "@assistant/shared/gatewayUi";
 import { contentTypeFor } from "../webStatic.ts";
@@ -67,6 +69,7 @@ import {
   type GatewayWebClients,
 } from "./clients.ts";
 import { EnrollmentBudget } from "./enrollmentBudget.ts";
+import { decodeRequestsQuery, type GatewayWebRequests } from "./requests.ts";
 import { admittedEmail, type GatewayWebConfig } from "./config.ts";
 import {
   atlassianAuthorizeUrl,
@@ -163,6 +166,7 @@ export interface GatewayWebOptions {
   accounts: GatewayWebAccounts;
   integrations: GatewayWebIntegrations;
   clients: GatewayWebClients;
+  requests: GatewayWebRequests;
   log: (line: string) => void;
   /** Where the port binds; `127.0.0.1` unless given. */
   bindHost?: string;
@@ -255,7 +259,8 @@ function readBody(
 export async function startGatewayWeb(
   options: GatewayWebOptions,
 ): Promise<RunningGatewayWeb> {
-  const { config, users, accounts, integrations, clients, log } = options;
+  const { config, users, accounts, integrations, clients, requests, log } =
+    options;
   const idleMs = options.testIdleMs?.idle ?? IDLE_MS;
   const integrationIdleMs =
     options.testIdleMs?.integration ?? INTEGRATION_IDLE_MS;
@@ -306,7 +311,8 @@ export async function startGatewayWeb(
       | GatewayUiClients
       | GatewayUiEnrollmentCode
       | GatewayUiEnrollmentRequest
-      | GatewayUiMcpToken,
+      | GatewayUiMcpToken
+      | GatewayUiRequests,
     headers: Record<string, string> = {},
   ): void =>
     send(
@@ -838,6 +844,22 @@ export async function startGatewayWeb(
       const session = sessions.lookup(cookieOf(req, SESSION_COOKIE));
       if (!session) return json(res, 401, { error: "signed_out" });
       return settingsApi(req, method, path, body, session.userId, res);
+    }
+    if (path === "/api/requests") {
+      const session = sessions.lookup(cookieOf(req, SESSION_COOKIE));
+      if (!session) return json(res, 401, { error: "signed_out" });
+      if (method !== "GET") return text(res, 404, "not found");
+      const cursor = decodeRequestsQuery(url.searchParams);
+      if (!cursor) return json(res, 400, { error: "bad_request" });
+      try {
+        return json(
+          res,
+          200,
+          requests.since(session.userId, cursor.epoch, cursor.after),
+        );
+      } catch {
+        return json(res, 503, { error: "unavailable" });
+      }
     }
     if (path.startsWith("/api/enrollments/")) {
       const session = sessions.lookup(cookieOf(req, SESSION_COOKIE));

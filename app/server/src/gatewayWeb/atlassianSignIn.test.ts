@@ -276,6 +276,7 @@ async function startUi(
     accounts: NO_ACCOUNTS,
     integrations: fake.integrations,
     clients: NO_CLIENTS,
+    requests: { since: () => ({ epoch: "", requests: [] }) },
     log: (line) => logs.push(line),
     oidcTestOptions: { allowInsecureRequests: true },
     ...(options.now ? { now: options.now } : {}),

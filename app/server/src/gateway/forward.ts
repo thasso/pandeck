@@ -30,8 +30,13 @@
  * logged and never reaches the response.
  *
  * A log line names the provider, method, pathname (no query), lease id, outcome
- * and duration; on a client's port also the lease kind and the client id. No
- * line holds a credential, lease token, session key, query or body.
+ * and duration, then the outcome's class and `via=gateway`; on a client's port
+ * also the lease kind and the client id. No line holds a credential, lease
+ * token, session key, query or body. On a client's port the same request also
+ * becomes one record in the request log (`requestLog.ts`), which writes the
+ * line. Its byte counts come from listeners that read only a chunk's length
+ * beside the two `pipe`s, so they add no stream link and change no error,
+ * close or backpressure path.
  */
 import http from "node:http";
 import https from "node:https";
@@ -51,6 +56,11 @@ import {
   type MachinePool,
   type MachineSelection,
 } from "./machinePool.ts";
+import {
+  classifyClientCredential,
+  hasClientCookie,
+} from "./requestCredential.ts";
+import type { RequestEntry, RequestLog, RequestOutcome } from "./requestLog.ts";
 import {
   refusalResponse,
   type Refusal,
@@ -105,6 +115,24 @@ interface ForwarderDeps {
   machine?: MachineAccess | undefined;
   /** Model-run evidence from any lease kind, for the pool's benches. */
   observe?: MachinePool["observe"] | undefined;
+  /** On a client's port: where each admitted request's record goes. */
+  requests?: RequestRecorder | undefined;
+}
+
+/** The request log and the registry name of an account, for records. */
+interface RequestRecorder {
+  log: Pick<RequestLog, "record">;
+  accountName: (profileId: string) => string | undefined;
+}
+
+/**
+ * The client a request came from, as the client listener admitted it at the
+ * request's start: a revocation while it waits does not lose its record.
+ */
+export interface AdmittedClient {
+  id: string;
+  label: string;
+  userId: string;
 }
 
 /** What the machine path needs from the client listener. */
@@ -117,12 +145,36 @@ export interface MachineAccess {
   userOf: (req: http.IncomingMessage) => string | undefined;
 }
 
-/** How a request's log line ends: its outcome, lease and the lease's kind. */
-type Done = (
-  outcome: string,
-  leaseId?: string,
-  kind?: LeaseOwnership["kind"],
-) => void;
+/** How a request ended, for its log line and its record. */
+interface Ending {
+  /** The line's outcome as before: `200`, `refused forbidden 403`, … */
+  text: string;
+  outcome: RequestOutcome;
+  /** What the client was answered, or null when it got no status. */
+  status: number | null;
+  /** A fixed code, never request or upstream text. */
+  reason?: string;
+}
+
+/**
+ * One request's bookkeeping. `end` takes effect once, whichever path ends
+ * the request first; the counters only grow until then.
+ */
+interface Trace {
+  /** The machine path's; otherwise the held lease's kind. */
+  kind?: LeaseOwnership["kind"];
+  /** The account the request spends, once it is the client's own. */
+  profileId?: string;
+  /** The logical upstream host; `""` before one is known. */
+  host: string;
+  /** The status sent to the client, once its headers are written. */
+  status?: number;
+  /** Request body bytes read from the client toward the upstream. */
+  requestBytes: number;
+  /** Response body bytes sent to the client, a local refusal's included. */
+  responseBytes: number;
+  end(ending: Ending, leaseId?: string): void;
+}
 
 /** Where a request goes once it is allowed, credential included. */
 interface Destination {
@@ -219,10 +271,12 @@ function bearerOf(header: string | undefined): string | undefined {
   return header ? /^Bearer +(\S+)$/i.exec(header)?.[1] : undefined;
 }
 
+const CODE_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
+
 /** A Node error code for the log and refusal text, never an error message. */
 function errorCode(err: unknown): string {
   const code = (err as { code?: unknown } | undefined)?.code;
-  return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code)
+  return typeof code === "string" && CODE_RE.test(code)
     ? code
     : "connection failed";
 }
@@ -256,7 +310,12 @@ function refusalCase(refusal: Refusal): string {
 }
 
 export function createForwarder(deps: ForwarderDeps): {
-  handleRequest: (req: http.IncomingMessage, res: http.ServerResponse) => void;
+  /** `admitted`: on a client's port, the client the listener admitted. */
+  handleRequest: (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    admitted?: AdmittedClient,
+  ) => void;
   handleUpgrade: (req: http.IncomingMessage, socket: Duplex) => void;
 } {
   const { leases, log, agent, httpAgent, compat, stats } = deps;
@@ -276,31 +335,100 @@ export function createForwarder(deps: ForwarderDeps): {
   }
 
   /**
-   * One log line per request, written once whichever path ends it. On a
-   * client's port it names the lease kind (the held lease's unless given)
-   * and the client.
+   * One line per request, and on a client's port one record, written once
+   * whichever path ends it. On a client's port the line names the lease kind
+   * (the held lease's unless the machine path set it) and the client. What
+   * the record needs of the request is read here, at its start: the
+   * admitted client, the credential's class, whether a cookie came and the
+   * session key's hash prefix, never a value.
    */
-  function requestLog(
+  function startTrace(
     req: http.IncomingMessage,
     route: Route | undefined,
-  ): Done {
+    admitted: AdmittedClient | undefined,
+  ): Trace {
     const started = Date.now();
     const url = req.url ?? "";
     const pathname = route?.pathname ?? url.split("?")[0] ?? "";
     const clientId = deps.clientOf?.(req);
-    let logged = false;
-    return (outcome, leaseId, kind) => {
-      if (logged) return;
-      logged = true;
-      const lease = leaseId ? ` lease=${leaseId}` : "";
-      const leaseKind =
-        kind ?? (leaseId === undefined ? undefined : leases.kindOf(leaseId));
-      const client = deps.clientOf
-        ? ` kind=${leaseKind ?? "-"} client=${clientId ?? "-"}`
-        : "";
-      log(
-        `${route?.upstream.provider ?? "-"} ${req.method} ${quoted(pathname, LOGGED_PATH_CHARS)}${client}${lease} ${outcome} ${Date.now() - started}ms`,
-      );
+    const { requests } = deps;
+    const recording = requests && admitted;
+    const credential = recording
+      ? {
+          clientCredential: classifyClientCredential(req.rawHeaders),
+          clientCookie: hasClientCookie(req.rawHeaders),
+        }
+      : undefined;
+    const session =
+      recording && route?.upstream.kind === "provider"
+        ? pinKeyOf(route.upstream.provider, req.rawHeaders)?.slice(0, 12)
+        : undefined;
+    let ended = false;
+    const trace: Trace = {
+      host: route?.upstream.kind === "provider" ? route.upstream.host : "",
+      requestBytes: 0,
+      responseBytes: 0,
+      end(ending, leaseId) {
+        if (ended) return;
+        ended = true;
+        const durationMs = Date.now() - started;
+        const lease = leaseId ? ` lease=${leaseId}` : "";
+        const leaseKind =
+          trace.kind ??
+          (leaseId === undefined ? undefined : leases.kindOf(leaseId));
+        const client = deps.clientOf
+          ? ` kind=${leaseKind ?? "-"} client=${clientId ?? "-"}`
+          : "";
+        const line = `${route?.upstream.provider ?? "-"} ${req.method} ${quoted(pathname, LOGGED_PATH_CHARS)}${client}${lease} ${ending.text} ${durationMs}ms outcome=${ending.outcome} via=gateway`;
+        if (!requests || !admitted || !credential) return log(line);
+        const account =
+          trace.profileId === undefined
+            ? undefined
+            : requests.accountName(trace.profileId);
+        const entry: RequestEntry = {
+          userId: admitted.userId,
+          client: { id: admitted.id, label: admitted.label },
+          via: "gateway",
+          at: started,
+          host: trace.host,
+          method: req.method ?? "",
+          path: pathname,
+          status: ending.status,
+          outcome: ending.outcome,
+          ...(ending.reason === undefined ? {} : { reason: ending.reason }),
+          ...(account === undefined ? {} : { account }),
+          ...(session === undefined ? {} : { session }),
+          ...credential,
+          requestBytes: trace.requestBytes,
+          responseBytes: trace.responseBytes,
+          durationMs,
+        };
+        try {
+          requests.log.record(entry, line);
+        } catch (err) {
+          log(line);
+          log(`request record failed (${errorCode(err)})`);
+        }
+      },
+    };
+    return trace;
+  }
+
+  /** The ending of a local refusal: its case, an upgrade's as `upgrade`. */
+  function refusalEnding(refusal: Refusal, status: number): Ending {
+    const text = `refused ${refusalCase(refusal)} ${status}`;
+    if (refusal.case === "unreachable")
+      return {
+        text,
+        outcome: "failed",
+        status,
+        reason: CODE_RE.test(refusal.reason) ? refusal.reason : "unreachable",
+      };
+    return {
+      text,
+      outcome: "refused",
+      status,
+      reason: refusal.case === "websocket" ? "upgrade" : refusal.case,
     };
   }
 
@@ -308,7 +436,7 @@ export function createForwarder(deps: ForwarderDeps): {
     res: http.ServerResponse,
     shape: RefusalShape,
     refusal: Refusal,
-    done: Done,
+    trace: Trace,
     leaseId?: string,
   ): void {
     stats.refused += 1;
@@ -320,8 +448,10 @@ export function createForwarder(deps: ForwarderDeps): {
         ? {}
         : { "retry-after": String(retryAfter) }),
     });
+    trace.status = status;
+    trace.responseBytes += Buffer.byteLength(body);
     res.end(body);
-    done(`refused ${refusalCase(refusal)} ${status}`, leaseId);
+    trace.end(refusalEnding(refusal, status), leaseId);
   }
 
   /** Runs response bookkeeping; a throw is logged, never answered. */
@@ -337,36 +467,33 @@ export function createForwarder(deps: ForwarderDeps): {
     req: http.IncomingMessage,
     res: http.ServerResponse,
     route: Route | undefined,
-    done: Done,
+    trace: Trace,
   ): Promise<void> {
-    if (!route) return refuse(res, "claude", { case: "unknown-prefix" }, done);
+    if (!route) return refuse(res, "claude", { case: "unknown-prefix" }, trace);
     const shape = shapeOf(route);
     const bearer = bearerOf(req.headers.authorization);
     const clientId = deps.clientOf?.(req);
     // A client's request without a lease-shaped bearer is its machine's.
     if (deps.machine && clientId !== undefined && !isLeaseShaped(bearer))
-      return serveMachine(req, res, route, clientId, deps.machine, done).catch(
-        (err: unknown) => {
-          // Named here so the line keeps its kind; answered by the caller.
-          done(`internal error (${errorCode(err)})`, undefined, "machine");
-          throw err;
-        },
-      );
+      // Its kind is on the trace, so the caller's internal-error line keeps it.
+      return serveMachine(req, res, route, clientId, deps.machine, trace);
     const refuseLease = (lease: Extract<LeaseCheck, { ok: false }>): void =>
       lease.refusal === "revoked"
         ? refuse(
             res,
             shape,
             { case: "revoked-lease", reason: lease.reason },
-            done,
+            trace,
             lease.leaseId,
           )
-        : refuse(res, shape, { case: "unknown-lease" }, done);
+        : refuse(res, shape, { case: "unknown-lease" }, trace);
     const lease = leases.verify(bearer);
     if (!lease.ok) return refuseLease(lease);
     const { leaseId, binding } = lease;
     if (leases.clientOf(leaseId) !== clientId)
-      return refuse(res, shape, { case: "forbidden" }, done, leaseId);
+      return refuse(res, shape, { case: "forbidden" }, trace, leaseId);
+    // Only the client's own lease names its account in the record.
+    trace.profileId = binding.profileId;
     const { upstream } = route;
     if (upstream.kind === "compat") {
       // An engine or server lease of an OpenAI-compatible profile, never a
@@ -376,19 +503,20 @@ export function createForwarder(deps: ForwarderDeps): {
         (kind !== "engine" && kind !== "server") ||
         binding.provider !== "openai-compatible"
       )
-        return refuse(res, shape, { case: "forbidden" }, done, leaseId);
+        return refuse(res, shape, { case: "forbidden" }, trace, leaseId);
       const target = compat.current(binding.profileId);
       if (!target)
-        return refuse(res, shape, { case: "compat-unset" }, done, leaseId);
+        return refuse(res, shape, { case: "compat-unset" }, trace, leaseId);
+      trace.host = target.host;
       if (!isCompatAllowed(route, req.method, target.basePath))
-        return refuse(res, shape, { case: "forbidden" }, done, leaseId);
+        return refuse(res, shape, { case: "forbidden" }, trace, leaseId);
       return send(
         req,
         res,
         route,
         compatDestination(target),
         shape,
-        done,
+        trace,
         leaseId,
       );
     }
@@ -397,21 +525,21 @@ export function createForwarder(deps: ForwarderDeps): {
       binding.provider !== upstream.provider ||
       !isAllowed(route, req.method, leases.kindOf(leaseId))
     )
-      return refuse(res, shape, { case: "forbidden" }, done, leaseId);
+      return refuse(res, shape, { case: "forbidden" }, trace, leaseId);
     // A renewal may come first; a dead login is refused without upstream.
     const credential = await deps.vault.credentialFor(binding);
     // A revocation that arrived while it waited takes effect now.
     const still = leases.verify(bearer);
     if (!still.ok) return refuseLease(still);
     if (!credential.ok)
-      return refuse(res, shape, credentialRefusal(credential), done, leaseId);
+      return refuse(res, shape, credentialRefusal(credential), trace, leaseId);
     send(
       req,
       res,
       route,
       providerDestination(req, route, upstream, binding, credential),
       shape,
-      done,
+      trace,
       leaseId,
     );
   }
@@ -428,20 +556,20 @@ export function createForwarder(deps: ForwarderDeps): {
     route: Route,
     clientId: string,
     machine: MachineAccess,
-    logDone: Done,
+    trace: Trace,
   ): Promise<void> {
     const shape = shapeOf(route);
-    const done: Done = (outcome, leaseId) =>
-      logDone(outcome, leaseId, "machine");
+    // Every line of a machine request names its kind, an internal error's too.
+    trace.kind = "machine";
     if (!isLoopbackOnly(req.rawHeaders))
-      return refuse(res, shape, { case: "machine-origin" }, done);
+      return refuse(res, shape, { case: "machine-origin" }, trace);
     const { upstream } = route;
     // Never `/compat`, and only the engine routes.
     if (
       upstream.kind !== "provider" ||
       !isAllowed(route, req.method, "machine")
     )
-      return refuse(res, shape, { case: "forbidden" }, done);
+      return refuse(res, shape, { case: "forbidden" }, trace);
     const { provider } = upstream;
     const label = provider === "claude" ? "Claude" : "OpenAI";
     const pin = {
@@ -452,7 +580,7 @@ export function createForwarder(deps: ForwarderDeps): {
     for (let attempt = 0; ; attempt += 1) {
       const userId = machine.userOf(req);
       if (userId === undefined)
-        return refuse(res, shape, { case: "forbidden" }, done);
+        return refuse(res, shape, { case: "forbidden" }, trace);
       const outcome = machine.pool.select(userId, pin);
       if (!outcome.ok)
         return refuse(
@@ -465,14 +593,15 @@ export function createForwarder(deps: ForwarderDeps): {
                 provider: label,
                 retryAfterSeconds: outcome.retryAfterSeconds,
               },
-          done,
+          trace,
         );
       const { selection } = outcome;
       const { leaseId, binding } = selection;
+      trace.profileId = binding.profileId;
       const credential = await deps.vault.credentialFor(binding);
       // The final validation: what changed while it waited takes effect now.
       if (machine.userOf(req) !== userId)
-        return refuse(res, shape, { case: "forbidden" }, done, leaseId);
+        return refuse(res, shape, { case: "forbidden" }, trace, leaseId);
       // A dead login is a changed selection, never the vault's 401 here.
       const current =
         machine.pool.isCurrent(selection) &&
@@ -481,10 +610,16 @@ export function createForwarder(deps: ForwarderDeps): {
           credential.refusal.case !== "needs-login");
       if (!current) {
         if (attempt === 0) continue;
-        return refuse(res, shape, { case: "machine-retry" }, done, leaseId);
+        return refuse(res, shape, { case: "machine-retry" }, trace, leaseId);
       }
       if (!credential.ok)
-        return refuse(res, shape, credentialRefusal(credential), done, leaseId);
+        return refuse(
+          res,
+          shape,
+          credentialRefusal(credential),
+          trace,
+          leaseId,
+        );
       return send(
         req,
         res,
@@ -498,7 +633,7 @@ export function createForwarder(deps: ForwarderDeps): {
           selection,
         ),
         shape,
-        done,
+        trace,
         leaseId,
       );
     }
@@ -585,20 +720,29 @@ export function createForwarder(deps: ForwarderDeps): {
     route: Route,
     destination: Destination,
     shape: RefusalShape,
-    done: Done,
+    trace: Trace,
     leaseId: string,
   ): void {
     if (res.destroyed) {
       stats.clientClosed += 1;
-      return done("client closed", leaseId);
+      return trace.end(
+        {
+          text: "client closed",
+          outcome: "failed",
+          status: null,
+          reason: "client-closed",
+        },
+        leaseId,
+      );
     }
     forward(
       req,
       res,
       route,
       destination,
-      (outcome) => done(outcome, leaseId),
-      (refusal) => refuse(res, shape, refusal, done, leaseId),
+      trace,
+      (ending) => trace.end(ending, leaseId),
+      (refusal) => refuse(res, shape, refusal, trace, leaseId),
     );
   }
 
@@ -607,7 +751,8 @@ export function createForwarder(deps: ForwarderDeps): {
     res: http.ServerResponse,
     route: Route,
     destination: Destination,
-    done: (outcome: string) => void,
+    trace: Trace,
+    done: (ending: Ending) => void,
     refuseLocally: (refusal: Refusal) => void,
   ): void {
     const { options } = destination;
@@ -635,7 +780,13 @@ export function createForwarder(deps: ForwarderDeps): {
       ended = "upstream";
       stats.upstreamErrors += 1;
       res.destroy();
-      done(`upstream error after headers (${errorCode(err)})`);
+      const code = errorCode(err);
+      done({
+        text: `upstream error after headers (${code})`,
+        outcome: "failed",
+        status: trace.status ?? null,
+        reason: CODE_RE.test(code) ? code : "upstream-truncated",
+      });
     };
 
     upstreamReq.on("response", (upstreamRes) => {
@@ -659,8 +810,15 @@ export function createForwarder(deps: ForwarderDeps): {
         status,
         forwardableRaw(upstreamRes.rawHeaders, ["set-cookie"]),
       );
-      res.on("finish", () => done(String(status)));
+      trace.status = status;
+      res.on("finish", () =>
+        done({ text: String(status), outcome: "forwarded", status }),
+      );
       upstreamRes.pipe(res);
+      // Counts beside the pipe, reading only the length: no stream link.
+      upstreamRes.on("data", (chunk: Buffer) => {
+        trace.responseBytes += chunk.length;
+      });
     });
 
     upstreamReq.on("error", (err) => {
@@ -683,21 +841,37 @@ export function createForwarder(deps: ForwarderDeps): {
       ended = "client";
       stats.clientClosed += 1;
       upstreamReq.destroy();
-      done("client closed");
+      // After the upstream's headers it was forwarded and the client hung up.
+      done({
+        text: "client closed",
+        outcome: trace.status === undefined ? "failed" : "forwarded",
+        status: trace.status ?? null,
+        reason: "client-closed",
+      });
     });
     res.on("error", () => upstreamReq.destroy());
     req.on("error", () => upstreamReq.destroy());
     req.pipe(upstreamReq);
+    // Counts beside the pipe, reading only the length: no stream link.
+    req.on("data", (chunk: Buffer) => {
+      trace.requestBytes += chunk.length;
+    });
   }
 
   return {
-    handleRequest(req, res) {
+    handleRequest(req, res, admitted) {
       noteClient(req.headers);
       const route = routeFor(req.url ?? "");
-      const done = requestLog(req, route);
-      handle(req, res, route, done).catch((err: unknown) => {
-        done(`internal error (${errorCode(err)})`);
-        if (res.headersSent) res.destroy();
+      const trace = startTrace(req, route, admitted);
+      handle(req, res, route, trace).catch((err: unknown) => {
+        const sent = res.headersSent;
+        trace.end({
+          text: `internal error (${errorCode(err)})`,
+          outcome: "failed",
+          status: sent ? (trace.status ?? null) : 500,
+          reason: "internal-error",
+        });
+        if (sent) res.destroy();
         else res.writeHead(500).end();
       });
     },
@@ -706,15 +880,17 @@ export function createForwarder(deps: ForwarderDeps): {
     handleUpgrade(req, socket) {
       noteClient(req.headers);
       const route = routeFor(req.url ?? "");
-      const done = requestLog(req, route);
+      const trace = startTrace(req, route, undefined);
       stats.refused += 1;
       const refusal: Refusal = { case: "websocket" };
       const { status, body } = refusalResponse(refusal, shapeOf(route));
       socket.on("error", () => socket.destroy());
+      trace.status = status;
+      trace.responseBytes += Buffer.byteLength(body);
       socket.end(
         `HTTP/1.1 ${status} ${http.STATUS_CODES[status]}\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\nconnection: close\r\n\r\n${body}`,
       );
-      done(`refused ${refusalCase(refusal)} ${status}`);
+      trace.end(refusalEnding(refusal, status));
     },
   };
 }

@@ -59,6 +59,7 @@ import { ProfileRegistry } from "./profiles.ts";
 import type { RefreshLockOptions } from "./refreshLock.ts";
 import { RENEW_TICK_MS, type CodexRenewPort } from "./renewal.ts";
 import { openGatewayState } from "./state.ts";
+import { createRequestLog, type RequestLog } from "./requestLog.ts";
 import { createRemoteVault, type RemoteVaultOptions } from "./remoteVault.ts";
 import { createVault, type Vault } from "./vault.ts";
 import type { AtlassianEndpoint } from "./vaultAtlassian.ts";
@@ -133,6 +134,12 @@ export interface RunningGateway {
   readonly stats: Readonly<GatewayStats>;
   /** The client listener, when `clients` was given. */
   readonly clients: RunningClientListener | undefined;
+  /**
+   * The client model port's request log (`requestLog.ts`), with the client
+   * listener; the loopback listener's requests have no client and only
+   * their text line.
+   */
+  readonly requests: RequestLog | undefined;
   /** The profiles' writer lane, for in-gateway writers (G4, G5). */
   readonly lane: Pick<WriterLane, "run">;
   /** Serves gateway control 1.4 on `endpoint`, as the listener. */
@@ -284,9 +291,12 @@ export async function startGateway(
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : 0;
   log(`listening on 127.0.0.1:${port}`);
+  let requests: RequestLog | undefined;
   if (options.clients) {
     if (!options.stateDir)
       throw new Error("The client listener needs stateDir.");
+    const requestLog = createRequestLog({ stateDir: options.stateDir, log });
+    requests = requestLog;
     clients = await startClientListener(
       {
         stateDir: options.stateDir,
@@ -300,6 +310,10 @@ export async function startGateway(
             machine,
             observe: (evidence, status, rawHeaders) =>
               machine.pool.observe(evidence, status, rawHeaders),
+            requests: {
+              log: requestLog,
+              accountName: (profileId) => profiles.get(profileId)?.name,
+            },
           }),
         machinePins: state && {
           restored: state.machinePins,
@@ -333,6 +347,7 @@ export async function startGateway(
     leases,
     stats,
     clients,
+    requests,
     lane: local?.lane ?? {
       run: () =>
         Promise.reject(new Error("The vault runs in its own process.")),

@@ -86,7 +86,7 @@ import {
 } from "./clientRegistry.ts";
 import type { DevboxApproval } from "./devboxProof.ts";
 import type { CredentialOutcome, EdgeTools } from "./edgeTools.ts";
-import type { MachineAccess } from "./forward.ts";
+import type { AdmittedClient, MachineAccess } from "./forward.ts";
 import { MachinePool, type MachinePinRecord } from "./machinePool.ts";
 import { LoginRefusal, type LoginActor } from "./logins.ts";
 import {
@@ -224,6 +224,7 @@ interface ClientListenerDeps {
     handleRequest: (
       req: http.IncomingMessage,
       res: http.ServerResponse,
+      admitted: AdmittedClient,
     ) => void;
   };
   /** The saved machine pins and their writer; without them, memory only. */
@@ -975,7 +976,12 @@ export async function startClientListener(
     // The path only, without parsing: a malformed target must not throw here.
     if (deps.tools && (req.url ?? "").split("?")[0] === "/mcp")
       return mcpGate(req, res, client, deps.tools);
-    forwarder.handleRequest(req, res);
+    // The client as admitted now: its record survives a revocation meanwhile.
+    forwarder.handleRequest(req, res, {
+      id: client.id,
+      label: client.label,
+      userId: client.userId,
+    });
   };
   const model = tls.createServer(mutualTls, (socket) => {
     track(socket);

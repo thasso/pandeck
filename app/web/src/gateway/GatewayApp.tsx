@@ -17,6 +17,7 @@ import {
   fetchAccounts,
   fetchAtlassian,
   fetchClients,
+  fetchRequests,
   lookupEnrollment,
   mintMcpToken,
   removeAccount,
@@ -208,6 +209,7 @@ export function GatewayApp({
           callback: connectCode,
         }}
         clients={clientsProps}
+        requests={{ fetchRequests }}
       />
       {page.kind === "signedIn" && enrollCode ? (
         <GatewayEnrollApproval
