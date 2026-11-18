@@ -40,12 +40,13 @@ const NEVER_ENCODED_RE = /^[A-Za-z0-9\-._~/\\%]$/;
 
 /**
  * The canonical-path rule: a pathname of non-empty segments, none `.` or
- * `..`, without `\`, whose every `%` starts an escape of a byte that is not
- * unreserved, `/`, `\` or `%`. So an encoded letter, separator or a double
- * encoding cannot disguise a floor path, and a trailing `/` or `//` fails.
+ * `..`, without raw `\`, `#` or `;`, whose every `%` starts an escape of a
+ * byte that is not unreserved, `/`, `\` or `%`. So an encoded letter,
+ * separator or a double encoding cannot disguise a floor path, and a
+ * trailing `/` or `//` fails.
  */
 export function isCanonicalPath(pathname: string): boolean {
-  if (!pathname.startsWith("/") || pathname.includes("\\")) return false;
+  if (!pathname.startsWith("/") || /[\\#;]/.test(pathname)) return false;
   for (const segment of pathname.slice(1).split("/"))
     if (segment === "" || segment === "." || segment === "..") return false;
   for (
@@ -204,14 +205,15 @@ export function isTokenRoute(route: Route | undefined): route is Route {
 /**
  * The record's marking of a token-route machine request: listed only when
  * it would pass the floors and matches a template; `pathKey` is the
- * template, else the pathname.
+ * template, else the pathname without fragment text. Classification still
+ * reads the full raw pathname, not that display key.
  */
 export function classifyMachinePath(
   route: Route,
   method: string | undefined,
 ): { listed: boolean; pathKey: string } {
   const { pathname } = route;
-  const unlisted = { listed: false, pathKey: pathname };
+  const unlisted = { listed: false, pathKey: pathname.split("#")[0]! };
   if (
     isFloorMethod(method) ||
     !isCanonicalPath(pathname) ||

@@ -2331,10 +2331,11 @@ changes the target and `Host` ("Interception" below).
      nothing is recorded, no line is written, no credential is read and no
      upstream is contacted. No `clientError` hook parses it;
   3. the canonical-path rule: the pathname starts with `/`, has no empty, `.` or
-     `..` segment and no `\`, and every `%` begins two hex digits that do not
-     decode to a letter, digit, `-`, `.`, `_`, `~`, `/`, `\` or `%`. Anything
-     else gets 403 `non-canonical-path`, so no encoding reaches a floor entry
-     the plain path would hit;
+     `..` segment and no raw `\`, `#` or `;`, and every `%` begins two hex
+     digits that do not decode to a letter, digit, `-`, `.`, `_`, `~`, `/`, `\`
+     or `%`. Anything else gets 403 `non-canonical-path`. Raw fragment and
+     semicolon suffixes cannot disguise a floor endpoint; enforcement always
+     reads the full raw pathname;
   4. the deny floor: 403 `denied` (reason `denied:<id>`) for each entry below,
      case-folded, the entry itself and every path under it. A sibling such as
      `/api/oauth/usage` only shares a prefix and is not covered. `<uuid>` is any
@@ -2521,23 +2522,25 @@ writes no answer, no second record and contacts no upstream.
   `forward.ts` `startTrace` copies it into the entry; PR1 sets none); `host`
   (the route's upstream, `""` when none matched), `method`, `path` (pathname
   only, cut to 200 characters) and `pathKey` (on a token-route machine request
-  the matched listed template, else the pathname); `status` (what the client was
-  answered, `null` if none); `outcome` and `reason`; `account` (the registry
-  name, set only once the lease is the client's own or the pool picked it);
-  `session` (the first 12 hex of the session key's SHA-256, provider routes
-  only); `clientCredential` (`none`, `placeholder`, `lease` or `other`, from
-  `authorization`, `x-api-key` and `proxy-authorization`, every repeat, the most
-  sensitive winning; `requestCredential.ts`) and `clientCookie`; `requestBytes`
-  (body bytes read from the client, 0 for a refusal), `responseBytes` (body
-  bytes sent to the client, a refusal's body included, but 0 when HTTP
-  suppresses the body for HEAD, 1xx, 204 or 304), `durationMs` (nonnegative
-  integer elapsed time from a monotonic clock, while `at` remains wall-clock
-  time); `firstSeen`. A forwarded body passes one counting Transform each way,
-  lengths only. An early upstream reply is delivered immediately, but its record
-  waits for upload finish too. A later upload abort/error is failed; a peer that
-  stops reading before upload finish settles that failed lifetime rather than
-  leaving a pending record. No record holds a header value, credential, lease
-  token, query, body or raw session key: the log copies only these fields.
+  the matched listed template, else the pathname), both without query or
+  fragment text; `status` (what the client was answered, `null` if none);
+  `outcome` and `reason`; `account` (the registry name, set only once the lease
+  is the client's own or the pool picked it); `session` (the first 12 hex of the
+  session key's SHA-256, provider routes only); `clientCredential` (`none`,
+  `placeholder`, `lease` or `other`, from `authorization`, `x-api-key` and
+  `proxy-authorization`, every repeat, the most sensitive winning;
+  `requestCredential.ts`) and `clientCookie`; `requestBytes` (body bytes read
+  from the client, 0 for a refusal), `responseBytes` (body bytes sent to the
+  client, a refusal's body included, but 0 when HTTP suppresses the body for
+  HEAD, 1xx, 204 or 304), `durationMs` (nonnegative integer elapsed time from a
+  monotonic clock, while `at` remains wall-clock time); `firstSeen`. A forwarded
+  body passes one counting Transform each way, lengths only. An early upstream
+  reply is delivered immediately, but its record waits for upload finish too. A
+  later upload abort/error is failed; a peer that stops reading before upload
+  finish settles that failed lifetime rather than leaving a pending record. No
+  record holds a header value, credential, lease token, query, body or raw
+  session key: the log copies only these fields. Paths in records, text lines
+  and persisted first-seen identities omit everything from the first `?` or `#`.
 - **Outcomes.** `forwarded` with the upstream's status; `refused` with the
   refusal case as `reason` (a WebSocket upgrade's is `upgrade`); `failed` with a
   Node error code, `unreachable`, `upstream-truncated` (after the headers,
@@ -2552,20 +2555,21 @@ writes no answer, no second record and contacts no upstream.
   and no account or session. A `CONNECT` is recorded `refused` with
   `denied:method` (403), `forbidden` for an inactive client, or
   `registry-unavailable` (503). An origin-form target on a token route keeps its
-  route's host, path and marking; any other shows its target with the query, and
-  in authority form the userinfo, cut. A request the HTTP parser rejects (such
-  as `TRACK`) reaches no handler and is not recorded. `requestBytes` counts the
-  body's `data` chunks whoever reads them (`req.emit` is wrapped, so the
-  handler's reads are unchanged), `responseBytes` what the handler wrote;
-  lengths only. A completed gate refusal is `refused` with `mcp-origin` (403) or
-  `mcp-token` (401) and counts no body. Completion is the response's `finish`,
-  not an `end()` call with output still queued. A completed answer is classed by
-  status: below 400 `forwarded`; 4xx `refused` (`bad-request` 400,
-  `method-not-allowed` 405, `too-large` 413, else `client-error`); 5xx `failed`
-  (`internal-error` 500, `timeout` 504, else `server-error`). A close before
-  completion is `failed` even for 4xx, status `null` before headers: `aborted`
-  when the handler destroyed it, else `client-closed`. No tool name, JSON-RPC
-  method or other content is recorded.
+  route's host, path and marking. Display paths omit query and fragment text;
+  authority-form targets cut both before stripping userinfo, so an `@` in either
+  suffix is never mistaken for userinfo. Origin-form path `@` stays. A request
+  the HTTP parser rejects (such as `TRACK`) reaches no handler and is not
+  recorded. `requestBytes` counts the body's `data` chunks whoever reads them
+  (`req.emit` is wrapped, so the handler's reads are unchanged), `responseBytes`
+  what the handler wrote; lengths only. A completed gate refusal is `refused`
+  with `mcp-origin` (403) or `mcp-token` (401) and counts no body. Completion is
+  the response's `finish`, not an `end()` call with output still queued. A
+  completed answer is classed by status: below 400 `forwarded`; 4xx `refused`
+  (`bad-request` 400, `method-not-allowed` 405, `too-large` 413, else
+  `client-error`); 5xx `failed` (`internal-error` 500, `timeout` 504, else
+  `server-error`). A close before completion is `failed` even for 4xx, status
+  `null` before headers: `aborted` when the handler destroyed it, else
+  `client-closed`. No tool name, JSON-RPC method or other content is recorded.
 - **Line.** Today's forward line plus `outcome=` and `via=gateway`; no session
   tag. A request without a resolved client gets the line only, including the
   loopback listener. On an already-authenticated model socket, a fresh registry

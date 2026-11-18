@@ -270,12 +270,12 @@ export type ConnectRefusal =
   | { case: "registry-unavailable" };
 
 /**
- * A CONNECT target as a record may show it: the query cut first, so a `@`
- * in it is never taken for userinfo, then, in authority form only, the
- * userinfo through the last `@`. In origin form `@` is pathname text.
+ * A CONNECT target as a record may show it: query and fragment cut first,
+ * so a `@` in either is never taken for userinfo, then, in authority form
+ * only, the userinfo through the last `@`. In origin form `@` is pathname text.
  */
 function shownConnectTarget(url: string): string {
-  const target = url.split("?")[0] ?? "";
+  const target = url.split(/[?#]/)[0] ?? "";
   if (target.startsWith("/")) return target;
   return target.slice(target.lastIndexOf("@") + 1);
 }
@@ -533,7 +533,7 @@ export function createForwarder(deps: ForwarderDeps): {
     req: http.IncomingMessage,
     route: Route | undefined,
     admitted: AdmittedClient | undefined,
-    /** The path to show instead, already without query or userinfo. */
+    /** The path to show instead, already without query, fragment or userinfo. */
     shownPath?: string,
   ): Trace {
     const started = Date.now();
@@ -545,7 +545,9 @@ export function createForwarder(deps: ForwarderDeps): {
       !route && /^\/anthropic-mcp(?:\/|\?|$)/.test(url)
         ? url.slice("/anthropic-mcp".length).split("?")[0] || "/"
         : undefined;
-    const pathname = shownPath ?? route?.pathname ?? mcpPath ?? url.split("?")[0] ?? "";
+    // Display only. Routing, policy and marking keep the full raw target.
+    const pathname =
+      (shownPath ?? route?.pathname ?? mcpPath ?? url).split(/[?#]/)[0] ?? "";
     const clientId = deps.clientOf?.(req);
     const { requests } = deps;
     const recording = requests && admitted;
@@ -1282,7 +1284,8 @@ export function createForwarder(deps: ForwarderDeps): {
      * kind come from the raw target before anything is cut for display: an
      * origin-form target on a token route shows its host and pathname and
      * is marked for a machine bearer; anything else shows host `""` and the
-     * target without query or userinfo. Nothing is read from the socket.
+     * target without query, fragment or userinfo. Nothing is read from the
+     * socket.
      */
     refuseConnect(req, socket, head, admitted, refusal) {
       const url = req.url ?? "";

@@ -403,14 +403,14 @@ violation"); without the exclusion the same leaf verifies, measured 2026-11-18.
 A CONNECT to an IP literal must tunnel to the edge itself. With the relay's own
 certificate, a `CONNECT` on the model port must get the gateway's marked 403 in
 full and a `TRACK` exactly the HTTP parser's 400 (`docs/workers.md` "Token
-routes"), each closing the connection. A TLS peer without a
-client certificate, or with one the edge's CA did not issue, is closed on the
-model and the client port without one byte. Restarted with a `--ui-config` that
-names no `distDir`, the edge must serve `gateway-web/` byte for byte with its
-security headers, answer `/api/me` and `/api/accounts` 401 and `/auth/login`
-with the failed-sign-in redirect for an unreachable issuer; SIGTERM must exit 0
-and close every port. From an unrelated cwd and a clean environment, it also
-runs the packaged browser MCP CLI's version command and an MCP initialize plus
+routes"), each closing the connection. A TLS peer without a client certificate,
+or with one the edge's CA did not issue, is closed on the model and the client
+port without one byte. Restarted with a `--ui-config` that names no `distDir`,
+the edge must serve `gateway-web/` byte for byte with its security headers,
+answer `/api/me` and `/api/accounts` 401 and `/auth/login` with the
+failed-sign-in redirect for an unreachable issuer; SIGTERM must exit 0 and close
+every port. From an unrelated cwd and a clean environment, it also runs the
+packaged browser MCP CLI's version command and an MCP initialize plus
 `tools/list`, covering the patched local imports without a workspace
 `node_modules`. When Chrome or Chromium is available, the check also launches it
 and navigates a page. The Nix sandbox has neither browser, so that last probe

@@ -85,6 +85,22 @@ describe("the deny floor (C8)", () => {
       );
     });
 
+  for (const [id, root] of FLOOR)
+    for (const suffix of ["#FRAGMENT_SENTINEL", ";parameter=1"])
+      test(`F001: ${id}${suffix} is non-canonical on both token routes in both modes`, () => {
+        for (const prefix of ["/anthropic", "/anthropic-mcp"])
+          for (const mode of ["permissive", "strict"] as const) {
+            const target = route(`${prefix}${root}${suffix}`);
+            assert.deepEqual(machinePathVerdict(target, "POST", mode), {
+              case: "non-canonical-path",
+            });
+            assert.deepEqual(classifyMachinePath(target, "POST"), {
+              listed: false,
+              pathKey: suffix.startsWith("#") ? root : `${root}${suffix}`,
+            });
+          }
+      });
+
   test("E1's account calls only share a prefix with an entry", () => {
     for (const path of [
       "/api/oauth/usage",
@@ -108,6 +124,8 @@ describe("the canonical-path rule", () => {
       "/./x",
       "/x/..",
       "/x\\y",
+      "/x#fragment",
+      "/x;parameter",
       "/x%zz",
       "/x%2",
       "/%7e",
@@ -122,7 +140,16 @@ describe("the canonical-path rule", () => {
   });
 
   test("allows escapes of reserved and other bytes", () => {
-    for (const path of ["/x", "/a%20b", "/a%3Ab", "/a%3ab", "/x@y", "/a/b.c"])
+    for (const path of [
+      "/x",
+      "/a%20b",
+      "/a%3Ab",
+      "/a%3ab",
+      "/x%23y",
+      "/x%3By",
+      "/x@y",
+      "/a/b.c",
+    ])
       assert.equal(isCanonicalPath(path), true, path);
   });
 });

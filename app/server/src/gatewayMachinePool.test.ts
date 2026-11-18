@@ -2604,6 +2604,26 @@ test("rv-1430-03 obligation 4: CONNECT on the model port is refused 403 denied:m
       expect: { host: "", path: "api.anthropic.com:443" },
     },
     {
+      target: "/anthropic/x@y#FRAGMENT_SENTINEL@evil?query=SENTINEL",
+      bearer: PLACEHOLDER,
+      expect: {
+        host: "api.anthropic.com",
+        path: "/x@y",
+        pathKey: "/x@y",
+        listed: false,
+      },
+    },
+    {
+      target: "/anthropic/x@y#FRAGMENT_SENTINEL",
+      bearer: leaseShaped,
+      expect: {
+        host: "api.anthropic.com",
+        path: "/x@y",
+        pathKey: "/x@y",
+        listed: undefined,
+      },
+    },
+    {
       target: "user:pw@api.anthropic.com:443?q=SENTINEL",
       bearer: PLACEHOLDER,
       cookie: true,
@@ -2632,7 +2652,7 @@ test("rv-1430-03 obligation 4: CONNECT on the model port is refused 403 denied:m
         `${c.target}: ${field}`,
       );
     for (const text of ["user", "pw", "SENTINEL", "evil"])
-      assert.ok(!record.path.includes(text), `${c.target}: ${text}`);
+      assert.ok(!JSON.stringify(record).includes(text), `${c.target}: ${text}`);
   }
   const connectLines = lines.filter(
     (l) => / CONNECT /.test(l) && l.includes("via=gateway"),
