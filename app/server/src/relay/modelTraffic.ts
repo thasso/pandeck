@@ -195,7 +195,10 @@ export function createModelTraffic(options: {
       outcome: "refused",
       reason,
       requestBytes: 0,
-      responseBytes: Buffer.byteLength(body),
+      responseBytes:
+        "writeHead" in answer && (target.method ?? req.method) === "HEAD"
+          ? 0
+          : Buffer.byteLength(body),
     });
     req.resume();
   }
@@ -310,7 +313,7 @@ export function createModelTraffic(options: {
       fallback(
         errorCode(err),
         canAnswer ? 502 : null,
-        canAnswer ? Buffer.byteLength(body) : 0,
+        canAnswer && req.method !== "HEAD" ? Buffer.byteLength(body) : 0,
       );
       log(`${base.method} edge unreachable (${errorCode(err)})`);
       if (canAnswer) {

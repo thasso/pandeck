@@ -86,6 +86,65 @@ test("local CONNECT refusals reserve and report method CONNECT, path / and the n
   assert.ok(!r.logs.join("\n").includes("SENTINEL"));
 });
 
+test("HEAD local refusals and unreachable-edge fallbacks record only emitted body bytes", async () => {
+  const r = reporting();
+  const unused = net.createServer();
+  await new Promise<void>((resolve) => unused.listen(0, "127.0.0.1", resolve));
+  const closedPort = (unused.address() as { port: number }).port;
+  await new Promise<void>((resolve) => unused.close(() => resolve()));
+  const traffic = createModelTraffic({
+    ...r,
+    edge: { host: "127.0.0.1", port: closedPort, agent: false },
+    edgeHost: "localhost",
+    log: (line) => r.logs.push(line),
+  });
+  const server = http.createServer((req, res) => {
+    if (req.url === "/relay/test")
+      traffic.refuse(req, res, {
+        host: "api.anthropic.com",
+        path: req.url,
+        status: 403,
+        reason: "reserved-path",
+        errorType: "permission_error",
+        text: "reserved",
+      });
+    else
+      traffic.forward(req, res, {
+        host: "api.anthropic.com",
+        path: req.url ?? "/",
+        edgePath: req.url ?? "/",
+      });
+  });
+  const port = await listen(server);
+  for (const path of ["/relay/test", "/anthropic/v1/messages"]) {
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = http.request(
+        `http://127.0.0.1:${port}${path}`,
+        { method: "HEAD" },
+        (res) => {
+          let bytes = 0;
+          res.on("data", (chunk: Buffer) => (bytes += chunk.length));
+          res.on("end", () => {
+            assert.equal(bytes, 0);
+            resolve(res.statusCode!);
+          });
+        },
+      );
+      req.on("error", reject);
+      req.end();
+    });
+    assert.equal(status, path === "/relay/test" ? 403 : 502);
+  }
+  traffic.beginClose();
+  await traffic.drain(100);
+  await r.observations.close(100);
+  const measured = r.records.filter((entry) => "rid" in entry);
+  assert.deepEqual(
+    measured.map((entry) => entry.responseBytes),
+    [0, 0],
+  );
+});
+
 test("gateway forwarding accepts caller-supplied fallback host and original path independently of the route", async () => {
   const r = reporting();
   const unused = net.createServer();

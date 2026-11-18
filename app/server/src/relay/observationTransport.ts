@@ -31,15 +31,20 @@ export function observationTransport(
       request.on("response", (response) => {
         const chunks: Buffer[] = [];
         let size = 0;
+        let oversized = false;
         response.on("data", (chunk: Buffer) => {
+          if (oversized) return;
           size += chunk.length;
           if (size > 8192) {
+            oversized = true;
+            reject(new Error("Observation answer too large."));
             response.destroy();
-            request.destroy(new Error("Observation answer too large."));
+            request.destroy();
           } else chunks.push(chunk);
         });
         response.on("error", reject);
         response.on("end", () => {
+          if (oversized) return;
           let ack: number | undefined;
           try {
             const parsed: unknown = JSON.parse(
