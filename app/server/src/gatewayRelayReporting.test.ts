@@ -20,7 +20,7 @@ import type { GatewayOptions, RunningGateway } from "./gateway/gateway.ts";
 import type { ObservationsCommitted } from "./gateway/relayObservations.ts";
 import type { RequestRecord } from "./gateway/requestLog.ts";
 import type { RunningRelay } from "./relay/relay.ts";
-import { createObservations } from "./relay/observations.ts";
+import { createObservations, type Observation } from "./relay/observations.ts";
 import { createModelTraffic } from "./relay/modelTraffic.ts";
 import { MACHINE_PLACEHOLDER } from "./relay/credentialClass.ts";
 
@@ -113,6 +113,14 @@ async function rig(
   const proxy = {
     holdUp: false,
     dropDown: false,
+    holdDown: false,
+    delayedDown: [] as { local: net.Socket; chunk: Buffer }[],
+    releaseDown() {
+      this.holdDown = false;
+      for (const item of this.delayedDown.splice(0)) {
+        if (!item.local.destroyed) item.local.write(item.chunk);
+      }
+    },
     connections: 0,
     held: 0,
     lostAcks: 0,
@@ -129,7 +137,7 @@ async function rig(
       gateway.clients!.modelPort,
       extra.bindHost === "::" ? "::1" : "127.0.0.1",
     );
-    const pair = { local, edge, held: false, swallowed: false };
+    const pair = { local, edge, held: false, swallowed: false, delayed: false };
     pairs.add(pair);
     const end = () => {
       local.destroy();
@@ -146,6 +154,10 @@ async function rig(
     edge.on("data", (chunk: Buffer) => {
       if (proxy.dropDown) {
         pair.swallowed = true;
+      } else if (pair.delayed || proxy.holdDown) {
+        pair.delayed = true;
+        proxy.holdDown = false;
+        proxy.delayedDown.push({ local, chunk: Buffer.from(chunk) });
       } else if (!local.write(chunk)) edge.pause();
     });
     local.on("drain", () => edge.resume());
@@ -404,7 +416,11 @@ function send(
     req.end(options.body);
   });
 }
-function report(n: number, d: number, host = "127.0.0.1") {
+function report(
+  n: number,
+  d: number,
+  host = "127.0.0.1",
+): Observation & { d: number } {
   return {
     d,
     rid: rid(n),
@@ -1094,12 +1110,89 @@ test("T9 lost acks after real commit retry the rid-less note and a real fallback
     r.records().filter((row) => row.reason === "relay-restarted").length,
     1,
   );
+  r.onCommit = undefined;
+  r.proxy.holdDown = true;
   const next = await send(r, "/relay/next");
   assert.equal(next.status, 403);
   await r.until(() =>
-    r.records().some((row) => row.reason === "reserved-path"),
+    r.commits.some((event) =>
+      event.batch.records.some((entry) => entry.d === 3),
+    ),
   );
-  assert.ok(r.commits.at(-1)!.batch.records[0]!.d > 2);
+  const nextCommit = r.commits.at(-1)!;
+  const nextRecord = nextCommit.batch.records.find((entry) => entry.d === 3);
+  assert.ok(
+    nextRecord &&
+      "reason" in nextRecord &&
+      nextRecord.reason === "reserved-path",
+  );
+  assert.deepEqual(nextCommit.committed, [3]);
+  for (const entry of nextCommit.batch.records) {
+    if (entry.d <= 2) assert.ok(nextCommit.ignored.includes(entry.d));
+  }
+  assert.equal(r.records().filter((row) => row.rid === fallback.rid).length, 1);
+  assert.equal(
+    r.records().filter((row) => row.reason === "relay-restarted").length,
+    1,
+  );
+  assert.equal(
+    r.records().filter((row) => row.reason === "reserved-path").length,
+    1,
+  );
+  assert.ok(r.proxy.delayedDown.length > 0);
+  r.proxy.releaseDown();
+});
+
+test("T9 applies only a valid acknowledged prefix, then sends the queued suffix", async () => {
+  vi.useFakeTimers();
+  try {
+    const sent: number[][] = [];
+    const pending: {
+      resolve: (answer: { status: number; ack: number }) => void;
+      reject: (error: Error) => void;
+    }[] = [];
+    const queue = createObservations({
+      boot,
+      retryMs: 10,
+      log() {},
+      send(batch) {
+        sent.push(batch.records.map((entry) => entry.d));
+        return new Promise((resolve, reject) =>
+          pending.push({ resolve, reject }),
+        );
+      },
+    });
+    const tick = () => vi.advanceTimersByTimeAsync(0);
+    await tick();
+    pending[0]!.resolve({ status: 200, ack: 1 });
+    await tick();
+    queue.reserve()!.record(report(1, 2));
+    await tick();
+    pending[1]!.reject(new Error("lost first ack2"));
+    await vi.advanceTimersByTimeAsync(10);
+    assert.deepEqual(sent.at(-1), [2]);
+    queue.reserve()!.record(report(2, 3));
+    await tick();
+    assert.equal(sent.length, 3);
+    pending[2]!.reject(new Error("held duplicate ack2 exceeded deadline"));
+    await vi.advanceTimersByTimeAsync(20);
+    assert.deepEqual(sent.at(-1), [2, 3]);
+    queue.reserve()!.record(report(3, 4));
+    pending[3]!.resolve({ status: 200, ack: 3 });
+    await tick();
+    assert.deepEqual(sent.at(-1), [4]);
+    pending[4]!.resolve({ status: 200, ack: 5 });
+    await vi.advanceTimersByTimeAsync(10);
+    assert.deepEqual(sent.at(-1), [4]);
+    pending[5]!.resolve({ status: 200, ack: 3 });
+    await vi.advanceTimersByTimeAsync(20);
+    assert.deepEqual(sent.at(-1), [4]);
+    pending[6]!.resolve({ status: 200, ack: 4 });
+    await tick();
+    await queue.close(10);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("T10 admission reserves before all four held requests, and aggregates both overflow classes", async () => {
