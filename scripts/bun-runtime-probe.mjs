@@ -4524,8 +4524,9 @@ async function checkGatewayLink() {
   await new Promise((resolve) =>
     upstream.listen(0, "127.0.0.1", () => resolve()),
   );
+  // Keyed by upstream host (`UpstreamOverrides`), never by provider.
   const upstreams = {
-    "openai-codex": {
+    "chatgpt.com": {
       connect: { host: "127.0.0.1", port: upstream.address().port },
       ca: ca.certPem,
     },
