@@ -44,6 +44,7 @@
  */
 import http from "node:http";
 import https from "node:https";
+import { performance } from "node:perf_hooks";
 import { Transform, type Duplex } from "node:stream";
 import type { CompatTarget, CompatUpstream } from "./compatUpstream.ts";
 import {
@@ -199,6 +200,13 @@ function countRead(req: http.IncomingMessage, add: (n: number) => void): void {
   }) as typeof req.emit;
 }
 
+/** A queued pipelined response can have headers but no socket to send them. */
+function sentStatus(res: http.ServerResponse): number | null {
+  return res.headersSent && (res.socket !== null || res.writableFinished)
+    ? res.statusCode
+    : null;
+}
+
 /** Fixed reasons for the statuses a local answer is known to send. */
 const LOCAL_REASONS: Readonly<Record<number, string>> = {
   400: "bad-request",
@@ -270,6 +278,11 @@ interface Trace {
   responseBytes: number;
   /** Whether `end` already took effect. */
   readonly ended: boolean;
+  /** Holds a completed answer until its forwarded upload has finished. */
+  waitForUpload(): () => void;
+  /** A completed answer, pending the upload if one is still in flight. */
+  answered(ending: Ending, leaseId?: string): void;
+  /** A terminal failure, or an answer whose whole lifecycle is settled. */
   end(ending: Ending, leaseId?: string): void;
 }
 
@@ -454,6 +467,7 @@ export function createForwarder(deps: ForwarderDeps): {
     admitted: AdmittedClient | undefined,
   ): Trace {
     const started = Date.now();
+    const elapsedStart = performance.now();
     const url = req.url ?? "";
     const pathname = route?.pathname ?? url.split("?")[0] ?? "";
     const clientId = deps.clientOf?.(req);
@@ -470,6 +484,8 @@ export function createForwarder(deps: ForwarderDeps): {
         ? pinKeyOf(route.upstream.provider, req.rawHeaders)?.slice(0, 12)
         : undefined;
     let ended = false;
+    let waitingForUpload = false;
+    let answer: { ending: Ending; leaseId: string | undefined } | undefined;
     let account: string | undefined;
     const trace: Trace = {
       host: route?.upstream.kind === "provider" ? route.upstream.host : "",
@@ -487,10 +503,26 @@ export function createForwarder(deps: ForwarderDeps): {
           log(`request account lookup failed (${errorCode(err)})`);
         }
       },
+      waitForUpload() {
+        waitingForUpload = true;
+        return () => {
+          waitingForUpload = false;
+          if (answer) trace.end(answer.ending, answer.leaseId);
+        };
+      },
+      answered(ending, leaseId = trace.leaseId) {
+        if (ended) return;
+        if (waitingForUpload) answer = { ending, leaseId };
+        else trace.end(ending, leaseId);
+      },
       end(ending, leaseId = trace.leaseId) {
         if (ended) return;
         ended = true;
-        const durationMs = Date.now() - started;
+        answer = undefined;
+        const durationMs = Math.max(
+          0,
+          Math.round(performance.now() - elapsedStart),
+        );
         const lease = leaseId ? ` lease=${leaseId}` : "";
         const leaseKind =
           trace.kind ??
@@ -539,7 +571,7 @@ export function createForwarder(deps: ForwarderDeps): {
     trace.end({
       text: "client closed",
       outcome: "failed",
-      status: trace.status ?? null,
+      status: sentStatus(res),
       reason: "client-closed",
     });
     if (!res.destroyed) res.destroy();
@@ -582,6 +614,7 @@ export function createForwarder(deps: ForwarderDeps): {
   ): void {
     if (gone(res, trace)) return;
     stats.refused += 1;
+    if (leaseId !== undefined) trace.leaseId = leaseId;
     const { status, body, retryAfter } = refusalResponse(refusal, shape);
     res.writeHead(status, {
       "content-type": "application/json",
@@ -592,8 +625,10 @@ export function createForwarder(deps: ForwarderDeps): {
     });
     trace.status = status;
     trace.responseBytes += Buffer.byteLength(body);
+    res.once("finish", () =>
+      trace.answered(refusalEnding(refusal, status), leaseId),
+    );
     res.end(body);
-    trace.end(refusalEnding(refusal, status), leaseId);
   }
 
   /** Runs response bookkeeping; a throw is logged, never answered. */
@@ -877,7 +912,10 @@ export function createForwarder(deps: ForwarderDeps): {
       route,
       destination,
       trace,
-      (ending) => trace.end(ending, leaseId),
+      (ending) =>
+        ending.outcome === "forwarded"
+          ? trace.answered(ending, leaseId)
+          : trace.end(ending, leaseId),
       (refusal) => refuse(res, shape, refusal, trace, leaseId),
     );
   }
@@ -914,25 +952,32 @@ export function createForwarder(deps: ForwarderDeps): {
       },
     });
 
+    // Construction can throw before there is an upload lifetime to wait for.
+    const uploaded = trace.waitForUpload();
+
     /** The upstream failed after headers: the engine sees a truncated stream. */
     const failAfterHeaders = (err?: unknown): void => {
-      if (ended) return;
+      if (ended || trace.ended) return;
       ended = "upstream";
       stats.upstreamErrors += 1;
+      countIn.destroy();
       countOut.destroy();
       res.destroy();
       const code = errorCode(err);
       done({
         text: `upstream error after headers (${code})`,
         outcome: "failed",
-        status: trace.status ?? null,
+        status: sentStatus(res),
         reason: CODE_RE.test(code) ? code : "upstream-truncated",
       });
     };
 
     upstreamReq.on("response", (upstreamRes) => {
-      if (ended) {
+      if (ended || trace.ended || res.destroyed) {
+        ended = "client";
         upstreamRes.destroy();
+        cancel();
+        clientClosed(res, trace);
         return;
       }
       // An abort surfaces as `close` before `complete`; the error adds nothing.
@@ -959,13 +1004,34 @@ export function createForwarder(deps: ForwarderDeps): {
       upstreamRes.pipe(countOut).pipe(res);
     });
 
+    // Node can detach an early finished response before the incomplete
+    // IncomingMessage gets a close event. Its socket still owns that upload.
+    const uploadClosed = (): void => {
+      if (!upstreamReq.writableFinished && !trace.ended) {
+        cancel();
+        clientClosed(res, trace);
+      }
+    };
+    req.socket.once("close", uploadClosed);
+    upstreamReq.once("finish", () => {
+      req.socket.off("close", uploadClosed);
+      uploaded();
+    });
+    upstreamReq.once("close", () => {
+      req.socket.off("close", uploadClosed);
+      // A peer that stops reading before upload finish cannot receive more
+      // bytes. Settle this failed lifetime even if its answer already finished.
+      if (!upstreamReq.writableFinished && !ended && !trace.ended)
+        failAfterHeaders();
+    });
     upstreamReq.on("error", (err) => {
-      if (ended) return;
+      if (ended || trace.ended) return;
       if (res.headersSent) return failAfterHeaders(err);
       ended = "upstream";
       stats.upstreamErrors += 1;
       req.unpipe(countIn);
       countIn.destroy();
+      uploaded();
       refuseLocally({
         case: "unreachable",
         upstream: destination.label,
@@ -990,7 +1056,16 @@ export function createForwarder(deps: ForwarderDeps): {
       }, 10);
     });
     res.on("error", cancel);
-    req.on("error", cancel);
+    req.on("error", () => {
+      cancel();
+      clientClosed(res, trace);
+    });
+    req.on("close", () => {
+      if (!req.complete) {
+        cancel();
+        clientClosed(res, trace);
+      }
+    });
     countIn.on("error", () => upstreamReq.destroy());
     req.pipe(countIn).pipe(upstreamReq);
   }
@@ -1006,26 +1081,28 @@ export function createForwarder(deps: ForwarderDeps): {
       res.once("close", () => {
         setTimeout(() => {
           if (trace.ended) return;
-          if (res.writableFinished && trace.status !== undefined)
-            return trace.end({
-              text: String(trace.status),
-              outcome: "forwarded",
-              status: trace.status,
-            });
-          clientClosed(res, trace);
+          // Its finish handler owns a completed answer, including one still
+          // waiting for upload completion. Close must not publish it early.
+          if (!res.writableFinished) clientClosed(res, trace);
         }, 10);
       });
       handle(req, res, route, trace).catch((err: unknown) => {
         if (gone(res, trace)) return;
         const sent = res.headersSent;
-        trace.end({
+        const ending: Ending = {
           text: `internal error (${errorCode(err)})`,
           outcome: "failed",
-          status: sent ? (trace.status ?? null) : 500,
+          status: sent ? sentStatus(res) : 500,
           reason: "internal-error",
-        });
-        if (sent) res.destroy();
-        else res.writeHead(500).end();
+        };
+        if (sent) {
+          trace.end(ending);
+          res.destroy();
+        } else {
+          trace.status = 500;
+          res.once("finish", () => trace.answered(ending));
+          res.writeHead(500).end();
+        }
       });
     },
 
@@ -1040,10 +1117,19 @@ export function createForwarder(deps: ForwarderDeps): {
       socket.on("error", () => socket.destroy());
       trace.status = status;
       trace.responseBytes += Buffer.byteLength(body);
+      socket.once("finish", () => trace.end(refusalEnding(refusal, status)));
+      socket.once("close", () => {
+        if (!socket.writableFinished)
+          trace.end({
+            text: "client closed",
+            outcome: "failed",
+            status: null,
+            reason: "client-closed",
+          });
+      });
       socket.end(
         `HTTP/1.1 ${status} ${http.STATUS_CODES[status]}\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\nconnection: close\r\n\r\n${body}`,
       );
-      trace.end(refusalEnding(refusal, status));
     },
 
     /**
@@ -1098,7 +1184,7 @@ export function createForwarder(deps: ForwarderDeps): {
       res.once("close", () => {
         setTimeout(() => {
           if (trace.ended) return;
-          const status = res.headersSent ? res.statusCode : null;
+          const status = sentStatus(res);
           if (status !== null) trace.status = status;
           const reason = destroyedHere ? "aborted" : "client-closed";
           trace.end({

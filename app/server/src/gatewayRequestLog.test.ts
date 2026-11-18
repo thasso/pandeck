@@ -783,7 +783,7 @@ test("/mcp: an upload over the cap is one refused record, too-large", async () =
   );
 });
 
-test("a refusal before the forwarder without a resolvable client is a line only", async () => {
+test("a registry refusal before the forwarder retains its authenticated socket's client", async () => {
   const stateDir = mkdtempSync(join(DATA_DIR, "request-log-edge-"));
   const gw = await startEdge(upstreams.overrides, stateDir);
   account(gw, "a", "thasso");

@@ -2280,17 +2280,25 @@ writes no answer, no second record and contacts no upstream.
   `authorization`, `x-api-key` and `proxy-authorization`, every repeat, the most
   sensitive winning; `requestCredential.ts`) and `clientCookie`; `requestBytes`
   (body bytes read from the client, 0 for a refusal), `responseBytes` (body
-  bytes sent to the client, a refusal's body included), `durationMs`;
-  `firstSeen`. A forwarded body passes one counting Transform each way, lengths
-  only. No record holds a header value, credential, lease token, query, body or
-  raw session key: the log copies only these fields.
+  bytes sent to the client, a refusal's body included), `durationMs`
+  (nonnegative integer elapsed time from a monotonic clock, while `at` remains
+  wall-clock time); `firstSeen`. A forwarded body passes one counting Transform
+  each way, lengths only. An early upstream reply is delivered immediately, but
+  its record waits for upload finish too. A later upload abort/error is failed;
+  a peer that stops reading before upload finish settles that failed lifetime
+  rather than leaving a pending record. No record holds a header value,
+  credential, lease token, query, body or raw session key: the log copies only
+  these fields.
 - **Outcomes.** `forwarded` with the upstream's status; `refused` with the
   refusal case as `reason` (a WebSocket upgrade's is `upgrade`); `failed` with a
   Node error code, `unreachable`, `upstream-truncated` (after the headers,
   status kept) or `internal-error`. A client that closes before its answer ended
   is `failed` with `reason=client-closed`, its status kept once headers were
-  sent (`null` before), never a success. `observed` and `overflow` are the
-  relay's (PR2).
+  sent (`null` before), never a success. Forwarder-owned refusals also wait for
+  response `finish`; a pipelined reply queued without a socket has sent no
+  status. Completed marked refusals keep their reason even at 503; status-only
+  5xx mapping applies to adapter answers, not marked gateway refusals.
+  `observed` and `overflow` are the relay's (PR2).
 - **Answered by the edge.** `/mcp` and the listener's refusals have `host` `""`
   and no account or session. `requestBytes` counts the body's `data` chunks
   whoever reads them (`req.emit` is wrapped, so the handler's reads are
@@ -2305,10 +2313,12 @@ writes no answer, no second record and contacts no upstream.
   destroyed it, else `client-closed`. No tool name, JSON-RPC method or other
   content is recorded.
 - **Line.** Today's forward line plus `outcome=` and `via=gateway`; no session
-  tag. A request without a resolvable client gets the line only: on the loopback
-  listener, and on the model port when the registry cannot be read
-  (`refused registry-unavailable 503`) or the client was revoked since its
-  connection (`refused forbidden 403`).
+  tag. A request without a resolved client gets the line only, including the
+  loopback listener. On an already-authenticated model socket, a fresh registry
+  read failure (`refused registry-unavailable 503`) or inactive client
+  (`refused forbidden 403`) retains the cached identity for attribution only.
+  That cache never authorizes forwarding; current registry admission still
+  decides whether the request may proceed.
 - **Retention.** A ring of the last 5,000 records of all users, in memory, and a
   random `epoch` per start: a restart empties it and old cursors mean nothing.
   `firstSeen` marks the first record for a host, method and `pathKey`; those
