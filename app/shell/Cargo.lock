@@ -2651,6 +2651,7 @@ version = "0.65.0"
 dependencies = [
  "block2",
  "futures-util",
+ "libc",
  "objc2",
  "objc2-foundation",
  "objc2-ui-kit",
