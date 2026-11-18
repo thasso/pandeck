@@ -2115,9 +2115,8 @@ is added or removed.
     recorded local refusal. It releases that slot on edge headers, or converts
     it into the fallback until acknowledged. A full queue answers a marked 503
     without contacting the edge. Those refusals are counted, not individually
-    recorded: one overflow note uses the final reserved slot,
-    with count and first/last times. Further refusals aggregate while that note
-    is in flight.
+    recorded: one overflow note uses the final reserved slot, with count and
+    first/last times. Further refusals aggregate while that note is in flight.
   - The queue assigns `d` at enqueue, independently of request ids. One batch at
     a time goes over the same mTLS link to `POST /relay/observations`, at most
     100 records and 64 KiB. Only a valid 200 acknowledgement removes its prefix.
