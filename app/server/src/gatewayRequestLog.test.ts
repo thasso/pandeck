@@ -14,6 +14,7 @@ import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, test, vi } from "vitest";
+import type { EdgeTools } from "./gateway/edgeTools.ts";
 import type { RunningGateway } from "./gateway/gateway.ts";
 import type { RequestRecord } from "./gateway/requestLog.ts";
 
@@ -110,10 +111,15 @@ interface Machine {
 async function startEdge(
   overrides = upstreams.overrides,
   stateDir = mkdtempSync(join(DATA_DIR, "request-log-edge-")),
-  withTools = false,
+  withTools: boolean | EdgeTools = false,
 ): Promise<RunningGateway> {
   const gw = await startGateway({
-    ...(withTools ? { tools: createEdgeTools({ log: () => {} }) } : {}),
+    ...(withTools
+      ? {
+          tools:
+            withTools === true ? createEdgeTools({ log: () => {} }) : withTools,
+        }
+      : {}),
     stateDir,
     upstreams: overrides,
     claudeTokenEndpoint: upstreams.tokenEndpoint,
@@ -213,7 +219,15 @@ function send(
       ...(options.agent ? { agent: options.agent } : {}),
       path,
       method: options.method ?? "POST",
-      headers: { "content-type": "application/json", ...options.headers },
+      headers: {
+        "content-type": "application/json",
+        // GET does not get automatic body framing from ClientRequest. Without
+        // this the fixture's body is a second, malformed pipelined request.
+        "content-length": Buffer.byteLength(
+          options.body ?? '{"model":"fixture"}',
+        ),
+        ...options.headers,
+      },
     });
     request.on("response", (response) => {
       const chunks: Buffer[] = [];
@@ -696,6 +710,50 @@ test("/mcp: each answered or refused request is one record and one line, classed
     mcpLines[1]!,
     / refused method-not-allowed 405 \d+ms outcome=refused via=gateway$/,
   );
+});
+
+test("/mcp: a parser-closed TLS reply is classed by finish, not its 4xx status", async () => {
+  let finished = false;
+  let closed = false;
+  const tools = createEdgeTools({ log: () => {} });
+  const gw = await startEdge(upstreams.overrides, undefined, {
+    ...tools,
+    handleMcp(req, res, caller) {
+      res.once("finish", () => (finished = true));
+      res.once("close", () => (closed = true));
+      tools.handleMcp(req, res, caller);
+    },
+  });
+  const m = await machine(gw, "thasso", "devbox");
+  const token = gw.clients!.registry.setMcpToken(m.clientId);
+  // Deliberately omit GET body framing. Node's parser destroys this socket
+  // after accepting the headers, potentially before the TLS reply finishes.
+  await new Promise<void>((resolve) => {
+    const request = https.request({
+      ...tlsOf(gw, m),
+      path: "/mcp",
+      method: "GET",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    request.on("response", (response) => {
+      response.resume();
+      response.on("end", resolve);
+      response.on("error", () => resolve());
+    });
+    request.on("error", () => resolve());
+    request.end('{"model":"fixture"}');
+  });
+  await vi.waitFor(() => assert.equal(recordsOf(gw, "thasso").length, 1));
+  assert.equal(closed, true);
+  const [record] = recordsOf(gw, "thasso");
+  assert.deepEqual(
+    [record!.status, record!.outcome, record!.reason],
+    finished
+      ? [405, "refused", "method-not-allowed"]
+      : [405, "failed", "client-closed"],
+  );
+  assert.equal(requestLines().length, 1);
+  assert.ok(!JSON.stringify(record).includes(token));
 });
 
 test("/mcp: an upload over the cap is one refused record, too-large", async () => {

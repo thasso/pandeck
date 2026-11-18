@@ -1055,11 +1055,11 @@ export function createForwarder(deps: ForwarderDeps): {
      * (its `emit` is wrapped, so no listener changes how the handler reads),
      * `responseBytes` from the handler's `write` and `end`.
      *
-     * An answer ended in full is classed by its status: below 400
+     * An answer completed at `finish` is classed by its status: below 400
      * forwarded, 4xx refused, 5xx failed, each with a fixed reason. An
-     * answer not ended (closed before or during the body) is failed, its
+     * answer closed before completion, even after `end`, is failed, its
      * status null before headers: `aborted` when the handler destroyed it,
-     * else `client-closed`. A gate's `refuse` wins over its status.
+     * else `client-closed`. A completed gate's `refuse` wins over its status.
      */
     observeLocal(req, res, admitted) {
       const trace = startTrace(req, undefined, admitted);
@@ -1093,15 +1093,9 @@ export function createForwarder(deps: ForwarderDeps): {
         trace.end(answerEnding(status));
       };
       res.once("finish", finish);
-      // A TLS close can precede the finish event even for a complete reply.
-      // Defer the failure fallback one turn; finish remains the success edge.
+      // Allow an already-scheduled finish to run before the failure fallback.
+      // Close alone never proves completion, regardless of the reply's status.
       res.once("close", () => {
-        const closeStatus = res.headersSent ? res.statusCode : null;
-        if (closeStatus !== null && closeStatus >= 400 && closeStatus < 500) {
-          trace.status = closeStatus;
-          trace.end(answerEnding(closeStatus));
-          return;
-        }
         setTimeout(() => {
           if (trace.ended) return;
           const status = res.headersSent ? res.statusCode : null;

@@ -2294,14 +2294,16 @@ writes no answer, no second record and contacts no upstream.
 - **Answered by the edge.** `/mcp` and the listener's refusals have `host` `""`
   and no account or session. `requestBytes` counts the body's `data` chunks
   whoever reads them (`req.emit` is wrapped, so the handler's reads are
-  unchanged), `responseBytes` what the handler wrote; lengths only. A gate's
-  refusal is `refused` with `mcp-origin` (403) or `mcp-token` (401) and counts
-  no body. An answer ended in full is classed by its status: below 400
+  unchanged), `responseBytes` what the handler wrote; lengths only. A completed
+  gate refusal is `refused` with `mcp-origin` (403) or `mcp-token` (401) and
+  counts no body. Completion is the response's `finish`, not an `end()` call
+  with output still queued. A completed answer is classed by status: below 400
   `forwarded`; 4xx `refused` (`bad-request` 400, `method-not-allowed` 405,
   `too-large` 413, else `client-error`); 5xx `failed` (`internal-error` 500,
-  `timeout` 504, else `server-error`). An answer not ended is `failed`, status
-  `null` before headers: `aborted` when the handler destroyed it, else
-  `client-closed`. No tool name, JSON-RPC method or other content is recorded.
+  `timeout` 504, else `server-error`). A close before completion is `failed`
+  even for 4xx, status `null` before headers: `aborted` when the handler
+  destroyed it, else `client-closed`. No tool name, JSON-RPC method or other
+  content is recorded.
 - **Line.** Today's forward line plus `outcome=` and `via=gateway`; no session
   tag. A request without a resolvable client gets the line only: on the loopback
   listener, and on the model port when the registry cannot be read

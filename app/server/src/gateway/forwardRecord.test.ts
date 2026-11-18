@@ -293,6 +293,12 @@ test("a local answer is classed by the status it sent in full", async () => {
     assert.equal(entry.requestBytes, Buffer.byteLength('{"model":"fixture"}'));
     assert.equal(entry.responseBytes, Buffer.byteLength("answer"));
   }
+  await settle();
+  assert.equal(r.entries.length, statuses.length);
+  assert.equal(
+    r.lines.filter((l) => l.includes(" via=gateway")).length,
+    statuses.length,
+  );
 });
 
 test("a local answer: a gate's refusal wins and counts no body", async () => {
@@ -337,29 +343,43 @@ test("a local answer the handler destroys is failed: null before headers, its st
   assert.equal(r.lines.filter((l) => l.includes(" via=gateway")).length, 2);
 });
 
-test("a local answer ended under backpressure is failed if the caller aborts before finish", async () => {
-  const r = await rig({
-    local: (_req, res) => {
-      res.writeHead(200);
-      res.end(Buffer.alloc(32 * 1024 * 1024, 0x61));
-    },
+for (const status of [200, 400, 405, 413, 500])
+  test(`a local ${status} answer ended under backpressure is failed if the caller aborts before finish`, async () => {
+    let answer: http.ServerResponse | undefined;
+    let finished = false;
+    const r = await rig({
+      local: (_req, res) => {
+        answer = res;
+        res.once("finish", () => (finished = true));
+        res.writeHead(status);
+        res.end(Buffer.alloc(32 * 1024 * 1024, 0x61));
+      },
+    });
+    const request = start(r.port, "/large");
+    await new Promise<void>((resolve) =>
+      request.on("response", (response) => {
+        response.on("error", () => {});
+        response.once("data", () => {
+          response.pause();
+          resolve();
+        });
+      }),
+    );
+    assert.equal(answer!.writableEnded, true);
+    assert.equal(answer!.writableFinished, false);
+    assert.equal(finished, false);
+    request.destroy();
+    await vi.waitFor(() => assert.equal(r.entries.length, 1));
+    assert.deepEqual(
+      [r.entries[0]!.status, r.entries[0]!.outcome, r.entries[0]!.reason],
+      [status, "failed", "client-closed"],
+    );
+    await settle();
+    assert.equal(finished, false);
+    assert.equal(answer!.writableFinished, false);
+    assert.equal(r.entries.length, 1);
+    assert.equal(r.lines.filter((l) => l.includes(" via=gateway")).length, 1);
   });
-  const request = start(r.port, "/large");
-  await new Promise<void>((resolve) =>
-    request.on("response", (response) => {
-      response.once("data", () => {
-        response.pause();
-        resolve();
-      });
-    }),
-  );
-  request.destroy();
-  await vi.waitFor(() => assert.equal(r.entries.length, 1));
-  assert.deepEqual(
-    [r.entries[0]!.status, r.entries[0]!.outcome, r.entries[0]!.reason],
-    [200, "failed", "client-closed"],
-  );
-});
 
 test("a local answer whose client goes away is failed, client-closed, never a success", async () => {
   const r = await rig({
