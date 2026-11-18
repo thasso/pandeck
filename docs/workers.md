@@ -2133,12 +2133,14 @@ changes the target and `Host` ("Interception" below).
   - On the client model port, the edge reads exactly one relay-id field matching
     `^[0-9a-f]{32}:[1-9][0-9]{0,14}$`. Invalid or repeated fields are ignored,
     the request is served without a rid, and its text line says `rid=invalid`.
-    Valid ids enter client-scoped, boot-scoped dedup before `/mcp` or
-    forwarding. A repeated id gets marked 409 `duplicate-rid`, one text line and
-    no second record. A live id below the compacted floor is served and recorded
-    with `rid=below-floor`, never refused merely because compaction lost
-    precision. All upstream requests drop every `x-pandeck-*` field, on every
-    listener.
+    Valid ids enter client-scoped, boot-scoped dedup before `/mcp`, forwarding
+    or a CONNECT refusal, including cached-client admission refusals. The
+    observation-ingest endpoint keeps its separate active-client admission and
+    does not reserve an id from batch transport metadata. A repeated id gets
+    marked 409 `duplicate-rid`, one text line and no second record. A live id
+    below the compacted floor is served and recorded with `rid=below-floor`,
+    never refused merely because compaction lost precision. All upstream
+    requests drop every `x-pandeck-*` field, on every listener.
   - The ingest endpoint accepts only POST, at most 100 entries and 64 KiB. The
     whole batch must validate before any record, rid or acknowledgement is
     changed: lowercase boot, increasing safe-integer `d`, matching rid boot,
@@ -2522,25 +2524,31 @@ writes no answer, no second record and contacts no upstream.
   `forward.ts` `startTrace` copies it into the entry; PR1 sets none); `host`
   (the route's upstream, `""` when none matched), `method`, `path` (pathname
   only, cut to 200 characters) and `pathKey` (on a token-route machine request
-  the matched listed template, else the pathname), both without query or
-  fragment text; `status` (what the client was answered, `null` if none);
-  `outcome` and `reason`; `account` (the registry name, set only once the lease
-  is the client's own or the pool picked it); `session` (the first 12 hex of the
-  session key's SHA-256, provider routes only); `clientCredential` (`none`,
-  `placeholder`, `lease` or `other`, from `authorization`, `x-api-key` and
-  `proxy-authorization`, every repeat, the most sensitive winning;
-  `requestCredential.ts`) and `clientCookie`; `requestBytes` (body bytes read
-  from the client, 0 for a refusal), `responseBytes` (body bytes sent to the
-  client, a refusal's body included, but 0 when HTTP suppresses the body for
-  HEAD, 1xx, 204 or 304), `durationMs` (nonnegative integer elapsed time from a
-  monotonic clock, while `at` remains wall-clock time); `firstSeen`. A forwarded
-  body passes one counting Transform each way, lengths only. An early upstream
-  reply is delivered immediately, but its record waits for upload finish too. A
-  later upload abort/error is failed; a peer that stops reading before upload
-  finish settles that failed lifetime rather than leaving a pending record. No
-  record holds a header value, credential, lease token, query, body or raw
-  session key: the log copies only these fields. Paths in records, text lines
-  and persisted first-seen identities omit everything from the first `?` or `#`.
+  the matched listed template, else the pathname), both without query text;
+  gateway-originated rows also omit fragment text; `status` (what the client was
+  answered, `null` if none); `outcome` and `reason`; `account` (the registry
+  name, set only once the lease is the client's own or the pool picked it);
+  `session` (the first 12 hex of the session key's SHA-256, provider routes
+  only); `clientCredential` (`none`, `placeholder`, `lease` or `other`, from
+  `authorization`, `x-api-key` and `proxy-authorization`, every repeat, the most
+  sensitive winning; `requestCredential.ts`) and `clientCookie`; `requestBytes`
+  (body bytes read from the client, 0 for a refusal), `responseBytes` (body
+  bytes sent to the client, a refusal's body included, but 0 when HTTP
+  suppresses the body for HEAD, 1xx, 204 or 304), `durationMs` (nonnegative
+  integer elapsed time from a monotonic clock, while `at` remains wall-clock
+  time); `firstSeen`. A forwarded body passes one counting Transform each way,
+  lengths only. An early upstream reply is delivered immediately, but its record
+  waits for upload finish too. A later upload abort/error is failed; a peer that
+  stops reading before upload finish settles that failed lifetime rather than
+  leaving a pending record. No record holds a header value, credential, lease
+  token, query, body or raw session key: the log copies only these fields. For
+  gateway-originated rows, paths in records, text lines and persisted first-seen
+  identities omit everything from the first `?` or `#`.
+- **Relay fragment limitation.** Relay-originated local-refusal and fallback
+  paths still retain raw fragment text in records, text lines and persisted
+  first-seen identities. Task-1435 will address this after PR2b merges, per
+  requester ruling RD-1430-PR3-3. The gateway-originated fragment guarantee
+  above does not cover those relay rows.
 - **Outcomes.** `forwarded` with the upstream's status; `refused` with the
   refusal case as `reason` (a WebSocket upgrade's is `upgrade`); `failed` with a
   Node error code, `unreachable`, `upstream-truncated` (after the headers,
@@ -2554,17 +2562,19 @@ writes no answer, no second record and contacts no upstream.
 - **Answered by the edge.** `/mcp` and the listener's refusals have `host` `""`
   and no account or session. A `CONNECT` is recorded `refused` with
   `denied:method` (403), `forbidden` for an inactive client, or
-  `registry-unavailable` (503). An origin-form target on a token route keeps its
-  route's host, path and marking. Display paths omit query and fragment text;
-  authority-form targets cut both before stripping userinfo, so an `@` in either
-  suffix is never mistaken for userinfo. Origin-form path `@` stays. A request
-  the HTTP parser rejects (such as `TRACK`) reaches no handler and is not
-  recorded. `requestBytes` counts the body's `data` chunks whoever reads them
-  (`req.emit` is wrapped, so the handler's reads are unchanged), `responseBytes`
-  what the handler wrote; lengths only. A completed gate refusal is `refused`
-  with `mcp-origin` (403) or `mcp-token` (401) and counts no body. Completion is
-  the response's `finish`, not an `end()` call with output still queued. A
-  completed answer is classed by status: below 400 `forwarded`; 4xx `refused`
+  `registry-unavailable` (503). A repeated relay id instead gets a marked 409
+  `duplicate-rid` and only the duplicate diagnostic line, without a new record.
+  An origin-form target on a token route keeps its route's host, path and
+  marking. Display paths omit query and fragment text; authority-form targets
+  cut both before stripping userinfo, so an `@` in either suffix is never
+  mistaken for userinfo. Origin-form path `@` stays. A request the HTTP parser
+  rejects (such as `TRACK`) reaches no handler and is not recorded.
+  `requestBytes` counts the body's `data` chunks whoever reads them (`req.emit`
+  is wrapped, so the handler's reads are unchanged), `responseBytes` what the
+  handler wrote; lengths only. A completed gate refusal is `refused` with
+  `mcp-origin` (403) or `mcp-token` (401) and counts no body. Completion is the
+  response's `finish`, not an `end()` call with output still queued. A completed
+  answer is classed by status: below 400 `forwarded`; 4xx `refused`
   (`bad-request` 400, `method-not-allowed` 405, `too-large` 413, else
   `client-error`); 5xx `failed` (`internal-error` 500, `timeout` 504, else
   `server-error`). A close before completion is `failed` even for 4xx, status
