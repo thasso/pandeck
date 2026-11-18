@@ -2025,7 +2025,11 @@ test("AC13, AC14: machine leases count as live for renewal; a pin idle 7 days is
 // --- Task-1430 PR3: the permissive machine path on the token routes --------
 
 function recordsOf(rig: Rig, userId = "thasso") {
-  return rig.gw.requests!.since(userId, undefined, 0, 5000).records;
+  // PR2a also records relay startup observations. These assertions cover
+  // model-port requests; relay reporting has its own integration suite.
+  return rig.gw
+    .requests!.since(userId, undefined, 0, 5000)
+    .records.filter((record) => record.via === "gateway");
 }
 
 /** The account a fake upstream request spent, by its bearer. */
