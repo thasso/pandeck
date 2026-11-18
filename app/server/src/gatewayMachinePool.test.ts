@@ -38,7 +38,7 @@ const { isLeaseShaped } = await import("./gateway/leases.ts");
 const { enrollRelay, startRelay } = await import("./relay/relay.ts");
 const { startGatewayClientLink } = await import("./gatewayClientLink.ts");
 const { DATA_DIR } = await import("./config.ts");
-const { fakeProcesses, startFakeUpstreams } =
+const { fakeProcesses, rotatingClaudeTokens, startFakeUpstreams } =
   await import("./test/gatewayFixtures.ts");
 
 /**
@@ -154,6 +154,56 @@ const renewCodex: NonNullable<GatewayOptions["renewCodex"]> = async (file) => {
   return { ok: true };
 };
 
+/**
+ * Claude renewals at the fake `platform.claude.com`, held per account like
+ * the Codex port's (Task-1430 PR3, M1-L1): a gated account's renewal waits
+ * for its gate and then answers that account's `renewed` token. Ungated
+ * renewals rotate as the fixture's default does.
+ */
+const claudeGates = new Map<
+  string,
+  Gate & { enter: () => void; open: Promise<void> }
+>();
+/** Accounts whose Claude renewal the token endpoint was asked for, in order. */
+let claudeRenewCalls: string[] = [];
+const rotateClaude = rotatingClaudeTokens();
+
+function claudeGate(id: string): Gate {
+  let enter!: () => void;
+  let release!: () => void;
+  const entered = new Promise<void>((resolve) => (enter = resolve));
+  const open = new Promise<void>((resolve) => (release = resolve));
+  claudeGates.set(id, { entered, enter, open, release });
+  return { entered, release };
+}
+
+const claudeToken = (
+  seen: Parameters<typeof rotateClaude>[0],
+  res: http.ServerResponse,
+): void => {
+  const { refresh_token: refresh } = JSON.parse(seen.body.toString("utf8")) as {
+    refresh_token?: string;
+  };
+  const id = [...owners].find(([token]) => `${token}-refresh` === refresh)?.[1];
+  if (id !== undefined) claudeRenewCalls.push(id);
+  const held = id === undefined ? undefined : claudeGates.get(id);
+  if (!held || id === undefined) return rotateClaude(seen, res);
+  held.enter();
+  void held.open.then(() => {
+    claudeGates.delete(id);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        access_token: renewed(id),
+        refresh_token: `${renewed(id)}-refresh`,
+        expires_in: 28_800,
+        scope: "user:inference user:profile",
+        token_type: "Bearer",
+      }),
+    );
+  });
+};
+
 // --- fixtures ------------------------------------------------------------
 
 let upstreams: Awaited<ReturnType<typeof startFakeUpstreams>>;
@@ -166,6 +216,7 @@ beforeAll(async () => {
     claude: respond,
     mcp: respond,
     codex: respond,
+    claudeToken,
   });
 });
 
@@ -184,6 +235,9 @@ afterEach(async () => {
   upstreams.reset();
   answers.clear();
   gates.clear();
+  for (const held of claudeGates.values()) held.release();
+  claudeGates.clear();
+  claudeRenewCalls = [];
   renewCalls = [];
   renewRejected.clear();
   usedKeys.clear();
@@ -2239,6 +2293,193 @@ test("S4: a sweep during a held fresh request keeps its lease; the next sweep af
   clock += 61 * MIN;
   assert.equal((await rig.send("openai-codex", { key: "Z" })).status, 200);
   assert.equal(live(), false, "released, the next sweep revokes it");
+});
+
+// --- M1-L1: fresh requests across a held Claude credential read -----------
+
+/** Makes a Claude account's token due: its next read waits on its gated renewal. */
+function claudeDue(id: string): Gate {
+  writeToken("claude", accountFiles.get(id)!, access(id), clock + 30_000);
+  return claudeGate(id);
+}
+
+/** A key-less account call on `/anthropic`: a fresh selection. */
+const FRESH: SendOptions = {
+  method: "GET",
+  path: "/anthropic/api/oauth/usage",
+};
+
+test("S4(c), M1-L1: a fresh request whose lease is revoked during its held Claude read re-selects once, then succeeds", async () => {
+  const rig = await claudePair();
+  const wait = claudeDue("a");
+  const pending = rig.send("claude", FRESH);
+  await wait.entered;
+  const [held] = rig.machineLeases();
+  assert.ok(held && !held.revoked);
+  assert.equal(rig.gw.leases.revoke(held.leaseId, "session-ended"), true);
+  wait.release();
+  const reply = await pending;
+  assert.equal(reply.status, 200);
+  assert.equal(reply.account, "a");
+  assert.equal(upstreams.anthropic.length, 1);
+  // The re-selection took a new lease; the renewed token needed no second read.
+  const live = rig.machineLeases().filter((l) => !l.revoked);
+  assert.equal(live.length, 1);
+  assert.notEqual(live[0]!.leaseId, held.leaseId);
+  assert.deepEqual(claudeRenewCalls, ["a"]);
+  assert.deepEqual(rig.pins(), []);
+});
+
+test("S4(d), M1-L1: an account removed during a fresh request's held Claude read never sends its token; the request moves", async () => {
+  const rig = await claudePair();
+  const wait = claudeDue("a");
+  const pending = rig.send("claude", FRESH);
+  await wait.entered;
+  rig.edge.removeAccount("a");
+  wait.release();
+  const reply = await pending;
+  assert.equal(reply.status, 200);
+  assert.equal(reply.account, "b");
+  assert.equal(upstreams.anthropic.length, 1);
+  for (const seen of upstreams.anthropic)
+    assert.notEqual(spentBy(seen), "a", "A's token never reached the upstream");
+  assert.deepEqual(rig.pins(), []);
+});
+
+test("S4(e), M1-L1: a second change during a fresh request's re-selected Claude read is machine-retry, with no third read", async () => {
+  const rig = await claudePair();
+  rig.account("c", "claude");
+  const waitA = claudeDue("a");
+  const waitB = claudeDue("b");
+  claudeDue("c");
+  const pending = rig.send("claude", FRESH);
+  await waitA.entered;
+  rig.setEnabled("a", "claude", false);
+  waitA.release();
+  // Re-selected onto B, whose read is held too.
+  await waitB.entered;
+  rig.setEnabled("b", "claude", false);
+  waitB.release();
+  const reply = await pending;
+  assert.equal(reply.status, 503);
+  assert.match(
+    reply.text,
+    /this machine's account changed while the request waited; retry/,
+  );
+  assert.match(reply.text, new RegExp(MARKER));
+  assert.equal(reply.account, undefined);
+  assert.equal(upstreams.anthropic.length, 0);
+  assert.deepEqual(claudeRenewCalls, ["a", "b"], "no third credential read");
+  assert.deepEqual(rig.pins(), []);
+});
+
+test("S4(g), M1-L1: a client revoked during its fresh request's held Claude read gets no upstream answer", async () => {
+  const rig = await claudePair();
+  const wait = claudeDue("a");
+  const pending = rig.send("claude", FRESH).catch(() => ({
+    status: 0,
+    account: undefined,
+  }));
+  await wait.entered;
+  assert.equal(rig.machineLeases().length, 1);
+  rig.edge.registry.revoke(rig.machines[0]!.clientId);
+  await vi.waitFor(() =>
+    assert.ok(rig.machineLeases().every((l) => l.revoked)),
+  );
+  wait.release();
+  const reply = await pending;
+  assert.notEqual(reply.status, 200);
+  assert.equal(reply.account, undefined);
+  assert.equal(upstreams.anthropic.length, 0);
+  assert.deepEqual(claudeRenewCalls, ["a"]);
+});
+
+test("S4(h), M1-L1: a sweep during a fresh request's held Claude read keeps its lease; the next sweep after it ends revokes it", async () => {
+  const rig = await claudePair();
+  // A Codex session's model runs sweep the same pool, and pin no Claude lease.
+  rig.account("ca", "openai-codex");
+  const wait = claudeDue("a");
+  const pending = rig.send("claude", FRESH);
+  await wait.entered;
+  const [fresh] = rig.machineLeases();
+  assert.ok(fresh && !fresh.revoked);
+  const live = (): boolean =>
+    !rig.machineLeases().find((l) => l.leaseId === fresh.leaseId)!.revoked;
+  clock += 61 * MIN;
+  assert.equal((await rig.send("openai-codex", { key: "Z" })).status, 200);
+  assert.equal(live(), true, "the held lease survives the sweep");
+  wait.release();
+  const reply = await pending;
+  assert.equal(reply.status, 200);
+  assert.equal(reply.account, "a");
+  await vi.waitFor(() => assert.equal(recordsOf(rig).length, 2));
+  assert.equal(live(), true, "a zero count revokes nothing by itself");
+  clock += 61 * MIN;
+  assert.equal((await rig.send("openai-codex", { key: "Z" })).status, 200);
+  assert.equal(live(), false, "released, the next sweep revokes it");
+  assert.ok(rig.pins().every((pin) => pin.provider !== "claude"));
+});
+
+// --- M1-L2: account and MCP 2xx leave a model-run bench --------------------
+
+/** X pinned on `a`, then a short model-run bench on `a` (X keeps its pin). */
+async function benchedA(): Promise<Rig> {
+  const rig = await claudePair();
+  assert.equal((await rig.send("claude", { key: "X" })).account, "a");
+  plan("a", { status: 429, headers: { "retry-after": "30" } });
+  assert.equal((await rig.send("claude", { key: "X" })).status, 429);
+  return rig;
+}
+
+/** The bench on `a` still holds, then ends on time; no null-key pin appeared. */
+async function assertBenchHolds(rig: Rig): Promise<void> {
+  assert.equal(
+    (await rig.send("claude", { key: "Y" })).account,
+    "b",
+    "a new session avoids the benched account",
+  );
+  clock += 31_000;
+  assert.equal(
+    (await rig.send("claude", { key: "W" })).account,
+    "a",
+    "the bench, not ranking, kept Y off a",
+  );
+  assert.ok(rig.pins().every((pin) => pin.keyHash !== null));
+}
+
+test("C7, M1-L2: a session's account and MCP 2xx on its benched account leave the model-run bench in force", async () => {
+  const rig = await benchedA();
+  const pinOfX = () => {
+    const pin = rig.pins().find((p) => p.keyHash === pinHash("X"))!;
+    return { profileId: pin.profileId, tried: pin.tried };
+  };
+  const before = pinOfX();
+  const usage = await rig.send("claude", { ...FRESH, key: "X" });
+  assert.equal(usage.status, 200);
+  assert.equal(usage.account, "a");
+  const mcp = await machineSend(rig, "POST", "/anthropic-mcp/v1/mcp/linear", {
+    "x-claude-code-session-id": sessionKey("X"),
+  });
+  assert.equal(mcp.status, 200);
+  assert.equal(spentBy(upstreams.mcpProxy.at(-1)!), "a");
+  assert.deepEqual(pinOfX(), before);
+  await assertBenchHolds(rig);
+});
+
+test("C7, M1-L2: key-less account and MCP 2xx served fresh on a benched account leave its bench in force and pin nothing", async () => {
+  const rig = await benchedA();
+  const pins = rig.pins();
+  // With `b` disabled, `a` is the only usable account: fresh calls land on it.
+  rig.setEnabled("b", "claude", false);
+  const usage = await rig.send("claude", FRESH);
+  assert.equal(usage.status, 200);
+  assert.equal(usage.account, "a");
+  const mcp = await machineSend(rig, "POST", "/anthropic-mcp/v1/mcp/linear");
+  assert.equal(mcp.status, 200);
+  assert.equal(spentBy(upstreams.mcpProxy.at(-1)!), "a");
+  assert.deepEqual(rig.pins(), pins, "fresh calls write no pin");
+  rig.setEnabled("b", "claude", true);
+  await assertBenchHolds(rig);
 });
 
 // --- the real listener: CONNECT, TRACE, TRACK ------------------------------
