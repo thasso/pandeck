@@ -2141,17 +2141,24 @@ is added or removed.
   - The ingest endpoint accepts only POST, at most 100 entries and 64 KiB. The
     whole batch must validate before any record, rid or acknowledgement is
     changed: lowercase boot, increasing safe-integer `d`, matching rid boot,
-    bounded integers, fixed enums/reasons, uppercase method and query-free,
-    printable ASCII pathname capped at 200 characters. Hosts must match the
-    edge's own certificate host list, ASCII case-insensitively. This PR accepts
-    no P7-domain reports merely by suffix. The authenticated registry supplies
-    user/client identity; no body field can choose either. Invalid batches get
-    fixed marked 400, oversized ones 413, other methods 405, never an echo.
-    Records with `d` already acknowledged are ignored, then known-rid fallbacks
-    are ignored independently of the display ring. A missing old fallback below
-    the floor is discarded with a per-batch and running dropped count in the
-    text log. Relay notes and fallbacks use the same request-log writer as the
-    edge, labelled `via=relay`. Each note kind has a fixed first-seen identity.
+    bounded integers, fixed enums/reasons, method matching `^[A-Z][A-Z-]{0,15}$`
+    and query-free, printable ASCII pathname capped at 200 characters. The
+    actual method is retained, including `M-SEARCH`. Host ownership must match
+    both the configured hosts and the actual edge certificate. DNS matching
+    ignores case and one trailing dot; IPs compare in canonical form. A
+    configured full-label wildcard matches exactly one DNS label, only if the
+    certificate's SAN also permits it. The check uses no DNS or network lookup,
+    no common-name fallback and no partial/multi-label wildcard matching. Other
+    provider hosts are not accepted merely by suffix; no routing or policy
+    changes follow. The reported host spelling is retained apart from
+    lower-casing. The authenticated registry supplies user/client identity; no
+    body field can choose either. Invalid batches get fixed marked 400,
+    oversized ones 413, other methods 405, never an echo. Records with `d`
+    already acknowledged are ignored, then known-rid fallbacks are ignored
+    independently of the display ring. A missing old fallback below the floor is
+    discarded with a per-batch and running dropped count in the text log. Relay
+    notes and fallbacks use the same request-log writer as the edge, labelled
+    `via=relay`. Each note kind has a fixed first-seen identity.
   - Every boot's first queued record is `relay-restarted`, including the first
     ever boot. Its missing count means the prior loss is unknown. No observation
     queue, spill, marker or replay file is written. Crash loss is accepted.

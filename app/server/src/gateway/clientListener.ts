@@ -443,6 +443,7 @@ export async function startClientListener(
   const observations = deps.requests
     ? createRelayObservations({
         hosts: edgeTls.hosts,
+        certificate: edgeTls.serverCertPem,
         dedup: relayDedup,
         requests: deps.requests,
         now,

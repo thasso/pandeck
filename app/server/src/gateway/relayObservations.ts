@@ -1,5 +1,7 @@
 /** The only JSON body the credential edge parses: the relay's own reports. */
+import { X509Certificate } from "node:crypto";
 import type http from "node:http";
+import net from "node:net";
 import type { AdmittedClient } from "./forward.ts";
 import { GATEWAY_REFUSAL_MARKER } from "./refusals.ts";
 import { RELAY_RID, type RelayDedup } from "./relayDedup.ts";
@@ -72,8 +74,61 @@ const REASONS = new Set([
   "reserved-path",
 ]);
 
+/** Normalise identity spellings only, without resolving names. */
+function normalizedHost(
+  host: string,
+): { name: string; ip: boolean } | undefined {
+  if (net.isIPv6(host)) {
+    try {
+      return {
+        name: new URL(`http://[${host}]/`).hostname.slice(1, -1),
+        ip: true,
+      };
+    } catch {
+      return undefined;
+    }
+  }
+  return net.isIPv4(host)
+    ? { name: host, ip: true }
+    : { name: host.toLowerCase().replace(/\.$/, ""), ip: false };
+}
+
+/** Both configuration and the certificate actually served must own the name. */
+function hostOwnership(hosts: readonly string[], certificate: string) {
+  const configured = hosts.map(normalizedHost);
+  const cert = new X509Certificate(certificate);
+  return (host: string): boolean => {
+    const normalized = normalizedHost(host);
+    if (!normalized) return false;
+    const { name, ip } = normalized;
+    if (!name || name.includes("*")) return false;
+    const owned = configured.some((pattern) => {
+      if (!pattern || pattern.ip !== ip) return false;
+      if (pattern.name === name) return true;
+      if (ip || !pattern.name.startsWith("*.")) return false;
+      const suffix = pattern.name.slice(1);
+      if (!name.endsWith(suffix)) return false;
+      const label = name.slice(0, -suffix.length);
+      return label.length > 0 && !label.includes(".");
+    });
+    if (!owned) return false;
+    return ip
+      ? cert.checkIP(name) !== undefined
+      : cert.checkHost(name, {
+          subject: "never",
+          wildcards: true,
+          partialWildcards: false,
+          multiLabelWildcards: false,
+          singleLabelSubdomains: false,
+        }) !== undefined;
+  };
+}
+
 /** Validate every entry before touching identity, acknowledgement or log state. */
-function validate(value: unknown, hosts: readonly string[]): Batch | undefined {
+function validate(
+  value: unknown,
+  ownsHost: (host: string) => boolean,
+): Batch | undefined {
   if (
     !object(value) ||
     !keys(value, ["boot", "ack", "records"]) ||
@@ -109,11 +164,9 @@ function validate(value: unknown, hosts: readonly string[]): Batch | undefined {
         !integer(entry.at) ||
         typeof entry.host !== "string" ||
         !/^[\x21-\x7e]{1,253}$/.test(entry.host) ||
-        !hosts.some(
-          (host) => host.toLowerCase() === (entry.host as string).toLowerCase(),
-        ) ||
+        !ownsHost(entry.host) ||
         typeof entry.method !== "string" ||
-        !/^[A-Z]{1,16}$/.test(entry.method) ||
+        !/^[A-Z][A-Z-]{0,15}$/.test(entry.method) ||
         typeof entry.path !== "string" ||
         !/^\/[\x20-\x7e]{0,199}$/.test(entry.path) ||
         entry.path.includes("?") ||
@@ -160,12 +213,15 @@ function refuse(res: http.ServerResponse, status: number): void {
 
 export function createRelayObservations(options: {
   hosts: readonly string[];
+  /** The same server certificate used by the model-port TLS listener. */
+  certificate: string;
   dedup: RelayDedup;
   requests: Pick<RequestLog, "record">;
   log(line: string): void;
   now?: () => number;
   onCommitted?: ((event: ObservationsCommitted) => void) | undefined;
 }) {
+  const ownsHost = hostOwnership(options.hosts, options.certificate);
   return (
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -204,7 +260,7 @@ export function createRelayObservations(options: {
         value = undefined;
       }
       chunks.length = 0;
-      const batch = validate(value, options.hosts);
+      const batch = validate(value, ownsHost);
       if (!batch) {
         options.log("relay observations: invalid batch");
         refuse(res, 400);

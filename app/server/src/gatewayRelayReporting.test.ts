@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
+import dns from "node:dns";
 import {
   mkdtempSync,
   readFileSync,
@@ -20,6 +21,7 @@ import type { ObservationsCommitted } from "./gateway/relayObservations.ts";
 import type { RequestRecord } from "./gateway/requestLog.ts";
 import type { RunningRelay } from "./relay/relay.ts";
 import { createObservations } from "./relay/observations.ts";
+import { createModelTraffic } from "./relay/modelTraffic.ts";
 import { MACHINE_PLACEHOLDER } from "./relay/credentialClass.ts";
 
 const home = mkdtempSync(join(tmpdir(), "relay-real-edge-home-"));
@@ -76,6 +78,9 @@ async function rig(
     responseMs?: number;
     intervals?: number;
     drainMs?: number;
+    hosts?: string[];
+    relayHost?: string;
+    bindHost?: string;
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "relay-real-edge-"));
@@ -120,7 +125,10 @@ async function rig(
   };
   const server = net.createServer((local) => {
     proxy.connections++;
-    const edge = net.connect(gateway.clients!.modelPort, "127.0.0.1");
+    const edge = net.connect(
+      gateway.clients!.modelPort,
+      extra.bindHost === "::" ? "::1" : "127.0.0.1",
+    );
     const pair = { local, edge, held: false, swallowed: false };
     pairs.add(pair);
     const end = () => {
@@ -155,7 +163,9 @@ async function rig(
     edge.on("close", end);
     events.emit("change");
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) =>
+    server.listen(0, extra.bindHost ?? "127.0.0.1", resolve),
+  );
   const proxyPort = (server.address() as { port: number }).port;
   let edgeOptions: GatewayOptions;
   const makeGateway = async () => startGateway(edgeOptions);
@@ -169,7 +179,13 @@ async function rig(
       lines.push(line);
       events.emit("change");
     },
-    clients: { modelPort: 0, clientPort: 0, enrollPort: 0 },
+    clients: {
+      modelPort: 0,
+      clientPort: 0,
+      enrollPort: 0,
+      ...(extra.hosts ? { hosts: extra.hosts } : {}),
+      ...(extra.bindHost ? { bindHost: extra.bindHost } : {}),
+    },
     ...(tools ? { tools } : {}),
     ...(extra.intervals ? { relayDedupIntervals: extra.intervals } : {}),
     onObservationsCommitted(event) {
@@ -183,7 +199,7 @@ async function rig(
   gateway.clients!.registry.addUser("thasso");
   const clientId = await enrollRelay({
     stateDir: dir,
-    host: "127.0.0.1",
+    host: extra.relayHost ?? "127.0.0.1",
     enrollPort: gateway.clients!.enrollPort,
     caPem: gateway.clients!.caPem,
     code: gateway.clients!.registry.createCode("thasso", "reporting devbox"),
@@ -465,6 +481,195 @@ test("T1/T15 real forwarding replaces forged metadata, strips it upstream and pr
     1,
   );
 });
+
+test("F004 every Node method and M-SEARCH fallback preserve a genuine GET batch sibling", async () => {
+  const r = await rig();
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const queue = createObservations({
+    boot,
+    log: (line) => r.lines.push(line),
+    send: async (batch) => {
+      await held;
+      const answer = await post(r, batch);
+      return {
+        status: answer.status,
+        ...(answer.status === 200
+          ? (JSON.parse(answer.body) as { ack: number })
+          : {}),
+      };
+    },
+  });
+  const unused = net.createServer();
+  await new Promise<void>((resolve) => unused.listen(0, "127.0.0.1", resolve));
+  const closedPort = (unused.address() as net.AddressInfo).port;
+  await new Promise<void>((resolve) => unused.close(() => resolve()));
+  const traffic = createModelTraffic({
+    boot,
+    observations: queue,
+    edge: { host: "127.0.0.1", port: closedPort, agent: false },
+    edgeHost: "localhost",
+    log: (line) => r.lines.push(line),
+  });
+  const server = http.createServer((req, res) =>
+    traffic.forward(req, res, {
+      host: "127.0.0.1",
+      path: req.url!,
+      edgePath: req.url!,
+    }),
+  );
+  server.on("connect", (req, socket) =>
+    traffic.refuse(req, socket as net.Socket, {
+      host: "127.0.0.1",
+      path: "/relay/CONNECT",
+      status: 403,
+      reason: "reserved-path",
+      errorType: "permission_error",
+      text: "reserved",
+    }),
+  );
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as net.AddressInfo).port;
+  open.push(async () => {
+    release();
+    traffic.beginClose();
+    await traffic.drain(100);
+    await queue.close(100);
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+  async function raw(method: string, path: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const socket = net.connect(port, "127.0.0.1");
+      let response = "";
+      socket.setEncoding("utf8");
+      socket.on("data", (chunk: string) => {
+        response += chunk;
+      });
+      socket.on("error", reject);
+      socket.on("end", () => {
+        socket.destroy();
+        resolve(response);
+      });
+      socket.write(
+        `${method} ${method === "CONNECT" ? "localhost:443" : path} HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`,
+      );
+    });
+  }
+  for (const method of http.METHODS)
+    assert.match(await raw(method, `/relay/${method}`), /^HTTP\/1\.1 403/);
+  for (const method of ["GET", "M-SEARCH"])
+    assert.match(await raw(method, `/fallback/${method}`), /^HTTP\/1\.1 502/);
+  release();
+  await queue.close(1000);
+  assert.equal(queue.rejected, 0);
+  const rows = r.records().filter((row) => row.rid?.startsWith(boot));
+  assert.deepEqual(
+    rows.slice(0, http.METHODS.length).map((row) => row.method),
+    http.METHODS,
+  );
+  assert.deepEqual(
+    rows.slice(-2).map((row) => [row.method, row.path]),
+    [
+      ["GET", "/fallback/GET"],
+      ["M-SEARCH", "/fallback/M-SEARCH"],
+    ],
+  );
+  assert.ok(
+    r.commits.some(
+      (event) =>
+        event.batch.records.some(
+          (entry) => "rid" in entry && entry.method === "M-SEARCH",
+        ) &&
+        event.batch.records.some(
+          (entry) => "rid" in entry && entry.method === "GET",
+        ),
+    ),
+  );
+  assert.ok(!r.lines.some((line) => line.includes("invalid batch")));
+});
+
+test("F004 strict method grammar and whole-batch atomicity remain", async () => {
+  const r = await rig();
+  for (const method of [
+    "",
+    "-GET",
+    "get",
+    "M_Search",
+    "GET1",
+    "A".repeat(17),
+    "G ET",
+    "GET\\n",
+  ]) {
+    const before = r.records().length;
+    assert.equal(
+      (
+        await post(r, {
+          boot,
+          records: [report(1, 1), { ...report(2, 2), method }],
+        })
+      ).status,
+      400,
+    );
+    assert.equal(r.records().length, before);
+  }
+  for (const [i, method] of ["A", "A" + "-".repeat(15), "M-SEARCH"].entries()) {
+    assert.equal(
+      (await post(r, { boot, records: [{ ...report(i + 1, i + 1), method }] }))
+        .status,
+      200,
+    );
+    assert.equal(r.records().at(-1)!.method, method);
+  }
+});
+
+test.each([
+  [undefined, "LOCALHOST", "127.0.0.1"],
+  [undefined, "localhost.", "127.0.0.1"],
+  [["::1"], "0:0:0:0:0:0:0:1", "::"],
+  [["::1"], "::1", "::"],
+  [["*.relay.localhost"], "a.relay.localhost", "127.0.0.1"],
+] as const)(
+  "F007 enrolled host %s / %s retains relay reports",
+  async (hosts, relayHost, bindHost) => {
+    const original = dns.lookup;
+    // Test transport only. Ownership validation must never resolve a host.
+    const lookup = vi.spyOn(dns, "lookup").mockImplementation(((
+      host: string,
+      options: dns.LookupOptions | number,
+      callback: (
+        err: NodeJS.ErrnoException | null,
+        address: string | dns.LookupAddress[],
+        family?: number,
+      ) => void,
+    ) => {
+      if (host === "a.relay.localhost") {
+        if (typeof options === "object" && options.all)
+          callback(null, [{ address: "127.0.0.1", family: 4 }]);
+        else callback(null, "127.0.0.1", 4);
+      } else Reflect.apply(original, dns, [host, options, callback]);
+    }) as typeof dns.lookup);
+    try {
+      const r = await rig({
+        ...(hosts ? { hosts: [...hosts] } : {}),
+        relayHost,
+        bindHost,
+      });
+      assert.equal((await send(r, "/relay/x")).status, 403);
+      await r.relay.close();
+      const row = r.records().find((entry) => entry.path === "/relay/x");
+      assert.ok(row);
+      assert.equal(row.client.id, r.clientId);
+      assert.equal(row.reason, "reserved-path");
+      assert.equal(row.host, relayHost.toLowerCase());
+      assert.ok(!r.lines.some((line) => line.includes("invalid batch")));
+    } finally {
+      lookup.mockRestore();
+    }
+  },
+);
 
 test.each([
   ["/unknown-route", [], 404],
