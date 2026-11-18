@@ -607,6 +607,8 @@ async function claudePair(): Promise<Rig> {
 }
 
 const long429: Answer = { status: 429, headers: { "retry-after": "120" } };
+/** Anthropic's statement that a request hit a subscription limit. */
+const REJECTED = { "anthropic-ratelimit-unified-status": "rejected" } as const;
 
 // --- the placeholder ------------------------------------------------------
 
@@ -877,10 +879,16 @@ test.each([
   ["retry-after: 0", { "retry-after": "0" }, "a"],
   ["retry-after: 60", { "retry-after": "60" }, "a"],
   ["retry-after: 61", { "retry-after": "61" }, "b"],
-  ["no reset header", {}, "b"],
+  ["no stated limit (bare)", {}, "a"],
   [
-    "a repeated retry-after (raw duplicates)",
+    "a repeated retry-after (raw duplicates) and no stated limit",
     { "retry-after": ["30", "30"] },
+    "a",
+  ],
+  ["a stated limit with no reset", REJECTED, "b"],
+  [
+    "a stated limit and a repeated retry-after",
+    { ...REJECTED, "retry-after": ["30", "30"] },
     "b",
   ],
 ] as const)(
@@ -904,6 +912,141 @@ test.each([
     assert.equal((await rig.send("claude", { key: "X" })).account, next);
   },
 );
+
+// --- Task-1428: Anthropic states its limits --------------------------------
+
+/** Anthropic's unified reset `seconds` from the fake clock, in epoch seconds. */
+function unifiedResetIn(seconds: number): { header: string; at: number } {
+  const epoch = Math.ceil(clock / 1000) + seconds;
+  return { header: String(epoch), at: epoch * 1000 };
+}
+
+test("Task-1428: a bare 429 on /anthropic passes through unchanged and is no evidence", async () => {
+  const rig = await claudePair();
+  assert.equal((await rig.send("claude", { key: "X" })).account, "a");
+  const before = rig.pinsText();
+  plan("a", { status: 429 });
+  const bare = await rig.send("claude", { key: "X" });
+  assert.equal(bare.status, 429);
+  assert.equal(bare.account, "a");
+  assert.match(bare.text, /rate_limit_error/);
+  assert.equal(bare.headers["retry-after"], undefined);
+  assert.equal(bare.headers["anthropic-ratelimit-unified-status"], undefined);
+  // No tried mark, no pin move, no save, no bench.
+  assert.equal(rig.pinsText(), before);
+  assert.equal((await rig.send("claude", { key: "X" })).account, "a");
+  assert.equal((await rig.send("claude", { key: "Y" })).account, "a");
+});
+
+test("Task-1428: a weekly limit benches its account until the stated reset, not 5 minutes", async () => {
+  const rig = await claudePair();
+  assert.equal((await rig.send("claude", { key: "X" })).account, "a");
+  const reset = unifiedResetIn(3 * 24 * 3600);
+  plan("a", {
+    status: 429,
+    headers: {
+      ...REJECTED,
+      "anthropic-ratelimit-unified-reset": reset.header,
+    },
+  });
+  const limited = await rig.send("claude", { key: "X" });
+  assert.equal(limited.status, 429);
+  assert.equal(
+    limited.headers["anthropic-ratelimit-unified-reset"],
+    reset.header,
+  );
+  assert.deepEqual(rig.pins().find((p) => p.keyHash === pinHash("X"))?.tried, [
+    "a",
+  ]);
+  assert.equal((await rig.send("claude", { key: "X" })).account, "b");
+  clock += 6 * MIN;
+  assert.equal((await rig.send("claude", { key: "new-1" })).account, "b");
+  clock = reset.at - 1000;
+  assert.equal((await rig.send("claude", { key: "new-2" })).account, "b");
+  clock = reset.at;
+  assert.equal((await rig.send("claude", { key: "new-3" })).account, "a");
+});
+
+test("Task-1428: a stated limit 30 s away keeps the pin", async () => {
+  const rig = await claudePair();
+  assert.equal((await rig.send("claude", { key: "X" })).account, "a");
+  const before = rig.pinsText();
+  plan("a", {
+    status: 429,
+    headers: {
+      ...REJECTED,
+      "anthropic-ratelimit-unified-reset": unifiedResetIn(30).header,
+    },
+  });
+  assert.equal((await rig.send("claude", { key: "X" })).status, 429);
+  assert.equal((await rig.send("claude", { key: "Y" })).account, "b");
+  assert.equal((await rig.send("claude", { key: "X" })).account, "a");
+  assert.equal(
+    JSON.stringify(rig.pins().find((p) => p.keyHash === pinHash("X"))),
+    JSON.stringify(
+      (JSON.parse(before) as { pins: unknown[] }).pins.find(
+        (p) => (p as { keyHash: string }).keyHash === pinHash("X"),
+      ),
+    ),
+  );
+});
+
+test("Task-1428: on the lease path a bare 429 is no evidence and a weekly limit is", async () => {
+  const rig = await claudePair();
+  const { relay } = rig.machines[0]!;
+  const link = startGatewayClientLink({
+    socketPath: relay.socketPath,
+    relayPort: relay.port,
+    log: () => {},
+  });
+  open.push(link);
+  assert.equal(await link.ready, true);
+  const engine = await link.grantEngineLease({
+    workerId: undefined,
+    profileId: "a",
+  });
+  owners.set(engine.token, "engine-token-1428");
+  assert.equal((await rig.send("claude", { key: "X" })).account, "a");
+
+  // A bare 429 on an engine lease's model run: nothing benched or moved.
+  plan("a", { status: 429 });
+  const bare = await rig.send("claude", { bearer: engine.token });
+  assert.equal(bare.status, 429);
+  assert.equal(bare.account, "a");
+  assert.equal((await rig.send("claude", { key: "Y" })).account, "a");
+  assert.equal((await rig.send("claude", { key: "X" })).account, "a");
+
+  // A weekly limit on the same lease benches `a` until its reset: X moves.
+  const reset = unifiedResetIn(3 * 24 * 3600);
+  plan("a", {
+    status: 429,
+    headers: {
+      ...REJECTED,
+      "anthropic-ratelimit-unified-reset": reset.header,
+    },
+  });
+  assert.equal(
+    (await rig.send("claude", { bearer: engine.token })).status,
+    429,
+  );
+  assert.equal((await rig.send("claude", { key: "X" })).account, "b");
+  clock += 6 * MIN;
+  assert.equal((await rig.send("claude", { key: "Z" })).account, "b");
+});
+
+test("Task-1428: /chatgpt is unchanged: a 429 with no reset moves the pin", async () => {
+  const rig = await Rig.start();
+  rig.account("ca", "openai-codex");
+  rig.account("cb", "openai-codex");
+  await rig.machine();
+  assert.equal((await rig.send("openai-codex", { key: "X" })).account, "ca");
+  plan("ca", { status: 429 });
+  assert.equal((await rig.send("openai-codex", { key: "X" })).status, 429);
+  assert.equal((await rig.send("openai-codex", { key: "X" })).account, "cb");
+  assert.deepEqual(rig.pins().find((p) => p.keyHash === pinHash("X"))?.tried, [
+    "ca",
+  ]);
+});
 
 test("AC6c: a Codex reset 20 s away on /chatgpt keeps the pin", async () => {
   const rig = await Rig.start();
@@ -1500,6 +1643,7 @@ test("AC5, F007: a provider 429's header fields reach the harness unchanged thro
   plan("a", {
     status: 429,
     headers: {
+      ...REJECTED,
       "retry-after": ["30", "30"],
       "x-fixture-repeat": ["one", "two"],
       "set-cookie": ["a=1", "b=2"],
@@ -1518,6 +1662,10 @@ test("AC5, F007: a provider 429's header fields reach the harness unchanged thro
     '{"type":"error","error":{"type":"rate_limit_error","message":"fixture limit"}}',
   );
   assert.deepEqual(fields(reply.rawHeaders, "retry-after"), ["30", "30"]);
+  assert.deepEqual(
+    fields(reply.rawHeaders, "anthropic-ratelimit-unified-status"),
+    ["rejected"],
+  );
   assert.deepEqual(fields(reply.rawHeaders, "x-fixture-repeat"), [
     "one",
     "two",
@@ -1529,7 +1677,7 @@ test("AC5, F007: a provider 429's header fields reach the harness unchanged thro
   assert.deepEqual(fields(reply.rawHeaders, "set-cookie"), []);
   assert.deepEqual(fields(reply.rawHeaders, "proxy-fixture"), []);
   assert.ok(fields(reply.rawHeaders, "transfer-encoding").length <= 1);
-  // The pool still read the repeat as no reset: long, so the pin moves.
+  // A stated limit whose retry-after repeats has no reset: long, the pin moves.
   assert.equal((await rig.send("claude")).account, "b");
 });
 

@@ -768,11 +768,19 @@ can use it. What differs from Pandeck's own routing:
   (`POST /v1/messages`, `POST /backend-api/codex/responses`), from any lease
   kind, Pandeck's engines included. Usage, credit, consume and `count_tokens`
   answers are never evidence. Pandeck's own sessions do not read these benches.
-- **Resets from headers only.** A 429's stated reset is `retry-after` sent
+- **Stated limits only on `/anthropic`.** A 429 there is evidence only when
+  Anthropic states a limit: `anthropic-ratelimit-unified-status: rejected` or a
+  valid `retry-after`. A bare 429, Anthropic's answer to a subscription request
+  without Claude Code's system prompt such as Claude Code's startup
+  `quota_check` probe, passes through and benches, marks and moves nothing
+  (Task-1428). Every `/chatgpt` 429 is evidence.
+- **Resets from headers only.** A limit's stated reset is `retry-after` sent
   exactly once (whole seconds or an HTTP-date), else on `/chatgpt` the latest
-  valid Codex `x-codex-*-reset-at` or `-reset-after-seconds`. No valid reset
-  benches for `RATE_LIMIT_BENCH_MS` (5 minutes). As here, a past reset creates
-  no bench and a later 429 never shortens one.
+  valid Codex `x-codex-*-reset-at` or `-reset-after-seconds`, on `/anthropic`
+  `anthropic-ratelimit-unified-reset` (epoch seconds), so a weekly limit benches
+  until its reset. No valid reset benches for `RATE_LIMIT_BENCH_MS` (5 minutes).
+  As here, a past reset creates no bench and a later 429 never shortens one. No
+  body is read.
 - **Stickiness.** A pin moves only when its account cannot serve: unusable
   (removed, disabled, needs a login) or a long limit. A reset at most 60 s away
   (`MACHINE_SHORT_LIMIT_MS`) is short: the 429 passes through, the session
