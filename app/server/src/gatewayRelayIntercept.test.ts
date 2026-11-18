@@ -518,6 +518,77 @@ test("T8: an absolute-form target is the relay's marked 400 origin-form, one rel
   assert.ok(!surfaces(r).includes("SENTINEL"));
 });
 
+test.each([
+  ["other-SENTINEL.example:443", 400, "origin-form"],
+  ["api.anthropic.com:443", 400, "origin-form"],
+  ["/v1/messages?q=SENTINEL", 400, "origin-form"],
+  ["/relay/observations?q=SENTINEL", 403, "reserved-path"],
+])(
+  "F008: inner CONNECT %s is a marked local %i, not another tunnel",
+  async (target, status, reason) => {
+    const r = await rig();
+    const answer = await decrypted(
+      r,
+      request(
+        "CONNECT",
+        target,
+        [`Proxy-Authorization: Bearer ${CLAUDE_ACCESS}`, "cookie: SENTINEL"],
+        "",
+        "spoof-SENTINEL.example",
+      ),
+    );
+    assertMarked(
+      answer,
+      status,
+      status === 400 ? "invalid_request_error" : "permission_error",
+    );
+    await r.until(() => relayRows(r).length === 1);
+    const row = relayRows(r)[0]!;
+    assert.deepEqual(
+      [row.host, row.method, row.path, row.status, row.outcome, row.reason],
+      ["api.anthropic.com", "CONNECT", "/", status, "refused", reason],
+    );
+    assert.match(row.rid!, RID);
+    assert.equal(row.clientCredential, "other");
+    assert.equal(row.clientCookie, true);
+    assert.equal(row.responseBytes, answer.body.length);
+    assert.equal(edgeRows(r).length, 0);
+    assert.equal(upstreams.anthropic.length, 0);
+    assert.ok(!surfaces(r).includes("SENTINEL"));
+    assert.ok(!surfaces(r).includes(CLAUDE_ACCESS));
+  },
+);
+
+test("F008: inner CONNECT uses counted overflow when the reporting slot is occupied", async () => {
+  const r = await rig({ capacity: 2 });
+  await r.stopEdge();
+  const first = await decrypted(
+    r,
+    request("POST", "/v1/messages", [PLACEHOLDER], BODY),
+  );
+  assert.equal(first.status, 502);
+  const answer = await decrypted(
+    r,
+    request("CONNECT", "/relay/observations?q=SENTINEL"),
+  );
+  assertMarked(answer, 503, "api_error");
+  assert.match(answer.body.toString(), /too busy to report/);
+  await r.restartEdge();
+  await r.until(() => r.records().some((row) => row.outcome === "overflow"));
+  assert.equal(
+    relayRows(r).length,
+    1,
+    "only the earlier fallback is a request record",
+  );
+  assert.equal(relayRows(r)[0]!.method, "POST");
+  const notes = r.records().filter((row) => row.outcome === "overflow");
+  assert.equal(notes.length, 1);
+  assert.equal(notes[0]!.count, 1);
+  assert.equal(edgeRows(r).length, 0);
+  assert.equal(upstreams.anthropic.length, 0);
+  assert.ok(!surfaces(r).includes("SENTINEL"));
+});
+
 test("T9: a client that goes away mid-body aborts the upstream request", async () => {
   const r = await rig();
   await r.account();
@@ -588,7 +659,13 @@ test("T13 (before PR3): MCP is the edge's unknown-prefix 404 and an account call
   await r.account();
   const mcp = await decrypted(
     r,
-    request("POST", "/v1/messages", [PLACEHOLDER], BODY),
+    request(
+      "POST",
+      "/v1/messages?q=SENTINEL",
+      [PLACEHOLDER],
+      BODY,
+      "spoof-SENTINEL.example",
+    ),
     "mcp-proxy.anthropic.com",
   );
   assertMarked(mcp, 404, "not_found_error");
@@ -605,8 +682,34 @@ test("T13 (before PR3): MCP is the edge's unknown-prefix 404 and an account call
     [403, 404],
   );
   assert.equal(new Set(edgeRows(r).map((row) => row.rid)).size, 2);
-  assert.equal(relayRows(r).length, 0);
+  const mcpRow = edgeRows(r).find((row) => row.status === 404)!;
+  assert.deepEqual(
+    [mcpRow.host, mcpRow.path, mcpRow.reason, mcpRow.account],
+    ["mcp-proxy.anthropic.com", "/v1/messages", "unknown-prefix", undefined],
+  );
+  const profileRow = edgeRows(r).find((row) => row.status === 403)!;
+  assert.equal(profileRow.host, "api.anthropic.com");
+  assert.equal(profileRow.path, "/api/oauth/profile");
+  assert.equal(relayRows(r).length, 0, "edge headers suppress relay fallbacks");
+  await r.stopEdge();
+  const down = await decrypted(
+    r,
+    request("POST", "/v1/messages?q=SENTINEL", [PLACEHOLDER], BODY),
+    "mcp-proxy.anthropic.com",
+  );
+  assert.equal(down.status, 502);
+  await r.restartEdge();
+  await r.until(() => relayRows(r).length === 1);
+  assert.equal(relayRows(r)[0]!.host, mcpRow.host);
+  assert.equal(relayRows(r)[0]!.path, mcpRow.path);
+  assert.notEqual(relayRows(r)[0]!.rid, mcpRow.rid);
+  assert.equal(
+    edgeRows(r).length,
+    0,
+    "the answered requests did not acquire relay fallbacks after restart",
+  );
   assert.equal(upstreams.anthropic.length, 0);
+  assert.ok(!surfaces(r).includes("SENTINEL"));
 });
 
 test("T15: with the queue full and the edge down, a decrypted request, a connect-port refusal and an upgrade each get the 503 overflow; the edge later gets one overflow note of 3 and the earlier record", async () => {
@@ -777,6 +880,42 @@ test("T21a: a partial token-host CONNECT completed during an active stream drain
     1,
     "only the active stream reached the edge",
   );
+});
+
+test("F008: inner CONNECT on a streaming socket during drain gets one marked closing refusal", async () => {
+  const r = await rig({ drainMs: 400 });
+  await r.account();
+  upstreamStream = true;
+  const secure = await tokenHost(r);
+  const received: Buffer[] = [];
+  const gotHeaders = new Promise<void>((resolve) => {
+    secure.on("data", (chunk: Buffer) => {
+      received.push(chunk);
+      if (Buffer.concat(received).includes("data: stream")) resolve();
+    });
+  });
+  secure.write(
+    request("POST", "/v1/messages", [PLACEHOLDER], BODY).replace(
+      "connection: close",
+      "connection: keep-alive",
+    ),
+  );
+  await gotHeaders;
+  const cut = once(secure, "close");
+  const closing = r.relay.close();
+  secure.write(request("CONNECT", "other-SENTINEL.example:443"));
+  await cut;
+  await closing;
+  const raw = Buffer.concat(received);
+  const answer = parse(raw.subarray(raw.lastIndexOf("HTTP/1.1")));
+  assertMarked(answer, 503, "api_error");
+  await r.until(() => relayRows(r).length === 1 && edgeRows(r).length === 1);
+  const row = relayRows(r)[0]!;
+  assert.deepEqual(
+    [row.host, row.method, row.path, row.status, row.reason],
+    ["api.anthropic.com", "CONNECT", "/", 503, "relay-closing"],
+  );
+  assert.ok(!surfaces(r).includes("SENTINEL"));
 });
 
 test("T21a: close with an active decrypted stream cuts it at the drain deadline, as on the plain listener, with exactly one edge record", async () => {

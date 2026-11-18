@@ -48,7 +48,7 @@ export interface RequestEntry {
   rid?: string;
   /** Epoch milliseconds the request started. */
   at: number;
-  /** The logical upstream host, or `""` when no route matched. */
+  /** The fixed logical upstream host, or `""` when none is known. */
   host: string;
   method: string;
   /** Pathname only, never a query; cut to `PATH_CHARS`. */

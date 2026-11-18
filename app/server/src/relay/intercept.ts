@@ -52,6 +52,11 @@ const REFUSALS = {
     errorType: "invalid_request_error",
     text: "the relay accepts only origin-form request targets here.",
   },
+  "reserved-path": {
+    status: 403,
+    errorType: "permission_error",
+    text: "this path is reserved for the relay.",
+  },
   upgrade: {
     status: 501,
     errorType: "api_error",
@@ -157,6 +162,27 @@ export function attachInterception(
       path: req.url ?? "/",
       reason: "upgrade",
       ...REFUSALS.upgrade,
+    });
+  });
+  // CONNECT is dispatched here, not to the request callback. It never
+  // opens a nested tunnel, even with an origin-form target. Keep the
+  // existing reserved-path priority and never record its authority.
+  inner.on("connect", (req: http.IncomingMessage, socket: net.Socket) => {
+    socket.on("error", () => socket.destroy());
+    const host = hostOf.get(req.socket)?.host;
+    if (!host) {
+      socket.destroy();
+      return;
+    }
+    const reason = (req.url ?? "").startsWith("/relay/")
+      ? "reserved-path"
+      : "origin-form";
+    traffic.refuse(req, socket, {
+      host,
+      path: "/",
+      method: "CONNECT",
+      reason,
+      ...REFUSALS[reason],
     });
   });
   inner.on("clientError", (_err, socket) => socket.destroy());

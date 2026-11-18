@@ -2253,8 +2253,12 @@ changes the target and `Host` ("Interception" below).
     without the target.
   - **Decrypted requests.** Origin-form only (an absolute-form target gets 400
     `origin-form`); a WebSocket upgrade gets 501 `upgrade` without reaching the
-    edge. Each request keeps its header fields as received except hop-by-hop
-    fields, caller `x-pandeck-*` fields and `Host`, which becomes one
+    edge. An inner CONNECT never opens another tunnel or reaches the edge: it
+    gets 400 `origin-form`, except `/relay/…` gets the existing 403
+    `reserved-path`. Its record uses the outer token host and fixed path `/`,
+    never the inner authority. Closing and overflow use the shared 503 refusal.
+    Each request keeps its header fields as received except hop-by-hop fields,
+    caller `x-pandeck-*` fields and `Host`, which becomes one
     `127.0.0.1:<relay port>`; `Origin` still reaches the edge, which refuses it.
     Bodies pass unread. Every refusal above is marked and has Anthropic's error
     shape.
@@ -2275,11 +2279,14 @@ changes the target and `Host` ("Interception" below).
     Only that process trusts the CA.
   - **Until the permissive machine path and observed hosts land** (Task-1430
     PR3, PR4): account calls such as `/api/oauth/profile` get the machine path's
-    403, `mcp-proxy.anthropic.com` gets the edge's `unknown-prefix` 404, and
-    `claude.ai`, `downloads.claude.ai`, `www.anthropic.com` and the other named
-    hosts are tunnelled, neither decrypted nor recorded. Interception is for
-    testing devboxes until then, and never enabled in a release without the
-    relay's reporting (ADR-0006).
+    403, `mcp-proxy.anthropic.com` gets the edge's `unknown-prefix` 404. That
+    refusal's record still names `mcp-proxy.anthropic.com` and the original
+    query-free path, derived only from the fixed `/anthropic-mcp` prefix, not
+    the caller's `Host`. No MCP routing is enabled. `claude.ai`,
+    `downloads.claude.ai`, `www.anthropic.com` and the other named hosts are
+    tunnelled, neither decrypted nor recorded. Interception is for testing
+    devboxes until then, and never enabled in a release without the relay's
+    reporting (ADR-0006).
 - **Machine path.** On a client's model port, a request whose bearer is not
   lease-shaped (three base64url segments whose payload names a lease), or that
   has none, is a machine request. A lease-shaped bearer takes the lease path
