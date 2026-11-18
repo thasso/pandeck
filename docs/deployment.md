@@ -199,18 +199,20 @@ wrapper; optional browser and speech dependencies remain subsystem-owned.
 Clean-Mac dependency checks, signing, notarization and real agent-session
 validation remain unverified until their own receipts exist.
 
-The next desktop slice must give Tauri ownership of the bundled process and an
-explicit local/remote-server choice, separate from gateway selection. Local
-state must live under the user's app-support directory, never the app bundle or
-CWD, and survive app replacement and mode switches. Startup must keep loopback
-binding, auth, origin trust, the data-directory lock and host-tool gates; a busy
-port must fail or select a new port, never attach to an unrelated listener.
-Readiness, early exit, crash recovery and shutdown need lifecycle coverage
-before calling this a bundled-local app. The current shell still connects to a
-remote server only. The intended configurations remain local Pandeck with local
-gateway, local Pandeck with remote gateway, and thin client with remote Pandeck.
-Remote-gateway enrollment and macOS relay/LaunchAgent shipping belong to
-Task-1421; desktop integration must reuse that contract. None of this spike
+The macOS app bundles this runtime for local mode (`desktop-local-mode.md`): the
+shell owns the process, keeps its data under the user's app-support directory,
+and offers a local/remote choice separate from gateway selection. The server
+side of that contract is the supervised launch: when
+`ASSISTANT_SUPERVISOR_READY_FD`, `ASSISTANT_SUPERVISOR_NONCE` and
+`ASSISTANT_SUPERVISOR_LIFELINE` are set (`app/server/src/supervisedLaunch.ts`),
+the server binds loopback only, treats `ASSISTANT_PORT` as a preference and
+binds a free port if it is taken, writes one readiness line with its actual port
+to the inherited descriptor, refuses non-loopback `Host` headers with 421, and
+drains when its stdin closes. A systemd, Nix or developer launch sets none of
+them and behaves as before. The intended configurations remain local Pandeck
+with local gateway, local Pandeck with remote gateway, and thin client with
+remote Pandeck. Remote-gateway enrollment and macOS relay/LaunchAgent shipping
+belong to Task-1421; desktop integration must reuse that contract. None of this
 supplies the Keychain isolation, hardened runtime or separately signed launchd
 services in `workers.md`'s bundled desktop design.
 

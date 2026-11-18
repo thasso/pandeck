@@ -252,6 +252,125 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # The desktop app in local mode: the Tauri shell with the native runtime
+  # bundled, built unsigned (ad-hoc), then launched in the runner's GUI session.
+  # Its receipts are CI evidence, not a signed real-Mac or notarized release.
+  desktop-macos-arm64:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Require Apple Silicon
+        run: test "$(uname -m)" = arm64
+
+      - name: Set up the workspace
+        uses: ./.github/actions/setup-workspace
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.2"
+
+      # CI prerequisites only, as in package-macos-arm64: not a host-tool
+      # distribution policy. The server's boot check still enforces them.
+      - name: Provide required host tools on CI PATH
+        run: |
+          brew install bash coreutils
+          echo "$(brew --prefix coreutils)/libexec/gnubin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+
+      # tar round trip, as the runtime artifact does, so permissions and
+      # layout match the downloadable package.
+      - name: Build the native runtime into the shell
+        env:
+          ASSISTANT_BUILD_COMMIT: ${{ github.sha }}
+        run: |
+          pnpm run build
+          bun scripts/build-bun-server-bundle.mjs "$RUNNER_TEMP/pandeck-runtime"
+          tar -czf "$RUNNER_TEMP/runtime.tar.gz" -C "$RUNNER_TEMP/pandeck-runtime" .
+          mkdir app/shell/local-runtime
+          tar -xzf "$RUNNER_TEMP/runtime.tar.gz" -C app/shell/local-runtime
+
+      - name: Install the Tauri CLI
+        run: cargo install tauri-cli --version 2.11.5 --locked
+
+      - name: Shell unit tests
+        working-directory: app/shell
+        run: cargo test --locked
+
+      - name: Build the app bundle
+        working-directory: app/shell
+        run: |
+          cargo tauri build --bundles app --config tauri.local-runtime.json
+          echo "APP=$PWD/target/release/bundle/macos/Pandeck.app" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/desktop-evidence"
+
+      - name: Verify the bundle
+        run: |
+          runtime="$APP/Contents/Resources/pandeck-runtime"
+          {
+            echo "commit=${{ github.sha }}"
+            sw_vers
+            uname -sm
+            rustc --version
+            cargo tauri --version
+            /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist"
+            file "$APP/Contents/MacOS/"* "$runtime/personal-assistant-server" \
+              "$runtime/claude/claude" "$runtime/native/watcher.node"
+            echo "--- linked libraries"
+            otool -L "$APP/Contents/MacOS/"* "$runtime/personal-assistant-server" \
+              "$runtime/native/watcher.node"
+            echo "--- signature (ad-hoc expected; recorded, not enforced)"
+            codesign -dv "$APP" 2>&1 || true
+            codesign --verify --deep --strict "$APP" 2>&1 && echo "verify: ok" || echo "verify: failed"
+          } 2>&1 | tee "$RUNNER_TEMP/desktop-evidence/bundle-evidence.txt"
+          # Bundled native code may link only the OS, never the build host.
+          if otool -L "$APP/Contents/MacOS/"* "$runtime/personal-assistant-server" \
+            "$runtime/native/watcher.node" | grep -E '^\s' |
+            grep -vE '^\s+(/usr/lib/|/System/Library/|@rpath/|@loader_path/|@executable_path/)'; then
+            echo "bundled code links a library outside the OS" >&2
+            exit 1
+          fi
+          bun scripts/smoke-bun-server-package.mjs "$runtime" \
+            2>&1 | tee "$RUNNER_TEMP/desktop-evidence/bundled-runtime-smoke.log"
+
+      # Headless: the shell's launcher (not the app) drives the bundled runtime.
+      - name: Launcher receipt against the bundled runtime (headless)
+        working-directory: app/shell
+        run: |
+          PA_LOCAL_RUNTIME_DIR="$APP/Contents/Resources/pandeck-runtime" \
+            cargo test --locked bundled_runtime_lifecycle -- --ignored --nocapture \
+            2>&1 | tee "$RUNNER_TEMP/desktop-evidence/receipt-headless-launcher.log"
+
+      - name: Launch the app in the GUI session
+        run:
+          app/shell/scripts/smoke-macos-app.sh "$APP"
+          "$RUNNER_TEMP/desktop-evidence"
+
+      - name: Package the unsigned app
+        if: always()
+        run: |
+          if [ -d "${APP:-}" ]; then
+            ditto -c -k --keepParent "$APP" "$RUNNER_TEMP/Pandeck-darwin-arm64-unsigned.zip"
+            cd "$RUNNER_TEMP"
+            shasum -a 256 Pandeck-darwin-arm64-unsigned.zip > desktop-evidence/app-sha256.txt
+          fi
+
+      - name: Upload the app and evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pandeck-desktop-darwin-arm64-unsigned-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/Pandeck-darwin-arm64-unsigned.zip
+            ${{ runner.temp }}/desktop-evidence/
+          if-no-files-found: warn
+          retention-days: 14
+
   nix-build:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -350,6 +469,7 @@ jobs:
         test-web,
         engine-contract,
         package-macos-arm64,
+        desktop-macos-arm64,
         nix-build,
         nix-rebuild,
         reproducible,

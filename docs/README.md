@@ -243,7 +243,14 @@ only binding rules; everything else lives here.
   heap snapshots), the NixOS service's lifecycle and PATH/environment, the
   one-server-per-DATA_DIR lock, its host dependencies, and the PR-preview
   instances. Also covers the Darwin arm64 runtime package spike, native smoke,
-  host-tool gaps and the next bundled-local desktop slice.
+  host-tool gaps and the server's supervised-launch variables.
+- `desktop-local-mode.md` — the macOS app running its own bundled server: the
+  three desktop configurations and which the spike delivers, the local/remote
+  choice kept apart from the remote URL and gateway, resource and data
+  locations, the readiness pipe and nonce, port preference, trust ordering,
+  failure recovery, bounded shutdown, the security posture against same-user
+  processes, Finder-PATH and signing limits, CI receipts, and the next slice
+  with Task-1421's relay and LaunchAgent.
 - `ci-cd.md` — the GitHub Actions workflow: its jobs and the `ci` gate, test
   sharding, the gate order and measured parallelism, the cache rules, SemVer and
   changelog preparation, publishing a release tag, and what a build reports

@@ -48,9 +48,20 @@ in the test suites on two vCPUs:
   credentials, no provider requests and no logins. On success it uploads the
   runtime tarball, SHA-256, build environment and smoke log for 14 days. The
   artifact name includes the commit. It is an unsigned runtime spike, not a
-  Tauri app, release or clean-Mac launch receipt. The shell remains outside CI.
-  `docs/deployment.md#macos-apple-silicon-package-spike` covers layout, checks,
-  host dependencies and the next desktop slice.
+  Tauri app, release or clean-Mac launch receipt.
+  `docs/deployment.md#macos-apple-silicon-package-spike` covers layout, checks
+  and host dependencies.
+- `desktop-macos-arm64` builds the same runtime on `macos-15`, bundles it into
+  the Tauri app with `tauri.local-runtime.json` (Tauri CLI 2.11.5, installed
+  uncached), and runs the shell's `cargo test`. It then verifies the bundle
+  (architectures, OS-only linked libraries, the package smoke against the
+  bundled copy; the ad-hoc signature is recorded, not enforced) and runs the
+  launcher's headless receipt against the bundled runtime. Finally
+  `app/shell/scripts/smoke-macos-app.sh` opens the app in the runner's GUI
+  session. Host tools come from Homebrew on PATH, as above. It uploads the
+  unsigned app zip and labelled receipts for 14 days, even on failure. These are
+  CI receipts, not a signed or real-Mac launch (`docs/desktop-local-mode.md`).
+  This job is the only place CI builds the shell.
 - `nix-rebuild` — a second, independent build of the package on another runner.
   `reproducible` then compares the two NAR hashes. This replaced a
   `nix build --rebuild` step after the first build, which ran on the same runner
@@ -188,15 +199,16 @@ pnpm run changelog:generate 0.53.0
 `version:set` updates every version declaration in the tree as one operation:
 the root, server, shared and web package manifests, the Nix package version, and
 the native shell's `tauri.conf.json`, `Cargo.toml` and `Cargo.lock`. The shell
-is outside the pnpm workspace and CI but not outside the release — its
-declaration is what its About panel and its bundle carry, so a shell left behind
-ships a release calling itself an older version. `changelog:generate` finds the
-nearest first-parent tag, reads only first-parent commits after it, takes each
-squash-merge subject (`Title (#N)`) as one entry with its PR link, groups titles
-that start with `Task-NNN:` by Task, lists other commits with a commit link, and
-runs Prettier on the result. Use `--base <ref>` to select a different boundary —
-required whenever the previous version was never tagged, because the automatic
-lookup finds the nearest tag and would otherwise reach back past it.
+is outside the pnpm workspace (and built in CI only as an unsigned test bundle)
+but not outside the release — its declaration is what its About panel and its
+bundle carry, so a shell left behind ships a release calling itself an older
+version. `changelog:generate` finds the nearest first-parent tag, reads only
+first-parent commits after it, takes each squash-merge subject (`Title (#N)`) as
+one entry with its PR link, groups titles that start with `Task-NNN:` by Task,
+lists other commits with a commit link, and runs Prettier on the result. Use
+`--base <ref>` to select a different boundary — required whenever the previous
+version was never tagged, because the automatic lookup finds the nearest tag and
+would otherwise reach back past it.
 
 Review and edit the generated `CHANGELOG.md` — it is the release notes, so it
 should say what a user needs to know, including upgrade notes such as a
@@ -272,9 +284,10 @@ never claims the tag it may or may not be sitting on — the sha is the identity
 
 Nothing else is added to the release itself: the browser bundle and the server
 are stamped by the Nix build a deployment runs anyway. The DESKTOP app is the
-one part a release does not produce — `app/shell/` is outside CI, so an
-installed .app keeps saying whatever it was built from until it is rebuilt. To
-ship the new version there, after the release is published:
+one part a release does not produce — CI's `desktop-macos-arm64` bundle is an
+unsigned test artifact, not a shipped app, so an installed .app keeps saying
+whatever it was built from until it is rebuilt. To ship the new version there,
+after the release is published:
 
 ```bash
 git fetch --tags                        # the tag decides `-dev`, and it is read LOCALLY
