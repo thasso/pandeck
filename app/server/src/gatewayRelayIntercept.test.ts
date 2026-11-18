@@ -721,6 +721,64 @@ test("T4b: malformed CONNECT targets are answered without a record or a logged t
   assert.ok(!surfaces(r).includes("SENTINEL"));
 });
 
+test("T21a: a partial token-host CONNECT completed during an active stream drain gets one marked closing refusal", async () => {
+  const r = await rig({ drainMs: 400 });
+  await r.account();
+  upstreamStream = true;
+  const secure = await tokenHost(r);
+  const gotHeaders = new Promise<void>((resolve) => {
+    let seen = "";
+    secure.on("data", (chunk: Buffer) => {
+      seen += chunk.toString("latin1");
+      if (seen.includes("data: stream")) resolve();
+    });
+  });
+  secure.write(
+    request(
+      "POST",
+      "/v1/messages",
+      [PLACEHOLDER, "accept: text/event-stream"],
+      BODY,
+    ),
+  );
+  await gotHeaders;
+
+  const partial = net.connect(r.relay.port, "127.0.0.1");
+  partial.on("error", () => {});
+  open.push(() => {
+    partial.destroy();
+  });
+  await once(partial, "connect");
+  const prefix =
+    "CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n";
+  await new Promise<void>((resolve, reject) =>
+    partial.write(prefix, (error) => (error ? reject(error) : resolve())),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(partial.bytesWritten, Buffer.byteLength(prefix));
+
+  const refusal = readToClose(partial);
+  const closing = r.relay.close();
+  partial.write("\r\n");
+  const answer = parse(await refusal);
+  assertMarked(answer, 503, "api_error");
+  assert.ok(!answer.head.includes("200 Connection Established"));
+  await closing;
+  await r.until(() => relayRows(r).length === 1);
+  await r.until(() => edgeRows(r).length === 1);
+  const row = relayRows(r)[0]!;
+  assert.equal(row.host, "api.anthropic.com");
+  assert.equal(row.method, "CONNECT");
+  assert.equal(row.path, "/");
+  assert.equal(row.status, 503);
+  assert.equal(row.reason, "relay-closing");
+  assert.equal(
+    edgeRows(r).length,
+    1,
+    "only the active stream reached the edge",
+  );
+});
+
 test("T21a: close with an active decrypted stream cuts it at the drain deadline, as on the plain listener, with exactly one edge record", async () => {
   const r = await rig();
   await r.account();

@@ -380,6 +380,9 @@ export function createModelTraffic(options: {
     forward,
     refuse,
     count,
+    isClosing() {
+      return closing;
+    },
     beginClose() {
       closing = true;
     },

@@ -72,7 +72,7 @@ export interface InterceptionOptions {
   ca: InterceptCa;
   /** The relay's own loopback port, for the `Host` the edge sees. */
   relayPort(): number;
-  traffic: Pick<ModelTraffic, "forward" | "refuse" | "count">;
+  traffic: Pick<ModelTraffic, "forward" | "refuse" | "count" | "isClosing">;
   /** Keeps a socket for the relay's close. */
   track(socket: net.Socket): void;
   log(line: string): void;
@@ -252,9 +252,19 @@ export function attachInterception(
         });
         return;
       }
-      if (decision.kind === "tunnel")
+      if (decision.kind === "tunnel") {
         tunnel(socket, head, decision.host, decision.port);
-      else decrypt(req, socket, head, decision.host, decision.route);
+      } else if (traffic.isClosing()) {
+        traffic.refuse(req, socket, {
+          host: decision.host,
+          path: "/",
+          method: "CONNECT",
+          status: 503,
+          reason: "relay-closing",
+          errorType: "api_error",
+          text: "the relay is restarting; retry shortly.",
+        });
+      } else decrypt(req, socket, head, decision.host, decision.route);
     },
   );
 
