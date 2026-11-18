@@ -967,6 +967,34 @@ test("Task-1428: a weekly limit benches its account until the stated reset, not 
   assert.equal((await rig.send("claude", { key: "new-3" })).account, "a");
 });
 
+test("Task-1428: the captured weekly-limit answer passes through and moves the session until its reset", async () => {
+  // Header set of a signed-in Claude Code weekly limit (Task-1430 evidence,
+  // 2026-11-18), with the reset placed relative to the fake clock.
+  const rig = await claudePair();
+  assert.equal((await rig.send("claude", { key: "X" })).account, "a");
+  const retryAfter = 59_120;
+  const reset = unifiedResetIn(retryAfter);
+  const headers = {
+    ...REJECTED,
+    "anthropic-ratelimit-unified-reset": reset.header,
+    "retry-after": String(retryAfter),
+    "anthropic-ratelimit-unified-representative-claim": "seven_day",
+    "anthropic-ratelimit-unified-7d-status": "rejected",
+    "anthropic-ratelimit-unified-5h-status": "allowed",
+    "x-should-retry": "true",
+  };
+  plan("a", { status: 429, headers });
+  const limited = await rig.send("claude", { key: "X" });
+  assert.equal(limited.status, 429);
+  for (const [name, value] of Object.entries(headers))
+    assert.equal(limited.headers[name], value, name);
+  assert.equal((await rig.send("claude", { key: "X" })).account, "b");
+  clock += 6 * MIN;
+  assert.equal((await rig.send("claude", { key: "new-1" })).account, "b");
+  clock = Math.max(clock, reset.at);
+  assert.equal((await rig.send("claude", { key: "new-2" })).account, "a");
+});
+
 test("Task-1428: a stated limit 30 s away keeps the pin", async () => {
   const rig = await claudePair();
   assert.equal((await rig.send("claude", { key: "X" })).account, "a");

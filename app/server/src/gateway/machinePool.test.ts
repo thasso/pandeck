@@ -544,6 +544,55 @@ describe("Anthropic limit evidence (Task-1428)", () => {
     );
   });
 
+  // A signed-in Claude Code weekly-limit answer as captured (Task-1430
+  // evidence, 2026-11-18): retry-after agrees with the unified reset.
+  const capturedReset = 1_795_060_800;
+  const capturedRetryAfter = 59_120;
+  const captured = [
+    STATUS,
+    "rejected",
+    RESET,
+    String(capturedReset),
+    "retry-after",
+    String(capturedRetryAfter),
+    "anthropic-ratelimit-unified-representative-claim",
+    "seven_day",
+    "anthropic-ratelimit-unified-7d-status",
+    "rejected",
+    "anthropic-ratelimit-unified-5h-status",
+    "allowed",
+    "x-should-retry",
+    "true",
+  ];
+  const capturedAt = (capturedReset - capturedRetryAfter) * SECOND;
+
+  test("the captured weekly limit is long, benched until its stated reset", () => {
+    const expected = { long: true, benchUntil: capturedReset * SECOND };
+    assert.deepEqual(classifyReset("claude", captured, capturedAt), expected);
+    // The unified reset alone names the same instant.
+    const withoutRetryAfter = captured.filter(
+      (_, i) => captured[i - (i % 2)] !== "retry-after",
+    );
+    assert.equal(withoutRetryAfter.length, captured.length - 2);
+    assert.deepEqual(
+      classifyReset("claude", withoutRetryAfter, capturedAt),
+      expected,
+    );
+  });
+
+  test("the captured weekly limit moves the pin and benches past 5 minutes", () => {
+    const f = fixture();
+    f.clock.now = capturedAt;
+    const ref = claudeRef("X");
+    answer(f.pool, served(f.pool.select("u1", ref)), 429, captured);
+    assert.equal(profileOf(f.pool.select("u1", ref)), "claude-b");
+    assert.deepEqual(f.pool.records()[0]!.tried, ["claude-a"]);
+    f.clock.now = capturedReset * SECOND - SECOND;
+    assert.equal(profileOf(f.pool.select("u1", claudeRef("N1"))), "claude-b");
+    f.clock.now = capturedReset * SECOND;
+    assert.equal(profileOf(f.pool.select("u1", claudeRef("N2"))), "claude-a");
+  });
+
   test("/chatgpt is unchanged: a 429 with no reset is still long", () => {
     assert.deepEqual(classifyReset("openai-codex", [], now), {
       long: true,
