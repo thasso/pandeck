@@ -289,6 +289,8 @@ test("a machine request: one record with the C3 fields, one line, and nothing se
       pathKey: "/v1/messages",
       status: 200,
       outcome: "forwarded",
+      // A token-route machine request is marked against the templates.
+      listed: true,
       account: "Account a",
       session: sha256(SESSION_KEY).slice(0, 12),
       clientCredential: "placeholder",
@@ -463,8 +465,8 @@ test("an unreachable upstream: one failed record with the error code", async () 
   await new Promise<void>((resolve) => closed.close(() => resolve()));
   const gw = await startEdge({
     ...upstreams.overrides,
-    claude: {
-      ...upstreams.overrides.claude,
+    "api.anthropic.com": {
+      ...upstreams.overrides["api.anthropic.com"],
       connect: { host: "127.0.0.1", port },
     },
   });

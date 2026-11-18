@@ -1154,6 +1154,7 @@ async function listenerWith(
       forwarder: () => ({
         handleRequest: (_req, res) => res.end(),
         observeLocal: () => ({ refuse: () => {} }),
+        refuseConnect: (_req, socket) => socket.destroy(),
       }),
       log: () => {},
       vault: vault.port,

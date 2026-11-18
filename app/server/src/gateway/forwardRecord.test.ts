@@ -44,6 +44,8 @@ interface Rig {
   }[];
   /** Connections the upstream address received. */
   upstreamConnections: () => number;
+  /** Fresh selections made and released, and the order of both. */
+  fresh: { acquired: number; released: number; events: string[] };
 }
 
 async function listen(server: net.Server): Promise<number> {
@@ -60,6 +62,11 @@ async function listen(server: net.Server): Promise<number> {
 async function rig(
   options: {
     machine?: boolean;
+    machinePaths?: "permissive" | "strict";
+    /** Whether a selection holds after the credential wait (default true). */
+    current?: () => boolean;
+    /** The method the forwarder sees, as a runtime admitting it would pass. */
+    method?: string;
     local?: (
       req: http.IncomingMessage,
       res: http.ServerResponse,
@@ -87,6 +94,7 @@ async function rig(
   const httpAgent = new http.Agent();
   open.push(() => agent.destroy());
   open.push(() => httpAgent.destroy());
+  const fresh = { acquired: 0, released: 0, events: [] as string[] };
   const machine: MachineAccess = {
     pool: {
       select: (userId) => ({
@@ -96,9 +104,31 @@ async function rig(
           pin: { clientId: "c1", provider: "claude", keyHash: null },
           binding: BINDING,
           leaseId: "machine-lease",
+          kind: "pinned",
         },
       }),
-      isCurrent: () => true,
+      selectFresh: (userId) => {
+        const n = (fresh.acquired += 1);
+        fresh.events.push(`acquire ${n}`);
+        let held = true;
+        return {
+          ok: true,
+          selection: {
+            userId,
+            pin: { clientId: "c1", provider: "claude", keyHash: null },
+            binding: BINDING,
+            leaseId: "machine-lease",
+            kind: "fresh",
+          },
+          release: () => {
+            if (!held) return;
+            held = false;
+            fresh.released += 1;
+            fresh.events.push(`release ${n} after ${entries.length} records`);
+          },
+        };
+      },
+      isCurrent: options.current ?? (() => true),
       observe: () => {},
     },
     userOf: () => "u1",
@@ -109,7 +139,9 @@ async function rig(
     agent,
     httpAgent,
     upstreams: {
-      claude: { connect: { host: "127.0.0.1", port: upstreamPort } },
+      "api.anthropic.com": {
+        connect: { host: "127.0.0.1", port: upstreamPort },
+      },
     },
     compat: createCompatUpstream(),
     compatCa: undefined,
@@ -121,6 +153,7 @@ async function rig(
     },
     clientOf: () => "c1",
     machine: options.machine ? machine : undefined,
+    machinePaths: options.machinePaths,
     requests: {
       log: {
         record(entry, text) {
@@ -134,6 +167,7 @@ async function rig(
   });
   const { local } = options;
   const server = http.createServer((req, res) => {
+    if (options.method) req.method = options.method;
     if (!local) return forwarder.handleRequest(req, res, ADMITTED);
     const answer = forwarder.observeLocal(req, res, ADMITTED);
     local(req, res, (reason) => answer.refuse(reason));
@@ -148,6 +182,7 @@ async function rig(
     lines,
     waits,
     upstreamConnections: () => connections,
+    fresh,
   };
 }
 
@@ -521,4 +556,277 @@ test("a local answer whose client goes away is failed, client-closed, never a su
       [200, "failed", "client-closed"],
     ],
   );
+});
+
+// --- Task-1430 PR3: the token routes' machine path ------------------------
+
+/** Sends a body-less request and resolves with its status. */
+function ask(
+  port: number,
+  method: string,
+  path: string,
+  headers: http.OutgoingHttpHeaders = {},
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const request = http.request(
+      { host: "127.0.0.1", port, path, method, agent: false, headers },
+      (response) => {
+        response.resume();
+        response.on("end", () => resolve(response.statusCode ?? 0));
+      },
+    );
+    request.on("error", reject);
+    request.end();
+  });
+}
+
+const C8_ROOTS: readonly [string, string][] = [
+  ["v1-oauth", "/v1/oauth"],
+  ["oauth-token", "/api/oauth/token"],
+  ["oauth-authorize", "/api/oauth/authorize"],
+  ["oauth-revoke", "/api/oauth/revoke"],
+  ["cli-create-api-key", "/api/oauth/claude_cli/create_api_key"],
+  ["v1-org-api-keys", "/v1/organizations/api_keys"],
+  ["v1-org-x-api-keys", "/v1/organizations/o1/api_keys"],
+  ["org-x-api-keys", "/api/organizations/o1/api_keys"],
+  ["v1-org-invites", "/v1/organizations/invites"],
+  ["v1-org-users", "/v1/organizations/users"],
+  ["v1-org-x-invites", "/v1/organizations/o1/invites"],
+  ["v1-org-x-users", "/v1/organizations/o1/users"],
+  ["org-x-invites", "/api/organizations/o1/invites"],
+  ["org-x-members", "/api/organizations/o1/members"],
+  ["api-auth", "/api/auth"],
+];
+
+test("the floors refuse a token-route machine request marked and recorded, with no selection or upstream", async () => {
+  const r = await rig({ machine: true });
+  const cases: [string, string, string][] = [
+    ...C8_ROOTS.map(([id, root]): [string, string, string] => [
+      "POST",
+      `/anthropic${root}?q=SENTINEL`,
+      `denied:${id}`,
+    ]),
+    ["POST", "/anthropic-mcp/api/oauth/token", "denied:oauth-token"],
+    [
+      "GET",
+      "/anthropic-mcp/v1/organizations/o1/users",
+      "denied:v1-org-x-users",
+    ],
+    ["TRACE", "/anthropic/v1/messages", "denied:method"],
+    ["TRACE", "/anthropic-mcp/v1/mcp/x", "denied:method"],
+    ["GET", "/anthropic/api/x/", "non-canonical-path"],
+    ["GET", "/anthropic-mcp/v1/%6dcp/x", "non-canonical-path"],
+  ];
+  for (const [method, path, reason] of cases) {
+    const before = r.entries.length;
+    assert.equal(await ask(r.port, method, path), 403, path);
+    await vi.waitFor(() => assert.equal(r.entries.length, before + 1));
+    const entry = r.entries.at(-1)!;
+    const pathname = path.slice(path.indexOf("/", 1)).split("?")[0]!;
+    assert.deepEqual(
+      [entry.outcome, entry.reason, entry.listed, entry.pathKey, entry.path],
+      ["refused", reason, false, pathname, pathname],
+      path,
+    );
+    assert.equal(
+      entry.host,
+      path.startsWith("/anthropic-mcp")
+        ? "mcp-proxy.anthropic.com"
+        : "api.anthropic.com",
+    );
+  }
+  const text = r.lines.join("\n");
+  assert.equal(
+    r.lines.filter((l) => l.includes(" via=gateway")).length,
+    cases.length,
+  );
+  assert.ok(!text.includes("SENTINEL"));
+  assert.ok(!JSON.stringify(r.entries).includes("SENTINEL"));
+  assert.match(text, / refused denied:method 403 /);
+  assert.equal(r.fresh.acquired, 0);
+  assert.equal(r.waits.length, 0);
+  assert.equal(r.upstreamConnections(), 0);
+});
+
+test("TRACK, if a runtime admitted it, is refused by the forwarder's floor and recorded", async () => {
+  const r = await rig({ machine: true, method: "TRACK" });
+  for (const path of ["/anthropic/v1/messages", "/anthropic-mcp/v1/mcp/x"]) {
+    const before = r.entries.length;
+    assert.equal(await ask(r.port, "GET", path), 403);
+    await vi.waitFor(() => assert.equal(r.entries.length, before + 1));
+    const entry = r.entries.at(-1)!;
+    assert.deepEqual(
+      [entry.method, entry.reason, entry.listed],
+      ["TRACK", "denied:method", false],
+    );
+  }
+  assert.equal(r.upstreamConnections(), 0);
+  assert.equal(r.waits.length, 0);
+});
+
+test("strict mode refuses an unlisted path forbidden, unlisted; a listed one passes to selection", async () => {
+  const r = await rig({ machine: true, machinePaths: "strict" });
+  assert.equal(await ask(r.port, "GET", "/anthropic/api/new_thing"), 403);
+  assert.equal(await ask(r.port, "PUT", "/anthropic-mcp/x"), 403);
+  await vi.waitFor(() => assert.equal(r.entries.length, 2));
+  for (const entry of r.entries)
+    assert.deepEqual([entry.reason, entry.listed], ["forbidden", false]);
+  assert.equal(r.fresh.acquired, 0);
+  const listed = start(r.port, "/anthropic/api/oauth/validate");
+  await vi.waitFor(() => assert.equal(r.waits.length, 1));
+  assert.equal(r.fresh.acquired, 1);
+  listed.destroy();
+  await vi.waitFor(() => assert.equal(r.entries.length, 3));
+  assert.equal(r.entries[2]!.listed, true);
+  assert.equal(r.upstreamConnections(), 0);
+});
+
+test("an origin refusal is marked at admission; a lease-shaped request never is", async () => {
+  const r = await rig({ machine: true });
+  for (const [method, path, listed, pathKey] of [
+    ["GET", "/anthropic/api/oauth/usage", true, "/api/oauth/usage"],
+    ["GET", "/anthropic/api/new_thing", false, "/api/new_thing"],
+    ["POST", "/anthropic-mcp/v1/mcp/linear", true, "/v1/mcp/:slug"],
+    ["POST", "/anthropic-mcp/x", false, "/x"],
+  ] as const) {
+    const before = r.entries.length;
+    assert.equal(
+      await ask(r.port, method, path, { origin: "https://evil.example" }),
+      403,
+    );
+    await vi.waitFor(() => assert.equal(r.entries.length, before + 1));
+    const entry = r.entries.at(-1)!;
+    assert.deepEqual(
+      [entry.reason, entry.listed, entry.pathKey],
+      ["machine-origin", listed, pathKey],
+    );
+  }
+  // `/chatgpt` is no token route: its machine records carry no marking.
+  assert.equal(
+    await ask(r.port, "GET", "/chatgpt/x", { origin: "https://e.example" }),
+    403,
+  );
+  await vi.waitFor(() => assert.equal(r.entries.length, 5));
+  assert.ok(!("listed" in r.entries[4]!));
+  const lease = r.leases.grant(BINDING, {
+    kind: "engine",
+    owner: { workerId: "w1", clientId: "c1" },
+  });
+  for (const path of [
+    "/anthropic/api/claude_code/settings",
+    "/anthropic-mcp/v1/mcp/x",
+  ]) {
+    const before = r.entries.length;
+    assert.equal(
+      await ask(r.port, "GET", path, {
+        authorization: `Bearer ${lease.token}`,
+      }),
+      403,
+    );
+    await vi.waitFor(() => assert.equal(r.entries.length, before + 1));
+    const entry = r.entries.at(-1)!;
+    assert.equal(entry.reason, "forbidden");
+    assert.ok(!("listed" in entry) && !("pathKey" in entry), path);
+  }
+  assert.equal(r.upstreamConnections(), 0);
+});
+
+/** A fresh request's credential wait, settled by `settleWait`. */
+const releaseCases: [
+  string,
+  (r: Rig, request: http.ClientRequest) => void,
+  string,
+][] = [
+  [
+    "a credential refusal",
+    (r) =>
+      r.waits[0]!.resolve({
+        ok: false,
+        refusal: { case: "credential", problem: "missing" },
+      }),
+    "credential",
+  ],
+  [
+    "a locked vault",
+    (r) => r.waits[0]!.resolve({ ok: false, locked: true }),
+    "vault-locked",
+  ],
+  [
+    "a client abort during the wait",
+    (_r, request) => request.destroy(),
+    "client-closed",
+  ],
+  [
+    "an upstream error",
+    (r) => r.waits[0]!.resolve({ ok: true, headers: LATE_HEADERS, token: "" }),
+    "ECONNRESET",
+  ],
+  [
+    "an internal error after acquisition",
+    (r) => r.waits[0]!.reject(new Error("vault gone")),
+    "internal-error",
+  ],
+];
+
+for (const [name, settleWait, reason] of releaseCases)
+  test(`a fresh hold is released once, after the record: ${name}`, async () => {
+    const r = await rig({ machine: true });
+    const request = start(r.port, "/anthropic/api/oauth/validate");
+    await vi.waitFor(() => assert.equal(r.waits.length, 1));
+    assert.deepEqual(r.fresh.events, ["acquire 1"]);
+    settleWait(r, request);
+    await vi.waitFor(() => assert.equal(r.entries.length, 1));
+    await settle();
+    const [entry] = r.entries;
+    assert.equal(entry!.listed, true);
+    if (reason === "ECONNRESET")
+      assert.ok(
+        entry!.reason === "ECONNRESET" ||
+          entry!.reason === "unreachable" ||
+          entry!.reason === "EPIPE",
+        entry!.reason,
+      );
+    else assert.equal(entry!.reason, reason);
+    assert.deepEqual(r.fresh.events, [
+      "acquire 1",
+      "release 1 after 1 records",
+    ]);
+  });
+
+test("a re-selection holds the new lease before it releases the old; machine-retry releases the last", async () => {
+  const r = await rig({ machine: true, current: () => false });
+  const request = start(r.port, "/anthropic-mcp/v1/mcp/linear");
+  await vi.waitFor(() => assert.equal(r.waits.length, 1));
+  r.waits[0]!.resolve({ ok: true, headers: LATE_HEADERS, token: "" });
+  await vi.waitFor(() => assert.equal(r.waits.length, 2));
+  assert.deepEqual(r.fresh.events, [
+    "acquire 1",
+    "acquire 2",
+    "release 1 after 0 records",
+  ]);
+  r.waits[1]!.resolve({ ok: true, headers: LATE_HEADERS, token: "" });
+  await vi.waitFor(() => assert.equal(r.entries.length, 1));
+  assert.equal(r.entries[0]!.reason, "machine-retry");
+  assert.deepEqual(r.fresh.events.at(-1), "release 2 after 1 records");
+  assert.equal(r.fresh.released, 2);
+  assert.equal(r.waits.length, 2, "no third read");
+  request.destroy();
+});
+
+test("a model run or a session key is pinned, never fresh", async () => {
+  const r = await rig({ machine: true });
+  const run = start(r.port, "/anthropic/v1/messages");
+  const keyed = start(r.port, "/anthropic/api/oauth/usage", {
+    "x-claude-code-session-id": "s1",
+  });
+  await vi.waitFor(() => assert.equal(r.waits.length, 2));
+  assert.equal(r.fresh.acquired, 0);
+  // `count_tokens` and MCP are no model runs: fresh.
+  const count = start(r.port, "/anthropic/v1/messages/count_tokens");
+  const mcp = start(r.port, "/anthropic-mcp/v1/messages");
+  await vi.waitFor(() => assert.equal(r.waits.length, 4));
+  assert.equal(r.fresh.acquired, 2);
+  for (const request of [run, keyed, count, mcp]) request.destroy();
+  await vi.waitFor(() => assert.equal(r.entries.length, 4));
+  assert.equal(r.fresh.released, 2);
 });

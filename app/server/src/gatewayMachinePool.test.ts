@@ -26,6 +26,7 @@ import https from "node:https";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import tls from "node:tls";
 import { afterAll, afterEach, beforeAll, test, vi } from "vitest";
 import type { GatewayOptions, RunningGateway } from "./gateway/gateway.ts";
 
@@ -161,10 +162,21 @@ let lines: string[] = [];
 const accountFiles = new Map<string, string>();
 
 beforeAll(async () => {
-  upstreams = await startFakeUpstreams({ claude: respond, codex: respond });
+  upstreams = await startFakeUpstreams({
+    claude: respond,
+    mcp: respond,
+    codex: respond,
+  });
 });
 
 afterEach(async () => {
+  // R3: no structured record holds a secret either, nor a query or body.
+  const records = started.flatMap((rig) =>
+    rig.users.flatMap(
+      (user) => rig.gw.requests?.since(user, undefined, 0, 5000).records ?? [],
+    ),
+  );
+  started.length = 0;
   while (open.length) await open.pop()!.close();
   // AC11: no log line holds the placeholder, a token or a session key.
   const logged = lines;
@@ -176,8 +188,14 @@ afterEach(async () => {
   renewRejected.clear();
   usedKeys.clear();
   lines = [];
+  const recorded = JSON.stringify(records);
+  for (const text of [PLACEHOLDER, "SENTINEL", ...owners.keys()])
+    assert.ok(!recorded.includes(text), `a record holds ${text.slice(0, 12)}`);
+  for (const key of keys)
+    assert.ok(!recorded.includes(key) && !recorded.includes(sha256(key)));
   for (const line of logged) {
     assert.ok(!line.includes(PLACEHOLDER), `placeholder logged: ${line}`);
+    assert.ok(!line.includes("SENTINEL"), `a query or body logged: ${line}`);
     for (const token of owners.keys())
       assert.ok(!line.includes(token), `a token is logged: ${line}`);
     for (const key of keys)
@@ -415,9 +433,13 @@ interface SendOptions {
   method?: string;
 }
 
+/** The rigs this test started, for the records check after it. */
+const started: Rig[] = [];
+
 /** A gateway edge with fake upstreams, its users, accounts and relays. */
 class Rig {
   gw!: RunningGateway;
+  users: string[] = [];
   readonly stateDir = mkdtempSync(join(DATA_DIR, "machine-edge-"));
   machines: Machine[] = [];
   private ports: { modelPort: number; clientPort: number; enrollPort: number } =
@@ -432,6 +454,8 @@ class Rig {
     };
     await rig.boot();
     for (const user of users) rig.edge.registry.addUser(user);
+    rig.users = users;
+    started.push(rig);
     open.push({ close: () => rig.gw.close() });
     return rig;
   }
@@ -1739,11 +1763,10 @@ test.each(["LOCALHOST:8797", "[::1]:80", "127.0.0.1", "localhost"])(
   },
 );
 
-test("AC10: machine requests reach only the engine routes, never /compat, and WebSockets stay refused", async () => {
+test("AC10: machine requests reach only /chatgpt's engine route, never /compat, and WebSockets stay refused", async () => {
   const rig = await claudePair();
   rig.account("ca", "openai-codex");
   for (const [method, path] of [
-    ["GET", "/anthropic/api/oauth/usage"],
     ["GET", "/chatgpt/backend-api/wham/usage"],
     ["POST", "/chatgpt/backend-api/wham/rate-limit-reset-credits/consume"],
     ["POST", "/compat/v1/chat/completions"],
@@ -1759,6 +1782,14 @@ test("AC10: machine requests reach only the engine routes, never /compat, and We
     assert.equal(reply.account, undefined);
   }
   assert.equal(rig.machineLeases().length, 0, "a refused route pins nothing");
+  // R2′: the token route forwards an account call, fresh and pin-free.
+  const usage = await rig.send("claude", {
+    method: "GET",
+    path: "/anthropic/api/oauth/usage",
+  });
+  assert.equal(usage.status, 200);
+  assert.ok(usage.account);
+  assert.deepEqual(rig.pins(), []);
   // A WebSocket upgrade never reaches an upstream.
   const upgraded = await new Promise<number | "closed">((resolve) => {
     const request = http.request({
@@ -1935,4 +1966,485 @@ test("AC13, AC14: machine leases count as live for renewal; a pin idle 7 days is
   assert.deepEqual(rig.pins(), []);
   assert.ok(rig.machineLeases().every((lease) => lease.revoked));
   assert.equal(rig.gw.leases.hasLiveLease("a"), false);
+});
+
+// --- Task-1430 PR3: the permissive machine path on the token routes --------
+
+function recordsOf(rig: Rig, userId = "thasso") {
+  return rig.gw.requests!.since(userId, undefined, 0, 5000).records;
+}
+
+/** The account a fake upstream request spent, by its bearer. */
+function spentBy(seen: {
+  headers: http.IncomingHttpHeaders;
+}): string | undefined {
+  return owners.get(
+    String(seen.headers.authorization ?? "").replace(/^Bearer /, ""),
+  );
+}
+
+/** A machine request through the relay, bearer the placeholder. */
+function machineSend(
+  rig: Rig,
+  method: string,
+  path: string,
+  headers: Record<string, string> = {},
+): ReturnType<typeof rawRequest> {
+  return rawRequest(rig.machines[0]!.relay.port, path, {
+    method,
+    headers: { authorization: `Bearer ${PLACEHOLDER}`, ...headers },
+  });
+}
+
+const REJECTED_LONG = {
+  status: 429,
+  headers: {
+    "anthropic-ratelimit-unified-status": "rejected",
+    "retry-after": "3600",
+  },
+};
+
+test("AC1, AC2: /anthropic-mcp reaches only its fixed host with the account's bearer; unlisted paths forward, marked", async () => {
+  const rig = await claudePair();
+  const mcp = await machineSend(
+    rig,
+    "POST",
+    "/anthropic-mcp/v1/mcp/linear?q=SENTINEL",
+    { host: "127.0.0.1", "x-forwarded-host": "evil.example" },
+  );
+  assert.equal(mcp.status, 200);
+  assert.equal(upstreams.anthropic.length, 0);
+  assert.equal(upstreams.mcpProxy.length, 1);
+  const [seen] = upstreams.mcpProxy;
+  assert.equal(seen!.servername, "mcp-proxy.anthropic.com");
+  assert.equal(seen!.headers.host, "mcp-proxy.anthropic.com");
+  assert.ok(["a", "b"].includes(spentBy(seen!) ?? ""), "the account's bearer");
+  assert.equal(seen!.url, "/v1/mcp/linear?q=SENTINEL");
+  assert.equal(seen!.body.toString("utf8"), '{"model":"fixture"}');
+
+  const unlisted = await machineSend(rig, "GET", "/anthropic/api/new_thing");
+  assert.equal(unlisted.status, 200);
+  assert.equal(upstreams.anthropic.at(-1)!.servername, "api.anthropic.com");
+  assert.equal((await machineSend(rig, "PUT", "/anthropic-mcp/x")).status, 200);
+  assert.equal(upstreams.mcpProxy.length, 2);
+  const eval_ = await machineSend(
+    rig,
+    "POST",
+    "/anthropic/api/eval/sdk-zAZezfDKGoZuXXKe",
+  );
+  assert.equal(eval_.status, 200);
+  // An unknown prefix that only starts like the MCP one.
+  assert.equal(
+    (await machineSend(rig, "POST", "/anthropic-mcpX/v1")).status,
+    404,
+  );
+  assert.deepEqual(rig.pins(), [], "a session-less account call pins nothing");
+
+  await vi.waitFor(() => assert.equal(recordsOf(rig).length, 5));
+  const marks = recordsOf(rig).map((r) => [
+    r.host,
+    r.method,
+    r.path,
+    r.pathKey,
+    r.listed,
+  ]);
+  assert.deepEqual(marks, [
+    [
+      "mcp-proxy.anthropic.com",
+      "POST",
+      "/v1/mcp/linear",
+      "/v1/mcp/:slug",
+      true,
+    ],
+    ["api.anthropic.com", "GET", "/api/new_thing", "/api/new_thing", false],
+    ["mcp-proxy.anthropic.com", "PUT", "/x", "/x", false],
+    [
+      "api.anthropic.com",
+      "POST",
+      "/api/eval/sdk-zAZezfDKGoZuXXKe",
+      "/api/eval/sdk-zAZezfDKGoZuXXKe",
+      true,
+    ],
+    // No token route, so no marking.
+    ["", "POST", "/anthropic-mcpX/v1", "/anthropic-mcpX/v1", undefined],
+  ]);
+
+  // Conditional requests pass unchanged both ways.
+  for (const id of ["a", "b"])
+    plan(id, { status: 304, headers: { etag: '"v1"' } });
+  const cached = await machineSend(
+    rig,
+    "GET",
+    "/anthropic/api/claude_code/settings",
+    {
+      "if-none-match": '"v1"',
+    },
+  );
+  assert.equal(cached.status, 304);
+  assert.equal(cached.headers.etag, '"v1"');
+  assert.equal(upstreams.anthropic.at(-1)!.headers["if-none-match"], '"v1"');
+});
+
+test("AC11: engine leases reach neither /anthropic-mcp nor an unlisted /anthropic path", async () => {
+  const rig = await claudePair();
+  const { relay } = rig.machines[0]!;
+  const link = startGatewayClientLink({
+    socketPath: relay.socketPath,
+    relayPort: relay.port,
+    log: () => {},
+  });
+  open.push(link);
+  assert.equal(await link.ready, true);
+  const engine = await link.grantEngineLease({
+    workerId: undefined,
+    profileId: "a",
+  });
+  owners.set(engine.token, "engine-token");
+  for (const [method, path] of [
+    ["POST", "/anthropic-mcp/v1/mcp/x"],
+    ["GET", "/anthropic/api/claude_code/settings"],
+  ] as const) {
+    const reply = await rig.send("claude", {
+      bearer: engine.token,
+      method,
+      path,
+    });
+    assert.equal(reply.status, 403, path);
+    assert.match(reply.text, /does not cover this request/);
+  }
+  assert.equal(upstreams.anthropic.length + upstreams.mcpProxy.length, 0);
+  await vi.waitFor(() => assert.equal(recordsOf(rig).length, 2));
+  for (const record of recordsOf(rig)) {
+    assert.equal(record.listed, undefined, "a lease record is never marked");
+    assert.equal(record.pathKey, record.path, "the projection's fallback");
+  }
+});
+
+test("C7: account and MCP limits never bench, move or create a pin; a model run's still does", async () => {
+  const rig = await claudePair();
+  const first = await rig.send("claude", { key: "S" });
+  assert.equal(first.status, 200);
+  const home = first.account!;
+  const pins = rig.pins();
+  for (const [method, path] of [
+    ["POST", "/anthropic-mcp/v1/messages"],
+    ["POST", "/anthropic-mcp/v1/mcp/linear"],
+    ["GET", "/anthropic/api/oauth/usage"],
+    ["GET", "/anthropic/api/claude_code/settings"],
+  ] as const)
+    for (const key of ["S", undefined]) {
+      plan("a", REJECTED_LONG);
+      plan("b", REJECTED_LONG);
+      const reply = await machineSend(
+        rig,
+        method,
+        path,
+        key ? { "x-claude-code-session-id": sessionKey(key) } : {},
+      );
+      if (key) usedKeys.add(sessionKey(key));
+      answers.clear();
+      assert.equal(reply.status, 429, `${path} ${key}`);
+      assert.equal(reply.headers["retry-after"], "3600");
+      assert.equal(
+        reply.headers["anthropic-ratelimit-unified-status"],
+        "rejected",
+      );
+      assert.ok(!reply.text.includes(MARKER), "the upstream's own 429");
+      assert.deepEqual(
+        rig.pins(),
+        pins,
+        `${path} ${key}: no pin moves or appears`,
+      );
+      // Unbenched: the session's next model run is served on its account.
+      const next = await rig.send("claude", { key: "S" });
+      assert.equal(next.status, 200);
+      assert.equal(next.account, home);
+    }
+  // The route-bound model run still benches and moves.
+  plan(home, REJECTED_LONG);
+  assert.equal((await rig.send("claude", { key: "S" })).status, 429);
+  const moved = await rig.send("claude", { key: "S" });
+  assert.notEqual(moved.account, home);
+});
+
+test("D-PR3-4: a 401 from /anthropic-mcp forces no renewal; one from /anthropic still does", async () => {
+  const rig = await claudePair();
+  plan("a", { status: 401 });
+  plan("b", { status: 401 });
+  const mcp = await machineSend(rig, "POST", "/anthropic-mcp/v1/mcp/linear");
+  assert.equal(mcp.status, 401);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(upstreams.platform.length, 0, "no forced renewal");
+  answers.clear();
+  plan("a", { status: 401 });
+  plan("b", { status: 401 });
+  const api = await machineSend(rig, "GET", "/anthropic/api/oauth/usage");
+  assert.equal(api.status, 401);
+  await vi.waitFor(() => assert.equal(upstreams.platform.length, 1));
+});
+
+test("S4: a fresh request leaves a key-less model run's null-key pin where it is", async () => {
+  const rig = await claudePair();
+  const run = await rig.send("claude", {});
+  assert.equal(run.status, 200);
+  const pins = rig.pins();
+  assert.equal(pins.length, 1);
+  assert.equal(pins[0]!.keyHash, null);
+  for (let i = 0; i < 3; i += 1)
+    assert.equal(
+      (await machineSend(rig, "GET", "/anthropic/api/oauth/usage")).status,
+      200,
+    );
+  assert.deepEqual(rig.pins(), pins);
+});
+
+test("S4, AC10: fresh requests whose logins are dead are never the vault's 401", async () => {
+  const rig = await claudePair();
+  unlinkSync(accountFiles.get("a")!);
+  unlinkSync(accountFiles.get("b")!);
+  const replies = [];
+  for (let i = 0; i < 3; i += 1)
+    replies.push(await machineSend(rig, "GET", "/anthropic/api/oauth/usage"));
+  for (const reply of replies) {
+    assert.notEqual(reply.status, 401, reply.text);
+    assert.ok(!reply.text.includes(NEEDS_LOGIN_TEXT), reply.text);
+  }
+  assert.equal(replies.at(-1)!.status, 403);
+  assert.match(replies.at(-1)!.text, /no Claude account is available/);
+  assert.equal(upstreams.anthropic.length, 0);
+});
+
+test("S4: a sweep during a held fresh request keeps its lease; the next sweep after it ends revokes it", async () => {
+  const rig = await claudePair();
+  // A Codex session's model runs sweep the same pool, and pin no Claude lease.
+  rig.account("ca", "openai-codex");
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => (release = resolve));
+  plan("a", { status: 200, hold });
+  plan("b", { status: 200, hold });
+  const pending = machineSend(rig, "GET", "/anthropic/api/oauth/usage");
+  await vi.waitFor(() => assert.equal(upstreams.anthropic.length, 1));
+  answers.clear();
+  const [freshLease] = rig.machineLeases();
+  assert.ok(freshLease && !freshLease.revoked);
+  const live = (): boolean =>
+    !rig.machineLeases().find((l) => l.leaseId === freshLease.leaseId)!.revoked;
+  clock += 61 * MIN;
+  assert.equal((await rig.send("openai-codex", { key: "Z" })).status, 200);
+  assert.equal(live(), true, "the held lease survives the sweep");
+  release();
+  assert.equal((await pending).status, 200);
+  await vi.waitFor(() => assert.equal(recordsOf(rig).length, 2));
+  assert.equal(live(), true, "a zero count revokes nothing by itself");
+  clock += 61 * MIN;
+  assert.equal((await rig.send("openai-codex", { key: "Z" })).status, 200);
+  assert.equal(live(), false, "released, the next sweep revokes it");
+});
+
+// --- the real listener: CONNECT, TRACE, TRACK ------------------------------
+
+/** A raw TLS exchange with the edge's model port: everything until close. */
+function edgeRaw(rig: Rig, machine: Machine, request: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const file = (name: string): string =>
+      readFileSync(join(machine.dir, name), "utf8");
+    const socket = tls.connect({
+      host: "127.0.0.1",
+      port: rig.edge.modelPort,
+      servername: "localhost",
+      key: file("client-key.pem"),
+      cert: file("client-cert.pem"),
+      ca: file("gateway-ca.pem"),
+    });
+    const chunks: Buffer[] = [];
+    socket.on("secureConnect", () => socket.write(request));
+    socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+    socket.on("close", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    socket.on("error", reject);
+    socket.setTimeout(5000, () => {
+      socket.destroy();
+      reject(new Error("no close"));
+    });
+  });
+}
+
+/** A body-less request to the model port, read by its length, not its close. */
+function edgeAsk(
+  rig: Rig,
+  machine: Machine,
+  method: string,
+  path: string,
+): Promise<{ status: number; text: string }> {
+  return new Promise((resolve, reject) => {
+    const file = (name: string): string =>
+      readFileSync(join(machine.dir, name), "utf8");
+    const request = https.request({
+      host: "127.0.0.1",
+      port: rig.edge.modelPort,
+      servername: "localhost",
+      key: file("client-key.pem"),
+      cert: file("client-cert.pem"),
+      ca: file("gateway-ca.pem"),
+      path,
+      method,
+      agent: false,
+      headers: { authorization: `Bearer ${PLACEHOLDER}`, host: "127.0.0.1" },
+    });
+    request.on("response", (response) => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk: Buffer) => chunks.push(chunk));
+      response.on("end", () =>
+        resolve({
+          status: response.statusCode ?? 0,
+          text: Buffer.concat(chunks).toString("utf8"),
+        }),
+      );
+    });
+    request.on("error", reject);
+    request.end();
+  });
+}
+
+test("rv-1430-03 obligation 4: CONNECT on the model port is refused 403 denied:method, recorded, never tunnelled", async () => {
+  const rig = await claudePair();
+  const machine = rig.machines[0]!;
+  // A lease token's shape, naming a lease no table holds.
+  const payload = Buffer.from(
+    JSON.stringify({ pandeck: { v: 1, lease: "AAAAAAAAAAAAAAAAAAAAAA" } }),
+  ).toString("base64url");
+  const leaseShaped = `eyJhbGciOiJub25lIn0.${payload}.${Buffer.alloc(32, 7).toString("base64url")}`;
+  assert.ok(isLeaseShaped(leaseShaped));
+  owners.set(leaseShaped, "lease-shaped");
+  const cases: {
+    target: string;
+    bearer: string;
+    cookie?: boolean;
+    expect: Record<string, unknown>;
+  }[] = [
+    {
+      target: "api.anthropic.com:443",
+      bearer: PLACEHOLDER,
+      expect: { host: "", path: "api.anthropic.com:443", listed: undefined },
+    },
+    {
+      target: "/anthropic/v1/x",
+      bearer: PLACEHOLDER,
+      expect: {
+        host: "api.anthropic.com",
+        path: "/v1/x",
+        pathKey: "/v1/x",
+        listed: false,
+      },
+    },
+    {
+      target: "/anthropic/v1/x",
+      bearer: leaseShaped,
+      expect: {
+        host: "api.anthropic.com",
+        path: "/v1/x",
+        pathKey: "/v1/x",
+        listed: undefined,
+      },
+    },
+    {
+      target: "/anthropic/x@y",
+      bearer: PLACEHOLDER,
+      expect: { host: "api.anthropic.com", path: "/x@y", listed: false },
+    },
+    {
+      target: "user:pw@api.anthropic.com:443?q=SENTINEL",
+      bearer: PLACEHOLDER,
+      expect: { host: "", path: "api.anthropic.com:443", clientCookie: false },
+    },
+    {
+      // A `@` in the query is never userinfo.
+      target: "api.anthropic.com:443?q=SENTINEL@evil",
+      bearer: PLACEHOLDER,
+      expect: { host: "", path: "api.anthropic.com:443" },
+    },
+    {
+      target: "user:pw@api.anthropic.com:443?q=SENTINEL",
+      bearer: PLACEHOLDER,
+      cookie: true,
+      expect: { host: "", path: "api.anthropic.com:443", clientCookie: true },
+    },
+  ];
+  for (const [i, c] of cases.entries()) {
+    const reply = await edgeRaw(
+      rig,
+      machine,
+      `CONNECT ${c.target} HTTP/1.1\r\nHost: ${c.target.startsWith("/") ? "127.0.0.1" : "api.anthropic.com:443"}\r\nAuthorization: Bearer ${c.bearer}\r\n${c.cookie ? "Cookie: c=SENTINEL\r\n" : ""}\r\n`,
+    );
+    assert.match(reply, /^HTTP\/1\.1 403 /, c.target);
+    assert.ok(reply.includes(MARKER), "marked");
+    assert.ok(!/^HTTP\/1\.1 200/m.test(reply), "never a tunnel");
+    await vi.waitFor(() => assert.equal(recordsOf(rig).length, i + 1));
+    const record = recordsOf(rig).at(-1)!;
+    assert.deepEqual(
+      [record.method, record.outcome, record.reason, record.status],
+      ["CONNECT", "refused", "denied:method", 403],
+    );
+    for (const [field, value] of Object.entries(c.expect))
+      assert.deepEqual(
+        (record as unknown as Record<string, unknown>)[field],
+        value,
+        `${c.target}: ${field}`,
+      );
+    for (const text of ["user", "pw", "SENTINEL", "evil"])
+      assert.ok(!record.path.includes(text), `${c.target}: ${text}`);
+  }
+  const connectLines = lines.filter(
+    (l) => / CONNECT /.test(l) && l.includes("via=gateway"),
+  );
+  assert.equal(connectLines.length, cases.length);
+  for (const line of connectLines) {
+    assert.match(line, / refused denied:method 403 /);
+    assert.ok(!/user|pw|SENTINEL|evil/.test(line), line);
+  }
+  assert.equal(upstreams.anthropic.length + upstreams.mcpProxy.length, 0);
+  assert.equal(rig.machineLeases().length, 0, "no selection");
+});
+
+test("TRACE is refused by the forwarder on both token routes, read by its length", async () => {
+  const rig = await claudePair();
+  const machine = rig.machines[0]!;
+  for (const path of ["/anthropic/v1/messages", "/anthropic-mcp/v1/mcp/x"]) {
+    const reply = await edgeAsk(rig, machine, "TRACE", path);
+    assert.equal(reply.status, 403);
+    assert.ok(reply.text.includes(MARKER));
+  }
+  await vi.waitFor(() => assert.equal(recordsOf(rig).length, 2));
+  for (const record of recordsOf(rig))
+    assert.deepEqual(
+      [record.method, record.reason, record.listed],
+      ["TRACE", "denied:method", false],
+    );
+  assert.equal(
+    lines.filter(
+      (l) => / TRACE /.test(l) && / refused denied:method 403 /.test(l),
+    ).length,
+    2,
+  );
+  assert.equal(upstreams.anthropic.length + upstreams.mcpProxy.length, 0);
+});
+
+test("D-PR3-7: TRACK gets the runtime parser's 400, with no record, no line and no upstream or credential contact", async () => {
+  const rig = await claudePair();
+  const before = lines.length;
+  const reply = await edgeRaw(
+    rig,
+    rig.machines[0]!,
+    `TRACK /anthropic/v1/messages?q=SENTINEL HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer ${PLACEHOLDER}\r\nCookie: c=SENTINEL\r\n\r\n`,
+  );
+  assert.match(reply, /^HTTP\/1\.1 400 /);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(recordsOf(rig).length, 0);
+  assert.ok(!lines.slice(before).some((l) => l.includes("TRACK")));
+  assert.equal(upstreams.anthropic.length + upstreams.mcpProxy.length, 0);
+  assert.equal(upstreams.platform.length, 0);
+  assert.equal(
+    rig.machineLeases().length,
+    0,
+    "no selection, so no credential read",
+  );
 });

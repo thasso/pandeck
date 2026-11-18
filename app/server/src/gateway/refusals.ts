@@ -57,7 +57,7 @@ type PoolLabel = "Claude" | "OpenAI";
 
 /** How an upstream is named to the user. */
 export type UpstreamLabel =
-  "Anthropic" | "ChatGPT" | "the OpenAI-compatible endpoint";
+  "Anthropic" | "Anthropic MCP" | "ChatGPT" | "the OpenAI-compatible endpoint";
 
 export type Refusal =
   | { case: "unknown-lease" }
@@ -97,7 +97,14 @@ export type Refusal =
   /** A machine request with an `Origin` or a non-loopback `Host`. */
   | { case: "machine-origin" }
   /** A machine request's selection changed twice while it waited. */
-  | { case: "machine-retry" };
+  | { case: "machine-retry" }
+  /**
+   * A machine request a token route's floors refuse (Task-1430 PR3): `id` is
+   * a deny-floor entry's id or `method`, never request text.
+   */
+  | { case: "denied"; id: string }
+  /** A machine request on a token route whose path is not canonical. */
+  | { case: "non-canonical-path" };
 
 /** Which provider's error shape a refusal takes. */
 export type RefusalShape = "claude" | "codex";
@@ -119,6 +126,8 @@ const STATUS: Record<Refusal["case"], number> = {
   "machine-session-limited": 429,
   "machine-origin": 403,
   "machine-retry": 503,
+  denied: 403,
+  "non-canonical-path": 403,
 };
 
 /** Anthropic's error type names, which both shapes use. */
@@ -170,6 +179,10 @@ export function refusalText(refusal: Refusal): string {
       return `${GATEWAY_REFUSAL_MARKER} model access from this machine is for local tools only.`;
     case "machine-retry":
       return `${GATEWAY_REFUSAL_MARKER} this machine's account changed while the request waited; retry.`;
+    case "denied":
+      return `${GATEWAY_REFUSAL_MARKER} model access from this machine never covers this request.`;
+    case "non-canonical-path":
+      return `${GATEWAY_REFUSAL_MARKER} model access from this machine needs a canonical path (no empty, dot or encoded-unreserved segments).`;
   }
 }
 

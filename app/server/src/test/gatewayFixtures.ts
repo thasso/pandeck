@@ -20,6 +20,7 @@ import http from "node:http";
 import https from "node:https";
 import type net from "node:net";
 import { join } from "node:path";
+import type { TLSSocket } from "node:tls";
 import { DATA_DIR } from "../config.ts";
 import {
   issueLeafCertificate,
@@ -53,6 +54,8 @@ interface Seen {
   headers: http.IncomingHttpHeaders;
   /** The body as received, still encoded. */
   body: Buffer;
+  /** The TLS server name the gateway sent (SNI). */
+  servername: string | undefined;
 }
 
 /** Answers one upstream request, once its body was read. */
@@ -202,16 +205,24 @@ export function rotatingClaudeTokens(
   };
 }
 
+interface UpstreamOverride {
+  connect: { host: string; port: number };
+  ca: string;
+}
+
 export interface FakeUpstreams {
   /** Requests each upstream received: "no upstream request" is empty. */
   readonly anthropic: Seen[];
+  /** Requests the fake `mcp-proxy.anthropic.com` received. */
+  readonly mcpProxy: Seen[];
   readonly chatgpt: Seen[];
   /** Requests the fake `platform.claude.com` token endpoint received. */
   readonly platform: Seen[];
-  /** `startGateway`'s `upstreams` option. */
+  /** `startGateway`'s `upstreams` option, keyed by logical host. */
   readonly overrides: {
-    claude: { connect: { host: string; port: number }; ca: string };
-    "openai-codex": { connect: { host: string; port: number }; ca: string };
+    "api.anthropic.com": UpstreamOverride;
+    "mcp-proxy.anthropic.com": UpstreamOverride;
+    "chatgpt.com": UpstreamOverride;
   };
   /** `startGateway`'s `claudeTokenEndpoint` option. */
   readonly tokenEndpoint: {
@@ -229,6 +240,8 @@ export interface FakeUpstreams {
 export async function startFakeUpstreams(
   respond: {
     claude?: UpstreamResponder;
+    /** `mcp-proxy.anthropic.com`. */
+    mcp?: UpstreamResponder;
     codex?: UpstreamResponder;
     claudeToken?: UpstreamResponder;
     /** Sees each `api.anthropic.com` request as it starts, before its body. */
@@ -256,6 +269,7 @@ export async function startFakeUpstreams(
             url: req.url ?? "",
             headers: req.headers,
             body: Buffer.concat(chunks),
+            servername: (req.socket as TLSSocket).servername || undefined,
           };
           seen.push(request);
           responder(request, res);
@@ -270,16 +284,22 @@ export async function startFakeUpstreams(
     return { connect: { host: "127.0.0.1", port }, ca: ca.certPem };
   };
   const anthropic: Seen[] = [];
+  const mcpProxy: Seen[] = [];
   const chatgpt: Seen[] = [];
   const platform: Seen[] = [];
   const overrides = {
-    claude: await start(
+    "api.anthropic.com": await start(
       "api.anthropic.com",
       anthropic,
       respond.claude ?? answerOk,
       respond.claudeStarted,
     ),
-    "openai-codex": await start(
+    "mcp-proxy.anthropic.com": await start(
+      "mcp-proxy.anthropic.com",
+      mcpProxy,
+      respond.mcp ?? answerOk,
+    ),
+    "chatgpt.com": await start(
       "chatgpt.com",
       chatgpt,
       respond.codex ?? answerOk,
@@ -292,12 +312,14 @@ export async function startFakeUpstreams(
   );
   return {
     anthropic,
+    mcpProxy,
     chatgpt,
     platform,
     overrides,
     tokenEndpoint,
     reset() {
       anthropic.length = 0;
+      mcpProxy.length = 0;
       chatgpt.length = 0;
       platform.length = 0;
     },

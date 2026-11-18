@@ -43,7 +43,7 @@ test("AC12: gateway on, a compatible account's one-shot and engine open are each
     stateDir: join(home, "gateway"),
     port: 0,
     log: (line) => lines.push(line),
-    upstreams: { "openai-codex": { connect: { host: "127.0.0.1", port: 9 } } },
+    upstreams: { "chatgpt.com": { connect: { host: "127.0.0.1", port: 9 } } },
     claudeTokenEndpoint: { connect: { host: "127.0.0.1", port: 9 } },
   });
   try {

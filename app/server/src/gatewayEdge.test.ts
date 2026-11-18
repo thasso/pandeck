@@ -101,3 +101,25 @@ test("usage errors: no state directory, a bad port, an unknown flag, no vault wh
     },
   );
 });
+
+test("--machine-paths: strict or permissive; absent is permissive, anything else a usage error", () => {
+  const base = ["--state-dir", "s"];
+  assert.equal(
+    parseEdgeArgs(base, { requireVault: false })?.machinePaths,
+    undefined,
+  );
+  for (const mode of ["strict", "permissive"] as const)
+    assert.equal(
+      parseEdgeArgs([...base, "--machine-paths", mode], { requireVault: false })
+        ?.machinePaths,
+      mode,
+    );
+  for (const value of ["open", "STRICT", ""])
+    assert.equal(
+      parseEdgeArgs([...base, "--machine-paths", value], {
+        requireVault: false,
+      }),
+      undefined,
+      value,
+    );
+});

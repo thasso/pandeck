@@ -86,20 +86,26 @@ const NO_USAGE_THRESHOLDS = {
   weeklyUsedThreshold: 100,
 };
 
+/** The one model-run pathname of each route that has one. */
+const MODEL_RUN_PATHNAME: Readonly<Record<string, string>> = {
+  "/anthropic": "/v1/messages",
+  "/chatgpt": "/backend-api/codex/responses",
+};
+
 /**
- * The model-run routes: their responses are the only evidence for benches.
- * Usage, credit, consume and `count_tokens` responses never are.
+ * The model-run requests, bound to the route (Task-1430 C7): `POST` of the
+ * exact pathname on `/anthropic` or `/chatgpt`. Their responses are the only
+ * evidence for benches, and only they are pinned without a session key.
+ * Every `/anthropic-mcp` request, account and usage calls, credits, consume
+ * and `count_tokens` never are.
  */
 export function isModelRun(
-  provider: LeaseProvider,
+  prefix: string,
   method: string | undefined,
   pathname: string,
 ): boolean {
-  return (
-    method === "POST" &&
-    pathname ===
-      (provider === "claude" ? "/v1/messages" : "/backend-api/codex/responses")
-  );
+  const modelRun = MODEL_RUN_PATHNAME[prefix];
+  return modelRun !== undefined && method === "POST" && pathname === modelRun;
 }
 
 /** A header's values in Node's flat `rawHeaders` form, case-insensitive. */
@@ -363,6 +369,11 @@ export interface MachineSelection {
   binding: LoginBinding;
   /** The client's machine lease on the profile. */
   leaseId: string;
+  /**
+   * `pinned` follows `pin`; `fresh` (Task-1430 S4) was picked as a new pin
+   * would be, but stores nothing, and its `pin` names no stored pin.
+   */
+  kind: "pinned" | "fresh";
 }
 
 export type MachineSelectOutcome =
@@ -375,6 +386,19 @@ export type MachineSelectOutcome =
       refusal: "machine-session-limited";
       retryAfterSeconds: number;
     };
+
+/** A fresh selection, holding its machine lease until `release`. */
+export type MachineFreshOutcome =
+  | {
+      ok: true;
+      selection: MachineSelection;
+      /**
+       * Ends the hold; idempotent. Until then no sweep or eviction revokes
+       * the lease. A zero count revokes nothing by itself.
+       */
+      release: () => void;
+    }
+  | { ok: false; refusal: "machine-pool-empty" };
 
 export interface MachinePoolOptions {
   /** Grants, finds and revokes the clients' machine leases. */
@@ -413,6 +437,8 @@ function pinKey({ clientId, provider, keyHash }: PinRef): string {
 export class MachinePool {
   private readonly pins = new Map<string, StoredPin>();
   private readonly benches = new Map<string, Bench>();
+  /** Fresh selections in flight, by `client\nprofile`; never zero. */
+  private readonly freshInFlight = new Map<string, number>();
   private readonly options: MachinePoolOptions;
   private readonly now: () => number;
   /** Whether memory may be ahead of the file. */
@@ -486,6 +512,35 @@ export class MachinePool {
   }
 
   /**
+   * A request without a session key that is not a model run (Task-1430 S4):
+   * the account a new pin would get now, the best eligible else the best
+   * usable, and its machine lease. It sweeps nothing and writes no pin,
+   * tried set or save. The lease is held from here until `release`; a grant
+   * whose save throws propagates with no hold.
+   */
+  selectFresh(userId: string, ref: PinRef): MachineFreshOutcome {
+    const usable = this.usable(userId, ref.provider);
+    if (usable.length === 0)
+      return { ok: false, refusal: "machine-pool-empty" };
+    const target = this.best(usable, false)!;
+    const selection = this.selection(userId, ref, target.login, "fresh");
+    const key = `${ref.clientId}\n${target.login.id}`;
+    this.freshInFlight.set(key, (this.freshInFlight.get(key) ?? 0) + 1);
+    let held = true;
+    return {
+      ok: true,
+      selection,
+      release: () => {
+        if (!held) return;
+        held = false;
+        const count = (this.freshInFlight.get(key) ?? 1) - 1;
+        if (count > 0) this.freshInFlight.set(key, count);
+        else this.freshInFlight.delete(key);
+      },
+    };
+  }
+
+  /**
    * Records a model-run response from any lease kind, once its headers
    * arrive. A 429 that states a limit (`classifyReset`) benches the profile;
    * a long one also moves the session's pin, if it still names the profile,
@@ -523,7 +578,8 @@ export class MachinePool {
           : { until: reset.benchUntil, long: reset.long },
       );
     }
-    if (!reset.long || !selection) return;
+    // A fresh selection names no pin; only a model run is evidence anyway.
+    if (!reset.long || !selection || selection.kind === "fresh") return;
     const pin = this.pins.get(pinKey(selection.pin));
     if (!pin) return;
     if (pin.profileId === profileId) this.leaveLong(pin, selection.userId);
@@ -534,16 +590,17 @@ export class MachinePool {
   }
 
   /**
-   * Whether a selection still holds: its machine lease is live, its pin still
-   * names its profile and that profile is still usable. The client's own
-   * standing is the caller's to check.
+   * Whether a selection still holds: its machine lease is live, a pinned
+   * one's pin still names its profile, and that profile is still usable. A
+   * fresh one needs no pin. The client's own standing is the caller's to
+   * check.
    */
   isCurrent(selection: MachineSelection): boolean {
-    const pin = this.pins.get(pinKey(selection.pin));
     const { profileId } = selection.binding;
     return (
       this.options.leases.isLive(selection.leaseId) &&
-      pin?.profileId === profileId &&
+      (selection.kind === "fresh" ||
+        this.pins.get(pinKey(selection.pin))?.profileId === profileId) &&
       this.usable(selection.userId, selection.pin.provider).some(
         ({ login }) => login.id === profileId,
       )
@@ -682,6 +739,19 @@ export class MachinePool {
     ref: PinRef,
     login: LoginProfile,
   ): MachineSelectOutcome {
+    return {
+      ok: true,
+      selection: this.selection(userId, ref, login, "pinned"),
+    };
+  }
+
+  /** The profile's binding and the client's machine lease, reused or granted. */
+  private selection(
+    userId: string,
+    ref: PinRef,
+    login: LoginProfile,
+    kind: MachineSelection["kind"],
+  ): MachineSelection {
     const binding: LoginBinding = {
       profileId: login.id,
       provider: login.provider,
@@ -691,10 +761,7 @@ export class MachinePool {
     const leaseId =
       leases.liveMachineLease(ref.clientId, login.id) ??
       leases.grantMachine(binding, ref.clientId);
-    return {
-      ok: true,
-      selection: { userId, pin: { ...ref }, binding, leaseId },
-    };
+    return { userId, pin: { ...ref }, binding, leaseId, kind };
   }
 
   /** Drops a client's least recently used pins over the cap. */
@@ -707,11 +774,17 @@ export class MachinePool {
     this.releaseUnpinnedLeases();
   }
 
-  /** Revokes each live machine lease no pin of its client names. */
+  /**
+   * Revokes each live machine lease no pin of its client names and no fresh
+   * selection holds.
+   */
   private releaseUnpinnedLeases(): void {
-    const used = new Set(
-      [...this.pins.values()].map((pin) => `${pin.clientId}\n${pin.profileId}`),
-    );
+    const used = new Set([
+      ...[...this.pins.values()].map(
+        (pin) => `${pin.clientId}\n${pin.profileId}`,
+      ),
+      ...this.freshInFlight.keys(),
+    ]);
     this.options.leases.revokeWhere(
       (record) =>
         record.kind === "machine" &&

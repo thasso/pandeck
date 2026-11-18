@@ -7,7 +7,12 @@ import { afterEach, test, vi } from "vitest";
 import { decodeGatewayUiRequests } from "../../../shared/gatewayUi.ts";
 import { createCompatUpstream } from "./compatUpstream.ts";
 import { createForwarder, type GatewayStats } from "./forward.ts";
+import {
+  issueLeafCertificate,
+  loadOrCreateCa,
+} from "../packageProxy/certificateAuthority.ts";
 import { LeaseTable } from "./leases.ts";
+import { MachinePool } from "./machinePool.ts";
 import { createRequestLog } from "./requestLog.ts";
 
 const CLIENT = { id: "c1", label: "devbox", userId: "u1" };
@@ -429,3 +434,126 @@ test("a backwards wall clock cannot poison a producer page or hide later request
     1,
   );
 });
+
+for (const abort of [false, true])
+  test(`a fresh machine hold lasts through a pending upload, released at the record (${abort ? "abort" : "completion"})`, async () => {
+    const ca = await loadOrCreateCa();
+    const leaf = issueLeafCertificate(ca, "api.anthropic.com");
+    let upstreamBytes = 0;
+    const upstream = https.createServer(
+      { key: leaf.keyPem, cert: leaf.certPem },
+      (req, res) => {
+        req.on("data", (chunk: Buffer) => {
+          upstreamBytes += chunk.length;
+          if (!res.headersSent)
+            res.writeHead(200, { "content-length": 2 }).end("ok");
+        });
+      },
+    );
+    const upstreamPort = await listen(upstream);
+    open.push(() => upstream.closeAllConnections());
+    const leases = new LeaseTable();
+    const pool = new MachinePool({
+      leases,
+      accountsOf: () => ["a"],
+      profile: (id) =>
+        id === "a"
+          ? {
+              id: "a",
+              provider: "claude",
+              name: "Fixture a",
+              enabled: true,
+              tokenFile: "/nonexistent/a.json",
+            }
+          : undefined,
+      needsLogin: () => [],
+    });
+    /** The fake vault's account credential, a fixture. */
+    const ACCOUNT_TOKEN = "fixture-account";
+    const lines: string[] = [];
+    const requests = createRequestLog({ log: (line) => lines.push(line) });
+    // As production's: a kept-alive upstream connection.
+    const agent = new https.Agent({ keepAlive: true });
+    open.push(() => agent.destroy());
+    const forwarder = createForwarder({
+      leases,
+      log: (line) => lines.push(line),
+      agent,
+      httpAgent: new http.Agent(),
+      upstreams: {
+        "api.anthropic.com": {
+          connect: { host: "127.0.0.1", port: upstreamPort },
+          ca: ca.certPem,
+        },
+      },
+      compat: createCompatUpstream(),
+      compatCa: undefined,
+      stats: { forwarded: 0, refused: 0, clientClosed: 0, upstreamErrors: 0 },
+      vault: {
+        credentialFor: () =>
+          Promise.resolve({
+            ok: true,
+            headers: { authorization: `Bearer ${ACCOUNT_TOKEN}` },
+            token: ACCOUNT_TOKEN,
+          }),
+        upstream401: () => {},
+      },
+      clientOf: () => CLIENT.id,
+      machine: { pool, userOf: () => CLIENT.userId },
+      requests: { log: requests, accountName: () => "Account a" },
+    });
+    const port = await listen(
+      http.createServer((req, res) =>
+        forwarder.handleRequest(req, res, CLIENT),
+      ),
+    );
+    const entries = () =>
+      requests.since(CLIENT.userId, undefined, 0, 500).records;
+    const machineLease = () =>
+      leases.records().find((record) => record.kind === "machine");
+    const clientAgent = new http.Agent({ keepAlive: true });
+    open.push(() => clientAgent.destroy());
+    let socket: net.Socket | undefined;
+    const request = http.request({
+      host: "127.0.0.1",
+      port,
+      path: "/anthropic/api/oauth/validate",
+      method: "POST",
+      agent: clientAgent,
+      headers: { "content-length": 100 },
+    });
+    request.on("socket", (value) => (socket = value));
+    request.on("error", () => {});
+    const reply = new Promise<void>((resolve) =>
+      request.on("response", (response) => {
+        assert.equal(response.statusCode, 200);
+        response.resume();
+        response.on("end", resolve);
+      }),
+    );
+    request.write(Buffer.alloc(5, 0x61));
+    await reply;
+    assert.equal(upstreamBytes, 5);
+    await settle();
+    assert.equal(
+      entries().length,
+      0,
+      `the record waits for the upload: ${JSON.stringify(entries())}`,
+    );
+    // A sweep now keeps the held lease: nothing pins it, the hold does.
+    pool.sweep();
+    const held = machineLease();
+    assert.ok(held && held.revoked === undefined);
+    if (abort) socket!.destroy();
+    else request.end(Buffer.alloc(95, 0x62));
+    await vi.waitFor(() => assert.equal(entries().length, 1));
+    assert.equal(entries()[0]!.listed, true);
+    assert.equal(
+      leases.isLive(held.leaseId),
+      true,
+      "a zero count revokes nothing",
+    );
+    pool.sweep();
+    assert.equal(leases.isLive(held.leaseId), false);
+    assert.deepEqual(pool.records(), []);
+  });

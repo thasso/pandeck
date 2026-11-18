@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import {
+  isGatewayRefusal,
   isNeedsLoginRefusal,
   refusalResponse,
   refusalText,
@@ -108,4 +109,24 @@ test("1424: machine-session-limited takes Anthropic's rate-limit type", () => {
     (JSON.parse(body) as { error: { type: string } }).error.type,
     "rate_limit_error",
   );
+});
+
+test("1430 PR3: the floors' refusals are marked 403s in each shape and echo nothing", () => {
+  for (const refusal of [
+    { case: "denied", id: "method" },
+    { case: "denied", id: "oauth-token" },
+    { case: "non-canonical-path" },
+  ] satisfies Refusal[]) {
+    const text = refusalText(refusal);
+    assert.ok(isGatewayRefusal(text));
+    assert.equal(isNeedsLoginRefusal(text), false);
+    // The id is the record's reason, never the refusal's text.
+    if (refusal.case === "denied") assert.ok(!text.includes(refusal.id));
+    for (const shape of ["claude", "codex"] as const) {
+      const { status, body } = refusalResponse(refusal, shape);
+      assert.equal(status, 403);
+      assert.ok(body.includes("permission_error"));
+      assert.ok(body.includes(text));
+    }
+  }
 });

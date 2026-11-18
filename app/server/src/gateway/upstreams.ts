@@ -1,13 +1,21 @@
 /**
- * The gateway's model upstreams, selected by path prefix. The route decides
- * the upstream and the lease decides the profile; a request decides neither.
+ * The gateway's model upstreams, selected by path prefix. The prefix alone
+ * decides the host, and the lease (or the machine pool) decides the profile;
+ * a request decides neither: its `Host` and target never pick another.
  *
- * Each upstream allows exact `(method, pathname)` pairs after its prefix, with
- * no normalisation, so `/v1/messages/../x` and `/v1/messagesX` never match. A
- * later slice widens an allowlist only with engine contract-test evidence.
- * A server lease also gets its upstream's `serverAllowed`: v06's usage routes,
- * `/anthropic`'s `GET /api/oauth/usage` and `/chatgpt`'s wham routes, which an
- * engine lease never reaches.
+ * Engine and server leases keep exact `(method, pathname)` pairs after the
+ * prefix, with no normalisation, so `/v1/messages/../x` and `/v1/messagesX`
+ * never match. A later slice widens a lease list only with engine
+ * contract-test evidence. A server lease also gets its upstream's
+ * `serverAllowed`: v06's usage routes, `/anthropic`'s `GET /api/oauth/usage`
+ * and `/chatgpt`'s wham routes, which an engine lease never reaches.
+ *
+ * The token routes, `/anthropic` and `/anthropic-mcp`, are marked
+ * `machinePaths: "open"`: there the machine kind (a request without a lease,
+ * Task-1430 R2′) is governed by `machinePaths.ts` instead, any method and
+ * path the floors and the mode pass. `/anthropic-mcp` has no lease list, so
+ * no engine or server lease reaches it. `/chatgpt`'s machine kind keeps its
+ * engine list.
  *
  * `/compat` is the OpenAI-compatible endpoint the server pushed: its origin
  * and base path come from the push (`compatUpstream.ts`), and it allows only
@@ -22,12 +30,18 @@ interface ProviderUpstream {
   prefix: string;
   provider: LeaseProvider;
   /** The logical host: TLS name, `Host` header and, in production, address. */
-  host: string;
+  host: UpstreamHost;
   label: UpstreamLabel;
   allowed: readonly { method: string; pathname: string }[];
   /** What only a server lease reaches besides `allowed`. */
   serverAllowed: readonly { method: string; pathname: string }[];
+  /** A token route: the machine kind follows `machinePaths.ts`. */
+  machinePaths?: "open";
 }
+
+/** The fixed hosts the provider routes name. */
+export type UpstreamHost =
+  "api.anthropic.com" | "mcp-proxy.anthropic.com" | "chatgpt.com";
 
 /** The pushed OpenAI-compatible endpoint, spending the pushed key. */
 interface CompatUpstreamRoute {
@@ -51,6 +65,19 @@ const UPSTREAMS: readonly Upstream[] = [
     ],
     // The server's Claude usage read (G4b); never refreshed.
     serverAllowed: [{ method: "GET", pathname: "/api/oauth/usage" }],
+    machinePaths: "open",
+  },
+  {
+    // Claude Code's remote MCP connectors; machine requests only. Shares the
+    // `claude` pool, and `routeFor` never confuses it with `/anthropic`.
+    kind: "provider",
+    prefix: "/anthropic-mcp",
+    provider: "claude",
+    host: "mcp-proxy.anthropic.com",
+    label: "Anthropic MCP",
+    allowed: [],
+    serverAllowed: [],
+    machinePaths: "open",
   },
   {
     kind: "provider",

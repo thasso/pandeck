@@ -560,6 +560,8 @@ const GATEWAY_EDGE = [
   "logins",
   // Machine pools: a client's harness sessions pinned to accounts (Task-1424).
   "machinePool",
+  // The token routes' machine rules: floors, mode, listed templates (Task-1430).
+  "machinePaths",
   // The edge's VaultPort over gateway-vault/1.1.
   "remoteVault",
   // Client-scoped relay identity and observation ingest (Task-1430 PR2a).

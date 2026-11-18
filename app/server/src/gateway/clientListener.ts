@@ -47,6 +47,7 @@ import http from "node:http";
 import https from "node:https";
 import type net from "node:net";
 import { join } from "node:path";
+import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import type { Payload } from "../workerProtocol/codec.ts";
 import {
@@ -86,7 +87,12 @@ import {
 } from "./clientRegistry.ts";
 import type { DevboxApproval } from "./devboxProof.ts";
 import type { CredentialOutcome, EdgeTools } from "./edgeTools.ts";
-import type { AdmittedClient, LocalAnswer, MachineAccess } from "./forward.ts";
+import type {
+  AdmittedClient,
+  ConnectRefusal,
+  LocalAnswer,
+  MachineAccess,
+} from "./forward.ts";
 import { createRelayDedup, RELAY_RID } from "./relayDedup.ts";
 import {
   createRelayObservations,
@@ -241,6 +247,13 @@ interface ClientListenerDeps {
       res: http.ServerResponse,
       admitted?: AdmittedClient,
     ) => LocalAnswer;
+    refuseConnect: (
+      req: http.IncomingMessage,
+      socket: Duplex,
+      head: Buffer,
+      admitted: AdmittedClient | undefined,
+      refusal: ConnectRefusal,
+    ) => void;
   };
   /** The saved machine pins and their writer; without them, memory only. */
   machinePins?:
@@ -987,6 +1000,45 @@ export async function startClientListener(
   modelHttp.keepAliveTimeout = 0;
   modelHttp.headersTimeout = 0;
   modelHttp.requestTimeout = 0;
+  // CONNECT never tunnels here, whatever the bearer: the method floor refuses
+  // it marked and recorded, after the same admission as any request
+  // (Task-1430 PR3). Parse errors, TRACK included, keep the runtime's own
+  // 400 with no record (D-PR3-7): no `clientError` listener.
+  modelHttp.on(
+    "connect",
+    (req: http.IncomingMessage, socket: Duplex, head: Buffer) => {
+      const peer = req.socket;
+      if (!modelConnections.has(peer)) {
+        socket.destroy();
+        return;
+      }
+      const previous = (): AdmittedClient | undefined => {
+        const known = authenticated.get(peer);
+        return (
+          known && { id: known.id, label: known.label, userId: known.userId }
+        );
+      };
+      let client: GatewayClient | undefined;
+      try {
+        client = activeClient(peer);
+      } catch {
+        return forwarder.refuseConnect(req, socket, head, previous(), {
+          case: "registry-unavailable",
+        });
+      }
+      if (!client)
+        return forwarder.refuseConnect(req, socket, head, previous(), {
+          case: "forbidden",
+        });
+      forwarder.refuseConnect(
+        req,
+        socket,
+        head,
+        { id: client.id, label: client.label, userId: client.userId },
+        { case: "denied", id: "method" },
+      );
+    },
+  );
   const serveModel = (
     req: http.IncomingMessage,
     res: http.ServerResponse,

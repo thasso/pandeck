@@ -7,7 +7,7 @@
  *   gateway-dev --state-dir <dir> [--port <n>] [--model-port <n>]
  *     [--client-port <n>] [--enroll-port <n>] [--bind-host <address>]
  *     [--host <name>]... [--vault-host <address> [--vault-port <n>]]
- *     [--ui-config <file>]
+ *     [--ui-config <file>] [--machine-paths permissive|strict]
  *
  * With `--vault-host`, the vault runs in its own process (`gateway/vaultMain.ts`,
  * port 8794 unless `--vault-port`), reached over the pinned link that
@@ -19,6 +19,10 @@
  * gateway's own sign-in and page (`gatewayWeb/`, Task-1402): with
  * `--ui-config`, an HTTPS port for browsers on `--bind-host`, configured by
  * that 0600 file.
+ *
+ * `--machine-paths strict` forwards only the listed templates on the token
+ * routes' machine path; `permissive`, the default, forwards any path the
+ * floors pass (`gateway/machinePaths.ts`).
  *
  * Every port defaults to a free one; the ports in use are printed. The edge's
  * three ports bind to `--bind-host`, 127.0.0.1 unless given, and each `--host`
@@ -40,7 +44,7 @@ import {
 const options = parseEdgeArgs(process.argv.slice(2), { requireVault: false });
 if (!options) {
   console.error(
-    "usage: gateway-dev --state-dir <dir> [--port <n>] [--model-port <n>] [--client-port <n>] [--enroll-port <n>] [--bind-host <address>] [--host <name>]... [--vault-host <address> [--vault-port <n>]] [--ui-config <file>]",
+    "usage: gateway-dev --state-dir <dir> [--port <n>] [--model-port <n>] [--client-port <n>] [--enroll-port <n>] [--bind-host <address>] [--host <name>]... [--vault-host <address> [--vault-port <n>]] [--ui-config <file>] [--machine-paths permissive|strict]",
   );
   process.exit(2);
 }

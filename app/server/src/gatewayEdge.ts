@@ -29,6 +29,7 @@ import { parseArgs } from "node:util";
 import { devboxApproval, type DevboxEndpoints } from "./gateway/devboxProof.ts";
 import { startGateway, type RunningGateway } from "./gateway/gateway.ts";
 import { LoginRefusal, type LoginActor } from "./gateway/logins.ts";
+import type { MachinePathMode } from "./gateway/machinePaths.ts";
 import type { CodexRenewPort } from "./gateway/renewal.ts";
 import { readEdgeVaultLink } from "./gateway/vaultMethods.ts";
 import {
@@ -80,12 +81,15 @@ export interface EdgeOptions {
   vault?: { host: string; port: number };
   /** The UI's config file, when `--ui-config`. */
   uiConfig?: string;
+  /** `--machine-paths`: the token routes' machine mode; permissive when absent. */
+  machinePaths?: MachinePathMode;
 }
 
 /**
  * The edge's flags, or `undefined` for a usage error: a missing
- * `--state-dir`, a port out of range, an unknown flag, or no `--vault-host`
- * when `requireVault`.
+ * `--state-dir`, a port out of range, an unknown flag, a `--machine-paths`
+ * other than `permissive` or `strict`, or no `--vault-host` when
+ * `requireVault`.
  */
 export function parseEdgeArgs(
   argv: string[],
@@ -106,6 +110,7 @@ export function parseEdgeArgs(
         "vault-host": { type: "string" },
         "vault-port": { type: "string" },
         "ui-config": { type: "string" },
+        "machine-paths": { type: "string" },
       },
     }));
   } catch {
@@ -114,6 +119,13 @@ export function parseEdgeArgs(
   const stateDir = values["state-dir"];
   if (!stateDir) return undefined;
   if (requireVault && !values["vault-host"]) return undefined;
+  const machinePaths = values["machine-paths"];
+  if (
+    machinePaths !== undefined &&
+    machinePaths !== "permissive" &&
+    machinePaths !== "strict"
+  )
+    return undefined;
   const ports = [
     values.port,
     values["model-port"],
@@ -142,6 +154,7 @@ export function parseEdgeArgs(
       ? { vault: { host: values["vault-host"], port: vaultPort } }
       : {}),
     ...(values["ui-config"] ? { uiConfig: resolve(values["ui-config"]) } : {}),
+    ...(machinePaths ? { machinePaths } : {}),
   };
 }
 
@@ -384,6 +397,7 @@ export async function startEdge(
   const gateway = await startGateway({
     stateDir,
     port: options.port,
+    ...(options.machinePaths ? { machinePaths: options.machinePaths } : {}),
     ...(extras.renewCodex ? { renewCodex: extras.renewCodex } : {}),
     tools: extras.tools ?? createEdgeTools(),
     clients: {
