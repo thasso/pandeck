@@ -145,7 +145,10 @@ if (command === "enroll" && values.approve) {
     port: Number(values.port),
     socketPath: values.socket,
   });
+  let stopping = false;
   const stop = (): void => {
+    if (stopping) return;
+    stopping = true;
     void relay.close().then(() => process.exit(0));
   };
   process.once("SIGTERM", stop);

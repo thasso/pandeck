@@ -2083,10 +2083,12 @@ use the gateway's accounts through the local relay (Task-1424 PR 1). The harness
 points its base URL at the relay's loopback port and sends a fixed, public
 placeholder as its key. Any process on the machine can do this; Thasso accepted
 that. The relay's client certificate is the capability, and revoking the machine
-ends access at once. The relay changes only in transport (Task-1424 delivery
-amendment, Thasso's decision): it forwards request and response header fields as
-received, repeats included, and verifies the edge by its enrolled address
-whatever the `Host` (above). No route, body or credential handling changes.
+ends access at once. The relay forwards request and response header fields with
+repeats and verifies the edge by its enrolled address whatever the `Host`
+(above). It drops hop-by-hop fields. Request fields starting with `x-pandeck-`
+are reserved: every caller value is removed, regardless of case or repeats, and
+one `x-pandeck-relay-id` is added. Bodies still stream unchanged; no credential
+is added or removed.
 
 - **Placeholder.** One literal, JWT-shaped because pi and Codex accept only
   that, pinned in `gatewayMachinePool.test.ts`:
@@ -2099,6 +2101,63 @@ whatever the `Host` (above). No route, body or credential handling changes.
   `{"https://api.openai.com/auth":{"chatgpt_account_id":"pandeck-gateway"},"pandeck":{"v":1,"machine":true}}`.
   It names no lease, so it is not lease-shaped, and it grants nothing on its
   own. It may sit in the environment.
+
+- **Relay reporting** (Task-1430 PR2a). Each boot generates a random 32-hex id;
+  each admitted model request gets `<boot>:<n>`, starting at 1. This request id
+  does not order delivery. The relay reports local refusals and gateway-bound
+  requests ending without edge response headers. Once edge headers arrive, the
+  edge owns the record, including subsequent errors or caller cancellation.
+  Fallbacks contain the enrolled edge host, method, query-free printable path
+  capped at 200 characters, status or null, outcome, fixed reason or Node error
+  code, credential class, cookie presence, byte lengths and duration. No header
+  value, query, body or raw session key enters a report or text line.
+  - Admission reserves one of 19,999 ordinary slots before forwarding or a
+    recorded local refusal. It releases that slot on edge headers, or converts
+    it into the fallback until acknowledged. A full queue answers a marked 503
+    without contacting the edge. Those refusals are counted, not individually
+    recorded: one overflow note uses the final reserved slot,
+    with count and first/last times. Further refusals aggregate while that note
+    is in flight.
+  - The queue assigns `d` at enqueue, independently of request ids. One batch at
+    a time goes over the same mTLS link to `POST /relay/observations`, at most
+    100 records and 64 KiB. Only a valid 200 acknowledgement removes its prefix.
+    Network errors, a 15 s response deadline and unsuccessful replies retry from
+    1 s, doubling to 30 s. A 400 drops that batch with a fixed diagnostic and a
+    count in the summary. A caller cannot forge batches through the loopback
+    model listener: every `/relay/` target gets a local marked 403, subject to
+    the same admission reservation.
+  - Every boot's first queued record is `relay-restarted`, including the first
+    ever boot. Its missing count means the prior loss is unknown. No observation
+    queue, spill, marker or replay file is written. Crash loss is accepted.
+  - Graceful close is new behavior. It stops accepting, answers requests still
+    arriving on active keep-alive connections with marked 503 `relay-closing`,
+    drains active model work for up to 5 s, then cuts remaining streams and the
+    client-protocol sockets. Pre-header work becomes one fallback; post-header
+    work remains the edge's record. It then flushes for up to 5 s. A timeout
+    writes exactly one `observations: <n> not delivered at close` line, adding
+    `overflow <m>` when appropriate. Repeated close calls share one promise.
+    Allow more than 10 s for a service-manager stop. SIGTERM followed by SIGINT
+    shares the same stop; repeating a signal whose one-shot handler has gone is
+    an ordinary crash.
+  - Every 10 minutes and at close, `relay summary:` counts since boot by host,
+    relay-view outcome and credential class, plus rejected observation count.
+    `forwarded` means edge headers arrived, not necessarily upstream success.
+    This is observability, not lossless or exactly-once accounting. Edge dedup
+    can lose state on restart, after 6 h of boot inactivity, or beyond 64 boots
+    per client. Two UI rows with the same request id can then occur. Interval
+    compaction beyond 4,096 gaps can discard a genuinely missing old fallback,
+    with a counted edge diagnostic. Each note kind uses a seen-set identity.
+
+  | Relay-local answer               | Status | Marker             | Reporting                                                 |
+  | -------------------------------- | ------ | ------------------ | --------------------------------------------------------- |
+  | Existing edge-unreachable answer | 502    | None, unchanged    | Fallback if no edge headers                               |
+  | `overflow`                       | 503    | `Pandeck gateway:` | Aggregated overflow note                                  |
+  | `relay-closing`                  | 503    | `Pandeck gateway:` | Refused record if a slot is available, otherwise overflow |
+  | `reserved-path`                  | 403    | `Pandeck gateway:` | Refused record if a slot is available, otherwise overflow |
+
+  Marked answers use a fixed JSON error containing both provider shapes:
+  `type: error`, and `error.type`, `error.code`, `error.message`. They never
+  echo the target or any other caller text.
 
 - **Setup.** `<port>` is the relay's loopback port. `127.0.0.1` and `localhost`
   both work (the `Host` check below); another name for the same address does

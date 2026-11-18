@@ -1,14 +1,18 @@
 /**
  * The relay (`gateway-service` plan M14, Task-1384): the only holder of a
- * gateway client's key on its box. It understands no protocol; it adds the
- * client's TLS identity and pipes bytes to the gateway edge.
+ * gateway client's key on its box. It adds the client's TLS identity, reserves
+ * reporting capacity at admission and pipes bodies to the gateway edge.
  *
  * - A loopback HTTP listener for model traffic: every request goes to the
- *   edge's model port over mutual TLS, unchanged, lease token included. Header
- *   fields pass both ways as received, repeats included, without hop-by-hop
- *   ones; the edge's certificate is checked for the enrolled address, never
+ *   edge's model port over mutual TLS, lease token included. Caller x-pandeck-*
+ *   fields are stripped and one boot-scoped rid is set. Other header fields
+ *   pass both ways with repeats, without hop-by-hop ones. The edge's
+ *   certificate is checked for the enrolled address, never
  *   a forwarded `Host`. Both bodies stream with `pipe`, so a paused engine
- *   holds the edge back.
+ *   holds the edge back. Only endings without edge headers become fallback
+ *   observations. The bounded in-memory d/ack queue never writes a file;
+ *   every boot sends a restart note with unknown loss. Close drains for up to
+ *   5 s, then flushes for up to 5 s and reports any undelivered count.
  * - A Unix socket (0600, the relay's account) for the client protocol: each
  *   accepted connection is piped byte for byte to the edge's client port.
  *
@@ -36,6 +40,9 @@ import net from "node:net";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import tls from "node:tls";
+import { createModelTraffic } from "./modelTraffic.ts";
+import { observationTransport } from "./observationTransport.ts";
+import { createObservations } from "./observations.ts";
 
 const KEY_FILE = "client-key.pem";
 const CERT_FILE = "client-cert.pem";
@@ -59,29 +66,6 @@ interface RelayIdentity extends EdgeAddress {
   key: string;
   cert: string;
   ca: string;
-}
-
-const HOP_BY_HOP = new Set([
-  "connection",
-  "keep-alive",
-  "proxy-connection",
-  "te",
-  "trailer",
-  "transfer-encoding",
-  "upgrade",
-]);
-
-/**
- * The header fields as received, in order and with every repeat, without
- * the hop-by-hop ones: the edge reads repeats (a second `Host`, a repeated
- * session key), and a harness reads a provider's answer unchanged.
- */
-function forwardable(rawHeaders: readonly string[]): string[] {
-  const out: string[] = [];
-  for (let i = 0; i + 1 < rawHeaders.length; i += 2)
-    if (!HOP_BY_HOP.has(rawHeaders[i]!.toLowerCase()))
-      out.push(rawHeaders[i]!, rawHeaders[i + 1]!);
-  return out;
 }
 
 /**
@@ -586,6 +570,15 @@ export interface RelayOptions {
   /** The client protocol's Unix socket. */
   socketPath: string;
   log?: (line: string) => void;
+  /** Test seams; production uses 20,000 slots and the documented deadlines. */
+  observations?: {
+    capacity?: number;
+    retryMs?: number;
+    retryMaxMs?: number;
+    responseMs?: number;
+  };
+  drainMs?: number;
+  flushMs?: number;
 }
 
 export interface RunningRelay {
@@ -623,57 +616,32 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
     socket.once("close", () => sockets.delete(socket));
   };
 
+  const boot = randomBytes(16).toString("hex");
+  const edge = { ...tlsOptions, port: identity.modelPort, agent };
+  const observations = createObservations({
+    ...options.observations,
+    boot,
+    log,
+    send: observationTransport(
+      edge,
+      options.observations?.responseMs ?? 15_000,
+    ),
+  });
+  const traffic = createModelTraffic({
+    boot,
+    observations,
+    edge,
+    edgeHost,
+    log,
+  });
+  const summary = setInterval(() => traffic.summary(), 10 * 60_000);
+  summary.unref();
   const model = http.createServer((req, res) => {
-    const started = Date.now();
-    const headers = forwardable(req.rawHeaders);
-    if (
-      !headers.some((name, i) => i % 2 === 0 && name.toLowerCase() === "host")
-    )
-      headers.push("host", edgeHost);
-    const upstream = https.request({
-      ...tlsOptions,
-      port: identity.modelPort,
-      agent,
-      method: req.method,
-      path: req.url,
-      headers,
+    traffic.forward(req, res, {
+      host: identity.host,
+      path: req.url ?? "/",
+      edgePath: req.url ?? "/",
     });
-    let settled = false;
-    upstream.on("response", (edgeRes) => {
-      res.writeHead(edgeRes.statusCode ?? 502, forwardable(edgeRes.rawHeaders));
-      edgeRes.pipe(res);
-      edgeRes.on("error", () => res.destroy());
-      edgeRes.on("close", () => {
-        if (!edgeRes.complete) res.destroy();
-      });
-      res.on("finish", () => {
-        settled = true;
-        log(`${req.method} ${edgeRes.statusCode} ${Date.now() - started}ms`);
-      });
-    });
-    upstream.on("error", (err) => {
-      if (settled) return;
-      settled = true;
-      const code = (err as { code?: unknown }).code;
-      log(`${req.method} edge unreachable (${String(code ?? "error")})`);
-      if (res.headersSent) {
-        res.destroy();
-        return;
-      }
-      const body = JSON.stringify({
-        error: { message: "The relay cannot reach the gateway." },
-      });
-      res.writeHead(502, {
-        "content-type": "application/json",
-        "content-length": Buffer.byteLength(body),
-      });
-      res.end(body);
-    });
-    res.on("close", () => {
-      if (!res.writableFinished) upstream.destroy();
-    });
-    req.on("error", () => upstream.destroy());
-    req.pipe(upstream);
   });
   model.on("connection", track);
   model.on("clientError", (_err, socket) => socket.destroy());
@@ -698,46 +666,69 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
     edge.pipe(local);
   });
 
-  await new Promise<void>((resolve, reject) => {
-    model.once("error", reject);
-    model.listen(options.port, "127.0.0.1", () => {
-      model.removeListener("error", reject);
-      resolve();
-    });
-  });
-  clearSocketPath(options.socketPath);
-  // The socket is created 0600: no window in which another account opens it.
-  const umask = process.umask(0o177);
   try {
     await new Promise<void>((resolve, reject) => {
-      control.once("error", reject);
-      control.listen(options.socketPath, () => {
-        control.removeListener("error", reject);
+      model.once("error", reject);
+      model.listen(options.port, "127.0.0.1", () => {
+        model.removeListener("error", reject);
         resolve();
       });
     });
-  } finally {
-    process.umask(umask);
+    clearSocketPath(options.socketPath);
+    // The socket is created 0600: no window in which another account opens it.
+    const umask = process.umask(0o177);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        control.once("error", reject);
+        control.listen(options.socketPath, () => {
+          control.removeListener("error", reject);
+          resolve();
+        });
+      });
+    } finally {
+      process.umask(umask);
+    }
+    chmodSync(options.socketPath, 0o600);
+  } catch (err) {
+    traffic.beginClose();
+    clearInterval(summary);
+    model.close();
+    control.close();
+    await traffic.drain(0);
+    for (const socket of sockets) socket.destroy();
+    await observations.close(0);
+    agent.destroy();
+    throw err;
   }
-  chmodSync(options.socketPath, 0o600);
   const address = model.address();
   const port = typeof address === "object" && address ? address.port : 0;
   log(
     `client ${identity.clientId}: model on 127.0.0.1:${port}, client protocol on ${options.socketPath}`,
   );
+  let closePromise: Promise<void> | undefined;
   return {
     url: `http://127.0.0.1:${port}`,
     port,
     socketPath: options.socketPath,
-    async close() {
+    close() {
+      if (closePromise) return closePromise;
+      traffic.beginClose();
+      clearInterval(summary);
       const closed = Promise.all([
         new Promise<void>((resolve) => model.close(() => resolve())),
         new Promise<void>((resolve) => control.close(() => resolve())),
       ]);
-      for (const socket of sockets) socket.destroy();
-      sockets.clear();
-      agent.destroy();
-      await closed;
+      model.closeIdleConnections();
+      closePromise = (async () => {
+        await traffic.drain(options.drainMs ?? 5_000);
+        for (const socket of sockets) socket.destroy();
+        sockets.clear();
+        await closed;
+        await observations.close(options.flushMs ?? 5_000);
+        traffic.summary();
+        agent.destroy();
+      })();
+      return closePromise;
     },
   };
 }
