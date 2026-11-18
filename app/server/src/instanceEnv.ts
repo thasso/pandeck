@@ -1,4 +1,5 @@
 import { SCRUBBED_INTEGRATION_SECRET_ENV_VARS } from "./integrationSecrets.ts";
+import { SUPERVISOR_ENV_VARS } from "./supervisedLaunch.ts";
 
 /**
  * Variables that bind a process to THIS instance: its data directory, its
@@ -63,6 +64,9 @@ export const INSTANCE_OWNED_ENV_VARS = [
   // THIS server's APNs key; a worktree server must never push as production.
   "APNS_CREDENTIAL_FILE",
   ...SCRUBBED_INTEGRATION_SECRET_ENV_VARS,
+  // The desktop shell's readiness pipe, nonce and lifeline. A descendant that
+  // inherited the nonce could forge this server's readiness.
+  ...SUPERVISOR_ENV_VARS,
   "DATA_DIR",
 ] as const;
 

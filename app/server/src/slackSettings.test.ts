@@ -9,6 +9,8 @@ vi.mock("./config.ts", async (importActual) => {
   const actual = await importActual<typeof import("./config.ts")>();
   return {
     ...actual,
+    // The loopback fallback is what the bound-port test below exercises.
+    PUBLIC_BASE_URL: "",
     SLACK_STATIC_CONFIG: {
       ...actual.SLACK_STATIC_CONFIG,
       workspaceHost: "example.slack.test",
@@ -22,7 +24,7 @@ vi.mock("./config.ts", async (importActual) => {
   };
 });
 
-const { DATA_DIR } = await import("./config.ts");
+const { DATA_DIR, PORT, noteListeningPort } = await import("./config.ts");
 const {
   createSlackOAuthStartUrl,
   getSlackPublicApiConfig,
@@ -222,4 +224,28 @@ test("connected needs both OAuth tokens, and disconnect clears both", () => {
   assert.equal(settings.connected, false);
   assert.equal(settings.userTokenConfigured, false);
   assert.equal(settings.botTokenConfigured, false);
+});
+
+test("the OAuth redirect falls back to the port the server actually bound", () => {
+  const redirect = () =>
+    new URL(createSlackOAuthStartUrl()).searchParams.get("redirect_uri");
+  // Before listen, and whenever the bound port is the configured one, the
+  // fallback is unchanged.
+  assert.equal(redirect(), `http://localhost:${PORT}/api/slack/oauth/callback`);
+  // A supervised launch that found its preferred port taken binds another.
+  noteListeningPort(PORT + 1);
+  try {
+    assert.equal(
+      redirect(),
+      `http://localhost:${PORT + 1}/api/slack/oauth/callback`,
+    );
+    assert.equal(
+      new URL(
+        createSlackOAuthStartUrl("https://pa.example.test"),
+      ).searchParams.get("redirect_uri"),
+      "https://pa.example.test/api/slack/oauth/callback",
+    );
+  } finally {
+    noteListeningPort(PORT);
+  }
 });

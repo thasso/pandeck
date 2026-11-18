@@ -9,7 +9,7 @@ import {
   DATA_DIR,
   GOOGLE_OAUTH_CLIENT_ID,
   GOOGLE_OAUTH_CLIENT_SECRET,
-  PORT,
+  listeningPort,
   PUBLIC_BASE_URL,
 } from "./config.ts";
 import { errorText } from "./errors.ts";
@@ -70,7 +70,7 @@ export interface GoogleToolConfig extends StoredGoogleSettings {
 
 function googleOAuthRedirectUri(publicBaseUrl?: string): string {
   const baseUrl = cleanBaseUrl(
-    publicBaseUrl || PUBLIC_BASE_URL || `http://localhost:${PORT}`,
+    publicBaseUrl || PUBLIC_BASE_URL || `http://localhost:${listeningPort()}`,
   );
   return `${baseUrl}${GOOGLE_OAUTH_CALLBACK_PATH}`;
 }
@@ -558,7 +558,7 @@ async function googleGet<T>(url: string, accessToken: string): Promise<T> {
 }
 
 function cleanBaseUrl(value: string): string {
-  const trimmed = value.trim() || `http://localhost:${PORT}`;
+  const trimmed = value.trim() || `http://localhost:${listeningPort()}`;
   try {
     const url = new URL(trimmed);
     url.pathname = url.pathname.replace(/\/+$/, "");
@@ -566,6 +566,6 @@ function cleanBaseUrl(value: string): string {
     url.hash = "";
     return url.toString().replace(/\/$/, "");
   } catch {
-    return `http://localhost:${PORT}`;
+    return `http://localhost:${listeningPort()}`;
   }
 }

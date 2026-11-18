@@ -38,11 +38,19 @@ import {
   GATEWAY_SOCKET,
   HOST,
   IS_PROD,
+  listeningPort,
+  noteListeningPort,
   PORT,
   PUBLIC_BASE_URL,
 } from "./config.ts";
 import { authTokenStartupMessage, resolveAuthToken } from "./authToken.ts";
 import { scrubInstanceEnvironment } from "./instanceEnv.ts";
+import {
+  isSupervisedLoopbackHost,
+  readSupervisedLaunch,
+  reportSupervisedReady,
+  watchSupervisorLifeline,
+} from "./supervisedLaunch.ts";
 import { startSpawnBroker } from "./spawnBroker.ts";
 import { ignoreCollectedFileHandle } from "./collectedFileHandle.ts";
 import { startInProcessWorker } from "./workers/inProcessWorker.ts";
@@ -346,6 +354,8 @@ function isSafeId(id: string): boolean {
  * on the network could drive the Workshop agent (Bash = RCE). See authToken.ts.
  */
 const AUTH_TOKEN = resolveAuthToken();
+/** Set only when the desktop shell runs this server as its private child. */
+const SUPERVISED = readSupervisedLaunch(process.env, HOST);
 const portForwardGrants = new PortForwardGrantStore();
 
 const shutdownGraceEnv = Number(process.env.ASSISTANT_SHUTDOWN_GRACE_MS);
@@ -614,9 +624,20 @@ async function handleRequest(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
+  if (
+    SUPERVISED &&
+    !isSupervisedLoopbackHost(req.headers.host, listeningPort())
+  ) {
+    res.writeHead(421, {
+      "content-type": "application/json",
+      "cache-control": "no-store",
+    });
+    res.end(JSON.stringify({ error: "Misdirected Request" }));
+    return;
+  }
   const requestUrl = new URL(
     req.url ?? "/",
-    `http://${req.headers.host ?? `localhost:${PORT}`}`,
+    `http://${req.headers.host ?? `localhost:${listeningPort()}`}`,
   );
 
   if (requestUrl.pathname === "/api/health") {
@@ -1635,11 +1656,18 @@ function abortUpgrade(
 }
 
 server.on("upgrade", (req, socket, head) => {
+  if (
+    SUPERVISED &&
+    !isSupervisedLoopbackHost(req.headers.host, listeningPort())
+  ) {
+    abortUpgrade(socket, 421, "Misdirected Request");
+    return;
+  }
   let url: URL;
   try {
     url = new URL(
       req.url ?? "/",
-      `http://${req.headers.host ?? `localhost:${PORT}`}`,
+      `http://${req.headers.host ?? `localhost:${listeningPort()}`}`,
     );
   } catch {
     abortUpgrade(socket, 400, "Bad Request");
@@ -1990,19 +2018,53 @@ await startClaudeCredentialStatusChecks();
 await probeStreamingRecognizer();
 await probeTtsRuntime();
 
+if (SUPERVISED) {
+  // Under the desktop shell the port is a preference: a taken one is replaced
+  // by an OS-chosen port that THIS process binds and reports. The shell never
+  // adopts whatever listener already holds the preferred port.
+  server.once("error", (err: NodeJS.ErrnoException) => {
+    if (err.code !== "EADDRINUSE" || PORT === 0) throw err;
+    console.warn(
+      `[assistant] port ${PORT} is in use; binding an OS-chosen loopback port instead.`,
+    );
+    server.listen(0, HOST);
+  });
+  if (SUPERVISED.lifeline)
+    watchSupervisorLifeline(process.stdin, () => {
+      console.log("[assistant] supervising shell is gone; shutting down.");
+      process.kill(process.pid, "SIGTERM");
+    });
+}
+
 server.listen(PORT, HOST, () => {
+  const address = server.address();
+  noteListeningPort(
+    typeof address === "object" && address ? address.port : PORT,
+  );
+  const port = listeningPort();
   const displayHost = HOST === "0.0.0.0" || HOST === "::" ? "localhost" : HOST;
   console.log(
     `[assistant] build ${formatBuildInfo(SERVER_BUILD)} (reported to clients on ready)`,
   );
-  console.log(`[assistant] server listening on http://${displayHost}:${PORT}`);
+  console.log(`[assistant] server listening on http://${displayHost}:${port}`);
   console.log(
-    `[assistant] websocket on ws://${displayHost}:${PORT}/ws (server frames >= ${COMPRESSED_SERVER_FRAME_MIN_BYTES} bytes are deflated)`,
+    `[assistant] websocket on ws://${displayHost}:${port}/ws (server frames >= ${COMPRESSED_SERVER_FRAME_MIN_BYTES} bytes are deflated)`,
   );
   if (!IS_PROD && displayHost === "localhost") {
     console.log(
-      `[assistant] dev network access enabled — use http://<this-machine-ip>:${PORT} for API/WebSocket`,
+      `[assistant] dev network access enabled — use http://<this-machine-ip>:${port} for API/WebSocket`,
     );
+  }
+  if (SUPERVISED) {
+    try {
+      reportSupervisedReady(SUPERVISED, port);
+    } catch (err) {
+      console.error(
+        "[assistant] could not report readiness to the supervising shell:",
+        errorText(err),
+      );
+      process.exit(1);
+    }
   }
   if (!IS_PROD)
     console.log(
@@ -2409,7 +2471,7 @@ function initialSessionRoute(
   try {
     const requestUrl = new URL(
       req.url ?? "/ws",
-      `http://${req.headers.host ?? `localhost:${PORT}`}`,
+      `http://${req.headers.host ?? `localhost:${listeningPort()}`}`,
     );
     const sessionId = requestUrl.searchParams.get("sessionId")?.trim();
     if (!sessionId) return undefined;

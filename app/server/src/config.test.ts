@@ -13,6 +13,17 @@ describe("DATA_DIR child paths", () => {
   });
 });
 
+describe("listening port", () => {
+  it("is the configured port until listen reports the bound one", async () => {
+    vi.resetModules();
+    const config = await import("./config.ts");
+    assert.equal(config.listeningPort(), config.PORT);
+    config.noteListeningPort(43_210);
+    assert.equal(config.listeningPort(), 43_210);
+    vi.resetModules();
+  });
+});
+
 describe("deployment integration credentials", () => {
   const dirs: string[] = [];
 

@@ -1,5 +1,9 @@
 import type { TaskExternalLink, TaskItem } from "@assistant/shared";
-import { PORT, PUBLIC_BASE_URL, SLACK_STATIC_CONFIG } from "./config.ts";
+import {
+  listeningPort,
+  PUBLIC_BASE_URL,
+  SLACK_STATIC_CONFIG,
+} from "./config.ts";
 import { errorText } from "./errors.ts";
 import { getProject } from "./projectRegistry.ts";
 import {
@@ -686,10 +690,9 @@ function shortcutLinks(taskId: string, sourceUrl: string): string {
 }
 
 function taskWebUrl(taskId: string): string {
-  const base = (PUBLIC_BASE_URL || `http://localhost:${PORT}`).replace(
-    /\/+$/,
-    "",
-  );
+  const base = (
+    PUBLIC_BASE_URL || `http://localhost:${listeningPort()}`
+  ).replace(/\/+$/, "");
   return `${base}/tasks/${encodeURIComponent(taskId)}`;
 }
 

@@ -28,6 +28,22 @@ export const CWD = process.env.ASSISTANT_CWD ?? usableInitCwd ?? process.cwd();
 
 export const PORT = Number(process.env.ASSISTANT_PORT ?? 8787);
 
+let boundPort: number | undefined;
+
+/**
+ * The port this server actually listens on, once it does; the configured
+ * {@link PORT} before then. They differ under `ASSISTANT_PORT=0` or when a
+ * supervised launch falls back from a taken port (`supervisedLaunch.ts`).
+ */
+export function listeningPort(): number {
+  return boundPort ?? PORT;
+}
+
+/** Called once by `index.ts` from the listen callback. */
+export function noteListeningPort(port: number): void {
+  boundPort = port;
+}
+
 export const IS_PROD = process.env.NODE_ENV === "production";
 
 /**

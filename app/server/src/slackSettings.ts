@@ -7,7 +7,7 @@ import type {
 } from "@assistant/shared";
 import {
   DATA_DIR,
-  PORT,
+  listeningPort,
   PUBLIC_BASE_URL,
   SLACK_STATIC_CONFIG,
 } from "./config.ts";
@@ -237,7 +237,7 @@ function slackOAuthRedirectUri(publicBaseUrl?: string): string {
   const base = (
     publicBaseUrl ||
     PUBLIC_BASE_URL ||
-    `http://localhost:${PORT}`
+    `http://localhost:${listeningPort()}`
   ).replace(/\/+$/, "");
   return `${base}${SLACK_OAUTH_CALLBACK_PATH}`;
 }

@@ -7,6 +7,7 @@ import {
   scrubInstanceEnvironment,
 } from "./instanceEnv.ts";
 import { SCRUBBED_INTEGRATION_SECRET_ENV_VARS } from "./integrationSecrets.ts";
+import { SUPERVISOR_ENV_VARS } from "./supervisedLaunch.ts";
 
 const saved = new Map<string, string | undefined>();
 
@@ -125,4 +126,13 @@ test("leaves the ambient environment a spawned agent still needs", () => {
   assert.equal(process.env.PATH, path);
   assert.equal(process.env.HOME, home);
   assert.equal(process.env.ASSISTANT_STT_MODELS, "/nix/store/xxx-models");
+});
+
+test("drops the desktop supervisor's readiness pipe, nonce and lifeline", () => {
+  for (const name of SUPERVISOR_ENV_VARS) set(name, "1");
+  const removed = scrubInstanceEnvironment();
+  for (const name of SUPERVISOR_ENV_VARS) {
+    assert.equal(process.env[name], undefined);
+    assert.ok(removed.includes(name), `${name} should be reported as removed`);
+  }
 });

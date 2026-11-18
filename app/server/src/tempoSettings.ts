@@ -8,7 +8,7 @@ import type {
 import {
   DATA_DIR,
   JIRA_HOST,
-  PORT,
+  listeningPort,
   PUBLIC_BASE_URL,
   TEMPO_OAUTH_CLIENT_ID,
   TEMPO_OAUTH_CLIENT_SECRET,
@@ -165,7 +165,7 @@ function tempoOAuthClient(): {
 
 function tempoOAuthRedirectUri(publicBaseUrl?: string): string {
   const baseUrl = cleanBaseUrl(
-    publicBaseUrl || PUBLIC_BASE_URL || `http://localhost:${PORT}`,
+    publicBaseUrl || PUBLIC_BASE_URL || `http://localhost:${listeningPort()}`,
   );
   return `${baseUrl}${TEMPO_OAUTH_CALLBACK_PATH}`;
 }
@@ -522,7 +522,7 @@ function cleanUrl(value: string, fallback: string): string {
 }
 
 function cleanBaseUrl(value: string): string {
-  const trimmed = value.trim() || `http://localhost:${PORT}`;
+  const trimmed = value.trim() || `http://localhost:${listeningPort()}`;
   try {
     const url = new URL(trimmed);
     url.pathname = url.pathname.replace(/\/+$/, "");
@@ -530,6 +530,6 @@ function cleanBaseUrl(value: string): string {
     url.hash = "";
     return url.toString().replace(/\/$/, "");
   } catch {
-    return `http://localhost:${PORT}`;
+    return `http://localhost:${listeningPort()}`;
   }
 }
