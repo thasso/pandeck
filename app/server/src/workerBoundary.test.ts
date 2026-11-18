@@ -562,6 +562,9 @@ const GATEWAY_EDGE = [
   "machinePool",
   // The edge's VaultPort over gateway-vault/1.1.
   "remoteVault",
+  // Client-scoped relay identity and observation ingest (Task-1430 PR2a).
+  "relayDedup",
+  "relayObservations",
   // The client model port's request log and its credential classes (Task-1430).
   "requestCredential",
   "requestLog",

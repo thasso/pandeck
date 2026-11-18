@@ -87,6 +87,12 @@ import {
 import type { DevboxApproval } from "./devboxProof.ts";
 import type { CredentialOutcome, EdgeTools } from "./edgeTools.ts";
 import type { AdmittedClient, LocalAnswer, MachineAccess } from "./forward.ts";
+import { createRelayDedup, RELAY_RID } from "./relayDedup.ts";
+import {
+  createRelayObservations,
+  type ObservationsCommitted,
+} from "./relayObservations.ts";
+import type { RequestLog } from "./requestLog.ts";
 import { MachinePool, type MachinePinRecord } from "./machinePool.ts";
 import { LoginRefusal, type LoginActor } from "./logins.ts";
 import {
@@ -212,6 +218,10 @@ export interface ClientListenerOptions {
 
 interface ClientListenerDeps {
   stateDir: string;
+  requests?: Pick<RequestLog, "record">;
+  onObservationsCommitted?:
+    ((event: ObservationsCommitted) => void) | undefined;
+  relayDedupIntervals?: number | undefined;
   leases: LeaseTable;
   profiles: ProfileRegistry;
   /** The profiles renewal found needing a login. */
@@ -423,6 +433,23 @@ export async function startClientListener(
     options.hosts ?? ["localhost", "127.0.0.1"],
   );
   const registry = new ClientRegistry(deps.stateDir, now, log);
+  const relayDedup = createRelayDedup({
+    now,
+    log,
+    ...(deps.relayDedupIntervals === undefined
+      ? {}
+      : { maxIntervals: deps.relayDedupIntervals }),
+  });
+  const observations = deps.requests
+    ? createRelayObservations({
+        hosts: edgeTls.hosts,
+        dedup: relayDedup,
+        requests: deps.requests,
+        now,
+        log,
+        onCommitted: deps.onObservationsCommitted,
+      })
+    : undefined;
   // Usable accounts are read per selection, so account and login changes
   // reach the pools without a call here.
   const machinePool = new MachinePool({
@@ -1008,11 +1035,47 @@ export async function startClientListener(
     // Without tools `/mcp` is an unknown path to the forwarder, as before.
     // The path only, without parsing: a malformed target must not throw here.
     // The client as admitted now: its record survives a revocation meanwhile.
-    const admitted = {
+    const admitted: AdmittedClient = {
       id: client.id,
       label: client.label,
       userId: client.userId,
     };
+    if ((req.url ?? "").split("?")[0] === "/relay/observations" && observations)
+      return observations(req, res, admitted);
+    const supplied: string[] = [];
+    for (let i = 0; i + 1 < req.rawHeaders.length; i += 2)
+      if (req.rawHeaders[i]!.toLowerCase() === "x-pandeck-relay-id")
+        supplied.push(req.rawHeaders[i + 1]!);
+    if (supplied.length) {
+      const match = supplied.length === 1 ? RELAY_RID.exec(supplied[0]!) : null;
+      if (!match) admitted.ridDiagnostic = "invalid";
+      else {
+        admitted.rid = supplied[0]!;
+        const disposition = relayDedup.enter(
+          client.id,
+          match[1]!,
+          Number(match[2]),
+        );
+        if (disposition === "present") {
+          const { status, body } = refusalResponse(
+            { case: "duplicate-rid" },
+            "claude",
+          );
+          log(
+            `relay request: client=${client.id} rid=${admitted.rid} duplicate-rid`,
+          );
+          res.writeHead(status, {
+            "content-type": "application/json",
+            "content-length": Buffer.byteLength(body),
+          });
+          res.end(body);
+          req.resume();
+          return;
+        }
+        if (disposition === "below-floor")
+          admitted.ridDiagnostic = "below-floor";
+      }
+    }
     if (deps.tools && (req.url ?? "").split("?")[0] === "/mcp")
       return mcpGate(
         req,
@@ -1419,6 +1482,7 @@ export async function startClientListener(
     accountsChanged,
     async close() {
       clearInterval(revocations);
+      relayDedup.close();
       userOperations.close();
       for (const connection of [...connections.keys()])
         connection.end("the gateway closed");

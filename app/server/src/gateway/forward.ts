@@ -138,6 +138,9 @@ export interface AdmittedClient {
   id: string;
   label: string;
   userId: string;
+  rid?: string;
+  /** Fixed diagnostic for a supplied invalid id or a lossy-floor live id. */
+  ridDiagnostic?: "invalid" | "below-floor";
 }
 
 /** A request the client listener answers itself, being observed. */
@@ -328,7 +331,12 @@ function forwardable(
   const dropped = new Set([...HOP_BY_HOP, ...listed, ...drop]);
   const out: http.OutgoingHttpHeaders = {};
   for (const [name, value] of Object.entries(headers))
-    if (value !== undefined && !dropped.has(name) && !name.startsWith("proxy-"))
+    if (
+      value !== undefined &&
+      !dropped.has(name) &&
+      !name.startsWith("proxy-") &&
+      !name.startsWith("x-pandeck-")
+    )
       out[name] = value;
   return out;
 }
@@ -530,12 +538,18 @@ export function createForwarder(deps: ForwarderDeps): {
         const client = deps.clientOf
           ? ` kind=${leaseKind ?? "-"} client=${clientId ?? "-"}`
           : "";
-        const line = `${route?.upstream.provider ?? "-"} ${req.method} ${quoted(pathname, LOGGED_PATH_CHARS)}${client}${lease} ${ending.text} ${durationMs}ms outcome=${ending.outcome} via=gateway`;
+        const rid = admitted?.ridDiagnostic
+          ? ` rid=${admitted.ridDiagnostic}${admitted.rid ? ` relay-id=${admitted.rid}` : ""}`
+          : admitted?.rid
+            ? ` rid=${admitted.rid}`
+            : "";
+        const line = `${route?.upstream.provider ?? "-"} ${req.method} ${quoted(pathname, LOGGED_PATH_CHARS)}${client}${lease} ${ending.text} ${durationMs}ms outcome=${ending.outcome} via=gateway${rid}`;
         if (!requests || !admitted || !credential) return log(line);
         const entry: RequestEntry = {
           userId: admitted.userId,
           client: { id: admitted.id, label: admitted.label },
           via: "gateway",
+          ...(admitted.rid ? { rid: admitted.rid } : {}),
           at: started,
           host: trace.host,
           method: req.method ?? "",

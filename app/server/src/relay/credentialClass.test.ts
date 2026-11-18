@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { isLeaseShaped } from "../gateway/leases.ts";
+import {
+  classifyClientCredential as edgeClassify,
+  hasClientCookie as edgeCookie,
+} from "../gateway/requestCredential.ts";
+import {
+  CREDENTIAL_CASES,
+  COOKIE_CASES,
+  PLACEHOLDER_FIXTURE,
+} from "../test/requestCredentialCases.ts";
 import { GATEWAY_REFUSAL_MARKER } from "../gateway/refusals.ts";
 import {
   classifyClientCredential,
@@ -56,6 +65,22 @@ test("credential classes inspect all repeats and malformed values, never cookie 
     assert.equal(classifyClientCredential(headers), expected);
   assert.equal(hasClientCookie(["COOKIE", ""]), true);
   assert.equal(hasClientCookie(["authorization", "cookie"]), false);
+});
+
+test("relay and committed PR1 classifiers agree on the shared privacy fixtures", () => {
+  assert.equal(MACHINE_PLACEHOLDER, PLACEHOLDER_FIXTURE);
+  for (const { name, rawHeaders, expected } of CREDENTIAL_CASES) {
+    assert.equal(classifyClientCredential(rawHeaders), expected, name);
+    assert.equal(
+      classifyClientCredential(rawHeaders),
+      edgeClassify(rawHeaders),
+      name,
+    );
+  }
+  for (const { rawHeaders, expected } of COOKIE_CASES) {
+    assert.equal(hasClientCookie(rawHeaders), expected);
+    assert.equal(hasClientCookie(rawHeaders), edgeCookie(rawHeaders));
+  }
 });
 
 test("local lease shape agrees with the gateway's parser at its format boundaries", () => {

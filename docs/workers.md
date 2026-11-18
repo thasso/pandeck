@@ -2125,6 +2125,29 @@ is added or removed.
     count in the summary. A caller cannot forge batches through the loopback
     model listener: every `/relay/` target gets a local marked 403, subject to
     the same admission reservation.
+  - On the client model port, the edge reads exactly one relay-id field matching
+    `^[0-9a-f]{32}:[1-9][0-9]{0,14}$`. Invalid or repeated fields are ignored,
+    the request is served without a rid, and its text line says `rid=invalid`.
+    Valid ids enter client-scoped, boot-scoped dedup before `/mcp` or
+    forwarding. A repeated id gets marked 409 `duplicate-rid`, one text line and
+    no second record. A live id below the compacted floor is served and recorded
+    with `rid=below-floor`, never refused merely because compaction lost
+    precision. All upstream requests drop every `x-pandeck-*` field, on every
+    listener.
+  - The ingest endpoint accepts only POST, at most 100 entries and 64 KiB. The
+    whole batch must validate before any record, rid or acknowledgement is
+    changed: lowercase boot, increasing safe-integer `d`, matching rid boot,
+    bounded integers, fixed enums/reasons, uppercase method and query-free,
+    printable ASCII pathname capped at 200 characters. Hosts must match the
+    edge's own certificate host list, ASCII case-insensitively. This PR accepts
+    no P7-domain reports merely by suffix. The authenticated registry supplies
+    user/client identity; no body field can choose either. Invalid batches get
+    fixed marked 400, oversized ones 413, other methods 405, never an echo.
+    Records with `d` already acknowledged are ignored, then known-rid fallbacks
+    are ignored independently of the display ring. A missing old fallback below
+    the floor is discarded with a per-batch and running dropped count in the
+    text log. Relay notes and fallbacks use the same request-log writer as the
+    edge, labelled `via=relay`. Each note kind has a fixed first-seen identity.
   - Every boot's first queued record is `relay-restarted`, including the first
     ever boot. Its missing count means the prior loss is unknown. No observation
     queue, spill, marker or replay file is written. Crash loss is accepted.
@@ -2292,18 +2315,20 @@ is added or removed.
   | `machine-session-limited` | 429    | every <Claude\|OpenAI> account this session can use is rate-limited; retry later.                            |
   | `machine-origin`          | 403    | model access from this machine is for local tools only.                                                      |
   | `machine-retry`           | 503    | this machine's account changed while the request waited; retry.                                              |
+  | `duplicate-rid`           | 409    | this relay request was already recorded.                                                                     |
 
   The vault's needs-login 401 never reaches a machine request: a dead login is a
   changed selection.
 
 - **Logs.** Every forward line on a client's port names
-  `kind=<engine|server|machine>` and `client=<id>`, and every forward line ends
-  `outcome=<outcome> via=gateway` ("Request log"). No line holds the
-  placeholder, a session key or its hash, a token, a query or a body; only a
-  request record holds the session tag, and no line holds a client's own header
-  text (the first-client `user-agent` line is the loopback listener's only). A
-  failure while recording an answer (a registry read, a pin save) is logged with
-  a fixed line and never changes the answer.
+  `kind=<engine|server|machine>` and `client=<id>`, and every forward line
+  includes `outcome=<outcome> via=gateway` ("Request log"), followed by its
+  relay id or fixed id diagnostic when supplied. No line holds the placeholder,
+  a session key or its hash, a token, a query or a body; only a request record
+  holds the session tag, and no line holds a client's own header text (the
+  first-client `user-agent` line is the loopback listener's only). A failure
+  while recording an answer (a registry read, a pin save) is logged with a fixed
+  line and never changes the answer.
 - **Encrypted reasoning.** After a move between accounts, a Codex, pi or
   OpenCode conversation that carries encrypted reasoning may be refused by the
   new account. Pandeck rewrites history on the driver side for its own sessions

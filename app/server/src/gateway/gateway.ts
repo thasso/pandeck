@@ -60,6 +60,7 @@ import type { RefreshLockOptions } from "./refreshLock.ts";
 import { RENEW_TICK_MS, type CodexRenewPort } from "./renewal.ts";
 import { openGatewayState } from "./state.ts";
 import { createRequestLog, type RequestLog } from "./requestLog.ts";
+import type { ObservationsCommitted } from "./relayObservations.ts";
 import { createRemoteVault, type RemoteVaultOptions } from "./remoteVault.ts";
 import { createVault, type Vault } from "./vault.ts";
 import type { AtlassianEndpoint } from "./vaultAtlassian.ts";
@@ -102,6 +103,10 @@ export interface GatewayOptions {
    * `clients`, which an entry may read from its environment.
    */
   modelDeadlines?: ModelDeadlines;
+  /** Test-only post-commit, pre-answer hook for a lost observation ack. */
+  onObservationsCommitted?: (event: ObservationsCommitted) => void;
+  /** Test-only lowered interval compaction bound. */
+  relayDedupIntervals?: number;
   /** Test seam: shorter enrollment-port idle bounds for the client listener. */
   enrollIdle?: { baseMs: number; proofMs: number };
   /** The login drivers enrolled clients' logins run (`logins.ts`). */
@@ -303,6 +308,9 @@ export async function startGateway(
         leases,
         profiles,
         needsLogin: () => vault.needsLogin(),
+        requests: requestLog,
+        onObservationsCommitted: options.onObservationsCommitted,
+        relayDedupIntervals: options.relayDedupIntervals,
         forwarder: (machine) =>
           createForwarder({
             ...forwarderDeps,
