@@ -14,7 +14,7 @@ import https from "node:https";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, beforeAll, test } from "vitest";
+import { afterAll, afterEach, beforeAll, test, vi } from "vitest";
 import type { GatewayOptions, RunningGateway } from "./gateway/gateway.ts";
 import type { ObservationsCommitted } from "./gateway/relayObservations.ts";
 import type { RequestRecord } from "./gateway/requestLog.ts";
@@ -482,6 +482,132 @@ test("T2 malformed or repeated ids are ignored, served and diagnosed without ech
     2,
   );
   assert.ok(!r.lines.join("\n").includes("SENTINEL"));
+});
+
+test.each([
+  ["registry-unavailable", 503],
+  ["forbidden", 403],
+] as const)(
+  "cached-client %s refusal carries its rid and suppresses only its own fallback",
+  async (reason, status) => {
+    const r = await rig();
+    const { key, cert, ca, servername } = r.tlsOptions();
+    const agent = new https.Agent({
+      key,
+      cert,
+      ca,
+      servername,
+      keepAlive: true,
+      maxSockets: 1,
+    });
+    open.push(() => agent.destroy());
+    assert.equal(
+      (await send(r, "/unknown", { direct: true, agent })).status,
+      404,
+    );
+    const file = join(r.stateDir, "clients.json");
+    const good = readFileSync(file, "utf8");
+    const inactive =
+      reason === "forbidden"
+        ? vi
+            .spyOn(r.gateway.clients!.registry, "active")
+            .mockReturnValue(undefined)
+        : undefined;
+    if (!inactive) writeFileSync(file, "temporarily invalid JSON");
+    try {
+      const answer = await send(r, "/unknown?q=SENTINEL", {
+        direct: true,
+        agent,
+        headers: ["x-pandeck-relay-id", rid(1)],
+      });
+      assert.equal(answer.status, status);
+    } finally {
+      inactive?.mockRestore();
+      writeFileSync(file, good);
+    }
+    await r.until(() => r.records().some((row) => row.rid === rid(1)));
+    const row = r.records().find((entry) => entry.rid === rid(1))!;
+    assert.deepEqual(
+      [row.client.id, row.outcome, row.reason, row.status, row.via],
+      [r.clientId, "refused", reason, status, "gateway"],
+    );
+    assert.equal(upstreams.anthropic.length, 0);
+    assert.equal(
+      (await post(r, { boot, records: [report(1, 1)] })).status,
+      200,
+    );
+    const duplicate = await send(r, "/unknown", {
+      direct: true,
+      headers: ["x-pandeck-relay-id", rid(1)],
+    });
+    assert.equal(duplicate.status, 409);
+    assert.match(duplicate.body, /Pandeck gateway:/);
+    assert.equal(r.records().filter((entry) => entry.rid === rid(1)).length, 1);
+    assert.equal(
+      r.lines.filter(
+        (line) =>
+          line.includes(`rid=${rid(1)}`) && line.includes(`refused ${reason}`),
+      ).length,
+      1,
+    );
+    assert.ok(!JSON.stringify(r.records()).includes("SENTINEL"));
+    assert.ok(!r.lines.join("\n").includes("SENTINEL"));
+  },
+);
+
+test("cached-client registry refusal ignores invalid rid and keeps duplicates text-only", async () => {
+  const r = await rig();
+  const { key, cert, ca, servername } = r.tlsOptions();
+  const agent = new https.Agent({
+    key,
+    cert,
+    ca,
+    servername,
+    keepAlive: true,
+    maxSockets: 1,
+  });
+  open.push(() => agent.destroy());
+  await send(r, "/unknown", {
+    direct: true,
+    agent,
+    headers: ["x-pandeck-relay-id", rid(1)],
+  });
+  const file = join(r.stateDir, "clients.json");
+  const good = readFileSync(file, "utf8");
+  writeFileSync(file, "temporarily invalid JSON");
+  try {
+    const before = r.records().length;
+    const duplicate = await send(r, "/unknown", {
+      direct: true,
+      agent,
+      headers: ["x-pandeck-relay-id", rid(1)],
+    });
+    assert.equal(duplicate.status, 409);
+    assert.match(duplicate.body, /Pandeck gateway:/);
+    assert.equal(r.records().length, before);
+    const invalid = await send(r, "/unknown?q=SENTINEL", {
+      direct: true,
+      agent,
+      headers: ["x-pandeck-relay-id", "SENTINEL"],
+    });
+    assert.equal(invalid.status, 503);
+  } finally {
+    writeFileSync(file, good);
+  }
+  await r.until(() =>
+    r.records().some((row) => row.reason === "registry-unavailable"),
+  );
+  const rows = r
+    .records()
+    .filter((row) => row.reason === "registry-unavailable");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.rid, undefined);
+  assert.equal(
+    r.lines.filter((line) => line.includes("rid=invalid")).length,
+    1,
+  );
+  assert.ok(!r.lines.join("\n").includes("SENTINEL"));
+  assert.ok(!JSON.stringify(r.records()).includes("SENTINEL"));
 });
 
 test("T4/T6 fallback-first duplicate is a marked text-only 409; d order never suppresses a lower rid", async () => {

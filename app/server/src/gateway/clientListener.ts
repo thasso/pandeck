@@ -993,66 +993,40 @@ export async function startClientListener(
     // Every request is observed once: here when the listener answers it
     // itself, else by the forwarder. Without a resolved client, a line only.
     let client: GatewayClient | undefined;
+    let registryUnavailable = false;
     try {
       client = activeClient(req.socket);
     } catch {
-      const previous = authenticated.get(req.socket);
-      forwarder
-        .observeLocal(
-          req,
-          res,
-          previous && {
-            id: previous.id,
-            label: previous.label,
-            userId: previous.userId,
-          },
-        )
-        .refuse("registry-unavailable");
-      return json(res, 503, { error: "client registry unavailable" });
+      registryUnavailable = true;
     }
-    if (!client) {
-      const previous = authenticated.get(req.socket);
-      forwarder
-        .observeLocal(
-          req,
-          res,
-          previous && {
-            id: previous.id,
-            label: previous.label,
-            userId: previous.userId,
-          },
-        )
-        .refuse("forbidden");
-      const { status, body } = refusalResponse({ case: "forbidden" }, "claude");
-      res.writeHead(status, {
-        "content-type": "application/json",
-        "content-length": Buffer.byteLength(body),
-        connection: "close",
-      });
-      res.end(body);
-      return;
-    }
-    // Without tools `/mcp` is an unknown path to the forwarder, as before.
-    // The path only, without parsing: a malformed target must not throw here.
-    // The client as admitted now: its record survives a revocation meanwhile.
-    const admitted: AdmittedClient = {
-      id: client.id,
-      label: client.label,
-      userId: client.userId,
+    // The cached mTLS identity attributes refusals, not permission to route.
+    // Enter its rid too, before any handler or PR1 refusal trace is started.
+    const known = client ?? authenticated.get(req.socket);
+    const admitted: AdmittedClient | undefined = known && {
+      id: known.id,
+      label: known.label,
+      userId: known.userId,
     };
-    if ((req.url ?? "").split("?")[0] === "/relay/observations" && observations)
+    // Only an active client may ingest. The path is not parsed, so a
+    // malformed target cannot throw here.
+    if (
+      client &&
+      admitted &&
+      (req.url ?? "").split("?")[0] === "/relay/observations" &&
+      observations
+    )
       return observations(req, res, admitted);
     const supplied: string[] = [];
     for (let i = 0; i + 1 < req.rawHeaders.length; i += 2)
       if (req.rawHeaders[i]!.toLowerCase() === "x-pandeck-relay-id")
         supplied.push(req.rawHeaders[i + 1]!);
-    if (supplied.length) {
+    if (admitted && supplied.length) {
       const match = supplied.length === 1 ? RELAY_RID.exec(supplied[0]!) : null;
       if (!match) admitted.ridDiagnostic = "invalid";
       else {
         admitted.rid = supplied[0]!;
         const disposition = relayDedup.enter(
-          client.id,
+          admitted.id,
           match[1]!,
           Number(match[2]),
         );
@@ -1062,7 +1036,7 @@ export async function startClientListener(
             "claude",
           );
           log(
-            `relay request: client=${client.id} rid=${admitted.rid} duplicate-rid`,
+            `relay request: client=${admitted.id} rid=${admitted.rid} duplicate-rid`,
           );
           res.writeHead(status, {
             "content-type": "application/json",
@@ -1076,6 +1050,22 @@ export async function startClientListener(
           admitted.ridDiagnostic = "below-floor";
       }
     }
+    if (registryUnavailable) {
+      forwarder.observeLocal(req, res, admitted).refuse("registry-unavailable");
+      return json(res, 503, { error: "client registry unavailable" });
+    }
+    if (!client || !admitted) {
+      forwarder.observeLocal(req, res, admitted).refuse("forbidden");
+      const { status, body } = refusalResponse({ case: "forbidden" }, "claude");
+      res.writeHead(status, {
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(body),
+        connection: "close",
+      });
+      res.end(body);
+      return;
+    }
+    // Without tools `/mcp` is an unknown path to the forwarder, as before.
     if (deps.tools && (req.url ?? "").split("?")[0] === "/mcp")
       return mcpGate(
         req,
