@@ -242,7 +242,8 @@ only binding rules; everything else lives here.
   Node, where Bun behaves differently, running the server suite under Bun, and
   heap snapshots), the NixOS service's lifecycle and PATH/environment, the
   one-server-per-DATA_DIR lock, its host dependencies, and the PR-preview
-  instances.
+  instances. Also covers the Darwin arm64 runtime package spike, native smoke,
+  host-tool gaps and the next bundled-local desktop slice.
 - `ci-cd.md` — the GitHub Actions workflow: its jobs and the `ci` gate, test
   sharding, the gate order and measured parallelism, the cache rules, SemVer and
   changelog preparation, publishing a release tag, and what a build reports

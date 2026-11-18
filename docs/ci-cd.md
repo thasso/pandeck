@@ -39,8 +39,18 @@ in the test suites on two vCPUs:
 - `nix-build` — the production package `.#personal-assistant` (the Bun bundle,
   whose install check boots it under the packaged Bun) and the flake checks:
   closure policy, preview isolation and OOM policy of the NixOS module. The
-  workspace suites run on Node, so this install check is CI's only run of the
-  server under Bun (`docs/deployment.md#bun-package`).
+  workspace suites run on Node, so this install check is CI's broad Linux
+  runtime gate under Bun (`docs/deployment.md#bun-package`).
+- `package-macos-arm64` runs the native Bun package builder on `macos-15`, with
+  an explicit arm64 assertion, and smokes its extracted tarball. It supplies
+  Bash 5+ and GNU coreutils through Homebrew for CI only, without relaxing
+  production host-tool gates. The smoke uses isolated temporary data, no real
+  credentials, no provider requests and no logins. On success it uploads the
+  runtime tarball, SHA-256, build environment and smoke log for 14 days. The
+  artifact name includes the commit. It is an unsigned runtime spike, not a
+  Tauri app, release or clean-Mac launch receipt. The shell remains outside CI.
+  `docs/deployment.md#macos-apple-silicon-package-spike` covers layout, checks,
+  host dependencies and the next desktop slice.
 - `nix-rebuild` — a second, independent build of the package on another runner.
   `reproducible` then compares the two NAR hashes. This replaced a
   `nix build --rebuild` step after the first build, which ran on the same runner
@@ -67,13 +77,13 @@ overrides the flag (Vitest reads it after the CLI), so CI must not set it.
 The workflow has read-only repository permissions, uses no secrets, pins actions
 to commit SHAs, and cancels superseded PR runs per ref. Active `main` runs are
 not cancelled, preserving their verdict and cache saves. Job timeouts are 30
-minutes for the Node jobs, 10 for `engine-contract`, 60 for the Nix builds and 5
-for the comparison and gate jobs. Before the repository goes public, it must
-require workflow approval for all external contributors in its Actions settings.
-Dependabot checks only GitHub Actions (workflows and the local composite action)
-weekly, groups updates into one PR and applies a seven-day cooldown; the pnpm
-catalog remains manually managed. There are no deployment, preview or release
-workflows.
+minutes for the Node jobs and native macOS package, 10 for `engine-contract`, 60
+for the Nix builds and 5 for the comparison and gate jobs. Before the repository
+goes public, it must require workflow approval for all external contributors in
+its Actions settings. Dependabot checks only GitHub Actions (workflows and the
+local composite action) weekly, groups updates into one PR and applies a
+seven-day cooldown; the pnpm catalog remains manually managed. There are no
+deployment, preview or release workflows.
 
 ## Gates
 
@@ -81,13 +91,13 @@ workflows.
 `pnpm run format:check` → `pnpm run lint` → `pnpm run lint:deadcode` →
 `pnpm run check:instructions` → `check-migrations-lock.mjs` →
 `pnpm run check:prompts` → `pnpm run typecheck` → `pnpm run test:release`,
-`pnpm run test:package-config-secrets`, the engine-contract runner's own tests
-and the shared suite → `pnpm run build`. The umbrella `pnpm run test` remains
-the local gate: it runs lint, the fast repository checks, every suite and then
-`pnpm run test:engine-contract`, which prints a SKIP line and passes on a
-machine that cannot make user namespaces. CI names those gates separately so a
-failure says which one broke, and runs the server and web suites in their own
-jobs.
+`pnpm run test:package-config-secrets`, the engine-contract runner's own tests,
+the native package target/header tests and the shared suite → `pnpm run build`.
+The umbrella `pnpm run test` remains the local gate: it runs lint, the fast
+repository checks, every suite and then `pnpm run test:engine-contract`, which
+prints a SKIP line and passes on a machine that cannot make user namespaces. CI
+names those gates separately so a failure says which one broke, and runs the
+server and web suites in their own jobs.
 
 `pnpm run lint` (oxlint, `docs/linting.md`) takes about 5s on four CPUs at about
 1.7 GB peak, so it needs no cache, no worker tuning and no heap flag. Under

@@ -21,6 +21,10 @@ import {
   serverBundlePlugins,
 } from "./bun-bundle.mjs";
 import { assertPackageConfigHasNoSecrets } from "./check-package-config-secrets.mjs";
+import {
+  assertNativeBinary,
+  bunPackageTarget,
+} from "./bun-package-platform.mjs";
 
 const outputArg = process.argv[2];
 if (!outputArg) {
@@ -50,17 +54,10 @@ function copy(source, destination, mode) {
   if (mode !== undefined) chmodSync(target, mode);
 }
 
-function platformArch() {
-  if (process.platform !== "linux")
-    throw new Error("The Bun server bundle currently targets Linux only.");
-  const arch = process.arch === "x64" ? "x64" : process.arch;
-  return arch;
-}
-
-const arch = platformArch();
+const target = bunPackageTarget();
 /** Where elkjs's license text and notice ship, relative to the package root. */
 const ELKJS_NOTICE_DIR = "workers/licenses/elkjs";
-const watcherPackage = `@parcel/watcher-linux-${arch}-glibc`;
+const watcherPackage = target.watcherPackage;
 const watcherAddon = join(
   dependencyRoot("@parcel/watcher", watcherPackage),
   "watcher.node",
@@ -69,7 +66,7 @@ const watcherWrapperSource = join(
   directDependencyRoot("@parcel/watcher"),
   "wrapper.js",
 );
-const claudePackage = `@anthropic-ai/claude-agent-sdk-linux-${arch}`;
+const claudePackage = target.claudePackage;
 const claudeCli = join(
   dependencyRoot("@anthropic-ai/claude-agent-sdk", claudePackage),
   "claude",
@@ -168,6 +165,10 @@ function elkjsDistribution() {
     trailer: `\n/*! elkjs ${version} | ${copyrights.join(" | ")} | EPL-2.0 | license and source: ${ELKJS_NOTICE_DIR}/ */\n`,
   };
 }
+
+// Validate all host-native inputs before replacing an existing output directory.
+for (const native of [process.execPath, watcherAddon, claudeCli])
+  assertNativeBinary(native, target);
 
 rmSync(outputDir, { recursive: true, force: true });
 mkdirSync(outputDir, { recursive: true });
@@ -290,4 +291,6 @@ rmSync(join(outputDir, "browser-mcp", "playwright-core", "node_modules"), {
 rmSync(join(outputDir, "browser-mcp", "playwright-core", "cli.js"));
 await write(join(outputDir, "browser-mcp", "cli.js"), packagedPlaywrightMcpCli);
 
-console.log(`Built Bun server bundle at ${outputDir}`);
+console.log(
+  `Built ${target.platform}-${target.arch} Bun server bundle at ${outputDir}`,
+);

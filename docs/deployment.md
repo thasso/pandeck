@@ -33,11 +33,12 @@ isolation may need operator review and credential rotation
 
 ## Bun package
 
-`packages.<system>.personal-assistant` is the production package: a Linux Bun
-executable bundle. `packages.default` and the NixOS module's `package` default
-are the same derivation, and `pa-pr` builds this attribute for previews.
-Production has run it since 0.49.0, and the Node/tsx package it replaced is
-gone.
+`packages.<system>.personal-assistant` is the production Nix package: a Linux
+Bun executable bundle. The same native bundle builder also supports Darwin arm64
+outside Nix, as a packaging spike described below. `packages.default` and the
+NixOS module's `package` default are the same derivation, and `pa-pr` builds
+this attribute for previews. Production has run it since 0.49.0, and the
+Node/tsx package it replaced is gone.
 
 Development and the test suites run on Node and tsx (`pnpm run dev`, vitest),
 while production runs this bundle under Bun. Two things guard that gap: the
@@ -151,6 +152,69 @@ production assets or identify its checkout as a packaged build. The optional
 reason. Lazy Photon and JSDOM loaders consume the captured paths rather than
 rereading the scrubbed environment. Starting the packaged bundle without
 `ASSISTANT_RUNTIME_DIR` fails immediately with a named packaged-server error.
+
+### macOS Apple Silicon package spike
+
+The native builder supports Linux x64 and arm64 on glibc, and Darwin arm64. It
+builds for the host running Bun, not a cross-compilation target. It selects that
+host's locked optional watcher and Claude CLI packages and rejects inputs whose
+ELF or Mach-O headers have the wrong OS or CPU. The existing Linux Nix platform
+flags, dependency hash and ELF fixups are unchanged. On a native Mac,
+`pnpm install --frozen-lockfile` selects the Darwin dependencies already pinned
+in `pnpm-lock.yaml`; no additional dependency catalog is needed.
+
+With pnpm 11, Node 24 and Bun 1.4.2 on PATH:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm run build
+bun scripts/build-bun-server-bundle.mjs /tmp/pandeck-runtime
+bun scripts/smoke-bun-server-package.mjs /tmp/pandeck-runtime
+```
+
+The smoke uses a temporary HOME, CWD and DATA_DIR. It executes the bundled
+Claude CLI only with `--version`, loads Photon and the native watcher, checks
+assets and notices, verifies missing-runtime and missing-host-tool boot
+refusals, then boots on loopback in production mode. It checks HTTP token and
+hostile-origin refusal, authenticated WebSocket upgrade, data-directory and
+busy-port refusals, all migrations, SIGTERM and restart with the same persisted
+token. It does not make provider requests or start logins. The Linux Nix install
+check remains the broader runtime/lifecycle/gateway regression gate; its `/proc`
+checks and network-isolated login fakes are not a macOS smoke.
+
+CI's `package-macos-arm64` job builds on `macos-15`, requires `uname -m` to be
+`arm64`, archives the runtime as a tarball to preserve executable permissions,
+and smokes the extracted archive before uploading it with a checksum and
+build/smoke evidence. This is a downloadable runtime, not a Tauri `.app` or
+signed/notarized distribution. A passing job is native CI evidence, not proof of
+launch on a clean end-user Mac. No release is published.
+
+Required host-tool gates still apply. Stock macOS Bash 3.2 and BSD `env` do not
+meet `config/host-tools.json`; CI supplies Homebrew Bash and GNU coreutils on
+PATH to exercise a successful production boot. That is a CI prerequisite, not a
+decision to distribute those tools with the app. The runtime does not bundle
+Git, OpenSSH, Chrome/Chromium, project compilers, speech models or their Python
+environment. Git and OpenSSH need to be supplied separately outside the Nix
+wrapper; optional browser and speech dependencies remain subsystem-owned.
+Clean-Mac dependency checks, signing, notarization and real agent-session
+validation remain unverified until their own receipts exist.
+
+The next desktop slice must give Tauri ownership of the bundled process and an
+explicit local/remote-server choice, separate from gateway selection. Local
+state must live under the user's app-support directory, never the app bundle or
+CWD, and survive app replacement and mode switches. Startup must keep loopback
+binding, auth, origin trust, the data-directory lock and host-tool gates; a busy
+port must fail or select a new port, never attach to an unrelated listener.
+Readiness, early exit, crash recovery and shutdown need lifecycle coverage
+before calling this a bundled-local app. The current shell still connects to a
+remote server only. The intended configurations remain local Pandeck with local
+gateway, local Pandeck with remote gateway, and thin client with remote Pandeck.
+Remote-gateway enrollment and macOS relay/LaunchAgent shipping belong to
+Task-1421; desktop integration must reuse that contract. None of this spike
+supplies the Keychain isolation, hardened runtime or separately signed launchd
+services in `workers.md`'s bundled desktop design.
+
+### Bundle loading and compatibility
 
 `scripts/bun-bundle.mjs` owns the esbuild call and its plugins, so the install
 check bundles its runtime probe exactly as the builder bundles `server.js`.
