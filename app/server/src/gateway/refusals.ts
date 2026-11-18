@@ -64,6 +64,7 @@ export type Refusal =
   | { case: "revoked-lease"; reason: RevokeReason }
   | { case: "forbidden" }
   | { case: "unknown-prefix" }
+  | { case: "duplicate-rid" }
   | { case: "websocket" }
   | { case: "credential"; problem: CredentialProblem }
   /** The profile's login is dead or absent; `name` is the registry's. */
@@ -106,6 +107,7 @@ const STATUS: Record<Refusal["case"], number> = {
   "revoked-lease": 401,
   forbidden: 403,
   "unknown-prefix": 404,
+  "duplicate-rid": 409,
   websocket: 403,
   credential: 401,
   "needs-login": 401,
@@ -124,6 +126,7 @@ const ERROR_TYPE: Record<number, string> = {
   401: "authentication_error",
   403: "permission_error",
   404: "not_found_error",
+  409: "invalid_request_error",
   429: "rate_limit_error",
   502: "api_error",
   503: "api_error",
@@ -143,6 +146,8 @@ export function refusalText(refusal: Refusal): string {
       return `${GATEWAY_REFUSAL_MARKER} this session's model access does not cover this request.`;
     case "unknown-prefix":
       return `${GATEWAY_REFUSAL_MARKER} no model upstream at this path.`;
+    case "duplicate-rid":
+      return `${GATEWAY_REFUSAL_MARKER} this relay request was already recorded.`;
     case "websocket":
       return `${GATEWAY_REFUSAL_MARKER} WebSocket transport is not supported; use SSE.`;
     case "credential":

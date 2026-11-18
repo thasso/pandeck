@@ -87,6 +87,12 @@ import {
 import type { DevboxApproval } from "./devboxProof.ts";
 import type { CredentialOutcome, EdgeTools } from "./edgeTools.ts";
 import type { AdmittedClient, LocalAnswer, MachineAccess } from "./forward.ts";
+import { createRelayDedup, RELAY_RID } from "./relayDedup.ts";
+import {
+  createRelayObservations,
+  type ObservationsCommitted,
+} from "./relayObservations.ts";
+import type { RequestLog } from "./requestLog.ts";
 import { MachinePool, type MachinePinRecord } from "./machinePool.ts";
 import { LoginRefusal, type LoginActor } from "./logins.ts";
 import {
@@ -212,6 +218,10 @@ export interface ClientListenerOptions {
 
 interface ClientListenerDeps {
   stateDir: string;
+  requests?: Pick<RequestLog, "record">;
+  onObservationsCommitted?:
+    ((event: ObservationsCommitted) => void) | undefined;
+  relayDedupIntervals?: number | undefined;
   leases: LeaseTable;
   profiles: ProfileRegistry;
   /** The profiles renewal found needing a login. */
@@ -423,6 +433,24 @@ export async function startClientListener(
     options.hosts ?? ["localhost", "127.0.0.1"],
   );
   const registry = new ClientRegistry(deps.stateDir, now, log);
+  const relayDedup = createRelayDedup({
+    now,
+    log,
+    ...(deps.relayDedupIntervals === undefined
+      ? {}
+      : { maxIntervals: deps.relayDedupIntervals }),
+  });
+  const observations = deps.requests
+    ? createRelayObservations({
+        hosts: edgeTls.hosts,
+        certificate: edgeTls.serverCertPem,
+        dedup: relayDedup,
+        requests: deps.requests,
+        now,
+        log,
+        onCommitted: deps.onObservationsCommitted,
+      })
+    : undefined;
   // Usable accounts are read per selection, so account and login changes
   // reach the pools without a call here.
   const machinePool = new MachinePool({
@@ -966,36 +994,69 @@ export async function startClientListener(
     // Every request is observed once: here when the listener answers it
     // itself, else by the forwarder. Without a resolved client, a line only.
     let client: GatewayClient | undefined;
+    let registryUnavailable = false;
     try {
       client = activeClient(req.socket);
     } catch {
-      const previous = authenticated.get(req.socket);
-      forwarder
-        .observeLocal(
-          req,
-          res,
-          previous && {
-            id: previous.id,
-            label: previous.label,
-            userId: previous.userId,
-          },
-        )
-        .refuse("registry-unavailable");
+      registryUnavailable = true;
+    }
+    // The cached mTLS identity attributes refusals, not permission to route.
+    // Enter its rid too, before any handler or PR1 refusal trace is started.
+    const known = client ?? authenticated.get(req.socket);
+    const admitted: AdmittedClient | undefined = known && {
+      id: known.id,
+      label: known.label,
+      userId: known.userId,
+    };
+    // Only an active client may ingest. The path is not parsed, so a
+    // malformed target cannot throw here.
+    if (
+      client &&
+      admitted &&
+      (req.url ?? "").split("?")[0] === "/relay/observations" &&
+      observations
+    )
+      return observations(req, res, admitted);
+    const supplied: string[] = [];
+    for (let i = 0; i + 1 < req.rawHeaders.length; i += 2)
+      if (req.rawHeaders[i]!.toLowerCase() === "x-pandeck-relay-id")
+        supplied.push(req.rawHeaders[i + 1]!);
+    if (admitted && supplied.length) {
+      const match = supplied.length === 1 ? RELAY_RID.exec(supplied[0]!) : null;
+      if (!match) admitted.ridDiagnostic = "invalid";
+      else {
+        admitted.rid = supplied[0]!;
+        const disposition = relayDedup.enter(
+          admitted.id,
+          match[1]!,
+          Number(match[2]),
+        );
+        if (disposition === "present") {
+          const { status, body } = refusalResponse(
+            { case: "duplicate-rid" },
+            "claude",
+          );
+          log(
+            `relay request: client=${admitted.id} rid=${admitted.rid} duplicate-rid`,
+          );
+          res.writeHead(status, {
+            "content-type": "application/json",
+            "content-length": Buffer.byteLength(body),
+          });
+          res.end(body);
+          req.resume();
+          return;
+        }
+        if (disposition === "below-floor")
+          admitted.ridDiagnostic = "below-floor";
+      }
+    }
+    if (registryUnavailable) {
+      forwarder.observeLocal(req, res, admitted).refuse("registry-unavailable");
       return json(res, 503, { error: "client registry unavailable" });
     }
-    if (!client) {
-      const previous = authenticated.get(req.socket);
-      forwarder
-        .observeLocal(
-          req,
-          res,
-          previous && {
-            id: previous.id,
-            label: previous.label,
-            userId: previous.userId,
-          },
-        )
-        .refuse("forbidden");
+    if (!client || !admitted) {
+      forwarder.observeLocal(req, res, admitted).refuse("forbidden");
       const { status, body } = refusalResponse({ case: "forbidden" }, "claude");
       res.writeHead(status, {
         "content-type": "application/json",
@@ -1006,13 +1067,6 @@ export async function startClientListener(
       return;
     }
     // Without tools `/mcp` is an unknown path to the forwarder, as before.
-    // The path only, without parsing: a malformed target must not throw here.
-    // The client as admitted now: its record survives a revocation meanwhile.
-    const admitted = {
-      id: client.id,
-      label: client.label,
-      userId: client.userId,
-    };
     if (deps.tools && (req.url ?? "").split("?")[0] === "/mcp")
       return mcpGate(
         req,
@@ -1419,6 +1473,7 @@ export async function startClientListener(
     accountsChanged,
     async close() {
       clearInterval(revocations);
+      relayDedup.close();
       userOperations.close();
       for (const connection of [...connections.keys()])
         connection.end("the gateway closed");

@@ -329,6 +329,48 @@ test("an upstream answer arriving inside the deferred client-close window is ign
   assert.equal(r.lines.length, 1);
 });
 
+test.each([200, 204, 304])(
+  "F005 forwarded %i preserves suppressed-body and GET-sized response counts",
+  async (status) => {
+    const r = await rig((req, res) => {
+      req.resume();
+      res.writeHead(status);
+      res.end("answer");
+    });
+    let bytes = 0;
+    await new Promise<void>((resolve, reject) => {
+      const request = http.request(
+        {
+          host: "127.0.0.1",
+          port: r.port,
+          path: PATH,
+          method: "POST",
+          agent: false,
+          headers: { authorization: `Bearer ${r.lease.token}` },
+        },
+        (response) => {
+          assert.equal(response.statusCode, status);
+          response.on("data", (chunk: Buffer) => {
+            bytes += chunk.length;
+          });
+          response.on("end", resolve);
+          response.on("error", reject);
+        },
+      );
+      request.on("error", reject);
+      request.end("input");
+    });
+    await vi.waitFor(() => assert.equal(r.entries().length, 1));
+    const [entry] = r.entries();
+    assert.equal(bytes, status === 200 ? 6 : 0);
+    assert.equal(entry!.responseBytes, bytes);
+    assert.equal(entry!.requestBytes, 5);
+    assert.equal(entry!.status, status);
+    assert.equal(entry!.outcome, "forwarded");
+    assert.equal(r.lines.length, 1);
+  },
+);
+
 test("a backwards wall clock cannot poison a producer page or hide later requests", async () => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(2_000);
   const r = await rig((req, res) => {

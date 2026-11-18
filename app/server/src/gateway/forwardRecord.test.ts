@@ -301,6 +301,47 @@ test("a local answer is classed by the status it sent in full", async () => {
   );
 });
 
+for (const status of [200, 204, 304])
+  for (const method of ["GET", "HEAD"])
+    test(`F005 local ${method} ${status} counts only emitted body bytes`, async () => {
+      const r = await rig({
+        local: (_req, res) => {
+          res.writeHead(status);
+          res.write("ans");
+          res.end("wer");
+        },
+      });
+      let bytes = 0;
+      await new Promise<void>((resolve, reject) => {
+        const request = http.request(
+          {
+            host: "127.0.0.1",
+            port: r.port,
+            path: "/local",
+            method,
+            agent: false,
+          },
+          (response) => {
+            assert.equal(response.statusCode, status);
+            response.on("data", (chunk: Buffer) => {
+              bytes += chunk.length;
+            });
+            response.on("end", resolve);
+            response.on("error", reject);
+          },
+        );
+        request.on("error", reject);
+        request.end();
+      });
+      await vi.waitFor(() => assert.equal(r.entries.length, 1));
+      assert.equal(
+        bytes,
+        method === "HEAD" || status === 204 || status === 304 ? 0 : 6,
+      );
+      assert.equal(r.entries[0]!.responseBytes, bytes);
+      assert.equal(r.lines.length, 1);
+    });
+
 test("a local answer: a gate's refusal wins and counts no body", async () => {
   const r = await rig({
     local: (_req, res, refuse) => {

@@ -868,6 +868,35 @@ export async function checkEdgeEntry(runtimeRoot) {
       socketPath: join(temp, "r.sock"),
       log: () => {},
     });
+    // PR2a reporting: real source relay against the packaged edge, no provider.
+    const modelRefusal = await fetchBytes(
+      `${relay.url}/anthropic/v1/messages`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      },
+    );
+    assert(
+      modelRefusal.status === 403 &&
+        modelRefusal.body.includes("Pandeck gateway:"),
+      "The relay's model request did not reach the edge's machine refusal.",
+    );
+    await eventually(
+      () =>
+        edge.lines.some(
+          (line) =>
+            line.includes("via=relay") &&
+            line.includes("reason=relay-restarted"),
+        ) &&
+        edge.lines.some(
+          (line) =>
+            line.includes("via=gateway") &&
+            /rid=[0-9a-f]{32}:[1-9][0-9]*/.test(line),
+        ),
+      5000,
+      "packaged-edge relay restart and rid request lines",
+    );
     // `--`: a client id is never read as an option, whatever its first character.
     const mcpToken = (
       await admin(edgeDir, "clients", "mcp-token", "--", clientId)

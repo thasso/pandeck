@@ -138,6 +138,9 @@ export interface AdmittedClient {
   id: string;
   label: string;
   userId: string;
+  rid?: string;
+  /** Fixed diagnostic for a supplied invalid id or a lossy-floor live id. */
+  ridDiagnostic?: "invalid" | "below-floor";
 }
 
 /** A request the client listener answers itself, being observed. */
@@ -158,18 +161,28 @@ function chunkBytes(chunk: unknown, encoding: unknown): number {
   return chunk instanceof Uint8Array ? chunk.byteLength : 0;
 }
 
+/** HTTP suppresses body chunks for HEAD and these response statuses. */
+function hasResponseBody(res: http.ServerResponse): boolean {
+  return (
+    res.req.method !== "HEAD" &&
+    res.statusCode >= 200 &&
+    res.statusCode !== 204 &&
+    res.statusCode !== 304
+  );
+}
+
 /**
- * Counts the body bytes a local handler writes to `res`: its own `write` and
- * `end` read each chunk's length and pass every call on unchanged.
+ * Counts the body bytes a local handler writes to `res`, excluding chunks
+ * HTTP suppresses. Both `write` and `end` pass every call on unchanged.
  */
 function countAnswer(res: http.ServerResponse, add: (n: number) => void): void {
   const { write, end } = res;
   res.write = ((...args: unknown[]) => {
-    add(chunkBytes(args[0], args[1]));
+    if (hasResponseBody(res)) add(chunkBytes(args[0], args[1]));
     return Reflect.apply(write, res, args) as boolean;
   }) as typeof res.write;
   res.end = ((...args: unknown[]) => {
-    add(chunkBytes(args[0], args[1]));
+    if (hasResponseBody(res)) add(chunkBytes(args[0], args[1]));
     return Reflect.apply(end, res, args) as http.ServerResponse;
   }) as typeof res.end;
 }
@@ -328,7 +341,12 @@ function forwardable(
   const dropped = new Set([...HOP_BY_HOP, ...listed, ...drop]);
   const out: http.OutgoingHttpHeaders = {};
   for (const [name, value] of Object.entries(headers))
-    if (value !== undefined && !dropped.has(name) && !name.startsWith("proxy-"))
+    if (
+      value !== undefined &&
+      !dropped.has(name) &&
+      !name.startsWith("proxy-") &&
+      !name.startsWith("x-pandeck-")
+    )
       out[name] = value;
   return out;
 }
@@ -530,12 +548,18 @@ export function createForwarder(deps: ForwarderDeps): {
         const client = deps.clientOf
           ? ` kind=${leaseKind ?? "-"} client=${clientId ?? "-"}`
           : "";
-        const line = `${route?.upstream.provider ?? "-"} ${req.method} ${quoted(pathname, LOGGED_PATH_CHARS)}${client}${lease} ${ending.text} ${durationMs}ms outcome=${ending.outcome} via=gateway`;
+        const rid = admitted?.ridDiagnostic
+          ? ` rid=${admitted.ridDiagnostic}${admitted.rid ? ` relay-id=${admitted.rid}` : ""}`
+          : admitted?.rid
+            ? ` rid=${admitted.rid}`
+            : "";
+        const line = `${route?.upstream.provider ?? "-"} ${req.method} ${quoted(pathname, LOGGED_PATH_CHARS)}${client}${lease} ${ending.text} ${durationMs}ms outcome=${ending.outcome} via=gateway${rid}`;
         if (!requests || !admitted || !credential) return log(line);
         const entry: RequestEntry = {
           userId: admitted.userId,
           client: { id: admitted.id, label: admitted.label },
           via: "gateway",
+          ...(admitted.rid ? { rid: admitted.rid } : {}),
           at: started,
           host: trace.host,
           method: req.method ?? "",
@@ -624,7 +648,7 @@ export function createForwarder(deps: ForwarderDeps): {
         : { "retry-after": String(retryAfter) }),
     });
     trace.status = status;
-    trace.responseBytes += Buffer.byteLength(body);
+    if (hasResponseBody(res)) trace.responseBytes += Buffer.byteLength(body);
     res.once("finish", () =>
       trace.answered(refusalEnding(refusal, status), leaseId),
     );
