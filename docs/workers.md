@@ -2144,15 +2144,17 @@ changes the target and `Host` ("Interception" below).
     changed: lowercase boot, increasing safe-integer `d`, matching rid boot,
     bounded integers, fixed enums/reasons, method matching `^[A-Z][A-Z-]{0,15}$`
     and query-free, printable ASCII pathname capped at 200 characters. The
-    actual method is retained, including `M-SEARCH`. Host ownership must match
-    both the configured hosts and the actual edge certificate. DNS matching
+    actual method is retained, including `M-SEARCH`. Edge-host ownership must
+    match both the configured hosts and the actual edge certificate. DNS matching
     ignores case and one trailing dot; IPs compare in canonical form. A
     configured full-label wildcard matches exactly one DNS label, only if the
     certificate's SAN also permits it. The check uses no DNS or network lookup,
-    no common-name fallback and no partial/multi-label wildcard matching. Other
-    provider hosts are not accepted merely by suffix; no routing or policy
-    changes follow. The reported host spelling is retained apart from
-    lower-casing. The authenticated registry supplies user/client identity; no
+    no common-name fallback and no partial/multi-label wildcard matching.
+    Separately, reports may name a lower-case DNS name equal to or under the
+    relay's named domains (`anthropic.com`, `claude.ai`, `claude.com`;
+    ADR-0006). Those P7 identities, including both token hosts, need not match
+    the edge certificate. No other suffix or routing/policy change is allowed.
+    The reported host spelling is retained apart from lower-casing. The authenticated registry supplies user/client identity; no
     body field can choose either. Invalid batches get fixed marked 400,
     oversized ones 413, other methods 405, never an echo. Records with `d`
     already acknowledged are ignored, then known-rid fallbacks are ignored
@@ -2175,10 +2177,12 @@ changes the target and `Host` ("Interception" below).
     an ordinary crash.
   - Every 10 minutes and at close, `relay summary:` counts since boot by host,
     relay-view outcome and credential class, plus rejected observation count.
-    `forwarded` means edge headers arrived, not necessarily upstream success.
-    This is observability, not lossless or exactly-once accounting. Edge dedup
-    can lose state on restart, after 6 h of boot inactivity, or beyond 64 boots
-    per client. Two UI rows with the same request id can then occur. Interval
+    With interception it also counts `tls-failed` by token host and `malformed`
+    CONNECT targets under the host `-`; neither is recorded. `forwarded` means
+    edge headers arrived, not necessarily upstream success. This is
+    observability, not lossless or exactly-once accounting. Edge dedup can lose
+    state on restart, after 6 h of boot inactivity, or beyond 64 boots per
+    client. Two UI rows with the same request id can then occur. Interval
     compaction beyond 4,096 gaps can discard a genuinely missing old fallback,
     with a counted edge diagnostic. Each note kind uses a seen-set identity.
 
@@ -2188,6 +2192,10 @@ changes the target and `Host` ("Interception" below).
   | `overflow`                       | 503    | `Pandeck gateway:` | Aggregated overflow note                                  |
   | `relay-closing`                  | 503    | `Pandeck gateway:` | Refused record if a slot is available, otherwise overflow |
   | `reserved-path`                  | 403    | `Pandeck gateway:` | Refused record if a slot is available, otherwise overflow |
+  | `connect-port`, `connect-target` | 403    | `Pandeck gateway:` | Refused record if a slot is available, otherwise overflow |
+  | `origin-form`                    | 400    | `Pandeck gateway:` | Refused record if a slot is available, otherwise overflow |
+  | `upgrade`                        | 501    | `Pandeck gateway:` | Refused record if a slot is available, otherwise overflow |
+  | Malformed CONNECT target         | 400    | `Pandeck gateway:` | None; summary count only                                  |
 
   Marked answers use a fixed JSON error containing both provider shapes:
   `type: error`, and `error.type`, `error.code`, `error.message`. They never
@@ -2250,6 +2258,17 @@ changes the target and `Host` ("Interception" below).
     `127.0.0.1:<relay port>`; `Origin` still reaches the edge, which refuses it.
     Bodies pass unread. Every refusal above is marked and has Anthropic's error
     shape.
+  - **Reporting.** A decrypted request takes the plain listener's path through
+    the relay (admission, one rid, reserved fields dropped, a fallback record
+    when no edge headers arrive), its record naming the token host and the
+    original pathname without query. `connect-port`, `connect-target`,
+    `origin-form` and `upgrade` reserve a slot and are recorded (a refused
+    CONNECT as method `CONNECT`, path `/`, its credential class read from the
+    CONNECT's own fields, `Proxy-Authorization` included), or answer the 503
+    `overflow` when the queue is full. A malformed target and a failed TLS
+    handshake are only counted in the relay summary; blind tunnels are neither
+    recorded nor counted. Decrypted connections join the relay's close: they
+    drain with the plain listener's work and are then cut.
   - **Setup.** `HTTPS_PROXY=http://127.0.0.1:<port>` (never `HTTP_PROXY`),
     `NODE_EXTRA_CA_CERTS=<path>`, `ANTHROPIC_BASE_URL` unset, and none of the
     three domains in `NO_PROXY`; the IDB `claude-gateway` wrapper owns this.

@@ -72,6 +72,11 @@ const REASONS = new Set([
   "client-closed",
   "relay-closing",
   "reserved-path",
+  // The relay's own refusals on intercepted traffic (ADR-0006).
+  "connect-port",
+  "connect-target",
+  "origin-form",
+  "upgrade",
 ]);
 
 /** Normalise identity spellings only, without resolving names. */
@@ -137,6 +142,29 @@ function hostOwnership(hosts: readonly string[], certificate: string) {
   };
 }
 
+/**
+ * The relay's named domains (ADR-0006; `relay/connectTarget.ts`, which this
+ * module may not import; a test pins the two equal). A relay record may name
+ * one of them, or a DNS name under one, besides the edge's own hosts.
+ */
+export const RELAY_NAMED_DOMAINS: readonly string[] = [
+  "anthropic.com",
+  "claude.ai",
+  "claude.com",
+];
+const DNS_NAME =
+  /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/;
+
+/** P7 report identities are separate from the edge's own TLS identity. */
+function namedHost(host: string): boolean {
+  return (
+    DNS_NAME.test(host) &&
+    RELAY_NAMED_DOMAINS.some(
+      (domain) => host === domain || host.endsWith(`.${domain}`),
+    )
+  );
+}
+
 /** Validate every entry before touching identity, acknowledgement or log state. */
 function validate(
   value: unknown,
@@ -177,7 +205,7 @@ function validate(
         !integer(entry.at) ||
         typeof entry.host !== "string" ||
         !/^[\x21-\x7e]{1,253}$/.test(entry.host) ||
-        !ownsHost(entry.host) ||
+        !(ownsHost(entry.host) || namedHost(entry.host)) ||
         typeof entry.method !== "string" ||
         !/^[A-Z][A-Z-]{0,15}$/.test(entry.method) ||
         typeof entry.path !== "string" ||

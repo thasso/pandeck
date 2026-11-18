@@ -3,21 +3,21 @@
  * ADR-0006). `connectTarget` decides each target:
  *
  * - A token host on 443 is decrypted with a leaf of the relay's interception
- *   CA (ALPN `http/1.1`). Each decrypted request goes over the relay's
- *   mutual-TLS link to the edge's model port as that host's fixed route plus
- *   the original target, its header fields as received except hop-by-hop
- *   fields, caller `x-pandeck-*` fields and `Host`, which becomes one loopback
- *   `Host`. Bodies are piped both ways and never read.
+ *   CA (ALPN `http/1.1`). Each decrypted request goes through the relay's
+ *   shared model traffic (`modelTraffic.ts`: admission, rid, reserved-field
+ *   strip, fallback record) to the edge's model port as that host's fixed
+ *   route plus the original target. Its header fields pass as received except
+ *   hop-by-hop fields, caller `x-pandeck-*` fields and `Host`, which becomes
+ *   one loopback `Host`. Bodies are piped both ways and never read.
  * - Every other valid target, IP literals included, is a blind tunnel: bytes
- *   piped untouched, nothing logged but a failure's error code.
+ *   piped untouched, not recorded, nothing logged but a failure's error code.
  * - A named host on a port other than 443, or spelled with a trailing dot, is
  *   refused with a marked 403; an absolute-form target inside the tunnel with
  *   a marked 400; an upgrade with a marked 501, without contacting the edge.
- * - A target that is not a valid authority gets a marked 400 and a fixed log
- *   line that never holds the target.
+ *   Each reserves a reporting slot and is recorded like any refusal.
+ * - A target that is not a valid authority gets a marked 400, a summary count
+ *   and a fixed log line; it is never recorded and its text never logged.
  *
- * Every refusal here has Anthropic's error shape and carries the gateway's
- * refusal marker, so the server's classifier never reads it as a dead login.
  * Imports only `node:` modules and `relay/`.
  */
 import type http from "node:http";
@@ -25,125 +25,96 @@ import { createServer } from "node:http";
 import net from "node:net";
 import tls from "node:tls";
 import { connectTarget } from "./connectTarget.ts";
-import { interceptedHeaders } from "./headers.ts";
+import { classifyClientCredential } from "./credentialClass.ts";
 import type { InterceptCa } from "./interceptCa.ts";
+import {
+  answerUnrecorded,
+  type LocalRefusal,
+  type ModelTraffic,
+} from "./modelTraffic.ts";
 
-/**
- * The gateway's refusal marker (`gateway/refusals.ts`), repeated here because
- * the relay imports no gateway module; a test pins the two equal.
- */
-export const RELAY_REFUSAL_MARKER = "Pandeck gateway:";
+/** The relay-local refusals on intercepted traffic, without their identity. */
+type Refusal = Pick<LocalRefusal, "status" | "errorType" | "text">;
 
-/** The refusals the relay answers itself on intercepted traffic. */
-type RelayRefusal =
-  "connect-port" | "connect-target" | "origin-form" | "upgrade" | "malformed";
-
-const REFUSALS: Record<
-  RelayRefusal,
-  { status: number; reason: string; type: string; text: string }
-> = {
+const REFUSALS = {
   "connect-port": {
     status: 403,
-    reason: "Forbidden",
-    type: "permission_error",
+    errorType: "permission_error",
     text: "the relay decrypts this host only on port 443.",
   },
   "connect-target": {
     status: 403,
-    reason: "Forbidden",
-    type: "permission_error",
+    errorType: "permission_error",
     text: "the relay refuses a named host spelled with a trailing dot.",
   },
   "origin-form": {
     status: 400,
-    reason: "Bad Request",
-    type: "invalid_request_error",
+    errorType: "invalid_request_error",
     text: "the relay accepts only origin-form request targets here.",
   },
   upgrade: {
     status: 501,
-    reason: "Not Implemented",
-    type: "api_error",
+    errorType: "api_error",
     text: "the relay does not upgrade connections to this host.",
   },
-  malformed: {
-    status: 400,
-    reason: "Bad Request",
-    type: "invalid_request_error",
-    text: "the relay cannot read this CONNECT target.",
-  },
+} as const satisfies Record<string, Refusal>;
+
+const MALFORMED: Refusal = {
+  status: 400,
+  errorType: "invalid_request_error",
+  text: "the relay cannot read this CONNECT target.",
 };
 
-/** A refusal's body: Anthropic's error shape with the marker, no request text. */
-function relayRefusalBody(refusal: RelayRefusal): string {
-  const { type, text } = REFUSALS[refusal];
-  return JSON.stringify({
-    type: "error",
-    error: { type, message: `${RELAY_REFUSAL_MARKER} ${text}` },
-  });
-}
-
-/** A refusal as raw HTTP/1.1 bytes, for a socket no server answers on. */
-function rawRefusal(refusal: RelayRefusal): string {
-  const { status, reason } = REFUSALS[refusal];
-  const body = relayRefusalBody(refusal);
-  return [
-    `HTTP/1.1 ${status} ${reason}`,
-    "content-type: application/json",
-    `content-length: ${Buffer.byteLength(body)}`,
-    "connection: close",
-    "",
-    body,
-  ].join("\r\n");
-}
-
-/**
- * Where a request goes on the edge and what it carries. `recordHost` and
- * `recordPath` name it for the relay's own record when no edge answer comes
- * (PR2a's reporting): a token host and the query-free original pathname.
- */
-export interface Ingress {
-  path: string;
-  headers: string[];
-  recordHost?: string;
-  recordPath?: string;
-}
-
-type Forward = (
-  req: http.IncomingMessage,
-  res: http.ServerResponse,
-  ingress: Ingress,
-) => void;
+/** The summary's host column for a CONNECT whose target is never shown. */
+const UNSHOWN = "-";
 
 export interface InterceptionOptions {
   ca: InterceptCa;
   /** The relay's own loopback port, for the `Host` the edge sees. */
   relayPort(): number;
-  forward: Forward;
+  traffic: Pick<ModelTraffic, "forward" | "refuse" | "count">;
   /** Keeps a socket for the relay's close. */
   track(socket: net.Socket): void;
   log(line: string): void;
 }
 
 function errorCode(err: unknown): string {
-  return String((err as { code?: unknown }).code ?? "error");
+  const code = (err as { code?: unknown } | undefined)?.code;
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code)
+    ? code
+    : "error";
 }
 
 /**
- * Adds CONNECT handling to the relay's model listener; the returned close
- * stops the decrypted requests' server (the sockets are the relay's).
+ * The fields a decrypted request carries: as received, every caller `Host`
+ * replaced by one loopback `Host`, so the edge sees a loopback caller exactly
+ * as through the plain listener. The shared forward drops hop-by-hop and
+ * reserved fields and sets the rid.
+ */
+function loopbackHeaders(
+  rawHeaders: readonly string[],
+  loopbackHost: string,
+): string[] {
+  const out: string[] = [];
+  for (let i = 0; i + 1 < rawHeaders.length; i += 2)
+    if (rawHeaders[i]!.toLowerCase() !== "host")
+      out.push(rawHeaders[i]!, rawHeaders[i + 1]!);
+  out.push("host", loopbackHost);
+  return out;
+}
+
+/**
+ * Adds CONNECT handling to the relay's model listener. The returned `close`
+ * closes the decrypted requests' server once its connections are gone; the
+ * relay's close drains and destroys them (they are tracked).
  */
 export function attachInterception(
   model: http.Server,
   options: InterceptionOptions,
 ): { close(): Promise<void> } {
-  const { ca, log, track } = options;
+  const { ca, log, track, traffic } = options;
   /** The token host, and its route, each decrypted socket was opened for. */
   const hostOf = new WeakMap<net.Socket, { host: string; route: string }>();
-
-  const refuseRaw = (socket: net.Socket, refusal: RelayRefusal): void => {
-    socket.end(rawRefusal(refusal));
-  };
 
   const inner = createServer((req, res) => {
     const opened = hostOf.get(req.socket);
@@ -154,32 +125,39 @@ export function attachInterception(
     const { host, route } = opened;
     const target = req.url ?? "";
     if (!target.startsWith("/")) {
-      // Reporting (PR2a) records this refusal: path `/`, `origin-form`.
-      const body = relayRefusalBody("origin-form");
-      res.writeHead(400, {
-        "content-type": "application/json",
-        "content-length": Buffer.byteLength(body),
+      traffic.refuse(req, res, {
+        host,
+        path: "/",
+        reason: "origin-form",
+        ...REFUSALS["origin-form"],
       });
-      res.end(body);
-      log(`${host}: ${req.method} refused (origin-form)`);
       return;
     }
-    const query = target.indexOf("?");
-    options.forward(req, res, {
-      path: route + target,
-      headers: interceptedHeaders(
+    // `/relay/…`, admission, rid and the fallback record are the shared
+    // forward's; `path` is reported without its query.
+    traffic.forward(req, res, {
+      host,
+      path: target,
+      edgePath: route + target,
+      headers: loopbackHeaders(
         req.rawHeaders,
         `127.0.0.1:${options.relayPort()}`,
       ),
-      recordHost: host,
-      recordPath: query === -1 ? target : target.slice(0, query),
     });
   });
   inner.on("upgrade", (req: http.IncomingMessage, socket: net.Socket) => {
-    // Reporting (PR2a) records this refusal: `upgrade`, no edge request.
     socket.on("error", () => socket.destroy());
-    refuseRaw(socket, "upgrade");
-    log(`${hostOf.get(req.socket)?.host ?? "?"}: upgrade refused`);
+    const host = hostOf.get(req.socket)?.host;
+    if (!host) {
+      socket.destroy();
+      return;
+    }
+    traffic.refuse(req, socket, {
+      host,
+      path: req.url ?? "/",
+      reason: "upgrade",
+      ...REFUSALS.upgrade,
+    });
   });
   inner.on("clientError", (_err, socket) => socket.destroy());
   inner.on("connection", track);
@@ -195,7 +173,7 @@ export function attachInterception(
       upstream = net.connect(port, host);
     } catch (err) {
       log(`CONNECT refused: no tunnel (${errorCode(err)})`);
-      refuseRaw(socket, "malformed");
+      answerUnrecorded(socket, MALFORMED);
       return;
     }
     track(upstream);
@@ -214,13 +192,15 @@ export function attachInterception(
   };
 
   const decrypt = (
+    req: http.IncomingMessage,
     socket: net.Socket,
     head: Buffer,
     host: string,
     route: string,
   ): void => {
     socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-    // Bytes the client sent after the CONNECT belong to the TLS stream.
+    // Bytes the client sent after the CONNECT belong to the TLS stream, so
+    // they go back onto the raw socket before the TLS layer reads it.
     if (head.length) socket.unshift(head);
     // ONE call: the key and the certificate are always one pair.
     const leaf = ca.leafFor(host);
@@ -232,8 +212,13 @@ export function attachInterception(
     });
     hostOf.set(secure, { host, route });
     secure.on("error", (err) => {
-      // No request was admitted, so nothing is recorded.
+      // No request was admitted, so nothing is recorded; counted instead.
       log(`${host}: TLS failed (${errorCode(err)})`);
+      traffic.count(
+        host,
+        "tls-failed",
+        classifyClientCredential(req.rawHeaders),
+      );
       secure.destroy();
     });
     inner.emit("connection", secure);
@@ -241,29 +226,35 @@ export function attachInterception(
 
   model.on(
     "connect",
-    (req: http.IncomingMessage, rawSocket: net.Socket, head: Buffer) => {
-      const socket = rawSocket;
+    (req: http.IncomingMessage, socket: net.Socket, head: Buffer) => {
       socket.on("error", () => socket.destroy());
       const decision = connectTarget(req.url ?? "");
-      switch (decision.kind) {
-        case "malformed":
-          // Never the target: it may hold anything.
-          log("CONNECT refused (malformed target)");
-          refuseRaw(socket, "malformed");
-          return;
-        case "refuse":
-          // Reporting (PR2a) reserves a slot and records this refusal:
-          // method CONNECT, path `/`, the validated host and the reason.
-          log(`CONNECT ${decision.host} refused (${decision.reason})`);
-          refuseRaw(socket, decision.reason);
-          return;
-        case "tunnel":
-          tunnel(socket, head, decision.host, decision.port);
-          return;
-        case "intercept":
-          decrypt(socket, head, decision.host, decision.route);
-          return;
+      if (decision.kind === "malformed") {
+        // Never the target: it may hold anything.
+        log("CONNECT refused (malformed target)");
+        traffic.count(
+          UNSHOWN,
+          "malformed",
+          classifyClientCredential(req.rawHeaders),
+        );
+        answerUnrecorded(socket, MALFORMED);
+        req.resume();
+        return;
       }
+      if (decision.kind === "refuse") {
+        log(`CONNECT ${decision.host} refused (${decision.reason})`);
+        traffic.refuse(req, socket, {
+          host: decision.host,
+          path: "/",
+          method: "CONNECT",
+          reason: decision.reason,
+          ...REFUSALS[decision.reason],
+        });
+        return;
+      }
+      if (decision.kind === "tunnel")
+        tunnel(socket, head, decision.host, decision.port);
+      else decrypt(req, socket, head, decision.host, decision.route);
     },
   );
 
@@ -271,6 +262,7 @@ export function attachInterception(
     close: () =>
       new Promise<void>((resolve) => {
         inner.close(() => resolve());
+        inner.closeIdleConnections();
       }),
   };
 }

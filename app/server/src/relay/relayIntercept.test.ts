@@ -22,8 +22,10 @@ import {
   isGatewayRefusal,
 } from "../gateway/refusals.ts";
 import { edgeTlsFor, issueClientCertificate } from "../gateway/x509.ts";
-import { RELAY_REFUSAL_MARKER } from "./intercept.ts";
 import { loadInterceptCa, type InterceptCa } from "./interceptCa.ts";
+import { MACHINE_PLACEHOLDER } from "./credentialClass.ts";
+import { RELAY_REFUSAL_MARKER } from "./modelTraffic.ts";
+import type { Delivery, ObservationBatch } from "./observations.ts";
 import { startRelay, type RunningRelay } from "./relay.ts";
 
 const CLIENT_ID = "c_intercept_test";
@@ -48,11 +50,17 @@ interface Recorded {
   clientCn: string;
 }
 
-/** The recording edge: every request it got, and its TCP connections. */
+/**
+ * The recording edge: every model request it got, the relay's observation
+ * batches (acknowledged in full) apart from them, and its TCP connections.
+ */
 interface RecordingEdge {
   port: number;
   requests: Recorded[];
+  batches: ObservationBatch[];
   connections: number;
+  /** Resolves once a batch holding a record that matches arrives. */
+  reported(match: (record: Delivery) => boolean): Promise<Delivery>;
 }
 
 const open: { close(): Promise<void> }[] = [];
@@ -65,7 +73,26 @@ beforeAll(() => {
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 async function recordingEdge(): Promise<RecordingEdge> {
-  const edge: RecordingEdge = { port: 0, requests: [], connections: 0 };
+  const waiting = new Set<() => void>();
+  const edge: RecordingEdge = {
+    port: 0,
+    requests: [],
+    batches: [],
+    connections: 0,
+    reported: (match) =>
+      new Promise((resolve) => {
+        const check = (): void => {
+          const found = edge.batches
+            .flatMap((batch) => batch.records)
+            .find(match);
+          if (!found) return;
+          waiting.delete(check);
+          resolve(found);
+        };
+        waiting.add(check);
+        check();
+      }),
+  };
   const server = https.createServer(
     {
       key: edgeTls.serverKeyPem,
@@ -75,6 +102,24 @@ async function recordingEdge(): Promise<RecordingEdge> {
       rejectUnauthorized: true,
     },
     (req, res) => {
+      if (req.url === "/relay/observations") {
+        const chunks: Buffer[] = [];
+        req.on("data", (chunk: Buffer) => chunks.push(chunk));
+        req.on("end", () => {
+          const batch = JSON.parse(
+            Buffer.concat(chunks).toString("utf8"),
+          ) as ObservationBatch;
+          edge.batches.push(batch);
+          const body = JSON.stringify({ ack: batch.records.at(-1)!.d });
+          res.writeHead(200, {
+            "content-type": "application/json",
+            "content-length": Buffer.byteLength(body),
+          });
+          res.end(body);
+          for (const check of [...waiting]) check();
+        });
+        return;
+      }
       const hash = createHash("sha256");
       req.on("data", (chunk: Buffer) => hash.update(chunk));
       req.on("end", () => {
@@ -140,6 +185,8 @@ async function started(withCa = true): Promise<Started> {
     log: (line) => logs.push(line),
   });
   open.push({ close: () => relay.close() });
+  // Every boot first reports its restart; later connections are traffic's.
+  await edge.reported((record) => "note" in record);
   return { edge, relay, logs };
 }
 
@@ -295,8 +342,12 @@ function assertMapped(
     recorded.rawHeaders.filter(
       (name, i) => i % 2 === 0 && name.toLowerCase().startsWith("x-pandeck-"),
     ),
-    [],
-    "no caller x-pandeck-* field; the relay's own rid joins with PR2a",
+    ["x-pandeck-relay-id"],
+    "no caller x-pandeck-* field, only the relay's own rid",
+  );
+  assert.match(
+    fieldValues(recorded.rawHeaders, "x-pandeck-relay-id")[0]!,
+    /^[0-9a-f]{32}:[1-9][0-9]*$/,
   );
   // The caller's `connection: close` is hop-by-hop: only the relay's own
   // keep-alive link to the edge speaks here.
@@ -309,7 +360,7 @@ function assertMapped(
   );
 }
 
-test("T5a: each token host's decrypted request reaches the edge on its fixed route with one loopback Host, the bearer, repeats in order, no caller x-pandeck-* field and the same body", async () => {
+test("T5a: each token host's decrypted request reaches the edge on its fixed route with one loopback Host, the bearer, repeats in order, the relay's own rid only and the same body", async () => {
   const { edge, relay } = await started();
   for (const [host, url] of [
     ["api.anthropic.com", "/anthropic/v1/messages?beta=true"],
@@ -362,10 +413,11 @@ test("T12: an IP-literal CONNECT is a blind tunnel: the peer is the edge's own c
 
 test("T16: without an interception CA, CONNECT is closed without a 200 and the edge sees nothing", async () => {
   const { edge, relay } = await started(false);
+  const connections = edge.connections;
   const answer = await connectThrough(relay.port, "api.anthropic.com:443");
   assert.notEqual(answer.status, 200);
   assert.doesNotMatch(answer.head, /Connection Established/);
-  assert.equal(edge.connections, 0);
+  assert.equal(edge.connections, connections);
   assert.equal(edge.requests.length, 0);
 });
 
@@ -385,13 +437,12 @@ function assertMarked(answer: HttpAnswer, refusal: keyof typeof SHAPES): void {
   assert.equal(Number(length), answer.body.length, refusal);
   const text = answer.body.toString("utf8");
   assert.ok(isGatewayRefusal(text), refusal);
+  // Anthropic's error shape: these fields are required, more may follow.
   const parsed = JSON.parse(text) as {
     type: string;
     error: { type: string; message: string };
   };
-  assert.deepEqual(Object.keys(parsed), ["type", "error"]);
   assert.equal(parsed.type, "error");
-  assert.deepEqual(Object.keys(parsed.error), ["type", "message"]);
   assert.equal(parsed.error.type, type, refusal);
   assert.ok(parsed.error.message.startsWith(`${GATEWAY_REFUSAL_MARKER} `));
 }
@@ -428,10 +479,28 @@ test("T20: every relay-local refusal is marked like the gateway's and shaped lik
     "upgrade",
   );
   assert.equal(edge.requests.length, 0, "no refusal reached the edge");
+  // Each named refusal is one record; the malformed target none.
+  const reasons = ["connect-port", "connect-target", "origin-form", "upgrade"];
+  await edge.reported(
+    (record) => "reason" in record && record.reason === "upgrade",
+  );
+  const records = edge.batches
+    .flatMap((batch) => batch.records)
+    .filter((record) => "rid" in record);
+  assert.deepEqual(
+    records.map((record) => "reason" in record && record.reason).sort(),
+    [...reasons].sort(),
+  );
+  for (const record of records) {
+    assert.ok("rid" in record);
+    assert.equal(record.host, "api.anthropic.com");
+    assert.equal(record.outcome, "refused");
+  }
 });
 
 test("T22: a CONNECT to an IP with a port outside 1-65535 gets the marked 400, never a tunnel or a crash, and nothing of it is logged", async () => {
   const { edge, relay, logs } = await started();
+  const connections = edge.connections;
   for (const target of [
     "127.0.0.1:65536",
     "127.0.0.1:0",
@@ -449,7 +518,12 @@ test("T22: a CONNECT to an IP with a port outside 1-65535 gets the marked 400, n
       assert.ok(!line.includes("SENTINEL"), `logged a header: ${line}`);
     }
   }
-  assert.equal(edge.connections, 0, "the edge saw no connection");
+  assert.equal(edge.connections, connections, "the edge saw no connection");
+  assert.deepEqual(
+    edge.batches.flatMap((batch) => batch.records).filter((r) => "rid" in r),
+    [],
+    "a malformed target is never recorded",
+  );
   // Still serving: a decrypted request is mapped as before, and a valid IP
   // target still tunnels.
   const answer = await decrypted(
@@ -484,4 +558,33 @@ test("close: resolves with an intercepted connection and a tunnel still open", a
   const closedTunnel = once(tunnel.socket, "close");
   await relay.close();
   await Promise.all([closedSecure, closedTunnel]);
+});
+
+test("summary: TLS failures and malformed targets are counted, classed by the CONNECT's own Proxy-Authorization, never recorded", async () => {
+  const { edge, relay, logs } = await started();
+  const connected = await connectThrough(relay.port, "api.anthropic.com:443");
+  assert.equal(connected.status, 200);
+  const closed = once(connected.socket, "close");
+  connected.socket.resume();
+  connected.socket.write("not a TLS ClientHello\r\n\r\n");
+  await closed;
+  assertMarked(
+    await connectThrough(relay.port, "SENTINEL/x:443", [
+      `Proxy-Authorization: Bearer ${MACHINE_PLACEHOLDER}`,
+    ]),
+    "malformed",
+  );
+  await relay.close();
+  const summary = logs.filter((line) => line.startsWith("relay summary:"));
+  assert.equal(summary.length, 1);
+  assert.match(summary[0]!, /api\.anthropic\.com tls-failed none=1/);
+  assert.match(summary[0]!, /- malformed placeholder=1/);
+  assert.ok(
+    logs.some((line) => line.startsWith("api.anthropic.com: TLS failed (")),
+  );
+  assert.ok(!logs.join("\n").includes("SENTINEL"));
+  assert.deepEqual(
+    edge.batches.flatMap((batch) => batch.records).filter((r) => "rid" in r),
+    [],
+  );
 });

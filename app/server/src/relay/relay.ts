@@ -663,13 +663,7 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
     ? attachInterception(model, {
         ca: options.interceptCa,
         relayPort: () => port,
-        forward: (req, res, ingress) =>
-          traffic.forward(req, res, {
-            host: ingress.recordHost ?? identity.host,
-            path: ingress.recordPath ?? req.url ?? "/",
-            edgePath: ingress.path,
-            headers: ingress.headers,
-          }),
+        traffic,
         track,
         log,
       })

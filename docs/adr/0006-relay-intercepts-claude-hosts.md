@@ -59,12 +59,16 @@ hosts. Without the flag it has no CONNECT handler, as before.
 - **Reporting is the precondition.** Interception is never enabled in a release
   without the relay's reporting channel (Task-1430 split plan, C2/C4/C5): every
   decrypted request gets a relay request id and an edge record, and every
-  relay-local refusal of a named host is recorded. A relay crash may lose
-  records not yet acknowledged, shown by the next boot's `relay-restarted` note;
-  an overflowing queue leaves an overflow note; the same request may appear
-  twice, under one id, across an edge restart. There is no spill file: a closing
-  relay logs one line with the count it dropped. The log shows gaps and
-  duplicates as identifiable; it is not exactly-once accounting.
+  relay-local refusal of a named host is recorded. Both ingresses share one
+  forward (admission, rid, reserved-field strip, fallback); the edge's ingest
+  accepts a relay record naming a host under the named domains, and nothing
+  wider. A malformed target or a failed handshake is only counted in the relay's
+  summary line. A relay crash may lose records not yet acknowledged, shown by
+  the next boot's `relay-restarted` note; an overflowing queue leaves an
+  overflow note; the same request may appear twice, under one id, across an edge
+  restart. There is no spill file: a closing relay logs one line with the count
+  it dropped. The log shows gaps and duplicates as identifiable; it is not
+  exactly-once accounting.
 - **Before the permissive machine path and observed hosts** (Task-1430 PR3 and
   PR4): Claude Code's account calls on `/anthropic` get the machine path's 403,
   `/anthropic-mcp` has no gateway route and gets the edge's `unknown-prefix`

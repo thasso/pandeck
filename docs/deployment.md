@@ -390,43 +390,42 @@ through the edge's enrollment port must get no accounts, `jira_get_issue` in
 the tool's "Jira is not connected" answer; a wrong MCP token gets 401. The
 packaged edge must also log the source relay's `relay-restarted` observation and
 a model-port refusal carrying the relay's own rid, proving the reporting path
-under Bun without provider traffic. A second
-relay on the same state with an interception CA (ADR-0006) must serve a
-packaged-Bun child whose environment adds only `HTTPS_PROXY` and
-`NODE_EXTRA_CA_CERTS`: its `fetch` to `https://api.anthropic.com/v1/messages`
-must get the edge's marked refusal, not the relay's 502, with no name resolved.
-Under Bun's TLS, a leaf of that CA for `api.anthropic.com` must verify, one for
-`example.com` must fail with "permitted subtree violation", and one for
-`127.0.0.1` must fail by the CA's excluded addresses. Bun 1.4.2's BoringSSL
-evaluates no iPAddress constraint and reports "unsupported name constraint type"
-(OpenSSL reports "excluded subtree violation"); without the exclusion the same
-leaf verifies, measured 2026-11-18. A CONNECT to an IP literal must tunnel to
-the edge itself. A TLS peer without a client certificate, or
-with one the edge's CA did not issue, is closed on the model and the client port
-without one byte. Restarted with a `--ui-config` that names no `distDir`, the
-edge must serve `gateway-web/` byte for byte with its security headers, answer
-`/api/me` and `/api/accounts` 401 and `/auth/login` with the failed-sign-in
-redirect for an unreachable issuer; SIGTERM must exit 0 and close every port.
-From an unrelated cwd and a clean environment, it also runs the packaged browser
-MCP CLI's version command and an MCP initialize plus `tools/list`, covering the
-patched local imports without a workspace `node_modules`. When Chrome or
-Chromium is available, the check also launches it and navigates a page. The Nix
-sandbox has neither browser, so that last probe reports an explicit skip there;
-the same clean-environment probe with the pinned Bun 1.4.2 passes launch and
-navigation on a host with Chrome, run outside the sandbox against the built
-package. The server itself keeps its deterministic bundle beside the executable
-because Bun's standalone compiler randomizes its embedded module-table
-encryption; the package wrapper invokes that module explicitly, while
-`/proc/<pid>/exe` remains the packaged Bun executable. Bun's ordinary bundler
-also emits scheduler-dependent module order and identifier names, even when
-pinned to one CPU and given a lexically recreated source tree. The builder
-therefore uses pinned esbuild for the server module and its two bundled helpers;
-Bun remains the packaged runtime. The flake closure check rejects Node, tsx,
-`node_modules`, and source derivations, then confirms pinned git and OpenSSH
-remain present. The install check also scans every runtime file for the Nix
-source path and build directory. CI builds the package and its closure check on
-every change (`docs/ci-cd.md`), and a deployment of that commit builds the same
-derivation.
+under Bun without provider traffic. A second relay on the same state with an
+interception CA (ADR-0006) must serve a packaged-Bun child whose environment
+adds only `HTTPS_PROXY` and `NODE_EXTRA_CA_CERTS`: its `fetch` to
+`https://api.anthropic.com/v1/messages` must get the edge's marked refusal, not
+the relay's 502, with no name resolved. Under Bun's TLS, a leaf of that CA for
+`api.anthropic.com` must verify, one for `example.com` must fail with "permitted
+subtree violation", and one for `127.0.0.1` must fail by the CA's excluded
+addresses. Bun 1.4.2's BoringSSL evaluates no iPAddress constraint and reports
+"unsupported name constraint type" (OpenSSL reports "excluded subtree
+violation"); without the exclusion the same leaf verifies, measured 2026-11-18.
+A CONNECT to an IP literal must tunnel to the edge itself. A TLS peer without a
+client certificate, or with one the edge's CA did not issue, is closed on the
+model and the client port without one byte. Restarted with a `--ui-config` that
+names no `distDir`, the edge must serve `gateway-web/` byte for byte with its
+security headers, answer `/api/me` and `/api/accounts` 401 and `/auth/login`
+with the failed-sign-in redirect for an unreachable issuer; SIGTERM must exit 0
+and close every port. From an unrelated cwd and a clean environment, it also
+runs the packaged browser MCP CLI's version command and an MCP initialize plus
+`tools/list`, covering the patched local imports without a workspace
+`node_modules`. When Chrome or Chromium is available, the check also launches it
+and navigates a page. The Nix sandbox has neither browser, so that last probe
+reports an explicit skip there; the same clean-environment probe with the pinned
+Bun 1.4.2 passes launch and navigation on a host with Chrome, run outside the
+sandbox against the built package. The server itself keeps its deterministic
+bundle beside the executable because Bun's standalone compiler randomizes its
+embedded module-table encryption; the package wrapper invokes that module
+explicitly, while `/proc/<pid>/exe` remains the packaged Bun executable. Bun's
+ordinary bundler also emits scheduler-dependent module order and identifier
+names, even when pinned to one CPU and given a lexically recreated source tree.
+The builder therefore uses pinned esbuild for the server module and its two
+bundled helpers; Bun remains the packaged runtime. The flake closure check
+rejects Node, tsx, `node_modules`, and source derivations, then confirms pinned
+git and OpenSSH remain present. The install check also scans every runtime file
+for the Nix source path and build directory. CI builds the package and its
+closure check on every change (`docs/ci-cd.md`), and a deployment of that commit
+builds the same derivation.
 
 The package must not use `bun build --compile` or Bun's ordinary bundler. As
 observed on Bun 1.3.13, and not re-measured on 1.4.2 since the package uses
