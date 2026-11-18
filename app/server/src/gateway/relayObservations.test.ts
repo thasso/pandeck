@@ -106,7 +106,7 @@ test("F007 TLS-equivalent ownership is bounded, atomic and performs no DNS looku
     "a.relay.localhost.evil",
     "relay.localhost",
     "b.a.relay.localhost",
-    "api.anthropic.com",
+    "api.openai.com",
     "localhost..",
     "*.relay.localhost",
   ]) {
@@ -136,6 +136,49 @@ test("F007 TLS-equivalent ownership is bounded, atomic and performs no DNS looku
     assert.equal(r.records.at(-1)!.host, host.toLowerCase());
   }
   assert.equal(r.records.length, accepted.length);
+  assert.equal(lookup.mock.calls.length, 0);
+});
+
+test("P7 report names are separate from configured edge certificate ownership", async () => {
+  const r = await rig(["localhost"], ["elsewhere.test"]);
+  const lookup = vi.spyOn(dns, "lookup").mockImplementation(() => {
+    throw new Error("Report validation must not resolve names.");
+  });
+  const hosts = [
+    "api.anthropic.com",
+    "mcp-proxy.anthropic.com",
+    "claude.ai",
+    "downloads.claude.com",
+  ];
+  for (const host of [
+    "localhost",
+    "api.openai.com",
+    "api.anthropic.com.evil",
+    "API.ANTHROPIC.COM",
+    "api.anthropic.com.",
+  ]) {
+    assert.equal(
+      await r.post({ boot, records: [report(hosts[0]!, 1), report(host, 2)] }),
+      400,
+      host,
+    );
+    assert.equal(
+      r.records.length,
+      0,
+      "neither P7 nor edge records commit from an invalid batch",
+    );
+  }
+  assert.equal(
+    await r.post({
+      boot,
+      records: hosts.map((host, i) => report(host, i + 1)),
+    }),
+    200,
+  );
+  assert.deepEqual(
+    r.records.map((record) => record.host),
+    hosts,
+  );
   assert.equal(lookup.mock.calls.length, 0);
 });
 
@@ -392,7 +435,7 @@ test.each([
 test.each([
   [["localhost"], ["elsewhere.test"], "localhost"],
   [["localhost"], [], "localhost"],
-  [["localhost"], ["localhost", "api.anthropic.com"], "api.anthropic.com"],
+  [["localhost"], ["localhost", "api.openai.com"], "api.openai.com"],
   [["*.relay.localhost"], ["other.relay.localhost"], "a.relay.localhost"],
   [["a.relay.localhost"], ["*.relay.localhost"], "b.relay.localhost"],
   [["a*.relay.localhost"], ["a*.relay.localhost"], "ab.relay.localhost"],

@@ -417,6 +417,42 @@ test("named domains: the edge's ingest accepts the relay's named hosts and nothi
   assert.equal(relayRows(r).length, before + 4);
 });
 
+test("restack: decrypted M-SEARCH and GET refusals share real ingest with both P7 token hosts", async () => {
+  const r = await rig();
+  await r.stopEdge();
+  for (const [method, host] of [
+    ["M-SEARCH", "api.anthropic.com"],
+    ["GET", "mcp-proxy.anthropic.com"],
+  ] as const) {
+    const answer = await decrypted(
+      r,
+      request(method, `/relay/${method}?q=SENTINEL`, [PLACEHOLDER]),
+      host,
+    );
+    assertMarked(answer, 403, "permission_error");
+  }
+  await r.restartEdge();
+  await r.until(() => relayRows(r).length === 2);
+  assert.deepEqual(
+    relayRows(r).map((row) => [row.method, row.host, row.path, row.reason]),
+    [
+      ["M-SEARCH", "api.anthropic.com", "/relay/M-SEARCH", "reserved-path"],
+      ["GET", "mcp-proxy.anthropic.com", "/relay/GET", "reserved-path"],
+    ],
+  );
+  assert.ok(
+    r.commits.some(
+      (commit) =>
+        commit.batch.records.filter((record) => "rid" in record).length === 2,
+    ),
+    "a genuine GET shares the M-SEARCH batch",
+  );
+  assert.equal(edgeRows(r).length, 0);
+  assert.equal(upstreams.anthropic.length, 0);
+  assert.ok(!r.lines.some((line) => line.includes("invalid batch")));
+  assert.ok(!surfaces(r).includes("SENTINEL"));
+});
+
 test("T5: a decrypted POST /v1/messages reaches the fake Anthropic upstream with the account token and the same body; the client gets its answer unchanged", async () => {
   const r = await rig();
   await r.account();
