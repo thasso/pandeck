@@ -2109,14 +2109,18 @@ is added or removed.
   edge owns the record, including subsequent errors or caller cancellation.
   Fallbacks contain the enrolled edge host, method, query-free printable path
   capped at 200 characters, status or null, outcome, fixed reason or Node error
-  code, credential class, cookie presence, byte lengths and duration. No header
-  value, query, body or raw session key enters a report or text line.
+  code, credential class, cookie presence, byte lengths and duration. Durations
+  are nonnegative integer milliseconds from a monotonic clock; admission `at`
+  remains wall-clock time. No header value, query, body or raw session key
+  enters a report or text line.
   - Admission reserves one of 19,999 ordinary slots before forwarding or a
     recorded local refusal. It releases that slot on edge headers, or converts
     it into the fallback until acknowledged. A full queue answers a marked 503
     without contacting the edge. Those refusals are counted, not individually
     recorded: one overflow note uses the final reserved slot, with count and
-    first/last times. Further refusals aggregate while that note is in flight.
+    earliest/latest observed wall-clock times. These bounds stay ordered even if
+    the clock steps backward. Further refusals aggregate while that note is in
+    flight.
   - The queue assigns `d` at enqueue, independently of request ids. One batch at
     a time goes over the same mTLS link to `POST /relay/observations`, at most
     100 records and 64 KiB. Only a valid 200 acknowledgement removes its prefix.
@@ -2363,15 +2367,15 @@ writes no answer, no second record and contacts no upstream.
   `authorization`, `x-api-key` and `proxy-authorization`, every repeat, the most
   sensitive winning; `requestCredential.ts`) and `clientCookie`; `requestBytes`
   (body bytes read from the client, 0 for a refusal), `responseBytes` (body
-  bytes sent to the client, a refusal's body included), `durationMs`
-  (nonnegative integer elapsed time from a monotonic clock, while `at` remains
-  wall-clock time); `firstSeen`. A forwarded body passes one counting Transform
-  each way, lengths only. An early upstream reply is delivered immediately, but
-  its record waits for upload finish too. A later upload abort/error is failed;
-  a peer that stops reading before upload finish settles that failed lifetime
-  rather than leaving a pending record. No record holds a header value,
-  credential, lease token, query, body or raw session key: the log copies only
-  these fields.
+  bytes sent to the client, a refusal's body included, but 0 when HTTP
+  suppresses the body for HEAD, 1xx, 204 or 304), `durationMs` (nonnegative
+  integer elapsed time from a monotonic clock, while `at` remains wall-clock
+  time); `firstSeen`. A forwarded body passes one counting Transform each way,
+  lengths only. An early upstream reply is delivered immediately, but its record
+  waits for upload finish too. A later upload abort/error is failed; a peer that
+  stops reading before upload finish settles that failed lifetime rather than
+  leaving a pending record. No record holds a header value, credential, lease
+  token, query, body or raw session key: the log copies only these fields.
 - **Outcomes.** `forwarded` with the upstream's status; `refused` with the
   refusal case as `reason` (a WebSocket upgrade's is `upgrade`); `failed` with a
   Node error code, `unreachable`, `upstream-truncated` (after the headers,

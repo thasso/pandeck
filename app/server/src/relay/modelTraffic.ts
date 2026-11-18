@@ -140,6 +140,9 @@ export function createModelTraffic(options: {
     target: RequestIdentity,
   ) {
     const at = Date.now();
+    const started = performance.now();
+    const durationMs = () =>
+      Math.max(0, Math.round(performance.now() - started));
     const credential = classifyClientCredential(req.rawHeaders);
     const slot = observations.reserve();
     if (!slot) {
@@ -171,10 +174,10 @@ export function createModelTraffic(options: {
         "status" | "outcome" | "reason" | "requestBytes" | "responseBytes"
       >,
     ) => {
-      slot.record({ ...base, ...value, durationMs: Date.now() - at });
+      slot.record({ ...base, ...value, durationMs: durationMs() });
       count(base.host, value.outcome, credential);
     };
-    return { base, slot, record };
+    return { base, slot, record, durationMs };
   }
   function refuse(
     req: http.IncomingMessage,
@@ -223,7 +226,7 @@ export function createModelTraffic(options: {
     }
     const admission = admit(req, res, target);
     if (!admission) return;
-    const { base, slot, record } = admission;
+    const { base, slot, record, durationMs } = admission;
     headers.push("x-pandeck-relay-id", base.rid);
     if (
       !headers.some((name, i) => i % 2 === 0 && name.toLowerCase() === "host")
@@ -328,7 +331,7 @@ export function createModelTraffic(options: {
       detachRequest();
       req.resume();
       upstream.destroy();
-      log(`${base.method} ${res.statusCode} ${Date.now() - base.at}ms`);
+      log(`${base.method} ${res.statusCode} ${durationMs()}ms`);
       end();
     });
     res.on("close", () => {

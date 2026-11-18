@@ -180,7 +180,9 @@ export function createObservations(options: ObservationOptions) {
       const at = now();
       if (overflow) {
         overflow.count++;
-        overflow.to = at;
+        // Keep the observed wall-time range ordered even across clock steps.
+        overflow.from = Math.min(overflow.from, at);
+        overflow.to = Math.max(overflow.to, at);
       } else overflow = { note: "overflow", count: 1, from: at, to: at };
     },
     /** Flush starts only after every active reservation has been disposed. */

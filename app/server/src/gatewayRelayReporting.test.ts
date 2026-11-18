@@ -19,6 +19,7 @@ import type { GatewayOptions, RunningGateway } from "./gateway/gateway.ts";
 import type { ObservationsCommitted } from "./gateway/relayObservations.ts";
 import type { RequestRecord } from "./gateway/requestLog.ts";
 import type { RunningRelay } from "./relay/relay.ts";
+import { createObservations } from "./relay/observations.ts";
 import { MACHINE_PLACEHOLDER } from "./relay/credentialClass.ts";
 
 const home = mkdtempSync(join(tmpdir(), "relay-real-edge-home-"));
@@ -463,6 +464,136 @@ test("T1/T15 real forwarding replaces forged metadata, strips it upstream and pr
     r.records().filter((record) => record.rid === row.rid).length,
     1,
   );
+});
+
+test.each([
+  ["/unknown-route", [], 404],
+  ["/anthropic/v1/messages", [], 403],
+  ["/mcp", [], 401],
+  ["/mcp", ["origin", "https://example.test"], 403],
+] as const)(
+  "F005 GET/HEAD %s counts only emitted gateway body bytes",
+  async (path, headers, status) => {
+    const r = await rig({ tools: true });
+    for (const method of ["GET", "HEAD"]) {
+      const before = r.records().length;
+      const answer = await send(r, path, { method, headers: [...headers] });
+      assert.equal(answer.status, status);
+      await r.until(() => r.records().length === before + 1);
+      const row = r.records().at(-1)!;
+      assert.equal(row.via, "gateway");
+      assert.equal(row.method, method);
+      assert.equal(row.status, status);
+      assert.equal(row.outcome, "refused");
+      assert.match(row.rid!, /^[0-9a-f]{32}:[1-9][0-9]*$/);
+      assert.equal(row.responseBytes, Buffer.byteLength(answer.body));
+      const representation = Number(answer.headers["content-length"]);
+      assert.ok(representation > 0);
+      assert.equal(
+        Buffer.byteLength(answer.body),
+        method === "HEAD" ? 0 : representation,
+      );
+      assert.equal(
+        r.records().filter((entry) => entry.rid === row.rid).length,
+        1,
+      );
+    }
+  },
+);
+
+test("F006 a backward wall-clock step retains the relay record and a genuine GET sibling", async () => {
+  const r = await rig();
+  const clock = vi
+    .spyOn(Date, "now")
+    .mockReturnValueOnce(10_000)
+    .mockReturnValue(5_000);
+  try {
+    assert.equal((await send(r, "/relay/stepped")).status, 403);
+  } finally {
+    clock.mockRestore();
+  }
+  assert.equal((await send(r, "/relay/after-step")).status, 403);
+  await r.relay.close();
+  const rows = r.records().filter((row) => row.rid);
+  assert.deepEqual(
+    rows.map((row) => row.path),
+    ["/relay/stepped", "/relay/after-step"],
+  );
+  assert.equal(rows[0]!.at, 10_000);
+  assert.ok(
+    rows.every(
+      (row) =>
+        row.method === "GET" &&
+        Number.isSafeInteger(row.durationMs) &&
+        row.durationMs >= 0,
+    ),
+  );
+  assert.ok(!r.lines.some((line) => line.includes("invalid batch")));
+});
+
+test("F006 the real queue sends ordered overflow bounds and a genuine sibling through strict ingest", async () => {
+  const r = await rig();
+  let now = 10_000;
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let started!: () => void;
+  const sending = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let first = true;
+  const queue = createObservations({
+    boot,
+    capacity: 3,
+    now: () => now,
+    log: (line) => r.lines.push(line),
+    send: async (batch) => {
+      if (first) {
+        first = false;
+        started();
+        await held;
+      }
+      const answer = await post(r, batch);
+      return {
+        status: answer.status,
+        ...(answer.status === 200
+          ? (JSON.parse(answer.body) as { ack: number })
+          : {}),
+      };
+    },
+  });
+  open.push(() => queue.close(100));
+  await sending;
+  const slot = queue.reserve()!;
+  assert.ok(slot);
+  assert.equal(queue.reserve(), undefined);
+  queue.overflow();
+  now = 5_000;
+  queue.overflow();
+  const { d: _d, ...sibling } = report(1, 1);
+  slot.record({ ...sibling, outcome: "failed", clientCredential: "none" });
+  release();
+  await queue.close(1000);
+  assert.equal(queue.rejected, 0);
+  const rows = r.records();
+  assert.equal(rows.filter((row) => row.rid === rid(1)).length, 1);
+  const overflow = rows.find((row) => row.reason === "overflow");
+  assert.ok(overflow);
+  assert.equal(overflow.count, 2);
+  const batches = r.commits.filter((event) => event.boot === boot);
+  const note = batches
+    .flatMap((event) => event.batch.records)
+    .find((entry) => "note" in entry && entry.note === "overflow");
+  assert.deepEqual(note, {
+    d: 3,
+    note: "overflow",
+    count: 2,
+    from: 5_000,
+    to: 10_000,
+  });
+  assert.ok(batches.some((event) => event.committed.length === 2));
+  assert.ok(!r.lines.some((line) => line.includes("invalid batch")));
 });
 
 test("T2 malformed or repeated ids are ignored, served and diagnosed without echo", async () => {

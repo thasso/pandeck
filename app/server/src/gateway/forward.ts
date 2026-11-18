@@ -161,18 +161,28 @@ function chunkBytes(chunk: unknown, encoding: unknown): number {
   return chunk instanceof Uint8Array ? chunk.byteLength : 0;
 }
 
+/** HTTP suppresses body chunks for HEAD and these response statuses. */
+function hasResponseBody(res: http.ServerResponse): boolean {
+  return (
+    res.req.method !== "HEAD" &&
+    res.statusCode >= 200 &&
+    res.statusCode !== 204 &&
+    res.statusCode !== 304
+  );
+}
+
 /**
- * Counts the body bytes a local handler writes to `res`: its own `write` and
- * `end` read each chunk's length and pass every call on unchanged.
+ * Counts the body bytes a local handler writes to `res`, excluding chunks
+ * HTTP suppresses. Both `write` and `end` pass every call on unchanged.
  */
 function countAnswer(res: http.ServerResponse, add: (n: number) => void): void {
   const { write, end } = res;
   res.write = ((...args: unknown[]) => {
-    add(chunkBytes(args[0], args[1]));
+    if (hasResponseBody(res)) add(chunkBytes(args[0], args[1]));
     return Reflect.apply(write, res, args) as boolean;
   }) as typeof res.write;
   res.end = ((...args: unknown[]) => {
-    add(chunkBytes(args[0], args[1]));
+    if (hasResponseBody(res)) add(chunkBytes(args[0], args[1]));
     return Reflect.apply(end, res, args) as http.ServerResponse;
   }) as typeof res.end;
 }
@@ -638,7 +648,7 @@ export function createForwarder(deps: ForwarderDeps): {
         : { "retry-after": String(retryAfter) }),
     });
     trace.status = status;
-    trace.responseBytes += Buffer.byteLength(body);
+    if (hasResponseBody(res)) trace.responseBytes += Buffer.byteLength(body);
     res.once("finish", () =>
       trace.answered(refusalEnding(refusal, status), leaseId),
     );
