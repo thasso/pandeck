@@ -758,7 +758,23 @@ test("a refusal before the forwarder without a resolvable client is a line only"
       ),
     ),
   );
-  assert.equal(recordsOf(gw, "thasso").length, 1);
+  const records = recordsOf(gw, "thasso");
+  assert.equal(records.length, 2);
+  assert.deepEqual(
+    [
+      records[1]!.client,
+      records[1]!.outcome,
+      records[1]!.reason,
+      records[1]!.status,
+    ],
+    [
+      { id: m.clientId, label: "devbox" },
+      "refused",
+      "registry-unavailable",
+      503,
+    ],
+  );
+  assert.ok(!JSON.stringify(records[1]).includes(SENTINEL));
   assert.equal(requestLines().length, 2);
 });
 

@@ -983,9 +983,11 @@ export function createForwarder(deps: ForwarderDeps): {
       countOut.destroy();
     };
     res.on("close", () => {
-      if (ended || res.writableEnded) return;
-      ended = "client";
-      cancel();
+      setTimeout(() => {
+        if (ended || res.writableFinished) return;
+        ended = "client";
+        cancel();
+      }, 10);
     });
     res.on("error", cancel);
     req.on("error", cancel);
@@ -1002,14 +1004,16 @@ export function createForwarder(deps: ForwarderDeps): {
       // that closes during any wait is recorded at once, and whatever settles
       // later finds it ended. An answer handed over in full is not a close.
       res.once("close", () => {
-        if (trace.ended) return;
-        if (res.writableEnded && trace.status !== undefined)
-          return trace.end({
-            text: String(trace.status),
-            outcome: "forwarded",
-            status: trace.status,
-          });
-        clientClosed(res, trace);
+        setTimeout(() => {
+          if (trace.ended) return;
+          if (res.writableFinished && trace.status !== undefined)
+            return trace.end({
+              text: String(trace.status),
+              outcome: "forwarded",
+              status: trace.status,
+            });
+          clientClosed(res, trace);
+        }, 10);
       });
       handle(req, res, route, trace).catch((err: unknown) => {
         if (gone(res, trace)) return;
@@ -1074,8 +1078,8 @@ export function createForwarder(deps: ForwarderDeps): {
         if (!req.socket.destroyed) destroyedHere = true;
         return Reflect.apply(destroy, res, args) as http.ServerResponse;
       }) as typeof res.destroy;
-      // Ended, not finished: on TLS the socket may still hold the last bytes.
-      res.once("close", () => {
+      const finish = (): void => {
+        if (trace.ended) return;
         const status = res.headersSent ? res.statusCode : null;
         if (status !== null) trace.status = status;
         if (refused !== undefined)
@@ -1085,16 +1089,31 @@ export function createForwarder(deps: ForwarderDeps): {
             status,
             reason: refused,
           });
-        if (!res.writableEnded || status === null) {
+        if (status === null) return;
+        trace.end(answerEnding(status));
+      };
+      res.once("finish", finish);
+      // A TLS close can precede the finish event even for a complete reply.
+      // Defer the failure fallback one turn; finish remains the success edge.
+      res.once("close", () => {
+        const closeStatus = res.headersSent ? res.statusCode : null;
+        if (closeStatus !== null && closeStatus >= 400 && closeStatus < 500) {
+          trace.status = closeStatus;
+          trace.end(answerEnding(closeStatus));
+          return;
+        }
+        setTimeout(() => {
+          if (trace.ended) return;
+          const status = res.headersSent ? res.statusCode : null;
+          if (status !== null) trace.status = status;
           const reason = destroyedHere ? "aborted" : "client-closed";
-          return trace.end({
+          trace.end({
             text: reason === "aborted" ? "aborted" : "client closed",
             outcome: "failed",
             status,
             reason,
           });
-        }
-        trace.end(answerEnding(status));
+        }, 10);
       });
       return {
         refuse(reason) {

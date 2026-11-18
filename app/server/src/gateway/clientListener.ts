@@ -969,11 +969,33 @@ export async function startClientListener(
     try {
       client = activeClient(req.socket);
     } catch {
-      forwarder.observeLocal(req, res).refuse("registry-unavailable");
+      const previous = authenticated.get(req.socket);
+      forwarder
+        .observeLocal(
+          req,
+          res,
+          previous && {
+            id: previous.id,
+            label: previous.label,
+            userId: previous.userId,
+          },
+        )
+        .refuse("registry-unavailable");
       return json(res, 503, { error: "client registry unavailable" });
     }
     if (!client) {
-      forwarder.observeLocal(req, res).refuse("forbidden");
+      const previous = authenticated.get(req.socket);
+      forwarder
+        .observeLocal(
+          req,
+          res,
+          previous && {
+            id: previous.id,
+            label: previous.label,
+            userId: previous.userId,
+          },
+        )
+        .refuse("forbidden");
       const { status, body } = refusalResponse({ case: "forbidden" }, "claude");
       res.writeHead(status, {
         "content-type": "application/json",

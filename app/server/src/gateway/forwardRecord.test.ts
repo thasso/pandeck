@@ -337,6 +337,30 @@ test("a local answer the handler destroys is failed: null before headers, its st
   assert.equal(r.lines.filter((l) => l.includes(" via=gateway")).length, 2);
 });
 
+test("a local answer ended under backpressure is failed if the caller aborts before finish", async () => {
+  const r = await rig({
+    local: (_req, res) => {
+      res.writeHead(200);
+      res.end(Buffer.alloc(32 * 1024 * 1024, 0x61));
+    },
+  });
+  const request = start(r.port, "/large");
+  await new Promise<void>((resolve) =>
+    request.on("response", (response) => {
+      response.once("data", () => {
+        response.pause();
+        resolve();
+      });
+    }),
+  );
+  request.destroy();
+  await vi.waitFor(() => assert.equal(r.entries.length, 1));
+  assert.deepEqual(
+    [r.entries[0]!.status, r.entries[0]!.outcome, r.entries[0]!.reason],
+    [200, "failed", "client-closed"],
+  );
+});
+
 test("a local answer whose client goes away is failed, client-closed, never a success", async () => {
   const r = await rig({
     local: (req, res) => {
