@@ -255,6 +255,75 @@ for (const path of ["lease", "machine"] as const)
     });
   }
 
+test.each([
+  ["/anthropic-mcp", "mcp-proxy.anthropic.com", "/", 404],
+  ["/anthropic-mcp?q=SENTINEL", "mcp-proxy.anthropic.com", "/", 404],
+  ["/anthropic-mcp/", "mcp-proxy.anthropic.com", "/", 404],
+  [
+    "/anthropic-mcp/v1/messages?q=SENTINEL",
+    "mcp-proxy.anthropic.com",
+    "/v1/messages",
+    404,
+  ],
+  [
+    "/anthropic-mcpX/v1/messages?q=SENTINEL",
+    "",
+    "/anthropic-mcpX/v1/messages",
+    404,
+  ],
+  [
+    "/anthropic-mcp.evil/v1/messages",
+    "",
+    "/anthropic-mcp.evil/v1/messages",
+    404,
+  ],
+  ["/ANTHROPIC-MCP/v1/messages", "", "/ANTHROPIC-MCP/v1/messages", 404],
+  [
+    "/anthropic/v1/messages?q=SENTINEL",
+    "api.anthropic.com",
+    "/v1/messages",
+    401,
+  ],
+])(
+  "F009: fixed-prefix metadata for %s never enables routing or trusts Host",
+  async (target, host, path, status) => {
+    const r = await rig();
+    const request = start(r.port, target, { host: "spoof-SENTINEL.example" });
+    await new Promise<void>((resolve) =>
+      request.on("response", (res) => {
+        assert.equal(res.statusCode, status);
+        res.resume();
+        res.on("end", resolve);
+      }),
+    );
+    await vi.waitFor(() => assert.equal(r.entries.length, 1));
+    const entry = r.entries[0]!;
+    assert.deepEqual(
+      [
+        entry.host,
+        entry.path,
+        entry.status,
+        entry.outcome,
+        entry.reason,
+        entry.account,
+      ],
+      [
+        host,
+        path,
+        status,
+        "refused",
+        status === 404 ? "unknown-prefix" : "unknown-lease",
+        undefined,
+      ],
+    );
+    assert.equal(r.waits.length, 0);
+    assert.equal(r.upstreamConnections(), 0);
+    assert.equal(r.lines.length, 1);
+    assert.ok(!JSON.stringify(r.entries).includes("SENTINEL"));
+    assert.ok(!r.lines.join("\n").includes("SENTINEL"));
+  },
+);
+
 test("a local answer is classed by the status it sent in full", async () => {
   const statuses = [200, 202, 400, 401, 405, 413, 418, 500, 502, 504];
   const r = await rig({

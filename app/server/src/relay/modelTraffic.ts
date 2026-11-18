@@ -90,6 +90,20 @@ function answerLocal(answer: Answer, status: number, body: string): void {
     );
   }
 }
+/**
+ * A marked local answer that nothing records: a CONNECT target the relay
+ * cannot read may hold anything, so it never reaches a record (ADR-0006).
+ */
+export function answerUnrecorded(
+  answer: Answer,
+  refusal: Pick<LocalRefusal, "status" | "errorType" | "text">,
+): void {
+  answerLocal(
+    answer,
+    refusal.status,
+    refusalBody(refusal.errorType, refusal.text),
+  );
+}
 function httpStatus(status: number): string {
   return status === 403
     ? "Forbidden"
@@ -366,6 +380,9 @@ export function createModelTraffic(options: {
     forward,
     refuse,
     count,
+    isClosing() {
+      return closing;
+    },
     beginClose() {
       closing = true;
     },
@@ -392,3 +409,4 @@ export function createModelTraffic(options: {
     },
   };
 }
+export type ModelTraffic = ReturnType<typeof createModelTraffic>;

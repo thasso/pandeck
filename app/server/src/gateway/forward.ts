@@ -487,7 +487,13 @@ export function createForwarder(deps: ForwarderDeps): {
     const started = Date.now();
     const elapsedStart = performance.now();
     const url = req.url ?? "";
-    const pathname = route?.pathname ?? url.split("?")[0] ?? "";
+    // Before the MCP route exists, keep its fixed identity in refusal
+    // telemetry only. This does not create a route or trust the caller's Host.
+    const mcpPath =
+      !route && /^\/anthropic-mcp(?:\/|\?|$)/.test(url)
+        ? url.slice("/anthropic-mcp".length).split("?")[0] || "/"
+        : undefined;
+    const pathname = route?.pathname ?? mcpPath ?? url.split("?")[0] ?? "";
     const clientId = deps.clientOf?.(req);
     const { requests } = deps;
     const recording = requests && admitted;
@@ -506,7 +512,12 @@ export function createForwarder(deps: ForwarderDeps): {
     let answer: { ending: Ending; leaseId: string | undefined } | undefined;
     let account: string | undefined;
     const trace: Trace = {
-      host: route?.upstream.kind === "provider" ? route.upstream.host : "",
+      host:
+        route?.upstream.kind === "provider"
+          ? route.upstream.host
+          : mcpPath !== undefined
+            ? "mcp-proxy.anthropic.com"
+            : "",
       requestBytes: 0,
       responseBytes: 0,
       get ended() {

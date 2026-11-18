@@ -2088,7 +2088,8 @@ repeats and verifies the edge by its enrolled address whatever the `Host`
 (above). It drops hop-by-hop fields. Request fields starting with `x-pandeck-`
 are reserved: every caller value is removed, regardless of case or repeats, and
 one `x-pandeck-relay-id` is added. Bodies still stream unchanged; no credential
-is added or removed.
+is added or removed. For the two Claude token hosts it intercepts, ADR-0006
+changes the target and `Host` ("Interception" below).
 
 - **Placeholder.** One literal, JWT-shaped because pi and Codex accept only
   that, pinned in `gatewayMachinePool.test.ts`:
@@ -2143,22 +2144,25 @@ is added or removed.
     changed: lowercase boot, increasing safe-integer `d`, matching rid boot,
     bounded integers, fixed enums/reasons, method matching `^[A-Z][A-Z-]{0,15}$`
     and query-free, printable ASCII pathname capped at 200 characters. The
-    actual method is retained, including `M-SEARCH`. Host ownership must match
-    both the configured hosts and the actual edge certificate. DNS matching
-    ignores case and one trailing dot; IPs compare in canonical form. A
+    actual method is retained, including `M-SEARCH`. Edge-host ownership must
+    match both the configured hosts and the actual edge certificate. DNS
+    matching ignores case and one trailing dot; IPs compare in canonical form. A
     configured full-label wildcard matches exactly one DNS label, only if the
     certificate's SAN also permits it. The check uses no DNS or network lookup,
-    no common-name fallback and no partial/multi-label wildcard matching. Other
-    provider hosts are not accepted merely by suffix; no routing or policy
-    changes follow. The reported host spelling is retained apart from
-    lower-casing. The authenticated registry supplies user/client identity; no
-    body field can choose either. Invalid batches get fixed marked 400,
-    oversized ones 413, other methods 405, never an echo. Records with `d`
-    already acknowledged are ignored, then known-rid fallbacks are ignored
-    independently of the display ring. A missing old fallback below the floor is
-    discarded with a per-batch and running dropped count in the text log. Relay
-    notes and fallbacks use the same request-log writer as the edge, labelled
-    `via=relay`. Each note kind has a fixed first-seen identity.
+    no common-name fallback and no partial/multi-label wildcard matching.
+    Separately, reports may name a lower-case DNS name equal to or under the
+    relay's named domains (`anthropic.com`, `claude.ai`, `claude.com`;
+    ADR-0006). Those P7 identities, including both token hosts, need not match
+    the edge certificate. No other suffix or routing/policy change is allowed.
+    The reported host spelling is retained apart from lower-casing. The
+    authenticated registry supplies user/client identity; no body field can
+    choose either. Invalid batches get fixed marked 400, oversized ones 413,
+    other methods 405, never an echo. Records with `d` already acknowledged are
+    ignored, then known-rid fallbacks are ignored independently of the display
+    ring. A missing old fallback below the floor is discarded with a per-batch
+    and running dropped count in the text log. Relay notes and fallbacks use the
+    same request-log writer as the edge, labelled `via=relay`. Each note kind
+    has a fixed first-seen identity.
   - Every boot's first queued record is `relay-restarted`, including the first
     ever boot. Its missing count means the prior loss is unknown. No observation
     queue, spill, marker or replay file is written. Crash loss is accepted.
@@ -2174,10 +2178,12 @@ is added or removed.
     an ordinary crash.
   - Every 10 minutes and at close, `relay summary:` counts since boot by host,
     relay-view outcome and credential class, plus rejected observation count.
-    `forwarded` means edge headers arrived, not necessarily upstream success.
-    This is observability, not lossless or exactly-once accounting. Edge dedup
-    can lose state on restart, after 6 h of boot inactivity, or beyond 64 boots
-    per client. Two UI rows with the same request id can then occur. Interval
+    With interception it also counts `tls-failed` by token host and `malformed`
+    CONNECT targets under the host `-`; neither is recorded. `forwarded` means
+    edge headers arrived, not necessarily upstream success. This is
+    observability, not lossless or exactly-once accounting. Edge dedup can lose
+    state on restart, after 6 h of boot inactivity, or beyond 64 boots per
+    client. Two UI rows with the same request id can then occur. Interval
     compaction beyond 4,096 gaps can discard a genuinely missing old fallback,
     with a counted edge diagnostic. Each note kind uses a seen-set identity.
 
@@ -2187,6 +2193,10 @@ is added or removed.
   | `overflow`                       | 503    | `Pandeck gateway:` | Aggregated overflow note                                  |
   | `relay-closing`                  | 503    | `Pandeck gateway:` | Refused record if a slot is available, otherwise overflow |
   | `reserved-path`                  | 403    | `Pandeck gateway:` | Refused record if a slot is available, otherwise overflow |
+  | `connect-port`, `connect-target` | 403    | `Pandeck gateway:` | Refused record if a slot is available, otherwise overflow |
+  | `origin-form`                    | 400    | `Pandeck gateway:` | Refused record if a slot is available, otherwise overflow |
+  | `upgrade`                        | 501    | `Pandeck gateway:` | Refused record if a slot is available, otherwise overflow |
+  | Malformed CONNECT target         | 400    | `Pandeck gateway:` | None; summary count only                                  |
 
   Marked answers use a fixed JSON error containing both provider shapes:
   `type: error`, and `error.type`, `error.code`, `error.message`. They never
@@ -2223,6 +2233,61 @@ is added or removed.
     accepting each harness's API-key-mode body are operator checks on a devbox
     after merge. A body a provider rejects is fixed in that harness's documented
     config; a gateway change returns to planning.
+- **Interception (Claude Code, Task-1430, ADR-0006).** Without the custom base
+  URL, Claude Code reaches its account calls and model calls through the relay
+  as a proxy.
+  - **Flag and files.** `relay run … --intercept-ca-cert <path>` loads or makes
+    the interception CA: `intercept-ca-key.pem` and `intercept-ca-cert.pem`,
+    both 0600, in the relay's state directory; the key is reused across
+    restarts. It writes the certificate alone to `<path>` (0644, atomically) and
+    adds a CONNECT handler to the model listener. An unusable key stops the
+    relay with a message naming the file; delete `intercept-ca-*` and restart.
+    Without the flag nothing changes: CONNECT is closed as before.
+  - **Which CONNECT.** The target must be a valid authority (IPv6 in brackets,
+    IPv4, or DNS labels, then a port). Only `api.anthropic.com:443` and
+    `mcp-proxy.anthropic.com:443` are decrypted, to `/anthropic…` and
+    `/anthropic-mcp…` on the edge. IP literals and every other host are blind
+    tunnels, not logged by host. A name under `anthropic.com`, `claude.ai` or
+    `claude.com` on another port is refused 403 `connect-port`, spelled with a
+    trailing dot 403 `connect-target`. A target that is not a valid authority,
+    or an IP or other host with a port outside 1-65535, gets 400 and a log line
+    without the target.
+  - **Decrypted requests.** Origin-form only (an absolute-form target gets 400
+    `origin-form`); a WebSocket upgrade gets 501 `upgrade` without reaching the
+    edge. An inner CONNECT never opens another tunnel or reaches the edge: it
+    gets 400 `origin-form`, except `/relay/…` gets the existing 403
+    `reserved-path`. Its record uses the outer token host and fixed path `/`,
+    never the inner authority. Closing and overflow use the shared 503 refusal.
+    Each request keeps its header fields as received except hop-by-hop fields,
+    caller `x-pandeck-*` fields and `Host`, which becomes one
+    `127.0.0.1:<relay port>`; `Origin` still reaches the edge, which refuses it.
+    Bodies pass unread. Every refusal above is marked and has Anthropic's error
+    shape.
+  - **Reporting.** A decrypted request takes the plain listener's path through
+    the relay (admission, one rid, reserved fields dropped, a fallback record
+    when no edge headers arrive), its record naming the token host and the
+    original pathname without query. `connect-port`, `connect-target`,
+    `origin-form` and `upgrade` reserve a slot and are recorded (a refused
+    CONNECT as method `CONNECT`, path `/`, its credential class read from the
+    CONNECT's own fields, `Proxy-Authorization` included), or answer the 503
+    `overflow` when the queue is full. A malformed target and a failed TLS
+    handshake are only counted in the relay summary; blind tunnels are neither
+    recorded nor counted. Decrypted connections join the relay's close: they
+    drain with the plain listener's work and are then cut.
+  - **Setup.** `HTTPS_PROXY=http://127.0.0.1:<port>` (never `HTTP_PROXY`),
+    `NODE_EXTRA_CA_CERTS=<path>`, `ANTHROPIC_BASE_URL` unset, and none of the
+    three domains in `NO_PROXY`; the IDB `claude-gateway` wrapper owns this.
+    Only that process trusts the CA.
+  - **Until the permissive machine path and observed hosts land** (Task-1430
+    PR3, PR4): account calls such as `/api/oauth/profile` get the machine path's
+    403, `mcp-proxy.anthropic.com` gets the edge's `unknown-prefix` 404. That
+    refusal's record still names `mcp-proxy.anthropic.com` and the original
+    query-free path, derived only from the fixed `/anthropic-mcp` prefix, not
+    the caller's `Host`. No MCP routing is enabled. `claude.ai`,
+    `downloads.claude.ai`, `www.anthropic.com` and the other named hosts are
+    tunnelled, neither decrypted nor recorded. Interception is for testing
+    devboxes until then, and never enabled in a release without the relay's
+    reporting (ADR-0006).
 - **Machine path.** On a client's model port, a request whose bearer is not
   lease-shaped (three base64url segments whose payload names a lease), or that
   has none, is a machine request. A lease-shaped bearer takes the lease path

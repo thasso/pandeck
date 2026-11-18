@@ -86,6 +86,82 @@ test("local CONNECT refusals reserve and report method CONNECT, path / and the n
   assert.ok(!r.logs.join("\n").includes("SENTINEL"));
 });
 
+test("a closing CONNECT refusal overflows without a second record when admission is full", async () => {
+  const records: Delivery[] = [];
+  const logs: string[] = [];
+  let releaseSend!: () => void;
+  let pendingSend!: () => void;
+  const pending = new Promise<void>((resolve) => (pendingSend = resolve));
+  const observations = createObservations({
+    boot: "b".repeat(32),
+    capacity: 2,
+    log: (line) => logs.push(line),
+    send: async (batch) => {
+      if (batch.records.some((record) => "rid" in record)) {
+        pendingSend();
+        await new Promise<void>((resolve) => (releaseSend = resolve));
+      }
+      records.push(...batch.records);
+      return { status: 200, ack: batch.records.at(-1)!.d };
+    },
+  });
+  const traffic = createModelTraffic({
+    boot: "b".repeat(32),
+    observations,
+    edge: {},
+    edgeHost: "localhost",
+    log: (line) => logs.push(line),
+  });
+  const server = http.createServer();
+  server.on("connect", (req, socket) =>
+    traffic.refuse(req, socket as net.Socket, {
+      host: "api.anthropic.com",
+      path: "/",
+      method: "CONNECT",
+      status: 403,
+      reason: "connect-port",
+      errorType: "permission_error",
+      text: "this port is not supported.",
+    }),
+  );
+  const port = await listen(server);
+  const exchange = () =>
+    new Promise<string>((resolve, reject) => {
+      const socket = net.connect(port, "127.0.0.1");
+      let answer = "";
+      socket.setEncoding("utf8");
+      socket.on("data", (chunk: string) => (answer += chunk));
+      socket.on("end", () => resolve(answer));
+      socket.on("error", reject);
+      socket.write(
+        "CONNECT api.anthropic.com:8443 HTTP/1.1\r\nHost: api.anthropic.com:8443\r\n\r\n",
+      );
+    });
+
+  const first = await exchange();
+  assert.match(first, /^HTTP\/1\.1 403 Forbidden/);
+  await pending;
+  traffic.beginClose();
+  assert.equal(traffic.isClosing(), true);
+  const overflow = await exchange();
+  assert.match(overflow, /^HTTP\/1\.1 503 Service Unavailable/);
+  assert.match(overflow, /too busy to report/);
+  releaseSend();
+  await observations.close(100);
+  const measured = records.filter((record) => "rid" in record);
+  const notes = records.filter(
+    (record) => "note" in record && record.note === "overflow",
+  );
+  assert.equal(
+    measured.length,
+    1,
+    "the overflowed CONNECT has no request record",
+  );
+  assert.equal(measured[0]!.method, "CONNECT");
+  assert.equal(notes.length, 1);
+  assert.equal(notes[0]!.count, 1);
+});
+
 test("HEAD local refusals and unreachable-edge fallbacks record only emitted body bytes", async () => {
   const r = reporting();
   const unused = net.createServer();
