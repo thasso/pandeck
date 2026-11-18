@@ -316,14 +316,14 @@ for (const path of ["lease", "machine"] as const)
   }
 
 test.each([
-  ["/anthropic-mcp", "mcp-proxy.anthropic.com", "/", 404],
-  ["/anthropic-mcp?q=SENTINEL", "mcp-proxy.anthropic.com", "/", 404],
-  ["/anthropic-mcp/", "mcp-proxy.anthropic.com", "/", 404],
+  ["/anthropic-mcp", "mcp-proxy.anthropic.com", "", 401],
+  ["/anthropic-mcp?q=SENTINEL", "mcp-proxy.anthropic.com", "", 401],
+  ["/anthropic-mcp/", "mcp-proxy.anthropic.com", "/", 401],
   [
     "/anthropic-mcp/v1/messages?q=SENTINEL",
     "mcp-proxy.anthropic.com",
     "/v1/messages",
-    404,
+    401,
   ],
   [
     "/anthropic-mcpX/v1/messages?q=SENTINEL",
@@ -345,7 +345,7 @@ test.each([
     401,
   ],
 ])(
-  "F009: fixed-prefix metadata for %s never enables routing or trusts Host",
+  "F009: fixed-prefix metadata for %s never bypasses lease admission or trusts Host",
   async (target, host, path, status) => {
     const r = await rig();
     const request = start(r.port, target, { host: "spoof-SENTINEL.example" });

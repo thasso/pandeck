@@ -690,7 +690,7 @@ test("T11: CONNECT to a token host on another port is the marked 403 connect-por
   assert.equal(edgeRows(r).length, 0);
 });
 
-test("T13 (before PR3): MCP is the edge's unknown-prefix 404 and an account call its 403, each recorded once", async () => {
+test("T13 (with PR3): MCP and account calls forward with fixed-host metadata, each recorded once", async () => {
   const r = await rig();
   await r.account();
   const mcp = await decrypted(
@@ -704,28 +704,56 @@ test("T13 (before PR3): MCP is the edge's unknown-prefix 404 and an account call
     ),
     "mcp-proxy.anthropic.com",
   );
-  assertMarked(mcp, 404, "not_found_error");
+  assert.equal(mcp.status, 200);
   const profile = await decrypted(
     r,
     request("GET", "/api/oauth/profile", [PLACEHOLDER]),
   );
-  assertMarked(profile, 403, "permission_error");
+  assert.equal(profile.status, 200);
   await r.until(() => edgeRows(r).length === 2);
   assert.deepEqual(
     edgeRows(r)
       .map((row) => row.status)
       .sort(),
-    [403, 404],
+    [200, 200],
   );
   assert.equal(new Set(edgeRows(r).map((row) => row.rid)).size, 2);
-  const mcpRow = edgeRows(r).find((row) => row.status === 404)!;
+  const mcpRow = edgeRows(r).find(
+    (row) => row.host === "mcp-proxy.anthropic.com",
+  )!;
   assert.deepEqual(
-    [mcpRow.host, mcpRow.path, mcpRow.reason, mcpRow.account],
-    ["mcp-proxy.anthropic.com", "/v1/messages", "unknown-prefix", undefined],
+    [
+      mcpRow.host,
+      mcpRow.path,
+      mcpRow.reason,
+      mcpRow.account,
+      mcpRow.listed,
+      mcpRow.outcome,
+    ],
+    [
+      "mcp-proxy.anthropic.com",
+      "/v1/messages",
+      undefined,
+      "Intercept account",
+      false,
+      "forwarded",
+    ],
   );
-  const profileRow = edgeRows(r).find((row) => row.status === 403)!;
+  const profileRow = edgeRows(r).find(
+    (row) => row.host === "api.anthropic.com",
+  )!;
   assert.equal(profileRow.host, "api.anthropic.com");
   assert.equal(profileRow.path, "/api/oauth/profile");
+  assert.equal(profileRow.listed, false);
+  assert.equal(profileRow.account, "Intercept account");
+  assert.equal(profileRow.outcome, "forwarded");
+  assert.equal(upstreams.mcpProxy.length, 1);
+  assert.equal(sha(upstreams.mcpProxy[0]!.body), sha(BODY));
+  assert.equal(
+    upstreams.mcpProxy[0]!.headers.authorization,
+    `Bearer ${CLAUDE_ACCESS}`,
+  );
+  assert.equal(upstreams.anthropic.length, 1);
   assert.equal(relayRows(r).length, 0, "edge headers suppress relay fallbacks");
   await r.stopEdge();
   const down = await decrypted(
@@ -744,7 +772,8 @@ test("T13 (before PR3): MCP is the edge's unknown-prefix 404 and an account call
     0,
     "the answered requests did not acquire relay fallbacks after restart",
   );
-  assert.equal(upstreams.anthropic.length, 0);
+  assert.equal(upstreams.anthropic.length, 1);
+  assert.equal(upstreams.mcpProxy.length, 1);
   assert.ok(!surfaces(r).includes("SENTINEL"));
 });
 
