@@ -135,6 +135,40 @@ export interface AdmittedClient {
   userId: string;
 }
 
+/** A request the client listener answers itself, being observed. */
+export interface LocalAnswer {
+  /** Marks the answer a local refusal, `reason` a fixed code. */
+  refuse(reason: string): void;
+}
+
+/** A body chunk's length as `write` and `end` take it, else 0. */
+function chunkBytes(chunk: unknown, encoding: unknown): number {
+  if (typeof chunk === "string")
+    return Buffer.byteLength(
+      chunk,
+      typeof encoding === "string" && Buffer.isEncoding(encoding)
+        ? encoding
+        : "utf8",
+    );
+  return chunk instanceof Uint8Array ? chunk.byteLength : 0;
+}
+
+/**
+ * Counts the body bytes a local handler writes to `res`: its own `write` and
+ * `end` read each chunk's length and pass every call on unchanged.
+ */
+function countAnswer(res: http.ServerResponse, add: (n: number) => void): void {
+  const { write, end } = res;
+  res.write = ((...args: unknown[]) => {
+    add(chunkBytes(args[0], args[1]));
+    return Reflect.apply(write, res, args) as boolean;
+  }) as typeof res.write;
+  res.end = ((...args: unknown[]) => {
+    add(chunkBytes(args[0], args[1]));
+    return Reflect.apply(end, res, args) as http.ServerResponse;
+  }) as typeof res.end;
+}
+
 /** What the machine path needs from the client listener. */
 export interface MachineAccess {
   pool: Pick<MachinePool, "select" | "isCurrent" | "observe">;
@@ -317,11 +351,20 @@ export function createForwarder(deps: ForwarderDeps): {
     admitted?: AdmittedClient,
   ) => void;
   handleUpgrade: (req: http.IncomingMessage, socket: Duplex) => void;
+  observeLocal: (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    admitted?: AdmittedClient,
+  ) => LocalAnswer;
 } {
   const { leases, log, agent, httpAgent, compat, stats } = deps;
   const loggedClients = new Set<string>();
 
-  /** Logs the first request of each distinct client, bounded and quoted. */
+  /**
+   * Logs the first request of each distinct client, bounded and quoted.
+   * Loopback only: on a client's port these headers are the client's own
+   * text, and its request is identified by its record (Task-1430).
+   */
   function noteClient(headers: http.IncomingHttpHeaders): void {
     const userAgent = headerText(headers["user-agent"]);
     const originator = headerText(headers.originator);
@@ -860,7 +903,7 @@ export function createForwarder(deps: ForwarderDeps): {
 
   return {
     handleRequest(req, res, admitted) {
-      noteClient(req.headers);
+      if (!admitted) noteClient(req.headers);
       const route = routeFor(req.url ?? "");
       const trace = startTrace(req, route, admitted);
       handle(req, res, route, trace).catch((err: unknown) => {
@@ -891,6 +934,46 @@ export function createForwarder(deps: ForwarderDeps): {
         `HTTP/1.1 ${status} ${http.STATUS_CODES[status]}\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\nconnection: close\r\n\r\n${body}`,
       );
       trace.end(refusalEnding(refusal, status));
+    },
+
+    /**
+     * A client-port request the listener answers itself (`/mcp`, its own
+     * refusals): one line and, with `admitted`, one record, written once
+     * when the answer closes. Nothing is read from the request but its
+     * method, path and credential class; no listener is added to it, so
+     * `requestBytes` stays 0 (no body goes toward an upstream).
+     * `responseBytes` counts the body bytes the handler writes.
+     */
+    observeLocal(req, res, admitted) {
+      const trace = startTrace(req, undefined, admitted);
+      let refused: string | undefined;
+      countAnswer(res, (n) => (trace.responseBytes += n));
+      // Ended, not finished: on TLS the socket may still hold the last bytes.
+      res.once("close", () => {
+        const status = res.headersSent ? res.statusCode : null;
+        if (status !== null) trace.status = status;
+        if (refused !== undefined)
+          trace.end({
+            text: `refused ${refused} ${status ?? "-"}`,
+            outcome: "refused",
+            status,
+            reason: refused,
+          });
+        else if (res.writableEnded)
+          trace.end({ text: String(status), outcome: "forwarded", status });
+        else
+          trace.end({
+            text: "client closed",
+            outcome: status === null ? "failed" : "forwarded",
+            status,
+            reason: "client-closed",
+          });
+      });
+      return {
+        refuse(reason) {
+          refused = reason;
+        },
+      };
     },
   };
 }

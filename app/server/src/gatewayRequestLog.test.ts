@@ -25,6 +25,7 @@ const { enrollRelay } = await import("./relay/relay.ts");
 const { DATA_DIR } = await import("./config.ts");
 const { fakeProcesses, startFakeUpstreams } =
   await import("./test/gatewayFixtures.ts");
+const { createEdgeTools } = await import("./gatewayTools/index.ts");
 
 const PLACEHOLDER =
   "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoicGFuZGVjay1nYXRld2F5In0sInBhbmRlY2siOnsidiI6MSwibWFjaGluZSI6dHJ1ZX19.pandeck";
@@ -109,8 +110,10 @@ interface Machine {
 async function startEdge(
   overrides = upstreams.overrides,
   stateDir = mkdtempSync(join(DATA_DIR, "request-log-edge-")),
+  withTools = false,
 ): Promise<RunningGateway> {
   const gw = await startGateway({
+    ...(withTools ? { tools: createEdgeTools({ log: () => {} }) } : {}),
     stateDir,
     upstreams: overrides,
     claudeTokenEndpoint: upstreams.tokenEndpoint,
@@ -200,11 +203,14 @@ function send(
     method?: string;
     headers?: http.OutgoingHttpHeaders;
     body?: string;
+    /** A keep-alive agent built from `tlsOf`, to reuse one connection. */
+    agent?: https.Agent;
   } = {},
 ): Promise<Sent> {
   return new Promise((resolve, reject) => {
     const request = https.request({
       ...tlsOf(gw, m),
+      ...(options.agent ? { agent: options.agent } : {}),
       path,
       method: options.method ?? "POST",
       headers: { "content-type": "application/json", ...options.headers },
@@ -313,11 +319,15 @@ test("a sentinel bearer, API key and session key are classed, never kept", async
       authorization: `Bearer ${SENTINEL}`,
       "x-api-key": [PLACEHOLDER, SENTINEL],
       "x-claude-code-session-id": SESSION_KEY,
+      // A client's own header text reaches no line on its port.
+      "user-agent": `agent ${SENTINEL}`,
+      originator: SENTINEL,
     },
   });
   // Not lease-shaped: the machine path serves it.
   assert.equal(reply.status, 200);
   await vi.waitFor(() => assert.equal(recordsOf(gw, "thasso").length, 1));
+  assert.ok(!lines.some((line) => line.startsWith("client user-agent=")));
   const [record] = recordsOf(gw, "thasso");
   assert.equal(record!.clientCredential, "other");
   assert.equal(record!.clientCookie, false);
@@ -554,4 +564,142 @@ test("the seen set survives a restart; the epoch does not", async () => {
       { host: "api.anthropic.com", method: "POST", pathKey: "/v1/messages" },
     ],
   });
+});
+
+test("/mcp: each answered or refused request is one record and one line, with no token, query or JSON-RPC content", async () => {
+  const gw = await startEdge(upstreams.overrides, undefined, true);
+  const m = await machine(gw, "thasso", "devbox");
+  const token = gw.clients!.registry.setMcpToken(m.clientId);
+  const rpc = JSON.stringify({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: { name: SENTINEL, arguments: { note: SENTINEL } },
+  });
+  const auth = { authorization: `Bearer ${token}` };
+  const answered = await send(gw, m, `/mcp?q=${SENTINEL}`, {
+    headers: { ...auth, accept: "application/json, text/event-stream" },
+    body: rpc,
+  });
+  const notAllowed = await send(gw, m, "/mcp", {
+    method: "GET",
+    headers: auth,
+  });
+  const origin = await send(gw, m, "/mcp", {
+    headers: { ...auth, origin: "https://example.org" },
+    body: rpc,
+  });
+  const noToken = await send(gw, m, "/mcp", {
+    headers: { authorization: `Bearer pgmcp_${SENTINEL}` },
+    body: rpc,
+  });
+  assert.equal(notAllowed.status, 405);
+  assert.equal(origin.status, 403);
+  assert.equal(noToken.status, 401);
+  await vi.waitFor(() => assert.equal(recordsOf(gw, "thasso").length, 4));
+  const records = recordsOf(gw, "thasso");
+  assert.deepEqual(
+    records.map((r) => [r.method, r.status, r.outcome, r.reason]),
+    [
+      ["POST", answered.status, "forwarded", undefined],
+      ["GET", 405, "forwarded", undefined],
+      ["POST", 403, "refused", "mcp-origin"],
+      ["POST", 401, "refused", "mcp-token"],
+    ],
+  );
+  for (const record of records) {
+    assert.equal(record.host, "");
+    assert.equal(record.path, "/mcp");
+    assert.equal(record.pathKey, "/mcp");
+    assert.equal(record.clientCredential, "other");
+    assert.equal(record.requestBytes, 0);
+    assert.equal(record.account, undefined);
+    assert.equal(record.session, undefined);
+    assert.deepEqual(record.client, { id: m.clientId, label: "devbox" });
+  }
+  assert.equal(records[0]!.responseBytes, Buffer.byteLength(answered.text));
+  assert.equal(records[2]!.responseBytes, Buffer.byteLength(origin.text));
+  const stored = JSON.stringify(records);
+  for (const secret of [SENTINEL, token, "tools/call", "jsonrpc"])
+    assert.ok(!stored.includes(secret), secret);
+  // One line each, written by its record; none holds the token.
+  const mcpLines = requestLines().filter((line) => line.includes('"/mcp"'));
+  assert.equal(mcpLines.length, 4);
+  assert.ok(lines.every((line) => !line.includes(token)));
+  assert.ok(!lines.some((line) => line.startsWith("mcp refused")));
+  assert.match(
+    mcpLines[3]!,
+    new RegExp(
+      `^- POST "/mcp" kind=- client=${m.clientId} refused mcp-token 401 \\d+ms outcome=refused via=gateway$`,
+    ),
+  );
+});
+
+test("a refusal before the forwarder without a resolvable client is a line only", async () => {
+  const stateDir = mkdtempSync(join(DATA_DIR, "request-log-edge-"));
+  const gw = await startEdge(upstreams.overrides, stateDir);
+  account(gw, "a", "thasso");
+  const m = await machine(gw, "thasso", "devbox");
+  const { key, cert, ca, servername } = tlsOf(gw, m);
+  const agent = new https.Agent({
+    ...{ key, cert, ca, servername },
+    keepAlive: true,
+    maxSockets: 1,
+  });
+  open.push({ close: () => agent.destroy() });
+  assert.equal(
+    (await send(gw, m, "/anthropic/v1/messages", { agent })).status,
+    200,
+  );
+  await vi.waitFor(() => assert.equal(recordsOf(gw, "thasso").length, 1));
+  // The registry cannot be read: the open connection's next request is 503.
+  const file = join(stateDir, "clients.json");
+  const good = readFileSync(file, "utf8");
+  writeFileSync(file, "temporarily invalid JSON");
+  const refused = await send(gw, m, `/anthropic/v1/messages?q=${SENTINEL}`, {
+    agent,
+  });
+  writeFileSync(file, good);
+  assert.equal(refused.status, 503);
+  await vi.waitFor(() =>
+    assert.ok(
+      requestLines().some((line) =>
+        line.includes("refused registry-unavailable 503"),
+      ),
+    ),
+  );
+  assert.equal(recordsOf(gw, "thasso").length, 1);
+  assert.equal(requestLines().length, 2);
+});
+
+test("/mcp: a client that hangs up mid-body is one failed record, client-closed", async () => {
+  const gw = await startEdge(upstreams.overrides, undefined, true);
+  const m = await machine(gw, "thasso", "devbox");
+  const token = gw.clients!.registry.setMcpToken(m.clientId);
+  const request = https.request({
+    ...tlsOf(gw, m),
+    path: "/mcp",
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+      "content-length": 1_000,
+    },
+  });
+  request.on("error", () => {});
+  request.write('{"jsonrpc":');
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  request.destroy();
+  await vi.waitFor(() => assert.equal(recordsOf(gw, "thasso").length, 1));
+  const [record] = recordsOf(gw, "thasso");
+  assert.equal(record!.outcome, "failed");
+  assert.equal(record!.reason, "client-closed");
+  assert.equal(record!.status, null);
+  assert.equal(record!.responseBytes, 0);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(recordsOf(gw, "thasso").length, 1);
+  assert.equal(
+    requestLines().filter((line) => line.includes('"/mcp"')).length,
+    1,
+  );
 });

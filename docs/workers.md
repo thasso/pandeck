@@ -2242,9 +2242,10 @@ whatever the `Host` (above). No route, body or credential handling changes.
   `kind=<engine|server|machine>` and `client=<id>`, and every forward line ends
   `outcome=<outcome> via=gateway` ("Request log"). No line holds the
   placeholder, a session key or its hash, a token, a query or a body; only a
-  request record holds the session tag. A failure while recording an answer (a
-  registry read, a pin save) is logged with a fixed line and never changes the
-  answer.
+  request record holds the session tag, and no line holds a client's own header
+  text (the first-client `user-agent` line is the loopback listener's only). A
+  failure while recording an answer (a registry read, a pin save) is logged with
+  a fixed line and never changes the answer.
 - **Encrypted reasoning.** After a move between accounts, a Codex, pi or
   OpenCode conversation that carries encrypted reasoning may be refused by the
   new account. Pandeck rewrites history on the driver side for its own sessions
@@ -2257,7 +2258,10 @@ Every model request on a client's port gets one structured record and one log
 line (Task-1430 PR1, `gateway/requestLog.ts`), whatever its ending: forwarded,
 refused locally, unreachable, cut off after the headers, or closed by the
 client. The forwarder's once-guard (`Trace.end`) writes both, so a request that
-ends twice records once.
+ends twice records once. That includes `/mcp` and the client listener's own
+refusals: what the listener answers itself it hands to the forwarder's
+`observeLocal`, which records once when the answer closes; everything else goes
+to `handleRequest`, never both.
 
 - **Record** (`GatewayUiRequest` in `shared/gatewayUi.ts`): `seq` and `epoch`;
   `at`; the client's `{id, label}`; `via` (`gateway`; the relay, PR2, adds
@@ -2280,10 +2284,17 @@ ends twice records once.
   status kept) or `internal-error`. A client that closes first is `forwarded`
   once headers were sent, else `failed`, with `reason=client-closed`. `observed`
   and `overflow` are the relay's (PR2).
+- **Answered by the edge.** `/mcp` and the listener's refusals have `host` `""`,
+  no account or session, and `requestBytes` 0 (no body goes toward an upstream);
+  `responseBytes` counts what the handler wrote. An answered `/mcp` request is
+  `forwarded` with its status, whatever the handler answered; its gate's
+  refusals are `refused` with `mcp-origin` (403) or `mcp-token` (401). No tool
+  name, JSON-RPC method or other content is recorded.
 - **Line.** Today's forward line plus `outcome=` and `via=gateway`; no session
-  tag. Requests on the loopback listener have no client: line only.
-- **Not recorded:** `/mcp`, and requests the client listener refuses before the
-  forwarder (no certificate, revoked client, unknown port).
+  tag. A request without a resolvable client gets the line only: on the loopback
+  listener, and on the model port when the registry cannot be read
+  (`refused registry-unavailable 503`) or the client was revoked since its
+  connection (`refused forbidden 403`).
 - **Retention.** A ring of the last 5,000 records of all users, in memory, and a
   random `epoch` per start: a restart empties it and old cursors mean nothing.
   `firstSeen` marks the first record for a host, method and `pathKey`; those
