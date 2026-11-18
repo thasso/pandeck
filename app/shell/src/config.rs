@@ -58,7 +58,9 @@ fn remote_capability(urls: &[String]) -> String {
 
 /// Register the same URLPatterns used by navigation before publishing a choice.
 /// Tauri 2's runtime capabilities append, so prior choices live until restart.
-fn trust_server(app: &AppHandle, url: &str) -> Result<(), String> {
+/// Callers: startup's remote choice, a probed repoint, and a local child that
+/// proved its readiness.
+pub fn trust_server(app: &AppHandle, url: &str) -> Result<(), String> {
     let mut current = trusted_origins().lock().map_err(|err| err.to_string())?;
     let mut next = current.clone();
     if next.add_server(url)? {
@@ -117,10 +119,36 @@ impl WindowGeometry {
     }
 }
 
+/// Which server app windows load: the bundled local one, or the remembered
+/// remote URL. Kept apart from that URL so a round trip through local mode
+/// keeps the remote choice, and apart from any credential gateway, which the
+/// server itself configures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServerMode {
+    Local,
+    Remote,
+}
+
+impl ServerMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Remote => "remote",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShellConfig {
+    /// The remembered REMOTE server. Kept while local mode is selected.
     pub server_url: Option<String>,
+    /// `"local"` or `"remote"`. A string rather than the enum so a value from
+    /// a newer build cannot make the whole file unreadable.
+    pub mode: Option<String>,
+    /// The port the local server last bound, offered to it as a preference
+    /// so the page's origin — and its storage — survives a relaunch.
+    pub local_port: Option<u16>,
     /// `"dark"` or `"light"`, as last reported by a page through `window_ready`.
     pub theme: Option<String>,
     #[cfg(desktop)]
@@ -183,14 +211,61 @@ pub fn server_url(app: &AppHandle) -> String {
 }
 
 /// Bootstrap-only: validate and grant a user's explicit server choice before
-/// persisting it. Navigation and IPC use identical patterns.
+/// persisting it. Navigation and IPC use identical patterns. Choosing a remote
+/// server is also choosing remote mode, in the same write.
 pub fn set_server_url(app: &AppHandle, url: &str) -> Result<String, String> {
     let normalized = normalize_server(url)?;
     trust_server(app, &normalized)?;
     let mut config = load(app);
     config.server_url = Some(normalized.clone());
+    config.mode = Some(ServerMode::Remote.as_str().to_string());
     store(app, &config)?;
     Ok(normalized)
+}
+
+/// The mode a launch starts in. See [`effective_mode`].
+pub fn server_mode(app: &AppHandle, local_available: bool) -> ServerMode {
+    effective_mode(&load(app), local_available)
+}
+
+/// A stored choice wins while it is possible. With none, an install that has
+/// never been pointed at a remote server and carries a bundled one starts
+/// local; one that already remembers a server keeps using it, so an upgrade
+/// never moves an existing user. Local mode in a build without the bundled
+/// server falls back to remote WITHOUT forgetting the choice.
+pub fn effective_mode(config: &ShellConfig, local_available: bool) -> ServerMode {
+    if !local_available {
+        return ServerMode::Remote;
+    }
+    match config.mode.as_deref() {
+        Some("local") => ServerMode::Local,
+        Some("remote") => ServerMode::Remote,
+        _ if config.server_url.is_some() => ServerMode::Remote,
+        _ => ServerMode::Local,
+    }
+}
+
+/// Bootstrap-only: persist the mode, leaving the remote URL alone.
+pub fn set_server_mode(app: &AppHandle, mode: ServerMode) -> Result<(), String> {
+    let mut config = load(app);
+    config.mode = Some(mode.as_str().to_string());
+    store(app, &config)
+}
+
+/// The port the local server bound last time, if any.
+pub fn local_port(app: &AppHandle) -> Option<u16> {
+    load(app).local_port.filter(|port| *port != 0)
+}
+
+pub fn set_local_port(app: &AppHandle, port: u16) {
+    let mut config = load(app);
+    if config.local_port == Some(port) {
+        return;
+    }
+    config.local_port = Some(port);
+    if let Err(err) = store(app, &config) {
+        trace!("set_local_port failed: {err}");
+    }
 }
 
 /// The theme the next window should be painted before its page can say.
@@ -282,6 +357,45 @@ mod tests {
     use super::*;
     use tauri::utils::acl::capability::Capability;
 
+    fn parse(raw: &str) -> ShellConfig {
+        serde_json::from_str(raw).unwrap()
+    }
+
+    #[test]
+    fn mode_defaults_keep_existing_remote_users_remote() {
+        assert_eq!(effective_mode(&parse("{}"), true), ServerMode::Local);
+        assert_eq!(effective_mode(&parse("{}"), false), ServerMode::Remote);
+        let remote_user = parse(r#"{"serverUrl":"https://pa.example"}"#);
+        assert_eq!(effective_mode(&remote_user, true), ServerMode::Remote);
+        // An unknown value from a newer build neither breaks the file nor
+        // decides anything.
+        let future = parse(r#"{"serverUrl":"https://pa.example","mode":"gateway"}"#);
+        assert_eq!(future.server_url.as_deref(), Some("https://pa.example"));
+        assert_eq!(effective_mode(&future, true), ServerMode::Remote);
+        // Local chosen, then the bundled server went away: remote for now,
+        // the stored choice intact.
+        let local = parse(r#"{"serverUrl":"https://pa.example","mode":"local"}"#);
+        assert_eq!(effective_mode(&local, false), ServerMode::Remote);
+        assert_eq!(local.mode.as_deref(), Some("local"));
+    }
+
+    #[test]
+    fn a_mode_round_trip_preserves_the_remote_url_and_everything_else() {
+        let mut config =
+            parse(r#"{"serverUrl":"https://pa.example:8443","theme":"light","localPort":49152}"#);
+        for mode in [ServerMode::Local, ServerMode::Remote, ServerMode::Local] {
+            config.mode = Some(mode.as_str().to_string());
+            config = parse(&serde_json::to_string(&config).unwrap());
+            assert_eq!(effective_mode(&config, true), mode);
+            assert_eq!(
+                config.server_url.as_deref(),
+                Some("https://pa.example:8443")
+            );
+            assert_eq!(config.theme.as_deref(), Some("light"));
+            assert_eq!(config.local_port, Some(49152));
+        }
+    }
+
     #[test]
     fn runtime_template_grants_only_hosted_app_permissions() {
         let mut trust = TrustedOrigins::new();
@@ -295,6 +409,9 @@ mod tests {
             "allow-set-server-url",
             "allow-get-server-url",
             "allow-probe-server",
+            "allow-get-server-choice",
+            "allow-use-local-server",
+            "allow-local-server-status",
         ] {
             assert!(
                 !capability

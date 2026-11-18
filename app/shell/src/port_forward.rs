@@ -396,7 +396,7 @@ mod platform {
     }
 
     fn forwarding_urls(app: &AppHandle) -> Result<ServerTarget, String> {
-        let raw = config::server_url(app);
+        let raw = crate::serving_url(app).ok_or_else(|| "No server is ready.".to_string())?;
         let parsed = tauri::Url::parse(&raw)
             .map_err(|_| "The configured server URL is invalid.".to_string())?;
         if !config::is_allowed(&parsed)

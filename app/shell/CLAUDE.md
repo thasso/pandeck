@@ -7,11 +7,12 @@ build: it owns native capabilities, navigation policy, the menu and the
 bootstrap page — never product UI.
 
 - Declare every app command in `build.rs` and grant it per origin in
-  `capabilities/`: hosted pages get the minimum, server-repointing ones stay
-  bootstrap-only, a plugin reaches the page only through a command of ours. Keep
-  grants in step with `config::is_allowed` and the labels `build_app_window`
-  mints. Trust startup choices or successfully probed repoints; use the same
-  process-local URLPatterns for navigation and IPC before persisting a choice.
+  `capabilities/`: hosted pages get the minimum, server-choosing ones stay
+  bootstrap-only, plugins reach the page only through our commands. Keep grants
+  in step with `config::is_allowed` and the labels `build_app_window` mints.
+  Trust startup choices, probed repoints and a ready-verified local server; use
+  the same process-local URLPatterns for navigation and IPC before persisting a
+  choice.
 - An app window loads the server URL DIRECTLY and stays hidden until it reports
   in. Only `window_loaded`, raised by the SHELL's init script, may decide
   recovery — never the app's `window_ready`, which an older deployment lacks.

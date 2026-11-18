@@ -27,6 +27,12 @@ mod buildinfo;
 mod config;
 #[cfg(target_os = "ios")]
 mod ios;
+// The bundled local server: lifecycle (`local_server`) and mode (`local_mode`).
+// Desktop only; iOS stays a thin client of a remote server.
+#[cfg(desktop)]
+mod local_mode;
+#[cfg(desktop)]
+mod local_server;
 #[cfg(desktop)]
 mod menu;
 mod notify;
@@ -43,6 +49,8 @@ mod usernotify;
 
 #[cfg(desktop)]
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(desktop)]
+use std::sync::Mutex;
 
 use serde::Serialize;
 use tauri::utils::config::BackgroundThrottlingPolicy;
@@ -95,6 +103,11 @@ static POPUP_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// window of the app gets the same native surface as `main`.
 #[cfg(desktop)]
 static APP_WINDOW_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Bootstrap windows opened deliberately from `Server…`, which should show the
+/// server choice rather than reconnect. Taken once by `get_server_choice`.
+#[cfg(desktop)]
+static CHOOSER_WINDOWS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// Runs before any page script on every navigation, including the remote app.
 ///
@@ -366,7 +379,7 @@ fn shell_info(app: AppHandle) -> ShellInfo {
     trace!("shell_info");
     ShellInfo {
         platform: platform(),
-        server_url: config::server_url(&app),
+        server_url: serving_url(&app).unwrap_or_default(),
         titlebar_inset_left: TITLEBAR_INSET_LEFT,
         build: buildinfo::current(&app),
     }
@@ -469,8 +482,9 @@ fn open_window(app: AppHandle, path: Option<String>) {
 /// Open one short-lived, token-free file grant in the OS default browser.
 #[tauri::command]
 fn open_served_file(app: AppHandle, url: String) -> Result<(), String> {
-    let server = Url::parse(&config::server_url(&app))
-        .map_err(|_| "The configured server URL is invalid.".to_string())?;
+    let server = serving_url(&app)
+        .and_then(|url| Url::parse(&url).ok())
+        .ok_or_else(|| "The configured server URL is invalid.".to_string())?;
     let url = served_file_grant_url(&server, &url)?;
     trace!("open served file grant in browser");
     app.opener()
@@ -485,6 +499,8 @@ fn get_server_url(app: AppHandle) -> String {
     url
 }
 
+/// Bootstrap-only: a probed remote server, which is also a choice of remote
+/// mode. A running local server is stopped in the background; its data stays.
 #[tauri::command]
 fn set_server_url(
     app: AppHandle,
@@ -493,7 +509,98 @@ fn set_server_url(
 ) -> Result<String, String> {
     let normalized = config::set_server_url(&app, &url)?;
     forwards.stop_all();
+    #[cfg(desktop)]
+    if let Some(local) = app.try_state::<local_mode::LocalServer>() {
+        local.deselect(&app);
+    }
     Ok(normalized)
+}
+
+/// What the bootstrap page needs to decide between reconnecting and offering a
+/// choice: the mode, the remembered remote URL, the local server's state, and
+/// whether this window was opened to choose.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ServerChoice {
+    mode: &'static str,
+    remote_url: String,
+    #[cfg(desktop)]
+    local: local_mode::LocalStatus,
+    #[cfg(not(desktop))]
+    local: serde_json::Value,
+    choosing: bool,
+}
+
+/// Bootstrap-only, like every server-choosing command.
+#[tauri::command]
+fn get_server_choice(app: AppHandle, window: WebviewWindow) -> ServerChoice {
+    #[cfg(desktop)]
+    {
+        let choosing = CHOOSER_WINDOWS
+            .lock()
+            .map(|mut labels| {
+                let before = labels.len();
+                labels.retain(|label| label != window.label());
+                labels.len() != before
+            })
+            .unwrap_or(false);
+        let local = app.state::<local_mode::LocalServer>();
+        ServerChoice {
+            mode: match local.mode() {
+                config::ServerMode::Local => "local",
+                config::ServerMode::Remote => "remote",
+            },
+            remote_url: config::server_url(&app),
+            local: local.status(),
+            choosing,
+        }
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = window;
+        ServerChoice {
+            mode: "remote",
+            remote_url: config::server_url(&app),
+            local: serde_json::json!({ "state": "unavailable" }),
+            choosing: false,
+        }
+    }
+}
+
+/// Bootstrap-only: choose the bundled server and start it if it is not
+/// already starting or running. The page then waits on `local_server_status`.
+#[tauri::command]
+fn use_local_server(
+    app: AppHandle,
+    forwards: State<'_, port_forward::PortForwardManager>,
+) -> Result<serde_json::Value, String> {
+    #[cfg(desktop)]
+    {
+        let status = app
+            .state::<local_mode::LocalServer>()
+            .select_and_start(&app)?;
+        forwards.stop_all();
+        serde_json::to_value(status).map_err(|err| err.to_string())
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = (app, forwards);
+        Err("This device has no local server.".into())
+    }
+}
+
+/// Bootstrap-only: the local server's state while the page waits for it.
+#[tauri::command]
+fn local_server_status(app: AppHandle) -> serde_json::Value {
+    #[cfg(desktop)]
+    {
+        serde_json::to_value(app.state::<local_mode::LocalServer>().status()).unwrap_or_default()
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = app;
+        serde_json::json!({ "state": "unavailable" })
+    }
 }
 
 #[tauri::command]
@@ -663,18 +770,31 @@ mod served_file_grant_url_tests {
 /// The joined result is re-checked against the allow-list, so the only way out of
 /// this function is a URL the navigation guard would also admit — a window can
 /// never be created on a page it would then refuse to load.
-fn app_url(app: &AppHandle, path: Option<&str>) -> Url {
-    let configured = config::server_url(app);
+fn app_url(app: &AppHandle, path: Option<&str>) -> Option<Url> {
+    let configured = serving_url(app)?;
     let base = Url::parse(&configured)
         .or_else(|_| Url::parse(config::DEFAULT_SERVER_URL))
         .expect("the default server URL parses");
     let Some(path) = path.and_then(safe_path) else {
-        return base;
+        return Some(base);
     };
-    match base.join(&path) {
+    Some(match base.join(&path) {
         Ok(url) if config::is_allowed(&url) => url,
         _ => base,
+    })
+}
+
+/// The origin app windows load right now: the remote server in remote mode, or
+/// the local child once it has proved readiness and been trusted. None while
+/// the local server is starting, stopped or failed.
+pub(crate) fn serving_url(app: &AppHandle) -> Option<String> {
+    #[cfg(desktop)]
+    if let Some(local) = app.try_state::<local_mode::LocalServer>() {
+        if local.mode() == config::ServerMode::Local {
+            return local.ready_url();
+        }
     }
+    Some(config::server_url(app))
 }
 
 /// How far a new window is offset from the one that opened it, in physical px.
@@ -900,12 +1020,13 @@ fn build_window(
 /// navigate at all, it also denied the app the one situation its service worker
 /// and cached shell exist for. `ready::watch` owns what the probe used to: a page
 /// that never arrives is sent back to the bootstrap page.
-fn build_app_window(
+pub(crate) fn build_app_window(
     app: &AppHandle,
     label: &str,
     path: Option<&str>,
 ) -> tauri::Result<WebviewWindow> {
-    let url = app_url(app, path);
+    let url =
+        app_url(app, path).ok_or_else(|| std::io::Error::other("no server is ready to load"))?;
     trace!("app window {label} -> {url}");
     let window = build_window(app, label, WebviewUrl::External(url), false)?;
     ready::watch(app, label);
@@ -998,9 +1119,14 @@ pub(crate) fn next_window_label() -> String {
 /// It is also the only window granted the server-repointing commands, which is
 /// `capabilities/default.json`'s doing rather than this function's.
 #[cfg(desktop)]
-pub(crate) fn open_bootstrap_window(app: &AppHandle) -> Option<WebviewWindow> {
+pub(crate) fn open_bootstrap_window(app: &AppHandle, choosing: bool) -> Option<WebviewWindow> {
     let label = next_window_label();
-    trace!("new bootstrap window {label}");
+    trace!("new bootstrap window {label} choosing={choosing}");
+    if choosing {
+        if let Ok(mut labels) = CHOOSER_WINDOWS.lock() {
+            labels.push(label.clone());
+        }
+    }
     match build_window(app, &label, WebviewUrl::App("index.html".into()), true) {
         Ok(window) => {
             let _ = window.set_focus();
@@ -1017,6 +1143,19 @@ pub(crate) fn open_bootstrap_window(app: &AppHandle) -> Option<WebviewWindow> {
 /// where it landed.
 #[cfg(desktop)]
 pub(crate) fn open_app_window(app: &AppHandle, path: Option<&str>) -> Option<WebviewWindow> {
+    if serving_url(app).is_none() {
+        // Local mode with no ready server. While it starts, the main window
+        // appears on its own when it is ready; a failure gets the recovery page.
+        let failed = app
+            .try_state::<local_mode::LocalServer>()
+            .is_some_and(|local| matches!(local.status(), local_mode::LocalStatus::Failed { .. }));
+        trace!("app window requested with no server ready (failed={failed})");
+        return if failed {
+            open_bootstrap_window(app, false)
+        } else {
+            None
+        };
+    }
     let label = next_window_label();
     trace!("new app window {label}");
     match build_app_window(app, &label, path) {
@@ -1136,7 +1275,10 @@ pub fn run() {
             probe_server,
             push_registration,
             notify::notify,
-            openurl::take_pending_open_url
+            openurl::take_pending_open_url,
+            get_server_choice,
+            use_local_server,
+            local_server_status
         ])
         .setup(|app| {
             // The first moment the app can say where its own config dir is,
@@ -1168,15 +1310,38 @@ pub fn run() {
             // alerts it shows all arrive over the app's own socket.
             #[cfg(target_os = "macos")]
             usernotify::setup(app.handle(), || {});
+            // Local mode: no window until the child proves readiness, then the
+            // ordinary direct load (`local_mode::start_child`). A failure opens
+            // the bootstrap page as recovery.
+            #[cfg(desktop)]
+            {
+                let local = local_mode::LocalServer::new(app.handle());
+                let start_local = local.mode() == config::ServerMode::Local;
+                app.manage(local);
+                if start_local {
+                    app.state::<local_mode::LocalServer>().start(app.handle());
+                    return Ok(());
+                }
+            }
             config::initialize_trust(app.handle())?;
             build_app_window(app.handle(), "main", None)?;
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("error while building the assistant shell")
-        .run(|app, event| {
-            if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+        .run(|app, event| match event {
+            tauri::RunEvent::ExitRequested { .. } => {
                 app.state::<port_forward::PortForwardManager>().stop_all();
             }
+            // Bounded: SIGTERM, grace, then SIGKILL for the child and its
+            // descendants. A shell that dies without reaching this still
+            // closes the child's lifeline, and the server drains on its own.
+            #[cfg(desktop)]
+            tauri::RunEvent::Exit => {
+                if let Some(local) = app.try_state::<local_mode::LocalServer>() {
+                    local.shutdown_blocking(app);
+                }
+            }
+            _ => {}
         });
 }

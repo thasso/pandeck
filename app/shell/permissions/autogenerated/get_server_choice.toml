@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-server-choice"
+description = "Enables the get_server_choice command without any pre-configured scope."
+commands.allow = ["get_server_choice"]
+
+[[permission]]
+identifier = "deny-get-server-choice"
+description = "Denies the get_server_choice command without any pre-configured scope."
+commands.deny = ["get_server_choice"]

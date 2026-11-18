@@ -79,6 +79,23 @@
       }
       p.error {
         color: var(--danger);
+        white-space: pre-wrap;
+        text-align: left;
+        max-height: 12rem;
+        overflow: auto;
+        -webkit-user-select: text;
+        user-select: text;
+      }
+      .choice {
+        margin-bottom: 1.25rem;
+      }
+      .choice button {
+        width: 100%;
+      }
+      p.small {
+        font-size: 12px;
+        -webkit-user-select: text;
+        user-select: text;
       }
       form {
         display: flex;
@@ -132,8 +149,14 @@
       </div>
 
       <div id="failed" hidden>
-        <h1>Can't reach the assistant</h1>
+        <h1 id="title">Can't reach the assistant</h1>
         <p class="error" id="reason"></p>
+        <div class="choice" id="local-choice" hidden>
+          <button type="button" class="primary" id="use-local">
+            Use Pandeck on this Mac
+          </button>
+          <p class="small" id="local-detail" hidden></p>
+        </div>
         <form id="server-form">
           <input
             id="server-url"
@@ -147,7 +170,8 @@
           <button type="submit" class="primary">Connect</button>
         </form>
         <p id="hint">
-          If the server cannot be reached, check your network or VPN.
+          Or connect to a Pandeck server. If it cannot be reached, check your
+          network or VPN.
         </p>
       </div>
     </main>
@@ -156,12 +180,63 @@
       const invoke = window.__TAURI__?.core?.invoke;
       const el = (id) => document.getElementById(id);
 
+      // The server choice, as `get_server_choice` last described it.
+      let choice = null;
+
       /** Show the failure state with a reason, seeding the field for a retry. */
-      function fail(url, reason) {
+      function fail(url, reason, title = "Can't reach the assistant") {
         el("connecting").hidden = true;
         el("failed").hidden = false;
+        el("title").textContent = title;
         el("reason").textContent = reason;
+        el("reason").hidden = !reason;
         el("server-url").value = url;
+        const local = choice?.local;
+        el("local-choice").hidden = !local || local.state === "unavailable";
+        el("local-detail").hidden = !local?.logPath;
+        el("local-detail").textContent = local?.logPath
+          ? `Log: ${local.logPath}`
+          : "";
+      }
+
+      /** Offer both servers without reconnecting: the `Server…` menu. */
+      function choose() {
+        const local = choice.local;
+        const current =
+          choice.mode === "local"
+            ? `Now using Pandeck on this Mac (${local.state}).`
+            : `Now using ${choice.remoteUrl}.`;
+        fail(choice.remoteUrl, current, "Choose a server");
+        if (local.state === "failed") el("reason").textContent = local.detail;
+      }
+
+      /**
+       * Wait for the bundled server, then hand the window over. The shell
+       * trusts the local origin before it reports ready, so the navigation
+       * below is as safe as a probed remote one. A failure stops here: a
+       * restart is the user's call, never a loop.
+       */
+      async function followLocal(status) {
+        el("connecting").hidden = false;
+        el("failed").hidden = true;
+        el("connecting-text").textContent = "Starting Pandeck on this Mac…";
+        for (;;) {
+          if (status.state === "ready") {
+            location.replace(status.url);
+            return;
+          }
+          if (status.state !== "starting" && status.state !== "stopping") break;
+          await new Promise((done) => setTimeout(done, 300));
+          status = await invoke("local_server_status");
+        }
+        choice.local = status;
+        fail(
+          choice.remoteUrl,
+          status.state === "failed"
+            ? status.detail
+            : "Pandeck on this Mac is not running.",
+          "Pandeck on this Mac did not start",
+        );
       }
 
       /**
@@ -190,6 +265,15 @@
         }
       }
 
+      el("use-local").addEventListener("click", async () => {
+        try {
+          choice.mode = "local";
+          await followLocal(await invoke("use_local_server"));
+        } catch (err) {
+          fail(choice.remoteUrl, String(err));
+        }
+      });
+
       el("server-form").addEventListener("submit", async (event) => {
         event.preventDefault();
         const candidate = el("server-url").value.trim();
@@ -203,7 +287,12 @@
       if (!invoke) {
         fail("", "This page only runs inside the assistant shell.");
       } else {
-        invoke("get_server_url").then(connect);
+        invoke("get_server_choice").then((current) => {
+          choice = current;
+          if (choice.choosing) choose();
+          else if (choice.mode === "local") followLocal(choice.local);
+          else connect(choice.remoteUrl);
+        });
       }
     </script>
   </body>

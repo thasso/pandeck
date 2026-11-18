@@ -271,6 +271,9 @@ fn main() {
                 "push_registration",
                 "notify",
                 "take_pending_open_url",
+                "get_server_choice",
+                "use_local_server",
+                "local_server_status",
             ]),
         ),
     )
