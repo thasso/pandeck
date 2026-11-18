@@ -17,7 +17,8 @@
  * The packaged edge (Task-1401): `gateway-edge.js` refuses to start without
  * `--vault-host` or unpaired, links to a paired `vault.js`, serves an enrolled
  * relay's client protocol and `/mcp` (whose Jira tool answers "not
- * connected"), refuses peers without a certificate of its CA on the model and
+ * connected"), lets a relay intercept the token hosts for a packaged-Bun
+ * client (Task-1430), refuses peers without a certificate of its CA on the model and
  * client ports, serves the packaged gateway UI from `gateway-web/` with
  * `--ui-config`, and exits 0 on SIGTERM. No provider is reached.
  *
@@ -60,6 +61,10 @@ import {
   edgeTlsFor,
   selfSignedIdentity,
 } from "../app/server/src/gateway/x509.ts";
+import {
+  loadInterceptCa,
+  writeCaCertificate,
+} from "../app/server/src/relay/interceptCa.ts";
 import { enrollRelay, startRelay } from "../app/server/src/relay/relay.ts";
 import { WorkerConnection } from "../app/server/src/workerProtocol/connection.ts";
 import { dialUnixSocket } from "../app/server/src/workerProtocol/unixSocketTransport.ts";
@@ -681,6 +686,192 @@ function fetchBytes(url, options = {}) {
   );
 }
 
+/**
+ * Resolves the error text of a TLS client that trusts only `caPem`, with
+ * host-name checking off, against a local server presenting `leaf`; `"ok"`
+ * when the chain verifies. Only the chain can fail it.
+ */
+async function chainOutcome(leaf, caPem, servername) {
+  const server = tls.createServer({ key: leaf.key, cert: leaf.cert }, (s) =>
+    s.end(),
+  );
+  server.on("tlsClientError", () => {});
+  await new Promise((done) => server.listen(0, "127.0.0.1", done));
+  try {
+    return await within(
+      new Promise((done) => {
+        const socket = tls.connect({
+          host: "127.0.0.1",
+          port: server.address().port,
+          ca: [caPem],
+          ...(servername ? { servername } : {}),
+          checkServerIdentity: () => undefined,
+        });
+        socket.once("secureConnect", () => {
+          done(socket.authorized ? "ok" : String(socket.authorizationError));
+          socket.destroy();
+        });
+        socket.once("error", (err) => {
+          done(`${err.code ?? ""} ${err.message}`);
+          socket.destroy();
+        });
+      }),
+      15_000,
+      `a TLS client against a leaf for ${servername ?? "an IP"}`,
+    );
+  } finally {
+    await new Promise((done) => server.close(done));
+  }
+}
+
+/** A raw CONNECT through `port`; resolves the status line and the socket. */
+function rawConnect(port, target) {
+  return within(
+    new Promise((done, fail) => {
+      const socket = connect(port, "127.0.0.1");
+      let head = "";
+      const onData = (chunk) => {
+        head += chunk.toString("latin1");
+        if (!head.includes("\r\n\r\n")) return;
+        socket.removeListener("data", onData);
+        socket.pause();
+        done({ status: head.split("\r\n")[0], socket });
+      };
+      socket.on("data", onData);
+      socket.once("error", fail);
+      socket.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n\r\n`);
+    }),
+    15_000,
+    `CONNECT ${target}`,
+  );
+}
+
+/**
+ * The relay's interception under the packaged Bun (Task-1430 PR2b): a second
+ * relay on the enrolled state with an interception CA. (1) A packaged-Bun
+ * child given only `HTTPS_PROXY` and `NODE_EXTRA_CA_CERTS`, as
+ * `claude-gateway` will, POSTs to `https://api.anthropic.com/v1/messages` and
+ * gets the edge's own marked refusal, not the relay's 502: the request was
+ * decrypted and mapped to the edge, and no name was resolved. (2) Bun's TLS
+ * refuses a leaf of that CA for an IP address and for a DNS name outside the
+ * named domains by the CA's name constraints, while one for a token host
+ * verifies. (3) A CONNECT to an IP literal is tunnelled: the peer is the edge.
+ */
+async function checkInterception({
+  bunExecutable,
+  temp,
+  relayDir,
+  edgeCaPem,
+  modelPort,
+}) {
+  const interceptCa = loadInterceptCa(relayDir);
+  const caFile = join(temp, "ica.pem");
+  writeCaCertificate(interceptCa, caFile);
+  const relay = await startRelay({
+    stateDir: relayDir,
+    port: 0,
+    socketPath: join(temp, "i.sock"),
+    interceptCa,
+    log: () => {},
+  });
+  try {
+    // (1) The client's own form: the environment only.
+    const child = spawn(
+      [
+        bunExecutable,
+        "-e",
+        `fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { authorization: "Bearer fake", "content-type": "application/json", "anthropic-version": "2023-06-01" }, body: JSON.stringify({ model: "fake", max_tokens: 1, messages: [] }) }).then(async (r) => console.log(JSON.stringify({ status: r.status, body: await r.text() })), (e) => console.log(JSON.stringify({ error: String(e && (e.code || e.message)) })))`,
+      ],
+      {
+        cwd: temp,
+        env: {
+          PATH: process.env.PATH ?? "",
+          HOME: join(temp, "h"),
+          TMPDIR: join(temp, "t"),
+          HTTPS_PROXY: `http://127.0.0.1:${relay.port}`,
+          NODE_EXTRA_CA_CERTS: caFile,
+        },
+        stdout: "pipe",
+        stderr: "inherit",
+      },
+    );
+    const [output, code] = await within(
+      Promise.all([new globalThis.Response(child.stdout).text(), child.exited]),
+      30_000,
+      "the packaged-Bun client through the intercepting relay",
+    );
+    const answer = JSON.parse(output.trim() || "{}");
+    assert(
+      code === 0 &&
+        typeof answer.body === "string" &&
+        answer.body.includes(GATEWAY_REFUSAL_MARKER) &&
+        answer.status !== 502,
+      `An intercepted POST answered ${output.trim() || `nothing (exit ${code})`}, not the edge's marked refusal.`,
+    );
+
+    // (2) The CA's name constraints under Bun's TLS.
+    const control = await chainOutcome(
+      interceptCa.leafFor("api.anthropic.com"),
+      interceptCa.certPem,
+      "api.anthropic.com",
+    );
+    assert(control === "ok", `A token-host leaf did not verify: ${control}.`);
+    const ip = await chainOutcome(
+      interceptCa.leafFor("127.0.0.1"),
+      interceptCa.certPem,
+      undefined,
+    );
+    // Bun's BoringSSL evaluates no iPAddress constraint and refuses any IP
+    // name a constraint of that type covers ("unsupported name constraint
+    // type"); OpenSSL reports the exclusion. Without the exclusion the leaf
+    // verifies under both, so either text can only come from the CA's
+    // excluded subtrees (docs/deployment.md "Bun package").
+    assert(
+      /excluded subtree violation|unsupported name constraint type/i.test(ip),
+      `An IP leaf was not refused by the CA's exclusion: ${ip}.`,
+    );
+    const outside = await chainOutcome(
+      interceptCa.leafFor("example.com"),
+      interceptCa.certPem,
+      "example.com",
+    );
+    assert(
+      /permitted subtree violation/i.test(outside),
+      `A leaf outside the named domains was not refused by the CA: ${outside}.`,
+    );
+
+    // (3) An IP literal is tunnelled, never intercepted.
+    const tunnel = await rawConnect(relay.port, `127.0.0.1:${modelPort}`);
+    assert(
+      tunnel.status === "HTTP/1.1 200 Connection Established",
+      `CONNECT to an IP literal answered ${tunnel.status}.`,
+    );
+    const issuer = await within(
+      new Promise((done, fail) => {
+        const secure = tls.connect({
+          socket: tunnel.socket,
+          host: "127.0.0.1",
+          ca: [edgeCaPem],
+          rejectUnauthorized: false,
+        });
+        secure.once("secureConnect", () => {
+          done(secure.getPeerCertificate().issuer?.CN);
+          secure.destroy();
+        });
+        secure.once("error", fail);
+      }),
+      15_000,
+      "TLS through the tunnel",
+    );
+    assert(
+      issuer === "Pandeck gateway CA",
+      `The tunnelled peer's issuer is ${issuer}, not the edge's CA.`,
+    );
+  } finally {
+    await relay.close();
+  }
+}
+
 /** The text the edge's Jira tool answers a user with no credential. */
 const JIRA_NOT_CONNECTED =
   "Jira is not connected for this user; connect it in Pandeck's Settings.";
@@ -982,6 +1173,15 @@ export async function checkEdgeEntry(runtimeRoot) {
     const wrong = await mcp({ method: "tools/list" }, "wrong-token");
     assert(wrong.status === 401, `A wrong MCP token got ${wrong.status}.`);
 
+    // (6b) Interception (Task-1430, ADR-0006), all local.
+    await checkInterception({
+      bunExecutable,
+      temp,
+      relayDir,
+      edgeCaPem: caPem,
+      modelPort,
+    });
+
     // (7) Mutual TLS: no certificate, and one the edge's CA did not issue.
     const stranger = selfSignedIdentity("stranger", "client");
     for (const [port, name] of [
@@ -1110,7 +1310,7 @@ export async function checkEdgeEntry(runtimeRoot) {
     vault.kill("SIGTERM");
     const stopVault = await within(vault.exited, 30_000, "vault.js's stop");
     assert(stopVault === 0, `vault.js's stop exited with ${stopVault}.`);
-    return `refused unpaired and vault-less starts, vault link up, client protocol and /mcp through a relay (Jira not connected), no-cert and stranger peers refused on both ports, gateway-web served with --ui-config, SIGTERM exit 0`;
+    return `refused unpaired and vault-less starts, vault link up, client protocol and /mcp through a relay (Jira not connected), CONNECT interception (Bun fetch via HTTPS_PROXY reached the edge's marked refusal; IP and outside-name leaves refused by the CA; IP literal tunnelled), no-cert and stranger peers refused on both ports, gateway-web served with --ui-config, SIGTERM exit 0`;
   } finally {
     link?.end("check done");
     await relay?.close();

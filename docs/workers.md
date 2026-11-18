@@ -2088,7 +2088,8 @@ repeats and verifies the edge by its enrolled address whatever the `Host`
 (above). It drops hop-by-hop fields. Request fields starting with `x-pandeck-`
 are reserved: every caller value is removed, regardless of case or repeats, and
 one `x-pandeck-relay-id` is added. Bodies still stream unchanged; no credential
-is added or removed.
+is added or removed. For the two Claude token hosts it intercepts, ADR-0006
+changes the target and `Host` ("Interception" below).
 
 - **Placeholder.** One literal, JWT-shaped because pi and Codex accept only
   that, pinned in `gatewayMachinePool.test.ts`:
@@ -2223,6 +2224,43 @@ is added or removed.
     accepting each harness's API-key-mode body are operator checks on a devbox
     after merge. A body a provider rejects is fixed in that harness's documented
     config; a gateway change returns to planning.
+- **Interception (Claude Code, Task-1430, ADR-0006).** Without the custom base
+  URL, Claude Code reaches its account calls and model calls through the relay
+  as a proxy.
+  - **Flag and files.** `relay run … --intercept-ca-cert <path>` loads or makes
+    the interception CA: `intercept-ca-key.pem` and `intercept-ca-cert.pem`,
+    both 0600, in the relay's state directory; the key is reused across
+    restarts. It writes the certificate alone to `<path>` (0644, atomically) and
+    adds a CONNECT handler to the model listener. An unusable key stops the
+    relay with a message naming the file; delete `intercept-ca-*` and restart.
+    Without the flag nothing changes: CONNECT is closed as before.
+  - **Which CONNECT.** The target must be a valid authority (IPv6 in brackets,
+    IPv4, or DNS labels, then a port). Only `api.anthropic.com:443` and
+    `mcp-proxy.anthropic.com:443` are decrypted, to `/anthropic…` and
+    `/anthropic-mcp…` on the edge. IP literals and every other host are blind
+    tunnels, not logged by host. A name under `anthropic.com`, `claude.ai` or
+    `claude.com` on another port is refused 403 `connect-port`, spelled with a
+    trailing dot 403 `connect-target`. A target that is not a valid authority,
+    or an IP or other host with a port outside 1-65535, gets 400 and a log line
+    without the target.
+  - **Decrypted requests.** Origin-form only (an absolute-form target gets 400
+    `origin-form`); a WebSocket upgrade gets 501 `upgrade` without reaching the
+    edge. Each request keeps its header fields as received except hop-by-hop
+    fields, caller `x-pandeck-*` fields and `Host`, which becomes one
+    `127.0.0.1:<relay port>`; `Origin` still reaches the edge, which refuses it.
+    Bodies pass unread. Every refusal above is marked and has Anthropic's error
+    shape.
+  - **Setup.** `HTTPS_PROXY=http://127.0.0.1:<port>` (never `HTTP_PROXY`),
+    `NODE_EXTRA_CA_CERTS=<path>`, `ANTHROPIC_BASE_URL` unset, and none of the
+    three domains in `NO_PROXY`; the IDB `claude-gateway` wrapper owns this.
+    Only that process trusts the CA.
+  - **Until the permissive machine path and observed hosts land** (Task-1430
+    PR3, PR4): account calls such as `/api/oauth/profile` get the machine path's
+    403, `mcp-proxy.anthropic.com` gets the edge's `unknown-prefix` 404, and
+    `claude.ai`, `downloads.claude.ai`, `www.anthropic.com` and the other named
+    hosts are tunnelled, neither decrypted nor recorded. Interception is for
+    testing devboxes until then, and never enabled in a release without the
+    relay's reporting (ADR-0006).
 - **Machine path.** On a client's model port, a request whose bearer is not
   lease-shaped (three base64url segments whose payload names a lease), or that
   has none, is a machine request. A lease-shaped bearer takes the lease path

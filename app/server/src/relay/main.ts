@@ -11,7 +11,11 @@
  *   proof and, when the gateway approves at once, prints "Approved
  *   automatically." instead of the link (Task-1410 PR2); an empty token
  *   means the link
- * - `run --state-dir <dir> --port <loopback port> --socket <path>`
+ * - `run --state-dir <dir> --port <loopback port> --socket <path>
+ *   [--intercept-ca-cert <path>]`: with the flag, loads or makes the
+ *   interception CA in the state directory, writes its certificate (never the
+ *   key) to the path for `NODE_EXTRA_CA_CERTS`, and decrypts the token hosts
+ *   (ADR-0006)
  *
  * It runs as Pandeck's server account, so agents can read neither its key
  * nor its socket, and outlives server restarts.
@@ -26,12 +30,17 @@ import {
   type MachineKind,
 } from "./relay.ts";
 import { readEnrollmentCode, readOwnerToken } from "./enrollmentCode.ts";
+import {
+  loadInterceptCa,
+  writeCaCertificate,
+  type InterceptCa,
+} from "./interceptCa.ts";
 
 const KINDS: readonly string[] = ["devbox", "laptop", "other"];
 
 function usage(): never {
   console.error(
-    "usage: relay enroll --state-dir <dir> --gateway <host:port> --ca <pem file> [--code-file <0600 file>]\n       enrollment reads stdin unless --code-file is given\n       relay enroll --approve --name <text> [--kind devbox|laptop|other] [--owner-token-file <0600 file | ->] --state-dir <dir> --gateway <host:port> --ca <pem file>\n       relay run --state-dir <dir> --port <port> --socket <path>",
+    "usage: relay enroll --state-dir <dir> --gateway <host:port> --ca <pem file> [--code-file <0600 file>]\n       enrollment reads stdin unless --code-file is given\n       relay enroll --approve --name <text> [--kind devbox|laptop|other] [--owner-token-file <0600 file | ->] --state-dir <dir> --gateway <host:port> --ca <pem file>\n       relay run --state-dir <dir> --port <port> --socket <path> [--intercept-ca-cert <path>]",
   );
   process.exit(2);
 }
@@ -74,6 +83,7 @@ const { values } = parseArgs({
     kind: { type: "string" },
     port: { type: "string" },
     socket: { type: "string" },
+    "intercept-ca-cert": { type: "string" },
   },
 });
 const stateDir = values["state-dir"];
@@ -140,10 +150,33 @@ if (command === "enroll" && values.approve) {
   console.log(`enrolled as client ${clientId}`);
 } else if (command === "run") {
   if (!values.port || !values.socket) usage();
+  const caCertPath = values["intercept-ca-cert"];
+  let interceptCa: InterceptCa | undefined;
+  if (caCertPath !== undefined) {
+    try {
+      interceptCa = loadInterceptCa(stateDir);
+    } catch (err) {
+      // `loadInterceptCa`'s fixed message names the file, never a key.
+      console.error(
+        err instanceof Error ? err.message : "Unusable interception CA.",
+      );
+      process.exit(1);
+    }
+    try {
+      writeCaCertificate(interceptCa, caCertPath);
+    } catch {
+      console.error(
+        `Cannot write the interception CA certificate to ${caCertPath}.`,
+      );
+      process.exit(1);
+    }
+    console.log(`[relay] interception CA certificate at ${caCertPath}`);
+  }
   const relay = await startRelay({
     stateDir,
     port: Number(values.port),
     socketPath: values.socket,
+    ...(interceptCa ? { interceptCa } : {}),
   });
   let stopping = false;
   const stop = (): void => {

@@ -15,6 +15,12 @@
  *   5 s, then flushes for up to 5 s and reports any undelivered count.
  * - A Unix socket (0600, the relay's account) for the client protocol: each
  *   accepted connection is piped byte for byte to the edge's client port.
+ * - With an interception CA (`--intercept-ca-cert`, Task-1430, ADR-0006), the
+ *   model listener also answers CONNECT (`intercept.ts`): it decrypts
+ *   `api.anthropic.com` and `mcp-proxy.anthropic.com` and sends their requests
+ *   to the edge as `/anthropic…` and `/anthropic-mcp…`, the one place where
+ *   the relay rewrites a target and `Host`; bodies still pass unread. Other
+ *   targets are blind tunnels. Without the CA there is no CONNECT handler.
  *
  * `enrollRelay` makes the key and the MCP token with `node:crypto`, redeems a
  * one-time code at the edge's enrollment port with the public key and the
@@ -40,6 +46,8 @@ import net from "node:net";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import tls from "node:tls";
+import { attachInterception } from "./intercept.ts";
+import type { InterceptCa } from "./interceptCa.ts";
 import { createModelTraffic } from "./modelTraffic.ts";
 import { observationTransport } from "./observationTransport.ts";
 import { createObservations } from "./observations.ts";
@@ -569,6 +577,11 @@ export interface RelayOptions {
   port: number;
   /** The client protocol's Unix socket. */
   socketPath: string;
+  /**
+   * With it, CONNECT on the model listener decrypts the token hosts
+   * (`intercept.ts`); without it, CONNECT is closed as before.
+   */
+  interceptCa?: InterceptCa;
   log?: (line: string) => void;
   /** Test seams; production uses 20,000 slots and the documented deadlines. */
   observations?: {
@@ -645,6 +658,22 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
   });
   model.on("connection", track);
   model.on("clientError", (_err, socket) => socket.destroy());
+  let port = 0;
+  const interception = options.interceptCa
+    ? attachInterception(model, {
+        ca: options.interceptCa,
+        relayPort: () => port,
+        forward: (req, res, ingress) =>
+          traffic.forward(req, res, {
+            host: ingress.recordHost ?? identity.host,
+            path: ingress.recordPath ?? req.url ?? "/",
+            edgePath: ingress.path,
+            headers: ingress.headers,
+          }),
+        track,
+        log,
+      })
+    : undefined;
 
   const control = net.createServer((local) => {
     track(local);
@@ -674,6 +703,9 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
         resolve();
       });
     });
+    // Before any decrypted request can need it for its loopback `Host`.
+    const address = model.address();
+    port = typeof address === "object" && address ? address.port : 0;
     clearSocketPath(options.socketPath);
     // The socket is created 0600: no window in which another account opens it.
     const umask = process.umask(0o177);
@@ -700,10 +732,8 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
     agent.destroy();
     throw err;
   }
-  const address = model.address();
-  const port = typeof address === "object" && address ? address.port : 0;
   log(
-    `client ${identity.clientId}: model on 127.0.0.1:${port}, client protocol on ${options.socketPath}`,
+    `client ${identity.clientId}: model on 127.0.0.1:${port}, client protocol on ${options.socketPath}${interception ? ", intercepting the token hosts" : ""}`,
   );
   let closePromise: Promise<void> | undefined;
   return {
@@ -717,6 +747,7 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
       const closed = Promise.all([
         new Promise<void>((resolve) => model.close(() => resolve())),
         new Promise<void>((resolve) => control.close(() => resolve())),
+        interception?.close(),
       ]);
       model.closeIdleConnections();
       closePromise = (async () => {
