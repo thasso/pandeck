@@ -631,6 +631,10 @@ test.each([
   [["::1"], "0:0:0:0:0:0:0:1", "::"],
   [["::1"], "::1", "::"],
   [["*.relay.localhost"], "a.relay.localhost", "127.0.0.1"],
+  [["localhost."], "localhost", "127.0.0.1"],
+  [["localhost."], "LOCALHOST.", "127.0.0.1"],
+  [["*.relay.localhost."], "a.relay.localhost", "127.0.0.1"],
+  [["*.relay.localhost."], "A.RELAY.LOCALHOST.", "127.0.0.1"],
 ] as const)(
   "F007 enrolled host %s / %s retains relay reports",
   async (hosts, relayHost, bindHost) => {
@@ -645,7 +649,11 @@ test.each([
         family?: number,
       ) => void,
     ) => {
-      if (host === "a.relay.localhost") {
+      if (
+        ["localhost", "a.relay.localhost"].includes(
+          host.toLowerCase().replace(/\.$/, ""),
+        )
+      ) {
         if (typeof options === "object" && options.all)
           callback(null, [{ address: "127.0.0.1", family: 4 }]);
         else callback(null, "127.0.0.1", 4);

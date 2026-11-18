@@ -101,7 +101,7 @@ function hostOwnership(hosts: readonly string[], certificate: string) {
     const normalized = normalizedHost(host);
     if (!normalized) return false;
     const { name, ip } = normalized;
-    if (!name || name.includes("*")) return false;
+    if (!name || name.endsWith(".") || name.includes("*")) return false;
     const owned = configured.some((pattern) => {
       if (!pattern || pattern.ip !== ip) return false;
       if (pattern.name === name) return true;
@@ -112,15 +112,28 @@ function hostOwnership(hosts: readonly string[], certificate: string) {
       return label.length > 0 && !label.includes(".");
     });
     if (!owned) return false;
-    return ip
-      ? cert.checkIP(name) !== undefined
-      : cert.checkHost(name, {
-          subject: "never",
-          wildcards: true,
-          partialWildcards: false,
-          multiLabelWildcards: false,
-          singleLabelSubdomains: false,
-        }) !== undefined;
+    if (ip) return cert.checkIP(name) !== undefined;
+    const checkOptions = {
+      subject: "never" as const,
+      wildcards: true,
+      partialWildcards: false,
+      multiLabelWildcards: false,
+      singleLabelSubdomains: false,
+    };
+    if (
+      cert.checkHost(name, checkOptions) !== undefined ||
+      cert.checkHost(`${name}.`, checkOptions) !== undefined
+    )
+      return true;
+    // X509 does not expand a dotted wildcard SAN for either concrete spelling.
+    // Require three DNS labels, then prove that one literal SAN exists without
+    // wildcard expansion. Configuration ownership was checked independently.
+    if (!/^[a-z0-9_-]+(?:\.[a-z0-9_-]+){2,}$/.test(name)) return false;
+    const reference = `*${name.slice(name.indexOf("."))}.`;
+    return (
+      cert.checkHost(reference, { ...checkOptions, wildcards: false }) !==
+      undefined
+    );
   };
 }
 

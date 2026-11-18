@@ -140,6 +140,256 @@ test("F007 TLS-equivalent ownership is bounded, atomic and performs no DNS looku
 });
 
 test.each([
+  [
+    "exact dotted SAN and config accept undotted report",
+    ["localhost."],
+    ["localhost."],
+    "localhost",
+    200,
+  ],
+  [
+    "exact dotted SAN and config accept dotted report",
+    ["localhost."],
+    ["localhost."],
+    "localhost.",
+    200,
+  ],
+  [
+    "dotted SAN accepts either case spelling",
+    ["localhost"],
+    ["localhost."],
+    "LOCALHOST.",
+    200,
+  ],
+  [
+    "undotted SAN accepts dotted report",
+    ["localhost"],
+    ["localhost"],
+    "LOCALHOST.",
+    200,
+  ],
+  [
+    "dotted wildcard SAN accepts child spellings",
+    ["*.relay.localhost."],
+    ["*.relay.localhost."],
+    "A.RELAY.LOCALHOST.",
+    200,
+  ],
+  [
+    "dotted wildcard SAN accepts undotted child",
+    ["*.relay.localhost"],
+    ["*.relay.localhost."],
+    "a.relay.localhost",
+    200,
+  ],
+  [
+    "undotted SAN and dotted config accept undotted report",
+    ["localhost."],
+    ["localhost"],
+    "localhost",
+    200,
+  ],
+  [
+    "undotted wildcard SAN accepts dotted config and report",
+    ["*.relay.localhost."],
+    ["*.relay.localhost"],
+    "A.RELAY.LOCALHOST.",
+    200,
+  ],
+  [
+    "exact config accepts dotted wildcard SAN",
+    ["a.relay.localhost"],
+    ["*.relay.localhost."],
+    "a.relay.localhost",
+    200,
+  ],
+  [
+    "wildcard config accepts exact dotted child SAN",
+    ["*.relay.localhost."],
+    ["a.relay.localhost."],
+    "a.relay.localhost",
+    200,
+  ],
+  [
+    "dotted wildcard accepts underscore label",
+    ["*.relay.localhost."],
+    ["*.relay.localhost."],
+    "a_b.relay.localhost",
+    200,
+  ],
+  [
+    "dotted wildcard accepts hyphen label",
+    ["*.relay.localhost."],
+    ["*.relay.localhost."],
+    "a-b.relay.localhost",
+    200,
+  ],
+  ["canonical IPv6 remains accepted", ["::1"], ["::1"], "::1", 200],
+  ["expanded IPv6 remains accepted", ["::1"], ["::1"], "0:0:0:0:0:0:0:1", 200],
+  [
+    "dotted SAN still requires certificate ownership",
+    ["localhost"],
+    ["elsewhere.test"],
+    "localhost",
+    400,
+  ],
+  [
+    "dotted wildcard SAN does not own apex",
+    ["*.relay.localhost."],
+    ["*.relay.localhost."],
+    "relay.localhost",
+    400,
+  ],
+  [
+    "dotted wildcard SAN does not own extra label",
+    ["*.relay.localhost."],
+    ["*.relay.localhost."],
+    "b.a.relay.localhost",
+    400,
+  ],
+  [
+    "dotted SAN does not admit malformed multiple trailing dots",
+    ["localhost.."],
+    ["localhost.."],
+    "localhost..",
+    400,
+  ],
+  ["CN-only certificate is not ownership", ["localhost"], [], "localhost", 400],
+  [
+    "extra provider SAN is not configuration ownership",
+    ["localhost"],
+    ["localhost", "api.anthropic.com"],
+    "api.anthropic.com",
+    400,
+  ],
+  [
+    "exact config does not own another wildcard child",
+    ["a.relay.localhost"],
+    ["*.relay.localhost."],
+    "b.relay.localhost",
+    400,
+  ],
+  [
+    "wildcard config does not own foreign suffix",
+    ["*.relay.localhost."],
+    ["*.relay.localhost."],
+    "a.relay.localhost.evil",
+    400,
+  ],
+  [
+    "wildcard config does not own near suffix",
+    ["*.relay.localhost."],
+    ["*.relay.localhost."],
+    "a.evilrelay.localhost",
+    400,
+  ],
+  [
+    "partial wildcard SAN is not ownership",
+    ["ab.relay.localhost"],
+    ["a*.relay.localhost."],
+    "ab.relay.localhost",
+    400,
+  ],
+  [
+    "multiple wildcard SAN is not ownership",
+    ["b.a.relay.localhost"],
+    ["*.*.relay.localhost."],
+    "b.a.relay.localhost",
+    400,
+  ],
+  [
+    "unrelated exact SAN is not ownership",
+    ["*.relay.localhost."],
+    ["other.relay.localhost."],
+    "a.relay.localhost",
+    400,
+  ],
+  [
+    "caller literal wildcard is not a concrete name",
+    ["*.relay.localhost."],
+    ["*.relay.localhost."],
+    "*.relay.localhost.",
+    400,
+  ],
+  [
+    "slash label cannot use literal proof",
+    ["*.relay.localhost."],
+    ["*.relay.localhost."],
+    "a/b.relay.localhost",
+    400,
+  ],
+  [
+    "at-sign label cannot use literal proof",
+    ["*.relay.localhost."],
+    ["*.relay.localhost."],
+    "a@b.relay.localhost",
+    400,
+  ],
+  [
+    "empty internal label cannot use literal proof",
+    ["a..relay.localhost"],
+    ["*.relay.localhost."],
+    "a..relay.localhost",
+    400,
+  ],
+  [
+    "top-level dotted wildcard cannot use literal proof",
+    ["*.com."],
+    ["*.com."],
+    "a.com",
+    400,
+  ],
+  [
+    "IP still requires actual IP SAN",
+    ["127.0.0.1"],
+    ["127.0.0.2"],
+    "127.0.0.1",
+    400,
+  ],
+  [
+    "dotted IPv4 is not an IP SAN",
+    ["127.0.0.1"],
+    ["127.0.0.1"],
+    "127.0.0.1.",
+    400,
+  ],
+  [
+    "dotted wildcard does not own extra label even with exact config",
+    ["b.a.relay.localhost"],
+    ["*.relay.localhost."],
+    "b.a.relay.localhost",
+    400,
+  ],
+  [
+    "dotted wildcard does not own apex even with exact config",
+    ["relay.localhost"],
+    ["*.relay.localhost."],
+    "relay.localhost",
+    400,
+  ],
+] as const)(
+  "F007 certificate spelling: %s",
+  async (_name, hosts, certificateHosts, host, expected) => {
+    const cnOnly = certificateHosts.length === 0;
+    const control = cnOnly ? [] : ["control.localhost"];
+    const r = await rig(
+      [...hosts, ...control],
+      [...certificateHosts, ...control],
+    );
+    assert.equal(
+      await r.post({
+        boot,
+        records: [report(cnOnly ? host : control[0]!, 1), report(host, 2)],
+      }),
+      expected,
+    );
+    assert.equal(r.records.length, expected === 200 ? 2 : 0);
+    if (expected === 400)
+      assert.deepEqual(r.lines, ["relay observations: invalid batch"]);
+  },
+);
+
+test.each([
   [["localhost"], ["elsewhere.test"], "localhost"],
   [["localhost"], [], "localhost"],
   [["localhost"], ["localhost", "api.anthropic.com"], "api.anthropic.com"],
