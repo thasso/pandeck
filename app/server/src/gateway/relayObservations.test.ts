@@ -301,8 +301,8 @@ test.each([
   [
     "extra provider SAN is not configuration ownership",
     ["localhost"],
-    ["localhost", "api.anthropic.com"],
-    "api.anthropic.com",
+    ["localhost", "api.openai.com"],
+    "api.openai.com",
     400,
   ],
   [
