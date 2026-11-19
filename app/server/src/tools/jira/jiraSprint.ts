@@ -14,6 +14,7 @@ import type {
   JiraSprintChangeDisplay,
   JiraSprintField,
 } from "@assistant/shared";
+import { AtlassianHttpError } from "../../atlassian/atlassianFetch.ts";
 import {
   jiraBaseUrl,
   jiraGet,
@@ -232,10 +233,13 @@ async function fetchSprint(
       `/rest/agile/1.0/sprint/${sprintId}`,
     );
   } catch (err) {
-    const message = errorText(err);
-    if (/HTTP 40(3|4)\b/.test(message))
+    // By Jira's status, never by the message, which quotes Jira's body.
+    if (
+      err instanceof AtlassianHttpError &&
+      (err.status === 403 || err.status === 404)
+    )
       throw new Error(
-        `Jira sprint ${sprintId} could not be read: ${message} Find the sprint id with jira_lookup kind=sprints.`,
+        `Jira sprint ${sprintId} could not be read: ${errorText(err)} Find the sprint id with jira_lookup kind=sprints.`,
       );
     throw err;
   }

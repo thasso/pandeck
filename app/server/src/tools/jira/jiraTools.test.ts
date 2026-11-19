@@ -120,6 +120,7 @@ import {
   renderSearchPayload,
   usersLookupPayload,
 } from "../../test/jiraReadFixtures.ts";
+import { AtlassianHttpError } from "../../atlassian/atlassianFetch.ts";
 
 // Importing jiraTools also registers the "jiraIssue" approval executor.
 const {
@@ -1365,8 +1366,9 @@ function sprintStub(
     if (sprintMatch) {
       const sprint = byId.get(Number(sprintMatch[1]));
       if (!sprint)
-        throw new Error(
+        throw new AtlassianHttpError(
           `Jira API returned HTTP 404 for GET ${path}: {"errorMessages":["Sprint does not exist"]}`,
+          404,
         );
       return sprint as never;
     }
@@ -1376,8 +1378,9 @@ function sprintStub(
     if (boardMatch) {
       const boardId = Number(boardMatch[1]);
       if (boards.find((board) => board.id === boardId)?.type === "kanban")
-        throw new Error(
+        throw new AtlassianHttpError(
           `Jira API returned HTTP 400 for GET ${path}: {"errorMessages":["The board does not support sprints"]}`,
+          400,
         );
       const page = (query ?? {}) as {
         state?: string;
@@ -1476,6 +1479,32 @@ describe("jira_lookup sprints", () => {
     expect(payload.projectKey).toBe("STAR");
     expect(payload.boardsWithoutSprints).toEqual([7]);
     expect(payload.sprints).toEqual([expect.objectContaining({ id: 5149 })]);
+  });
+
+  test("only Jira's own 400 marks a board without sprints, never a message quoting one", async () => {
+    const path = "/rest/agile/1.0/board/42/sprint";
+    const failures: [string, Error][] = [
+      [
+        "a 403 whose body quotes HTTP 400",
+        new AtlassianHttpError(
+          `Jira API returned HTTP 403 for GET ${path}: {"errorMessages":["Upstream request failed, previously HTTP 400"]}`,
+          403,
+        ),
+      ],
+      ["a non-HTTP error quoting HTTP 400", new Error("proxy said HTTP 400")],
+    ];
+    for (const [label, failure] of failures) {
+      sprintStub([SPRINT_25]);
+      const inner = vi.mocked(jiraGet).getMockImplementation()!;
+      vi.mocked(jiraGet).mockImplementation(async (...args) => {
+        if (args[1] === path) throw failure;
+        return inner(...args);
+      });
+      await expect(
+        runLookup({ kind: "sprints", projectKey: "star" }),
+        label,
+      ).rejects.toBe(failure);
+    }
   });
 
   test("pages by the rows Jira returned, not the rows it was asked for", async () => {
@@ -1682,6 +1711,19 @@ describe("jira_mutate_issue sprint", () => {
     await expect(
       runMutate(sid, [{ operation: "sprint", sprintId: 1, sprintGoal: "x" }]),
     ).rejects.toThrow(/could not be read/);
+    // Only Jira's own 403/404 gets the sprint-id hint, never a body quoting one.
+    const inner = vi.mocked(jiraGet).getMockImplementation()!;
+    const quoting = new AtlassianHttpError(
+      'Jira API returned HTTP 500 for GET /rest/agile/1.0/sprint/2: {"errorMessages":["after HTTP 404"]}',
+      500,
+    );
+    vi.mocked(jiraGet).mockImplementation(async (...args) => {
+      if (args[1] === "/rest/agile/1.0/sprint/2") throw quoting;
+      return inner(...args);
+    });
+    await expect(
+      runMutate(sid, [{ operation: "sprint", sprintId: 2, sprintGoal: "x" }]),
+    ).rejects.toBe(quoting);
     expect(approvalsForSession(sid)).toHaveLength(0);
   });
 

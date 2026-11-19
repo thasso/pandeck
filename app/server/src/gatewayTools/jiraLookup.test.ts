@@ -313,6 +313,41 @@ test("sprints of a board, and of a project's boards with a state filter", async 
   assertSignals(seen);
 });
 
+test("only Jira's own 400 marks a board without sprints: a 403 quoting HTTP 400 is the remedy", async () => {
+  // Board 7 (kanban) answers a real 400 and is still skipped; board 42's 403
+  // body quotes "HTTP 400" and must not be mistaken for one.
+  stubJiraFetch((request) =>
+    request.path === "/rest/agile/1.0/board/42/sprint"
+      ? json(
+          {
+            errorMessages: ["Upstream request failed, previously HTTP 400"],
+          },
+          403,
+        )
+      : agile(request),
+  );
+  assert.deepEqual(await lookup({ kind: "sprints", projectKey: "STAR" }), {
+    ok: false,
+    code: "tool_error",
+    message:
+      "Atlassian rejected the credential; reconnect Jira in Pandeck's Settings.",
+  });
+});
+
+test("a failure that is not Jira's answer is not a board without sprints, whatever it says", async () => {
+  setRetrySleepForTests(() => Promise.resolve());
+  stubJiraFetch((request) => {
+    if (request.path === "/rest/agile/1.0/board/42/sprint")
+      throw new TypeError("proxy said HTTP 400");
+    return agile(request);
+  });
+  assert.deepEqual(await lookup({ kind: "sprints", projectKey: "STAR" }), {
+    ok: false,
+    code: "failed",
+    message: "jira_lookup failed.",
+  });
+});
+
 test("users are clamped to 10,000 across the pages", async () => {
   const seen = stubJiraFetch((request) =>
     request.path === "/rest/api/3/user/search"

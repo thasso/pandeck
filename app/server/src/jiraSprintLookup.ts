@@ -4,6 +4,7 @@
  * (`jiraRead.ts`). The approval-gated sprint edit stays in
  * `tools/jira/jiraSprint.ts`.
  */
+import { AtlassianHttpError } from "./atlassian/atlassianFetch.ts";
 import { jiraGet, type JiraConfig } from "./jiraClient.ts";
 import { JiraReadRefusal, stopIfAborted, withSignal } from "./jiraRead.ts";
 
@@ -83,11 +84,13 @@ export async function lookupSprints(
       sprints = read.sprints;
       if (!read.complete) cappedBoards.push(board.id);
     } catch (err) {
-      // A kanban board answers 400: it has no sprints. A named board is the
-      // caller's choice, so its failure is theirs to see.
+      // A kanban board answers 400: it has no sprints. Decided by Jira's
+      // status alone, never by the message, which quotes Jira's body. A named
+      // board is the caller's choice, so its failure is theirs to see.
       if (
         boardId === null &&
-        /HTTP 400\b/.test(err instanceof Error ? err.message : String(err))
+        err instanceof AtlassianHttpError &&
+        err.status === 400
       ) {
         skippedBoards.push(board.id);
         continue;
