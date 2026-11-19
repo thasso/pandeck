@@ -60,6 +60,14 @@ test("signed out: a sign-in link to the gateway's own login", async () => {
   expect(host.querySelector('[role="alert"]')).toBeNull();
 });
 
+test("the page scrolls itself: the shared stylesheet clips html, body and #root", async () => {
+  fetchMock.mockResolvedValueOnce(answer(401, { error: "signed_out" }));
+  await render("/");
+  const page = host.firstElementChild;
+  expect(page?.classList.contains("h-full")).toBe(true);
+  expect(page?.classList.contains("overflow-y-auto")).toBe(true);
+});
+
 test("a fixed sentence per sign-in code, and for an unknown one", async () => {
   const expected: Record<string, string> = {
     denied: "This account may not use this gateway.",

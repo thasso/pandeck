@@ -85,7 +85,9 @@ export function GatewayPage({
   requests,
 }: GatewayPageProps) {
   return (
-    <div className="flex min-h-svh flex-col bg-background text-foreground">
+    // `index.css` fixes html, body and #root to the viewport with overflow
+    // hidden (the app shell scrolls its own panes), so this page scrolls itself.
+    <div className="flex h-full flex-col overflow-y-auto bg-background text-foreground">
       <header className="sticky top-0 z-10 border-b border-border bg-card/80 backdrop-blur">
         <div className="mx-auto flex h-14 w-full max-w-4xl items-center gap-3 px-4">
           <img src={logoUrl} alt="" className="size-8 rounded-md" />
