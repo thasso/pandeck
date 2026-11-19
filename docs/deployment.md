@@ -456,10 +456,12 @@ and observed ingresses, the edge's ingest never reached; an observed `/relay/`
 target gets the marked 403 `reserved-path`. A `GET` whose `Connection` field
 nominates its `Content-Length`, its body again a whole `/relay/` request, must
 then arrive with that length and the same bytes on all three ingresses, with one
-record for the observed one. Last, the close must be bounded. It writes only
-under the scratch directory and fails unless the fixture prints its success line
-within 30 s. It is not part of `nix flake check` and does not replace the
-install check.
+record for the observed one. A `POST` answered before its upload finishes must
+then be recorded once on the observed host, and the next request on each ingress
+must get its own answer, the upstream never parsing the rest of that body as a
+request. Last, the close must be bounded. It writes only under the scratch
+directory and fails unless the fixture prints its success line within 30 s. It
+is not part of `nix flake check` and does not replace the install check.
 
 The package must not use `bun build --compile` or Bun's ordinary bundler. As
 observed on Bun 1.3.13, and not re-measured on 1.4.2 since the package uses

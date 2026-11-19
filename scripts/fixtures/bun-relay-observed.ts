@@ -111,6 +111,11 @@ const receiver = https.createServer(
   (req, res) => {
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    if (req.url?.endsWith("/early")) {
+      // Answers before reading the upload (step 7).
+      res.writeHead(413, { "content-length": 5 }).end("early");
+      return;
+    }
     req.on("end", () => {
       if (req.url !== "/relay/observations") {
         edgeRequests.push(req.url ?? "");
@@ -169,6 +174,11 @@ const upstream = https.createServer(
   (req, res) => {
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    if (req.url === "/api/early") {
+      // Answers before reading the upload (step 7).
+      res.writeHead(413, { "content-length": 5 }).end("early");
+      return;
+    }
     req.on("end", () => {
       upstreamSeen.push({
         url: req.url ?? "",
@@ -191,6 +201,21 @@ const upstream = https.createServer(
   },
 );
 upstream.on("connection", (socket: net.Socket) => sockets.add(socket));
+/** Bytes the upstream could not parse as a request (step 7). */
+let upstreamParseErrors = 0;
+const upstreamClientErrors: string[] = [];
+upstream.on(
+  "clientError",
+  (err: Error & { code?: string }, socket: net.Socket) => {
+    upstreamClientErrors.push(err.code ?? "UNKNOWN");
+    // A reset or an end mid-body (HPE_INVALID_EOF_STATE) is the relay
+    // dropping an early-answered connection; any other HPE_* is bytes parsed
+    // as a request that is none, as when a body's rest reaches a pooled one.
+    if (err.code?.startsWith("HPE_") && err.code !== "HPE_INVALID_EOF_STATE")
+      upstreamParseErrors += 1;
+    socket.destroy();
+  },
+);
 upstream.on(
   "upgrade",
   (req: http.IncomingMessage, socket: net.Socket, head: Buffer) => {
@@ -738,8 +763,108 @@ async function main(): Promise<void> {
     "no body reached the upstream as a request",
   );
   assert.equal(destinations.length, 5, "one dial per observed request");
+
+  // 7. An answer before the upload finishes (F004, F005, final fix batch 1):
+  //    Bun ends the inner request at the answer's finish, its body short.
+  //    The record follows the upload, and the next request on each ingress
+  //    gets its own answer, never the rest of that body read as a request.
+  {
+    const early = async (
+      socket: tls.TLSSocket | net.Socket,
+      path: string,
+      host: string,
+    ): Promise<void> => {
+      sockets.add(socket);
+      const answered = readUntil(
+        socket as tls.TLSSocket,
+        (received) =>
+          headEnd(received) !== -1 &&
+          received.length >= headEnd(received) + 4 + 5,
+      );
+      socket.write(
+        `POST ${path} HTTP/1.1\r\nHost: ${host}\r\ncontent-length: 20\r\n\r\n0123456789`,
+      );
+      assert.match(
+        (await within(answered, 5000, "an early answer")).toString("latin1"),
+        /^HTTP\/1\.1 413 /,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      socket.write("abcdefghij");
+    };
+    await early(
+      await decrypted(relay.port, "claude.ai", interceptCa.certPem),
+      "/api/early",
+      "claude.ai",
+    );
+    const earlyRecord = await reported(
+      (r) => r.path === "/api/early",
+      "the early-answered request",
+    );
+    assert.deepEqual(
+      [earlyRecord.status, earlyRecord.outcome],
+      [413, "observed"],
+    );
+    console.log(`early answer requestBytes: ${earlyRecord.requestBytes}`);
+    assert.match(
+      await exchange(
+        await decrypted(relay.port, "claude.ai", interceptCa.certPem),
+        Buffer.from(
+          "GET /api/after HTTP/1.1\r\nHost: claude.ai\r\nconnection: close\r\n\r\n",
+        ),
+      ),
+      /^HTTP\/1\.1 200 /,
+    );
+    const after = await reported(
+      (r) => r.path === "/api/after",
+      "the request after the early answer",
+    );
+    assert.deepEqual([after.status, after.outcome], [200, "observed"]);
+    console.log(`upstream client errors: ${upstreamClientErrors.join(",")}`);
+    assert.equal(upstreamParseErrors, 0, "no body read as a request");
+    assert.equal(
+      upstreamSeen.filter((seen) => seen.url === "/api/after").length,
+      1,
+    );
+
+    const plainEarly = await plainSocket();
+    await early(plainEarly, "/v1/early", "127.0.0.1");
+    const tokenEarly = await decrypted(
+      relay.port,
+      "api.anthropic.com",
+      interceptCa.certPem,
+    );
+    await early(tokenEarly, "/v1/early", "api.anthropic.com");
+    assert.match(
+      await exchange(
+        await plainSocket(),
+        Buffer.from(
+          "GET /v1/after HTTP/1.1\r\nHost: 127.0.0.1\r\nconnection: close\r\n\r\n",
+        ),
+      ),
+      /^HTTP\/1\.1 500 /,
+    );
+    assert.match(
+      await exchange(
+        await decrypted(relay.port, "api.anthropic.com", interceptCa.certPem),
+        Buffer.from(
+          "GET /v1/after HTTP/1.1\r\nHost: api.anthropic.com\r\nconnection: close\r\n\r\n",
+        ),
+      ),
+      /^HTTP\/1\.1 500 /,
+    );
+    assert.deepEqual(
+      edgeSeen
+        .filter((seen) => seen.url.endsWith("/after"))
+        .map((seen) => seen.url),
+      ["/v1/after", "/anthropic/v1/after"],
+    );
+    assert.equal(foreignIngest, 0);
+    plainEarly.destroy();
+    tokenEarly.destroy();
+  }
+  assert.equal(destinations.length, 7, "one dial per observed request");
   console.log(
-    "framing: chunked and nominated Content-Length on plain, token and observed; reserved 403",
+    "framing: chunked and nominated Content-Length on plain, token and observed; reserved 403; early answer settles, next request its own",
   );
 
   const started = Date.now();

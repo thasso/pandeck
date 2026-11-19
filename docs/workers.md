@@ -2278,23 +2278,25 @@ to that host ("Interception" below).
     against the default CA store. The inner `Host` and SNI never choose the
     destination. Nothing of the edge link is used: no client certificate, key,
     edge CA, agent or gateway credential; the observed hosts have their own
-    keep-alive pool. Header fields pass as received, repeats and order kept,
-    without the fixed hop-by-hop fields, every field a `Connection` field names
-    other than `Host`, `Content-Length` and `Transfer-Encoding`, and caller
-    `x-pandeck-*` fields; `Host` is kept. No credential or cookie is added or
-    removed, the target keeps its query, and a response `set-cookie` reaches the
-    client. Bodies are piped both ways and never read. An upgrade keeps its
-    `Upgrade` fields and one `Connection: Upgrade`. After the upstream's `101`,
-    the relay writes the `101`, then each side's buffered bytes to the other,
-    then pipes both ways; any other answer is an ordinary response followed by a
-    close. A request body goes up framed as the relay parsed it: chunked again
-    whatever the method, or with its `Content-Length`. An upgrade request goes
-    up as its head alone, with neither `Content-Length` nor `Transfer-Encoding`,
-    so nothing the client sends after it reaches the upstream before the `101`.
-    `/relay/…`, an upgrade's included, gets 403 `reserved-path` before any
-    upstream contact, as on every ingress; closing and a full queue answer their
-    503 first. An upstream that cannot be reached or fails verification gets the
-    marked 502 `the relay cannot reach this host.`
+    keep-alive pool, to which a connection whose answer finished before its
+    upload never returns. Header fields pass as received, repeats and order
+    kept, without the fixed hop-by-hop fields, every field a `Connection` field
+    names other than `Host`, `Content-Length` and `Transfer-Encoding`, and
+    caller `x-pandeck-*` fields; `Host` is kept. No credential or cookie is
+    added or removed, the target keeps its query, and a response `set-cookie`
+    reaches the client. Bodies are piped both ways and never read. An upgrade
+    keeps its `Upgrade` fields and one `Connection: Upgrade`. After the
+    upstream's `101`, the relay writes the `101`, then each side's buffered
+    bytes to the other, then pipes both ways; any other answer is an ordinary
+    response followed by a close. A request body goes up framed as the relay
+    parsed it: chunked again whatever the method, or with its `Content-Length`.
+    An upgrade request goes up as its head alone, with neither `Content-Length`
+    nor `Transfer-Encoding`, so nothing the client sends after it reaches the
+    upstream before the `101`. `/relay/…`, an upgrade's included, gets 403
+    `reserved-path` before any upstream contact, as on every ingress; closing
+    and a full queue answer their 503 first. An upstream that cannot be reached
+    or fails verification gets the marked 502
+    `the relay cannot reach this host.`
   - **Reporting.** A token-host request takes the plain listener's path through
     the relay (admission, one rid, reserved fields dropped, a fallback record
     when no edge headers arrive), its record naming the token host and the
@@ -2306,15 +2308,21 @@ to that host ("Interception" below).
     upstream status (`101` for an upgrade) once upstream headers arrived, plus
     `client-closed`, `relay-closing` or a Node error code if it ended early;
     otherwise `failed` with the local 502 or null and that reason (`UNKNOWN` for
-    an error without a code). `connect-port`, `connect-target`, `origin-form`,
-    `reserved-path` and `upgrade` reserve a slot and are recorded (a refused
-    CONNECT as method `CONNECT`, path `/`, its credential class read from the
-    CONNECT's own fields, `Proxy-Authorization` included). Every class answers
-    the 503 `overflow` without upstream or edge contact when the queue is full.
-    A malformed target and a failed TLS handshake are only counted in the relay
-    summary; blind tunnels are neither recorded nor counted. Decrypted
-    connections join the relay's close: they drain with the plain listener's
-    work and are then cut.
+    an error without a code). An answer that finishes before the upload ends the
+    lifetime at the first of: the upload's end, the client or its connection
+    gone (`client-closed`), the upstream request closed or failed. That upstream
+    connection is then destroyed, never pooled, on Node and Bun alike: Bun's
+    server ends such a request at its answer and calls it complete with its body
+    short, so the relay cannot tell a whole upload from a cut one, and under Bun
+    `requestBytes` counts only what arrived before the answer. `connect-port`,
+    `connect-target`, `origin-form`, `reserved-path` and `upgrade` reserve a
+    slot and are recorded (a refused CONNECT as method `CONNECT`, path `/`, its
+    credential class read from the CONNECT's own fields, `Proxy-Authorization`
+    included). Every class answers the 503 `overflow` without upstream or edge
+    contact when the queue is full. A malformed target and a failed TLS
+    handshake are only counted in the relay summary; blind tunnels are neither
+    recorded nor counted. Decrypted connections join the relay's close: they
+    drain with the plain listener's work and are then cut.
   - **Setup.** `HTTPS_PROXY=http://127.0.0.1:<port>` (never `HTTP_PROXY`),
     `NODE_EXTRA_CA_CERTS=<path>`, `ANTHROPIC_BASE_URL` unset, and none of the
     three domains in `NO_PROXY`; the IDB `claude-gateway` wrapper owns this.

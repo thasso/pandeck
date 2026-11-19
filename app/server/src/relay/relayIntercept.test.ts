@@ -145,7 +145,13 @@ async function recordingEdge(): Promise<RecordingEdge> {
       }
       const hash = createHash("sha256");
       req.on("data", (chunk: Buffer) => hash.update(chunk));
+      if (req.url?.endsWith("/early")) {
+        // Answers before reading the upload, which still arrives.
+        res.writeHead(413, { "content-length": 5 });
+        res.end("early");
+      }
       req.on("end", () => {
+        if (req.url?.endsWith("/early")) return;
         const peer = (req.socket as tls.TLSSocket).getPeerCertificate();
         edge.requests.push({
           method: req.method ?? "",
@@ -649,6 +655,8 @@ interface FakeUpstream {
   /** Requests whose answer is held (`/hold…`), first one first. */
   held: { req: http.IncomingMessage; res: http.ServerResponse }[];
   aborted: number;
+  /** TLS connections accepted: a reused one is not counted again. */
+  connections: number;
 }
 
 const RESPONSE_BODY = Buffer.from(
@@ -664,6 +672,7 @@ async function fakeUpstream(): Promise<FakeUpstream> {
     upgrades: [],
     held: [],
     aborted: 0,
+    connections: 0,
   };
   const fallback = upstreamCa.leafFor("claude.ai");
   const server = https.createServer(
@@ -692,6 +701,12 @@ async function fakeUpstream(): Promise<FakeUpstream> {
       if (req.url === "/early") {
         // Answers before reading the upload, which still arrives.
         res.writeHead(413, { "content-length": 5 });
+        res.end("early");
+        return;
+      }
+      if (req.url === "/early-close") {
+        // Answers before reading the upload, then closes its connection.
+        res.writeHead(413, { "content-length": 5, connection: "close" });
         res.end("early");
         return;
       }
@@ -755,6 +770,7 @@ async function fakeUpstream(): Promise<FakeUpstream> {
       socket.on("data", echo);
     },
   );
+  server.on("secureConnection", () => (upstream.connections += 1));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   upstream.port = (server.address() as net.AddressInfo).port;
   open.push({
@@ -814,7 +830,7 @@ async function secureTo(relayPort: number, host: string) {
 
 /** Reads from `socket` until `done` holds for everything received. */
 function readUntil(
-  socket: tls.TLSSocket,
+  socket: net.Socket,
   done: (received: Buffer) => boolean,
 ): Promise<Buffer> {
   let received = Buffer.alloc(0);
@@ -1677,4 +1693,199 @@ test("F001 (m2) audit: an observed upgrade head goes up without a Content-Length
     assert.deepEqual(fieldValues(upgrade.rawHeaders, "transfer-encoding"), []);
   }
   assert.deepEqual(r.upstream.requests, [], "no request beside the upgrades");
+});
+
+/** Fails after `ms` unless `promise` settles first. */
+async function within<T>(promise: Promise<T>, ms: number, what: string) {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`no ${what}`)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Sends a head and part of its body, then reads the whole early answer. */
+async function earlyAnswer(
+  socket: net.Socket,
+  head: string,
+  part: string,
+): Promise<HttpAnswer> {
+  const answered = readUntil(socket, (received) => {
+    const end = received.indexOf("\r\n\r\n");
+    return end !== -1 && received.length >= end + 4 + 5;
+  });
+  socket.write(head + part);
+  const answer = parseAnswer(await answered);
+  assert.equal(answer.status, 413, answer.head);
+  assert.equal(answer.body.toString(), "early");
+  return answer;
+}
+
+const settledSlot = (): Promise<void> =>
+  // The acknowledgement frees the record's slot just after the batch.
+  new Promise((resolve) => setTimeout(resolve, 50));
+
+test("F004 (A): an early answer whose upstream then closes settles at once, its upload finished or not; the slot is free for the next request", async () => {
+  const r = await observedRig({ capacity: 2 });
+  const secure = await secureTo(r.relay.port, "claude.ai");
+  await earlyAnswer(
+    secure,
+    "POST /early-close HTTP/1.1\r\nHost: claude.ai\r\ncontent-length: 20\r\n\r\n",
+    "0123456789",
+  );
+  secure.write("abcdefghij");
+  const record = await within(
+    reportedRecord(r.edge, (record) => record.path === "/early-close"),
+    2000,
+    "record for the early-closed request",
+  );
+  assert.equal(record.status, 413);
+  assert.equal(record.outcome, "observed");
+  assert.equal(record.reason, undefined);
+  assert.ok(record.requestBytes >= 10 && record.requestBytes <= 20);
+  assert.equal(record.responseBytes, 5);
+  await settledSlot();
+  const next = await decrypted(
+    r.relay.port,
+    "claude.ai",
+    "GET /next HTTP/1.1\r\nHost: claude.ai\r\nconnection: close\r\n\r\n",
+  );
+  assert.equal(next.status, 200, next.head);
+  secure.destroy();
+  await reportedRecord(r.edge, (record) => record.path === "/next");
+  assert.equal(
+    relayRecords(r.edge).filter((record) => record.path === "/early-close")
+      .length,
+    1,
+  );
+});
+
+test("F004 (B): an early answer, then the client gone mid-upload, records client-closed at once and frees its slot and drain entry", async () => {
+  const r = await observedRig({ capacity: 2 });
+  const secure = await secureTo(r.relay.port, "claude.ai");
+  await earlyAnswer(
+    secure,
+    "POST /early HTTP/1.1\r\nHost: claude.ai\r\ncontent-length: 1000\r\n\r\n",
+    "abc",
+  );
+  secure.destroy();
+  const record = await within(
+    reportedRecord(r.edge, (record) => record.path === "/early"),
+    2000,
+    "record for the abandoned upload",
+  );
+  assert.deepEqual(
+    [
+      record.status,
+      record.outcome,
+      record.reason,
+      record.requestBytes,
+      record.responseBytes,
+    ],
+    [413, "observed", "client-closed", 3, 5],
+  );
+  await settledSlot();
+  const next = await decrypted(
+    r.relay.port,
+    "claude.ai",
+    "GET /next HTTP/1.1\r\nHost: claude.ai\r\nconnection: close\r\n\r\n",
+  );
+  assert.equal(next.status, 200, next.head);
+  const after = await reportedRecord(
+    r.edge,
+    (record) => record.path === "/next",
+  );
+  assert.equal(after.status, 200);
+  // Nothing is left for the drain: the close does not wait out its deadline.
+  const started = Date.now();
+  await r.relay.close();
+  assert.ok(Date.now() - started < 150, "the drain had nothing to wait for");
+  assert.equal(relayRecords(r.edge).length, 2);
+});
+
+test("F005: an early-answered upstream connection never returns to the pool; the next request to the host gets its own answer and record", async () => {
+  const r = await observedRig();
+  const secure = await secureTo(r.relay.port, "claude.ai");
+  await earlyAnswer(
+    secure,
+    "POST /early HTTP/1.1\r\nHost: claude.ai\r\ncontent-length: 20\r\n\r\n",
+    "0123456789",
+  );
+  secure.write("abcdefghij");
+  const early = await reportedRecord(
+    r.edge,
+    (record) => record.path === "/early",
+  );
+  assert.deepEqual(
+    [early.status, early.reason, early.requestBytes],
+    [413, undefined, 20],
+  );
+  const next = await decrypted(
+    r.relay.port,
+    "claude.ai",
+    "GET /after HTTP/1.1\r\nHost: claude.ai\r\nconnection: close\r\n\r\n",
+  );
+  assert.equal(next.status, 200, next.head);
+  assert.ok(next.body.equals(RESPONSE_BODY));
+  const after = await reportedRecord(
+    r.edge,
+    (record) => record.path === "/after",
+  );
+  assert.deepEqual([after.status, after.outcome], [200, "observed"]);
+  assert.equal(r.upstream.connections, 2, "a fresh upstream connection");
+  assert.deepEqual(
+    r.upstream.requests.map((seen) => [seen.method, seen.url]),
+    [["GET", "/after"]],
+  );
+  secure.destroy();
+});
+
+test("F005 sibling: after an early edge answer, the plain and token forward give the next request its own answer", async () => {
+  const r = await observedRig();
+  const viaPlain = net.connect(r.relay.port, "127.0.0.1");
+  viaPlain.on("error", () => {});
+  await once(viaPlain, "connect");
+  const viaToken = await secureTo(r.relay.port, "api.anthropic.com");
+  for (const [socket, host] of [
+    [viaPlain, "127.0.0.1"],
+    [viaToken, "api.anthropic.com"],
+  ] as const) {
+    await earlyAnswer(
+      socket,
+      `POST /v1/early HTTP/1.1\r\nHost: ${host}\r\ncontent-length: 20\r\n\r\n`,
+      "0123456789",
+    );
+    socket.write("abcdefghij");
+  }
+  const afterPlain = await plain(
+    r.relay.port,
+    Buffer.from(
+      "GET /v1/after HTTP/1.1\r\nHost: 127.0.0.1\r\nconnection: close\r\n\r\n",
+    ),
+  );
+  assert.equal(afterPlain.status, 200, afterPlain.head);
+  assert.equal(afterPlain.body.toString(), "recorded");
+  const afterToken = await decrypted(
+    r.relay.port,
+    "api.anthropic.com",
+    "GET /v1/after HTTP/1.1\r\nHost: api.anthropic.com\r\nconnection: close\r\n\r\n",
+  );
+  assert.equal(afterToken.status, 200, afterToken.head);
+  assert.equal(afterToken.body.toString(), "recorded");
+  assert.deepEqual(
+    r.edge.requests.map((seen) => [seen.method, seen.url]),
+    [
+      ["GET", "/v1/after"],
+      ["GET", "/anthropic/v1/after"],
+    ],
+  );
+  assert.equal(r.edge.foreignIngest, 0);
+  viaPlain.destroy();
+  viaToken.destroy();
 });
