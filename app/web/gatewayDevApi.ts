@@ -8,14 +8,17 @@ const NAVIGATE = normalizePath(
 );
 
 /**
- * What the dev server serves in its place: instead of Atlassian's authorize
- * URL, the browser goes to this server's callback with a fake code, as if
- * Atlassian had answered, and never leaves localhost.
+ * What the dev server serves in its place: instead of a provider's authorize
+ * URL (Atlassian's, or Slack's on `slack.com`), the browser goes to this
+ * server's callback for that provider with a fake code, as if the provider
+ * had answered, and never leaves localhost.
  */
 export const DEV_NAVIGATE = `export const goTo = (url) => {
-  const state = new URL(url).searchParams.get("state") ?? "";
+  const target = new URL(url);
+  const state = target.searchParams.get("state") ?? "";
+  const provider = target.hostname === "slack.com" ? "slack" : "atlassian";
   window.location.assign(
-    "/auth/atlassian/callback?" +
+    "/auth/" + provider + "/callback?" +
       new URLSearchParams({ code: "FAKE_DEV_CODE", state }),
   );
 };
@@ -59,6 +62,10 @@ export function gatewayDevApi(): Plugin {
     email: "thasso.griebel@castlabs.com",
     displayName: "Thasso Griebel",
   };
+  // Offered unless GATEWAY_DEV_NO_SLACK=1, which shows a gateway without
+  // "Sign in with Slack" (no section at all).
+  const slackOffered = () => process.env.GATEWAY_DEV_NO_SLACK !== "1";
+  let slack: Record<string, unknown> = { connected: false };
   let clients = [
     {
       id: "c_1",
@@ -152,6 +159,20 @@ export function gatewayDevApi(): Plugin {
             code === null
               ? "/"
               : `/?${new URLSearchParams({ atlassian: code })}`,
+          );
+          res.end();
+          return;
+        }
+        // The dev page's "Sign in with Slack" lands here (`DEV_NAVIGATE`);
+        // open this path with `?slack=<code>` to replay a failure instead.
+        if (path === "/auth/slack/callback") {
+          const code = url.searchParams.get("slack");
+          if (code === null)
+            slack = { connected: true, teamName: "Dev workspace" };
+          res.statusCode = 303;
+          res.setHeader(
+            "location",
+            code === null ? "/" : `/?${new URLSearchParams({ slack: code })}`,
           );
           res.end();
           return;
@@ -279,6 +300,30 @@ export function gatewayDevApi(): Plugin {
             });
           case "/api/integrations/atlassian/clear":
             atlassian = { connected: false };
+            return json(res, 204);
+          case "/api/integrations/slack":
+            return json(
+              res,
+              200,
+              slackOffered()
+                ? { offered: true, ...slack }
+                : { offered: false, connected: false },
+            );
+          case "/api/integrations/slack/connect":
+            if (!slackOffered()) return json(res, 404, { error: "not_found" });
+            return json(res, 200, {
+              authorizeUrl: `https://slack.com/oauth/v2/authorize?${new URLSearchParams(
+                {
+                  client_id: "FAKE_DEV_CLIENT",
+                  user_scope: "search:read,channels:history",
+                  redirect_uri: "http://localhost/auth/slack/callback",
+                  state: "FAKE_DEV_STATE",
+                },
+              )}`,
+            });
+          case "/api/integrations/slack/clear":
+            if (!slackOffered()) return json(res, 404, { error: "not_found" });
+            slack = { connected: false };
             return json(res, 204);
           case "/api/clients":
             return json(res, 200, { clients });

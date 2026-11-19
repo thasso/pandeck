@@ -26,6 +26,7 @@ import {
   GatewayRequests,
   type GatewayRequestsProps,
 } from "./GatewayRequests.tsx";
+import { GatewaySlack, type GatewaySlackProps } from "./GatewaySlack.tsx";
 import logoUrl from "../../public/icon.svg";
 import { LogOut } from "lucide-react";
 
@@ -38,6 +39,8 @@ export type GatewayPageState =
       enrollmentWaiting?: boolean;
       /** Atlassian answered after the gateway session had ended. */
       atlassianSignedOut?: boolean;
+      /** Slack answered after the gateway session had ended. */
+      slackSignedOut?: boolean;
     }
   | { kind: "signedIn"; me: GatewayUiMe }
   | { kind: "unavailable" };
@@ -55,6 +58,10 @@ const SIGNIN_TEXT: Record<GatewayUiSigninCode, string> = {
 const ATLASSIAN_SIGNED_OUT_TEXT =
   "Your gateway session ended before Atlassian answered. Sign in, then use Sign in with Atlassian again.";
 
+/** The one Slack callback code shown signed out (Task-1453). */
+const SLACK_SIGNED_OUT_TEXT =
+  "Your gateway session ended before Slack answered. Sign in, then use Sign in with Slack again.";
+
 export interface GatewayPageProps {
   state: GatewayPageState;
   onSignOut: () => void;
@@ -63,6 +70,8 @@ export interface GatewayPageProps {
   accounts?: GatewayAccountsProps | undefined;
   /** The signed-in user's Atlassian credential (Task-1405). */
   atlassian?: GatewayAtlassianProps | undefined;
+  /** The signed-in user's Slack connection (Task-1453). */
+  slack?: GatewaySlackProps | undefined;
   /** The signed-in user's clients and MCP tokens (Task-1405). */
   clients?: GatewayClientsProps | undefined;
   /** The signed-in user's clients' request log (Task-1430). */
@@ -70,10 +79,11 @@ export interface GatewayPageProps {
 }
 
 /**
- * The gateway's own page (Task-1402, Task-1405, Task-1430): sign in with
- * the deployment's provider, see who you are, your accounts, your Jira
- * credential, your clients and their requests, sign out. Its own entry, served by the
- * edge; no Pandeck store, socket, router or token.
+ * The gateway's own page (Task-1402, Task-1405, Task-1430, Task-1453): sign
+ * in with the deployment's provider, see who you are, your accounts, your
+ * Jira credential, your Slack connection where the gateway offers it, your
+ * clients and their requests, sign out. Its own entry, served by the edge; no
+ * Pandeck store, socket, router or token.
  */
 export function GatewayPage({
   state,
@@ -81,6 +91,7 @@ export function GatewayPage({
   signingOut,
   accounts,
   atlassian,
+  slack,
   clients,
   requests,
 }: GatewayPageProps) {
@@ -138,6 +149,9 @@ export function GatewayPage({
               {state.atlassianSignedOut ? (
                 <ErrorNote message={ATLASSIAN_SIGNED_OUT_TEXT} />
               ) : null}
+              {state.slackSignedOut ? (
+                <ErrorNote message={SLACK_SIGNED_OUT_TEXT} />
+              ) : null}
               <p className="text-sm text-muted-foreground">
                 {state.enrollmentWaiting
                   ? "A machine is waiting for your approval. Sign in to review it."
@@ -156,6 +170,9 @@ export function GatewayPage({
         ) : null}
         {state.kind === "signedIn" && atlassian ? (
           <GatewayAtlassian {...atlassian} />
+        ) : null}
+        {state.kind === "signedIn" && slack ? (
+          <GatewaySlack {...slack} />
         ) : null}
         {state.kind === "signedIn" && clients ? (
           <GatewayClients {...clients} />

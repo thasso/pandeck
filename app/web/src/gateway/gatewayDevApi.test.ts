@@ -1,13 +1,18 @@
 /**
- * The dev server's "Sign in with Atlassian" (Task-1411) stays on localhost:
- * the serve-only plugin replaces `navigate.ts`, and that replacement turns the
- * start answer (which the shared decoder still pins to Atlassian) into this
- * server's callback, which finishes a fake sign-in. No network, no browser.
+ * The dev server's "Sign in with Atlassian" (Task-1411) and "Sign in with
+ * Slack" (Task-1453) stay on localhost: the serve-only plugin replaces
+ * `navigate.ts`, and that replacement turns each start answer (which the
+ * shared decoder still pins to its provider) into this server's callback for
+ * that provider, which finishes a fake sign-in. No network, no browser.
  */
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { fileURLToPath } from "node:url";
-import { decodeGatewayUiAtlassianConnectStart } from "@assistant/shared/gatewayUi";
+import {
+  decodeGatewayUiAtlassianConnectStart,
+  decodeGatewayUiSlack,
+  decodeGatewayUiSlackConnectStart,
+} from "@assistant/shared/gatewayUi";
 import { afterEach, expect, test, vi } from "vitest";
 import { DEV_NAVIGATE, gatewayDevApi } from "../../gatewayDevApi.ts";
 
@@ -121,4 +126,76 @@ test("Sign in with Atlassian on the dev page ends on the dev callback, signed in
     kind: "oauth",
     connectWith: "oauth",
   });
+});
+
+test("Sign in with Slack on the dev page ends on the Slack dev callback, connected", async () => {
+  vi.stubEnv("GATEWAY_DEV_NO_SLACK", "");
+  const { handler } = devServer();
+  const before = await request(handler, "GET", "/api/integrations/slack");
+  expect(decodeGatewayUiSlack(before.body)).toEqual({
+    offered: true,
+    connected: false,
+  });
+  const start = await request(
+    handler,
+    "POST",
+    "/api/integrations/slack/connect",
+  );
+  const decoded = decodeGatewayUiSlackConnectStart(start.body);
+  expect(decoded).toBeDefined();
+
+  const went = await devGoTo(decoded!.authorizeUrl);
+  expect(went).toHaveLength(1);
+  expect(went[0]!.startsWith("/")).toBe(true);
+  const target = new URL(went[0]!, "http://localhost:5180");
+  expect(target.pathname).toBe("/auth/slack/callback");
+  expect(target.searchParams.get("state")).toBe("FAKE_DEV_STATE");
+
+  const back = await request(
+    handler,
+    "GET",
+    `${target.pathname}${target.search}`,
+  );
+  expect(back).toMatchObject({ status: 303, location: "/" });
+  const status = await request(handler, "GET", "/api/integrations/slack");
+  expect(decodeGatewayUiSlack(status.body)).toMatchObject({
+    offered: true,
+    connected: true,
+  });
+  // Atlassian's record is untouched by the Slack sign-in.
+  const atlassian = await request(
+    handler,
+    "GET",
+    "/api/integrations/atlassian",
+  );
+  expect(atlassian.body).toMatchObject({ kind: "token" });
+});
+
+test("each provider's authorize URL goes to its own dev callback", async () => {
+  const [atlassian] = await devGoTo(
+    "https://auth.atlassian.com/authorize?state=A_STATE",
+  );
+  const [slack] = await devGoTo(
+    "https://slack.com/oauth/v2/authorize?state=S_STATE",
+  );
+  expect(new URL(atlassian!, "http://dev").pathname).toBe(
+    "/auth/atlassian/callback",
+  );
+  expect(new URL(slack!, "http://dev").pathname).toBe("/auth/slack/callback");
+  expect(new URL(slack!, "http://dev").searchParams.get("state")).toBe(
+    "S_STATE",
+  );
+});
+
+test("a dev callback's ?slack= code replays a failure; GATEWAY_DEV_NO_SLACK hides Slack", async () => {
+  const { handler } = devServer();
+  expect(
+    await request(handler, "GET", "/auth/slack/callback?slack=team_mismatch"),
+  ).toMatchObject({ status: 303, location: "/?slack=team_mismatch" });
+  vi.stubEnv("GATEWAY_DEV_NO_SLACK", "1");
+  const status = await request(handler, "GET", "/api/integrations/slack");
+  expect(status.body).toEqual({ offered: false, connected: false });
+  expect(
+    await request(handler, "POST", "/api/integrations/slack/connect"),
+  ).toMatchObject({ status: 404 });
 });
