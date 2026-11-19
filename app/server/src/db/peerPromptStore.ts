@@ -600,6 +600,16 @@ interface RoutedEnqueueInput {
    * waiting children follows admission order, whichever creation finishes first.
    */
   held?: { queueSeq: number };
+  /**
+   * The new message supersedes the sender's unread messages to this recipient:
+   * they are cancelled in this same transaction, so both commit or neither
+   * does. `reasonFor` gets the new message's id; `onReplaced` receives the
+   * cancelled rows after the commit.
+   */
+  replaceUnread?: {
+    reasonFor: (newMessageId: string) => string;
+    onReplaced: (rows: PeerPromptRecord[]) => void;
+  };
 }
 
 const INSERT_MESSAGE_SQL = `
@@ -624,6 +634,48 @@ function ensureChain(
     )
     .get(chainId) as { next_hop: number; closed: number };
   return { nextHop: row.next_hop, closed: Boolean(row.closed) };
+}
+
+/**
+ * Cancel, inside the caller's transaction, every message the sender queued for
+ * that recipient that it has not read yet, except `keepId` (Task-1442). A
+ * `held` opening prompt is never replaced (it is a spawned child's first turn
+ * and its slot), and a `dispatching` row is past recalling.
+ */
+function cancelUnreadInTxn(
+  db: ReturnType<typeof getDb>,
+  input: Pick<RoutedEnqueueInput, "recipientSessionId" | "senderSessionId">,
+  keepId: string,
+  reason: string,
+  now: number,
+): string[] {
+  const rows = db
+    .prepare(
+      `SELECT id FROM peer_prompts
+        WHERE recipient_session_id = ? AND sender_session_id = ? AND id != ?
+          AND status IN ('queued', 'retryable_failed')
+        ORDER BY queue_seq`,
+    )
+    .all(input.recipientSessionId, input.senderSessionId, keepId) as {
+    id: string;
+  }[];
+  return rows
+    .filter((row) =>
+      transitionInTxn(
+        db,
+        row.id,
+        ["queued", "retryable_failed"],
+        "cancelled",
+        {
+          failureReason: reason,
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          nextAttemptAt: null,
+        },
+        now,
+      ),
+    )
+    .map((row) => row.id);
 }
 
 /**
@@ -711,7 +763,11 @@ function enqueueRouted(
     );
     if (input.strictReplies && closed.length > 0)
       throw new PeerPromptRequestClosedError(closed);
+    const replacedIds = input.replaceUnread
+      ? cancelUnreadInTxn(db, input, id, input.replaceUnread.reasonFor(id), now)
+      : [];
     db.exec("COMMIT");
+    input.replaceUnread?.onReplaced(replacedIds.map((r) => map(getRow(r)!)));
     return map(getRow(id)!);
   } catch (err) {
     if (!(err instanceof PeerPromptHopLimitError)) {
@@ -975,10 +1031,14 @@ function claimNext(
 }
 
 /**
- * Claim a FIFO batch for a recipient: the oldest queued row plus any immediately
- * following queued rows (by queue_seq) that share the same sender AND
- * conversation, bounded by `maxCount` and `maxChars` of prompt text. All claimed
- * rows move to `dispatching` under one lease. Never reorders across batches.
+ * Claim a batch for a recipient: the oldest queued row plus every later queued
+ * row (by queue_seq) from the SAME sender, whatever its conversation, bounded
+ * by `maxCount` and `maxChars` of prompt text. Rows from other senders in
+ * between are skipped, not a stop: they head the next batch. One sender's
+ * messages therefore arrive together and in order, so a busy recipient reads
+ * a whole backlog from its coordinator in one turn instead of one turn each
+ * (Task-1442). A row past either bound ends the batch, so a sender's order
+ * is never broken. All claimed rows move to `dispatching` under one lease.
  */
 function claimBatch(
   recipientSessionId: string,
@@ -1004,12 +1064,7 @@ function claimBatch(
         chars += row.prompt.length;
         continue;
       }
-      const head = batch[0]!;
-      if (
-        row.sender_session_id !== head.sender_session_id ||
-        row.conversation_id !== head.conversation_id
-      )
-        break;
+      if (row.sender_session_id !== batch[0]!.sender_session_id) continue;
       if (batch.length >= maxCount) break;
       if (chars + row.prompt.length > maxChars) break;
       batch.push(row);

@@ -560,12 +560,13 @@ persona toolsets.
 - `sessions/sessionSendPromptTool.ts` owns `session_send_prompt` (exposed to all
   three personas): one open, safe API to prompt other sessions by copied id, in
   independent `rows` that may also answer (`inReplyTo`) or settle requests sent
-  to the caller (Task-942), or withdraw requests the caller sent (Task-1427). It
-  validates the target (rejecting
-  self/deleted/internal/archived/non-promptable), bounds the prompt to 8000
-  chars, and delegates to `../peerPrompt.ts` — the server-owned engine that
-  resolves the conversation/causal chain (with automatic reply correlation via
-  active delivery context or a unique unreplied request), persists through
+  to the caller (Task-942), or withdraw requests the caller sent (Task-1427). A
+  message row reports the target's backlog and may replace the caller's unread
+  messages there (`replacesUnread`, Task-1442). It validates the target
+  (rejecting self/deleted/internal/archived/non-promptable), bounds the prompt
+  to 8000 chars, and delegates to `../peerPrompt.ts` — the server-owned engine
+  that resolves the conversation/causal chain (with automatic reply correlation
+  via active delivery context or a unique unreplied request), persists through
   `db/peerPromptStore.ts`, and delivers a concise agent-provenance envelope
   without interrupting a running target. Because delivery only happens while the
   recipient is idle, the description owns the async reply contract — a reply

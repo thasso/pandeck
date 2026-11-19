@@ -413,13 +413,25 @@ restarts its reply deadline.
   card's `messageKey` (`peerRequestKey`) — next to its own text, so the
   recipient can answer or settle it by `inReplyTo` from any later turn
   (`agent-workflows.md`, peer sessions lane). A batch of one names the key in
-  the reply cue. A larger batch with a request in it starts every member with a
-  label line, ``[1/3 · reply key `k…`]`` or `[2/3 · no reply asked]`, so each
-  body sits between its own label and the next. A batch without requests keeps
-  the plain shape. Labels are model-facing only: the transcript card shows the
-  plain messages. The envelope's non-message overhead stays under
-  `ENVELOPE_OVERHEAD_MAX` (500; five labelled requests with the longest title
-  measure 471).
+  the reply cue. A larger batch opens with "N peer messages from «sender»,
+  oldest first; where they disagree, the later one stands" and starts every
+  member with a label line, ``[1/3 · reply key `k…`]`` or `[2/3]`, so each body
+  sits between its own label and the next. Labels are model-facing only: the
+  transcript card shows the plain messages. The envelope's non-message overhead
+  stays under `ENVELOPE_OVERHEAD_MAX` (800; ten labelled requests with the
+  longest title and the backlog note measure 762).
+- **Batches.** The drain claims the oldest unread row and every later one from
+  the same sender, across its conversations, up to 10 messages and 40,000
+  characters (`claimBatch`); rows from other senders in between head the next
+  batch. A bound ends the batch where it is, so one sender's order is never
+  broken. Until [Task-1442](pa://task/1442) a batch also stopped at another
+  conversation or sender, so a coordinator's corrections interleaved with a
+  helper's handoffs were read one turn each, hours late. A turn's reply without
+  `inReplyTo` continues the batch's newest request, or else its newest message,
+  and the Peer prompts history shows a batch once, in its newest member's
+  conversation (which may differ from the reply's). The envelope ends with how
+  many unread messages still wait behind the batch, when any do, so the
+  recipient does not answer a point a waiting message changed.
 - **Settled.** The recipient may close a request without a message (a settle
   row): `settled` is terminal and recipient-written, carries the reason in
   `settle_reason`, and is owed by nobody. Like `replied`, it can be written

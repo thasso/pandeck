@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import type {
   PeerPromptCard,
+  PeerPromptSendBacklog,
   PeerPromptState,
   PeerPromptToolRow,
 } from "@assistant/shared";
@@ -217,12 +218,31 @@ export function PeerPromptToolRowsView({
       {rows.map((row, i) => {
         if (row.kind === "message")
           return (
-            <PeerPromptCardView
+            <div
               key={row.card.messageKey || i}
-              card={row.card}
-              onOpenSession={onOpenSession}
-              onWithdraw={onWithdrawRequest}
-            />
+              className="flex w-full min-w-0 flex-col gap-1"
+            >
+              <PeerPromptCardView
+                card={row.card}
+                onOpenSession={onOpenSession}
+                onWithdraw={onWithdrawRequest}
+              />
+              {row.backlog ? (
+                <p className="px-2 text-xs text-muted-foreground">
+                  {backlogNote(row.backlog)}
+                </p>
+              ) : null}
+              {row.replaced ? (
+                <PeerPromptClosedRow
+                  row={{
+                    kind: "withdraw",
+                    reason: "Replaced by this message.",
+                    withdrawn: row.replaced,
+                  }}
+                  onOpenSession={onOpenSession}
+                />
+              ) : null}
+            </div>
           );
         if (row.kind === "error")
           return (
@@ -241,6 +261,22 @@ export function PeerPromptToolRowsView({
       })}
     </div>
   );
+}
+
+/** One line on what a sent message waits behind in its recipient's queue. */
+function backlogNote(backlog: PeerPromptSendBacklog): string {
+  const parts: string[] = [];
+  if (backlog.recipient === "running") parts.push("Recipient is busy");
+  if (backlog.ahead > 0)
+    parts.push(
+      `${backlog.ahead} message${backlog.ahead === 1 ? "" : "s"} ahead in its queue`,
+    );
+  const yours = backlog.yourUnread.length;
+  if (yours > 0)
+    parts.push(
+      `${yours} earlier message${yours === 1 ? "" : "s"} of yours still unread`,
+    );
+  return `${parts.join(" · ")}.`;
 }
 
 /**

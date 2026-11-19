@@ -527,6 +527,37 @@ describe("a rows payload (Task-942)", () => {
     expect(container.textContent).toContain("apply the body");
   });
 
+  it("notes a busy recipient's backlog and the unread messages a send replaced (Task-1442)", () => {
+    const block = rowsBlock([
+      {
+        kind: "message",
+        card: answer,
+        backlog: {
+          recipient: "running",
+          ahead: 3,
+          yourUnread: [{ messageKey: "k0", message: "older brief" }],
+        },
+        replaced: [
+          {
+            recipientTitle: "Reviewer",
+            message: "stale correction",
+            beforeDelivery: true,
+          },
+        ],
+      },
+    ]);
+    act(() =>
+      root.render(
+        <>{renderToolBlock(block, { showTools: false, expandTools: false })}</>,
+      ),
+    );
+    expect(container.textContent).toContain(
+      "Recipient is busy · 3 messages ahead in its queue · 1 earlier message of yours still unread.",
+    );
+    expect(container.textContent).toContain("Withdrawn");
+    expect(container.textContent).toContain("request to Reviewer");
+  });
+
   it("shows what a reply answers and why a request was settled", () => {
     renderCard(answer as PeerPromptCardType);
     expandCard();
