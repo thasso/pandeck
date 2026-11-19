@@ -6,7 +6,7 @@
  *   gateway-edge --state-dir <dir> [--port <n>] [--model-port <n>]
  *     [--client-port <n>] [--enroll-port <n>] [--bind-host <address>]
  *     [--host <name>]... --vault-host <address> [--vault-port <n>]
- *     [--ui-config <file>]
+ *     [--ui-config <file>] [--machine-paths permissive|strict]
  *
  * The flags mean what they mean for `gatewayDevMain.ts`, except that
  * `--vault-host` is required: the vault (`vault.js`, port 8794 unless
@@ -29,7 +29,7 @@ const log = (line: string): void => console.log(`[gateway-edge] ${line}`);
 const options = parseEdgeArgs(process.argv.slice(2), { requireVault: true });
 if (!options) {
   console.error(
-    "usage: gateway-edge --state-dir <dir> [--port <n>] [--model-port <n>] [--client-port <n>] [--enroll-port <n>] [--bind-host <address>] [--host <name>]... --vault-host <address> [--vault-port <n>] [--ui-config <file>]",
+    "usage: gateway-edge --state-dir <dir> [--port <n>] [--model-port <n>] [--client-port <n>] [--enroll-port <n>] [--bind-host <address>] [--host <name>]... --vault-host <address> [--vault-port <n>] [--ui-config <file>] [--machine-paths permissive|strict]",
   );
   process.exit(2);
 }

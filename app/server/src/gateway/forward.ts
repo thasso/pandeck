@@ -21,13 +21,19 @@
  *
  * On a client's model port, a bearer that is not lease-shaped, or none, takes
  * the machine path (Task-1424, `machinePool.ts`): only a loopback `Host` and no
- * `Origin`, only the engine routes of `/anthropic` and `/chatgpt`, then the
- * client's pool picks and pins the account and its machine lease. After the
+ * `Origin`; on the token routes (`/anthropic`, `/anthropic-mcp`) then the
+ * method floor, the canonical-path rule, the deny floor and the mode
+ * (`machinePaths.ts`, Task-1430 PR3), on `/chatgpt` its engine route only.
+ * The client's pool then picks the account and its machine lease: pinned for
+ * a model run or a request with a session key, else a fresh selection that
+ * holds its lease until the request's record is written. After the
  * credential wait the selection must still hold (client active, lease live,
- * pin and profile unchanged and usable); it is re-selected once, and a second
- * change is refused. The upstream's status and raw headers on a model-run
- * route, from any lease kind, feed the pool's benches; a failure there is
- * logged and never reaches the response.
+ * a pinned one's pin unchanged, profile usable); it is re-selected once, and
+ * a second change is refused. The upstream's status and raw headers on a
+ * model-run request (`isModelRun`, bound to the route), from any lease kind,
+ * feed the pool's benches; a failure there is logged and never reaches the
+ * response. A token-route machine request's record is marked `listed` and
+ * `pathKey` at admission, whatever ends it.
  *
  * A log line names the provider, method, pathname (no query), lease id, outcome
  * and duration, then the outcome's class and `via=gateway`; on a client's port
@@ -51,7 +57,6 @@ import {
   isLeaseShaped,
   type LeaseCheck,
   type LeaseOwnership,
-  type LeaseProvider,
   type LeaseTable,
   type LoginBinding,
 } from "./leases.ts";
@@ -61,6 +66,12 @@ import {
   type MachinePool,
   type MachineSelection,
 } from "./machinePool.ts";
+import {
+  classifyMachinePath,
+  isTokenRoute,
+  machinePathVerdict,
+  type MachinePathMode,
+} from "./machinePaths.ts";
 import {
   classifyClientCredential,
   hasClientCookie,
@@ -77,13 +88,17 @@ import {
   isCompatAllowed,
   routeFor,
   type Route,
+  type UpstreamHost,
 } from "./upstreams.ts";
 import type { VaultCredential, VaultPort } from "./vaultPort.ts";
 
-/** Where to connect for an upstream instead of its logical host (tests). */
+/**
+ * Where to connect for an upstream instead of its logical host (tests),
+ * keyed by that host: TLS still verifies the logical name against `ca`.
+ */
 export type UpstreamOverrides = Partial<
   Record<
-    LeaseProvider,
+    UpstreamHost,
     { connect: { host: string; port: number }; ca?: string | string[] }
   >
 >;
@@ -122,6 +137,8 @@ interface ForwarderDeps {
   observe?: MachinePool["observe"] | undefined;
   /** On a client's port: where each admitted request's record goes. */
   requests?: RequestRecorder | undefined;
+  /** The machine kind's mode on the token routes; permissive when absent. */
+  machinePaths?: MachinePathMode | undefined;
 }
 
 /** The request log and the registry name of an account, for records. */
@@ -244,9 +261,28 @@ function answerEnding(status: number): Ending {
   };
 }
 
+/**
+ * How the client listener refuses a CONNECT: the method floor's, or its own
+ * admission refusals (`registry-unavailable` as its ordinary requests get).
+ */
+export type ConnectRefusal =
+  | Extract<Refusal, { case: "denied" | "forbidden" }>
+  | { case: "registry-unavailable" };
+
+/**
+ * A CONNECT target as a record may show it: query and fragment cut first,
+ * so a `@` in either is never taken for userinfo, then, in authority form
+ * only, the userinfo through the last `@`. In origin form `@` is pathname text.
+ */
+function shownConnectTarget(url: string): string {
+  const target = url.split(/[?#]/)[0] ?? "";
+  if (target.startsWith("/")) return target;
+  return target.slice(target.lastIndexOf("@") + 1);
+}
+
 /** What the machine path needs from the client listener. */
 export interface MachineAccess {
-  pool: Pick<MachinePool, "select" | "isCurrent" | "observe">;
+  pool: Pick<MachinePool, "select" | "selectFresh" | "isCurrent" | "observe">;
   /**
    * The user of the request's client while that client is active with its
    * certificate, else undefined; throws when the registry cannot be read.
@@ -297,6 +333,11 @@ interface Trace {
   answered(ending: Ending, leaseId?: string): void;
   /** A terminal failure, or an answer whose whole lifecycle is settled. */
   end(ending: Ending, leaseId?: string): void;
+  /**
+   * Runs `fn` once `end` has written the record and line, or now if it has:
+   * the request's terminal end, an upload still in flight included.
+   */
+  onEnd(fn: () => void): void;
 }
 
 /** Where a request goes once it is allowed, credential included. */
@@ -432,6 +473,8 @@ function refusalCase(refusal: Refusal): string {
       return "needs-login";
     case "unreachable":
       return `unreachable (${refusal.reason})`;
+    case "denied":
+      return `denied:${refusal.id}`;
     default:
       return refusal.case;
   }
@@ -445,6 +488,13 @@ export function createForwarder(deps: ForwarderDeps): {
     admitted?: AdmittedClient,
   ) => void;
   handleUpgrade: (req: http.IncomingMessage, socket: Duplex) => void;
+  refuseConnect: (
+    req: http.IncomingMessage,
+    socket: Duplex,
+    head: Buffer,
+    admitted: AdmittedClient | undefined,
+    refusal: ConnectRefusal,
+  ) => void;
   observeLocal: (
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -483,17 +533,21 @@ export function createForwarder(deps: ForwarderDeps): {
     req: http.IncomingMessage,
     route: Route | undefined,
     admitted: AdmittedClient | undefined,
+    /** The path to show instead, already without query, fragment or userinfo. */
+    shownPath?: string,
   ): Trace {
     const started = Date.now();
     const elapsedStart = performance.now();
     const url = req.url ?? "";
-    // Before the MCP route exists, keep its fixed identity in refusal
-    // telemetry only. This does not create a route or trust the caller's Host.
+    // When no MCP route is resolved, keep its fixed refusal identity only.
+    // This does not create a route or trust the caller's Host.
     const mcpPath =
       !route && /^\/anthropic-mcp(?:\/|\?|$)/.test(url)
         ? url.slice("/anthropic-mcp".length).split("?")[0] || "/"
         : undefined;
-    const pathname = route?.pathname ?? mcpPath ?? url.split("?")[0] ?? "";
+    // Display only. Routing, policy and marking keep the full raw target.
+    const pathname =
+      (shownPath ?? route?.pathname ?? mcpPath ?? url).split(/[?#]/)[0] ?? "";
     const clientId = deps.clientOf?.(req);
     const { requests } = deps;
     const recording = requests && admitted;
@@ -507,6 +561,16 @@ export function createForwarder(deps: ForwarderDeps): {
       recording && route?.upstream.kind === "provider"
         ? pinKeyOf(route.upstream.provider, req.rawHeaders)?.slice(0, 12)
         : undefined;
+    // A token-route machine request is marked now, before any refusal; the
+    // local answers' targets are routed here only to classify them.
+    const marked =
+      recording && deps.machine ? (route ?? routeFor(url)) : undefined;
+    const marking =
+      isTokenRoute(marked) &&
+      !isLeaseShaped(bearerOf(req.headers.authorization))
+        ? classifyMachinePath(marked, req.method)
+        : undefined;
+    const ends: (() => void)[] = [];
     let ended = false;
     let waitingForUpload = false;
     let answer: { ending: Ending; leaseId: string | undefined } | undefined;
@@ -544,54 +608,67 @@ export function createForwarder(deps: ForwarderDeps): {
         if (waitingForUpload) answer = { ending, leaseId };
         else trace.end(ending, leaseId);
       },
+      onEnd(fn) {
+        if (ended) contained("request end", fn);
+        else ends.push(fn);
+      },
       end(ending, leaseId = trace.leaseId) {
         if (ended) return;
         ended = true;
         answer = undefined;
-        const durationMs = Math.max(
-          0,
-          Math.round(performance.now() - elapsedStart),
-        );
-        const lease = leaseId ? ` lease=${leaseId}` : "";
-        const leaseKind =
-          trace.kind ??
-          (leaseId === undefined ? undefined : leases.kindOf(leaseId));
-        const client = deps.clientOf
-          ? ` kind=${leaseKind ?? "-"} client=${clientId ?? "-"}`
-          : "";
-        const rid = admitted?.ridDiagnostic
-          ? ` rid=${admitted.ridDiagnostic}${admitted.rid ? ` relay-id=${admitted.rid}` : ""}`
-          : admitted?.rid
-            ? ` rid=${admitted.rid}`
-            : "";
-        const line = `${route?.upstream.provider ?? "-"} ${req.method} ${quoted(pathname, LOGGED_PATH_CHARS)}${client}${lease} ${ending.text} ${durationMs}ms outcome=${ending.outcome} via=gateway${rid}`;
-        if (!requests || !admitted || !credential) return log(line);
-        const entry: RequestEntry = {
-          userId: admitted.userId,
-          client: { id: admitted.id, label: admitted.label },
-          via: "gateway",
-          ...(admitted.rid ? { rid: admitted.rid } : {}),
-          at: started,
-          host: trace.host,
-          method: req.method ?? "",
-          path: pathname,
-          status: ending.status,
-          outcome: ending.outcome,
-          ...(ending.reason === undefined ? {} : { reason: ending.reason }),
-          ...(account === undefined ? {} : { account }),
-          ...(session === undefined ? {} : { session }),
-          ...credential,
-          requestBytes: trace.requestBytes,
-          responseBytes: trace.responseBytes,
-          durationMs,
-        };
         try {
-          requests.log.record(entry, line);
-        } catch (err) {
-          log(line);
-          log(`request record failed (${errorCode(err)})`);
+          write(ending, leaseId);
+        } finally {
+          for (const fn of ends.splice(0)) contained("request end", fn);
         }
       },
+    };
+    /** The request's one line and, when recorded, its record. */
+    const write = (ending: Ending, leaseId: string | undefined): void => {
+      const durationMs = Math.max(
+        0,
+        Math.round(performance.now() - elapsedStart),
+      );
+      const lease = leaseId ? ` lease=${leaseId}` : "";
+      const leaseKind =
+        trace.kind ??
+        (leaseId === undefined ? undefined : leases.kindOf(leaseId));
+      const client = deps.clientOf
+        ? ` kind=${leaseKind ?? "-"} client=${clientId ?? "-"}`
+        : "";
+      const rid = admitted?.ridDiagnostic
+        ? ` rid=${admitted.ridDiagnostic}${admitted.rid ? ` relay-id=${admitted.rid}` : ""}`
+        : admitted?.rid
+          ? ` rid=${admitted.rid}`
+          : "";
+      const line = `${route?.upstream.provider ?? "-"} ${req.method} ${quoted(pathname, LOGGED_PATH_CHARS)}${client}${lease} ${ending.text} ${durationMs}ms outcome=${ending.outcome} via=gateway${rid}`;
+      if (!requests || !admitted || !credential) return log(line);
+      const entry: RequestEntry = {
+        userId: admitted.userId,
+        client: { id: admitted.id, label: admitted.label },
+        via: "gateway",
+        ...(admitted.rid ? { rid: admitted.rid } : {}),
+        at: started,
+        host: trace.host,
+        method: req.method ?? "",
+        path: pathname,
+        status: ending.status,
+        outcome: ending.outcome,
+        ...(ending.reason === undefined ? {} : { reason: ending.reason }),
+        ...(marking ?? {}),
+        ...(account === undefined ? {} : { account }),
+        ...(session === undefined ? {} : { session }),
+        ...credential,
+        requestBytes: trace.requestBytes,
+        responseBytes: trace.responseBytes,
+        durationMs,
+      };
+      try {
+        requests.log.record(entry, line);
+      } catch (err) {
+        log(line);
+        log(`request record failed (${errorCode(err)})`);
+      }
     };
     return trace;
   }
@@ -636,7 +713,12 @@ export function createForwarder(deps: ForwarderDeps): {
       text,
       outcome: "refused",
       status,
-      reason: refusal.case === "websocket" ? "upgrade" : refusal.case,
+      reason:
+        refusal.case === "websocket"
+          ? "upgrade"
+          : refusal.case === "denied"
+            ? `denied:${refusal.id}`
+            : refusal.case,
     };
   }
 
@@ -760,10 +842,12 @@ export function createForwarder(deps: ForwarderDeps): {
   }
 
   /**
-   * A machine request: loopback only, an engine route, then the pool's pick,
-   * its credential and the final validation. A selection that changed while
-   * the credential was read is re-selected once; a second change is refused
-   * `machine-retry`, with no third credential read.
+   * A machine request: loopback only, the token routes' rules or `/chatgpt`'s
+   * engine route, then the pool's pick, its credential and the final
+   * validation. A selection that changed while the credential was read is
+   * re-selected once; a second change is refused `machine-retry`, with no
+   * third credential read. A fresh selection's hold ends with the trace: a
+   * re-selection holds the new lease before it lets the old one go.
    */
   async function serveMachine(
     req: http.IncomingMessage,
@@ -779,11 +863,18 @@ export function createForwarder(deps: ForwarderDeps): {
     if (!isLoopbackOnly(req.rawHeaders))
       return refuse(res, shape, { case: "machine-origin" }, trace);
     const { upstream } = route;
-    // Never `/compat`, and only the engine routes.
-    if (
-      upstream.kind !== "provider" ||
-      !isAllowed(route, req.method, "machine")
-    )
+    // Never `/compat`; the token routes by their rules, else the engine route.
+    if (upstream.kind !== "provider")
+      return refuse(res, shape, { case: "forbidden" }, trace);
+    const token = isTokenRoute(route);
+    if (token) {
+      const refusal = machinePathVerdict(
+        route,
+        req.method,
+        deps.machinePaths ?? "permissive",
+      );
+      if (refusal) return refuse(res, shape, refusal, trace);
+    } else if (!isAllowed(route, req.method, "machine"))
       return refuse(res, shape, { case: "forbidden" }, trace);
     const { provider } = upstream;
     const label = provider === "claude" ? "Claude" : "OpenAI";
@@ -792,11 +883,26 @@ export function createForwarder(deps: ForwarderDeps): {
       provider,
       keyHash: pinKeyOf(provider, req.rawHeaders),
     };
+    // S4: what no session continues and no model run is pins nothing.
+    const fresh =
+      token &&
+      pin.keyHash === null &&
+      !isModelRun(upstream.prefix, req.method, route.pathname);
+    let release: (() => void) | undefined;
+    if (fresh) trace.onEnd(() => release?.());
     for (let attempt = 0; ; attempt += 1) {
       const userId = machine.userOf(req);
       if (userId === undefined)
         return refuse(res, shape, { case: "forbidden" }, trace);
-      const outcome = machine.pool.select(userId, pin);
+      let outcome;
+      if (fresh) {
+        outcome = machine.pool.selectFresh(userId, pin);
+        if (outcome.ok) {
+          const previous = release;
+          release = outcome.release;
+          previous?.();
+        }
+      } else outcome = machine.pool.select(userId, pin);
       if (!outcome.ok)
         return refuse(
           res,
@@ -877,10 +983,13 @@ export function createForwarder(deps: ForwarderDeps): {
     credential: Extract<VaultCredential, { ok: true }>,
     selection?: MachineSelection,
   ): Destination {
-    const override = deps.upstreams[upstream.provider];
-    const evidence = isModelRun(upstream.provider, req.method, route.pathname)
+    const override = deps.upstreams[upstream.host];
+    const evidence = isModelRun(upstream.prefix, req.method, route.pathname)
       ? { provider: upstream.provider, profileId: binding.profileId, selection }
       : undefined;
+    // A remote MCP server may answer 401 itself: that is no verdict on the
+    // account's token, so it forces no renewal (D-PR3-4).
+    const renewsOn401 = upstream.host !== "mcp-proxy.anthropic.com";
     return {
       secure: true,
       options: {
@@ -897,7 +1006,7 @@ export function createForwarder(deps: ForwarderDeps): {
       label: upstream.label,
       onResponse: (status, rawHeaders) => {
         // The 401 passes through unchanged; renewal may force one (once).
-        if (status === 401)
+        if (status === 401 && renewsOn401)
           contained("upstream 401 report", () =>
             deps.vault.upstream401(binding, credential.token),
           );
@@ -1153,6 +1262,66 @@ export function createForwarder(deps: ForwarderDeps): {
       trace.status = status;
       trace.responseBytes += Buffer.byteLength(body);
       socket.once("finish", () => trace.end(refusalEnding(refusal, status)));
+      socket.once("close", () => {
+        if (!socket.writableFinished)
+          trace.end({
+            text: "client closed",
+            outcome: "failed",
+            status: null,
+            reason: "client-closed",
+          });
+      });
+      socket.end(
+        `HTTP/1.1 ${status} ${http.STATUS_CODES[status]}\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\nconnection: close\r\n\r\n${body}`,
+      );
+    },
+
+    /**
+     * A CONNECT on a client's model port, refused whatever its bearer: a
+     * marked 403 (or the listener's 503) written raw, then the socket ends.
+     * One line and, with `admitted`, one record, at `finish`, or at `close`
+     * when the answer was not written in full. The route and the machine
+     * kind come from the raw target before anything is cut for display: an
+     * origin-form target on a token route shows its host and pathname and
+     * is marked for a machine bearer; anything else shows host `""` and the
+     * target without query, fragment or userinfo. Nothing is read from the
+     * socket.
+     */
+    refuseConnect(req, socket, head, admitted, refusal) {
+      const url = req.url ?? "";
+      const routed = url.startsWith("/") ? routeFor(url) : undefined;
+      const route = isTokenRoute(routed) ? routed : undefined;
+      const trace = startTrace(
+        req,
+        route,
+        admitted,
+        route ? undefined : shownConnectTarget(url),
+      );
+      trace.requestBytes = head.length;
+      stats.refused += 1;
+      const { status, body, ending } =
+        refusal.case === "registry-unavailable"
+          ? {
+              status: 503,
+              body: JSON.stringify({ error: "client registry unavailable" }),
+              ending: {
+                text: "refused registry-unavailable 503",
+                outcome: "refused" as const,
+                status: 503,
+                reason: "registry-unavailable",
+              },
+            }
+          : (() => {
+              const answer = refusalResponse(refusal, "claude");
+              return {
+                ...answer,
+                ending: refusalEnding(refusal, answer.status),
+              };
+            })();
+      socket.on("error", () => socket.destroy());
+      trace.status = status;
+      trace.responseBytes += Buffer.byteLength(body);
+      socket.once("finish", () => trace.end(ending));
       socket.once("close", () => {
         if (!socket.writableFinished)
           trace.end({

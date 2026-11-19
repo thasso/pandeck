@@ -142,8 +142,8 @@ async function gateway(
       logLines.push(line);
     },
     upstreams: {
-      claude: upstreamOverride(claudePort),
-      "openai-codex": upstreamOverride(chatgpt.port),
+      "api.anthropic.com": upstreamOverride(claudePort),
+      "chatgpt.com": upstreamOverride(chatgpt.port),
     },
   });
   running.push(gw);

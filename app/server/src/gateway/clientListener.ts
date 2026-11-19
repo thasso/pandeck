@@ -47,6 +47,7 @@ import http from "node:http";
 import https from "node:https";
 import type net from "node:net";
 import { join } from "node:path";
+import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import type { Payload } from "../workerProtocol/codec.ts";
 import {
@@ -86,7 +87,12 @@ import {
 } from "./clientRegistry.ts";
 import type { DevboxApproval } from "./devboxProof.ts";
 import type { CredentialOutcome, EdgeTools } from "./edgeTools.ts";
-import type { AdmittedClient, LocalAnswer, MachineAccess } from "./forward.ts";
+import type {
+  AdmittedClient,
+  ConnectRefusal,
+  LocalAnswer,
+  MachineAccess,
+} from "./forward.ts";
 import { createRelayDedup, RELAY_RID } from "./relayDedup.ts";
 import {
   createRelayObservations,
@@ -241,6 +247,13 @@ interface ClientListenerDeps {
       res: http.ServerResponse,
       admitted?: AdmittedClient,
     ) => LocalAnswer;
+    refuseConnect: (
+      req: http.IncomingMessage,
+      socket: Duplex,
+      head: Buffer,
+      admitted: AdmittedClient | undefined,
+      refusal: ConnectRefusal,
+    ) => void;
   };
   /** The saved machine pins and their writer; without them, memory only. */
   machinePins?:
@@ -972,6 +985,53 @@ export async function startClientListener(
   });
   const modelDeadlines = deps.modelDeadlines ?? MODEL_DEADLINES;
   const modelConnections = new WeakMap<net.Socket, ModelConnection>();
+  /** Cached mTLS identity attributes refusals, never permission to route. */
+  const modelAdmission = (req: http.IncomingMessage) => {
+    let client: GatewayClient | undefined;
+    let registryUnavailable = false;
+    try {
+      client = activeClient(req.socket);
+    } catch {
+      registryUnavailable = true;
+    }
+    const known = client ?? authenticated.get(req.socket);
+    const admitted: AdmittedClient | undefined = known && {
+      id: known.id,
+      label: known.label,
+      userId: known.userId,
+    };
+    return { client, admitted, registryUnavailable };
+  };
+  /** Reserve before any attributed trace, for ordinary requests and CONNECT. */
+  const duplicateRelayId = (
+    req: http.IncomingMessage,
+    admitted: AdmittedClient | undefined,
+  ): boolean => {
+    const supplied: string[] = [];
+    for (let i = 0; i + 1 < req.rawHeaders.length; i += 2)
+      if (req.rawHeaders[i]!.toLowerCase() === "x-pandeck-relay-id")
+        supplied.push(req.rawHeaders[i + 1]!);
+    if (!admitted || !supplied.length) return false;
+    const match = supplied.length === 1 ? RELAY_RID.exec(supplied[0]!) : null;
+    if (!match) {
+      admitted.ridDiagnostic = "invalid";
+      return false;
+    }
+    admitted.rid = supplied[0]!;
+    const disposition = relayDedup.enter(
+      admitted.id,
+      match[1]!,
+      Number(match[2]),
+    );
+    if (disposition === "present") {
+      log(
+        `relay request: client=${admitted.id} rid=${admitted.rid} duplicate-rid`,
+      );
+      return true;
+    }
+    if (disposition === "below-floor") admitted.ridDiagnostic = "below-floor";
+    return false;
+  };
   // Never listened: only admitted sockets reach it, through `connection`.
   const modelHttp = http.createServer((req, res) => {
     const connection = modelConnections.get(req.socket);
@@ -987,27 +1047,45 @@ export async function startClientListener(
   modelHttp.keepAliveTimeout = 0;
   modelHttp.headersTimeout = 0;
   modelHttp.requestTimeout = 0;
+  // CONNECT never tunnels here, whatever the bearer: the method floor refuses
+  // it marked and recorded, after the same admission as any request
+  // (Task-1430 PR3). Parse errors, TRACK included, keep the runtime's own
+  // 400 with no record (D-PR3-7): no `clientError` listener.
+  modelHttp.on(
+    "connect",
+    (req: http.IncomingMessage, socket: Duplex, head: Buffer) => {
+      const peer = req.socket;
+      if (!modelConnections.has(peer)) {
+        socket.destroy();
+        return;
+      }
+      const { client, admitted, registryUnavailable } = modelAdmission(req);
+      if (duplicateRelayId(req, admitted)) {
+        const { status, body } = refusalResponse(
+          { case: "duplicate-rid" },
+          "claude",
+        );
+        socket.on("error", () => socket.destroy());
+        socket.end(
+          `HTTP/1.1 ${status} ${http.STATUS_CODES[status]}\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\nconnection: close\r\n\r\n${body}`,
+        );
+        return;
+      }
+      const refusal: ConnectRefusal = registryUnavailable
+        ? { case: "registry-unavailable" }
+        : !client
+          ? { case: "forbidden" }
+          : { case: "denied", id: "method" };
+      forwarder.refuseConnect(req, socket, head, admitted, refusal);
+    },
+  );
   const serveModel = (
     req: http.IncomingMessage,
     res: http.ServerResponse,
   ): void => {
     // Every request is observed once: here when the listener answers it
     // itself, else by the forwarder. Without a resolved client, a line only.
-    let client: GatewayClient | undefined;
-    let registryUnavailable = false;
-    try {
-      client = activeClient(req.socket);
-    } catch {
-      registryUnavailable = true;
-    }
-    // The cached mTLS identity attributes refusals, not permission to route.
-    // Enter its rid too, before any handler or PR1 refusal trace is started.
-    const known = client ?? authenticated.get(req.socket);
-    const admitted: AdmittedClient | undefined = known && {
-      id: known.id,
-      label: known.label,
-      userId: known.userId,
-    };
+    const { client, admitted, registryUnavailable } = modelAdmission(req);
     // Only an active client may ingest. The path is not parsed, so a
     // malformed target cannot throw here.
     if (
@@ -1017,39 +1095,18 @@ export async function startClientListener(
       observations
     )
       return observations(req, res, admitted);
-    const supplied: string[] = [];
-    for (let i = 0; i + 1 < req.rawHeaders.length; i += 2)
-      if (req.rawHeaders[i]!.toLowerCase() === "x-pandeck-relay-id")
-        supplied.push(req.rawHeaders[i + 1]!);
-    if (admitted && supplied.length) {
-      const match = supplied.length === 1 ? RELAY_RID.exec(supplied[0]!) : null;
-      if (!match) admitted.ridDiagnostic = "invalid";
-      else {
-        admitted.rid = supplied[0]!;
-        const disposition = relayDedup.enter(
-          admitted.id,
-          match[1]!,
-          Number(match[2]),
-        );
-        if (disposition === "present") {
-          const { status, body } = refusalResponse(
-            { case: "duplicate-rid" },
-            "claude",
-          );
-          log(
-            `relay request: client=${admitted.id} rid=${admitted.rid} duplicate-rid`,
-          );
-          res.writeHead(status, {
-            "content-type": "application/json",
-            "content-length": Buffer.byteLength(body),
-          });
-          res.end(body);
-          req.resume();
-          return;
-        }
-        if (disposition === "below-floor")
-          admitted.ridDiagnostic = "below-floor";
-      }
+    if (duplicateRelayId(req, admitted)) {
+      const { status, body } = refusalResponse(
+        { case: "duplicate-rid" },
+        "claude",
+      );
+      res.writeHead(status, {
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(body),
+      });
+      res.end(body);
+      req.resume();
+      return;
     }
     if (registryUnavailable) {
       forwarder.observeLocal(req, res, admitted).refuse("registry-unavailable");

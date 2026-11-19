@@ -2133,12 +2133,14 @@ changes the target and `Host` ("Interception" below).
   - On the client model port, the edge reads exactly one relay-id field matching
     `^[0-9a-f]{32}:[1-9][0-9]{0,14}$`. Invalid or repeated fields are ignored,
     the request is served without a rid, and its text line says `rid=invalid`.
-    Valid ids enter client-scoped, boot-scoped dedup before `/mcp` or
-    forwarding. A repeated id gets marked 409 `duplicate-rid`, one text line and
-    no second record. A live id below the compacted floor is served and recorded
-    with `rid=below-floor`, never refused merely because compaction lost
-    precision. All upstream requests drop every `x-pandeck-*` field, on every
-    listener.
+    Valid ids enter client-scoped, boot-scoped dedup before `/mcp`, forwarding
+    or a CONNECT refusal, including cached-client admission refusals. The
+    observation-ingest endpoint keeps its separate active-client admission and
+    does not reserve an id from batch transport metadata. A repeated id gets
+    marked 409 `duplicate-rid`, one text line and no second record. A live id
+    below the compacted floor is served and recorded with `rid=below-floor`,
+    never refused merely because compaction lost precision. All upstream
+    requests drop every `x-pandeck-*` field, on every listener.
   - The ingest endpoint accepts only POST, at most 100 entries and 64 KiB. The
     whole batch must validate before any record, rid or acknowledgement is
     changed: lowercase boot, increasing safe-integer `d`, matching rid boot,
@@ -2299,13 +2301,15 @@ changes the target and `Host` ("Interception" below).
      included. Through the relay these reach the edge as sent: a foreign `Host`,
      or a second one, gets this marked 403 for an IP- or DNS-enrolled relay
      alike;
-  2. reaches only the engine routes: `POST /anthropic/v1/messages`, its
-     `count_tokens`, and `POST /chatgpt/backend-api/codex/responses`. No usage,
-     credit or consume route, never `/compat`, and WebSocket stays refused;
+  2. on `/chatgpt` reaches only `POST /chatgpt/backend-api/codex/responses`.
+     Never `/compat`, and WebSocket stays refused. The token routes
+     (`/anthropic` and `/anthropic-mcp`, below) take the token-route rules
+     instead;
   3. is served on the account its pool picks for the route's provider (Claude
-     for `/anthropic`, OpenAI for `/chatgpt`) from the client's user's registry
-     accounts, with that account's credential and, on `/chatgpt`, its
-     `ChatGPT-Account-Id`. Nothing in the request names the account;
+     for `/anthropic` and `/anthropic-mcp`, OpenAI for `/chatgpt`) from the
+     client's user's registry accounts, with that account's credential and, on
+     `/chatgpt`, its `ChatGPT-Account-Id`. Nothing in the request names the
+     account or the host: the route fixes the host;
   4. after the credential read, is checked again: the client still active, its
      machine lease live, its pin still on that account, the account still
      usable, and no needs-login answer. A change re-selects once; a second
@@ -2315,11 +2319,82 @@ changes the target and `Host` ("Interception" below).
      needs a login: that request gets the 503, and the next one, whose selection
      sees the empty pool, gets 403 `machine-pool-empty`. No extra final check
      runs (AC7b over AC8 for the first request, requester's ruling).
+- **Token routes** (Task-1430 PR3, `gateway/machinePaths.ts`). `/anthropic`
+  forwards to `api.anthropic.com` and `/anthropic-mcp` to
+  `mcp-proxy.anthropic.com`, the host Claude Code's claude.ai connectors call. A
+  machine request on either is checked in this order, on the full pathname
+  (never the record's cut one) and before any credential read:
+  1. `machine-origin` (above);
+  2. the method floor: `TRACE`, `TRACK` and `CONNECT` get 403 `denied` (reason
+     `denied:method`). The forwarder refuses `TRACE`. The model listener answers
+     a `CONNECT` itself (any target form) with the same marked 403, records it
+     and closes the connection; no tunnel opens. Node's parser rejects `TRACK`
+     before any handler with its own 400 (owner-approved exception D-PR3-7):
+     nothing is recorded, no line is written, no credential is read and no
+     upstream is contacted. No `clientError` hook parses it;
+  3. the canonical-path rule: the pathname starts with `/`, has no empty, `.` or
+     `..` segment and no raw `\`, `#` or `;`, and every `%` begins two hex
+     digits that do not decode to a letter, digit, `-`, `.`, `_`, `~`, `/`, `\`
+     or `%`. Anything else gets 403 `non-canonical-path`. Raw fragment and
+     semicolon suffixes cannot disguise a floor endpoint; enforcement always
+     reads the full raw pathname;
+  4. the deny floor: 403 `denied` (reason `denied:<id>`) for each entry below,
+     case-folded, the entry itself and every path under it. A sibling such as
+     `/api/oauth/usage` only shares a prefix and is not covered. `<uuid>` is any
+     one segment. These mint, exchange or revoke credentials, or manage an
+     organisation's keys and members, which no harness on a machine needs:
+
+     | Id                   | Path                                   |
+     | -------------------- | -------------------------------------- |
+     | `v1-oauth`           | `/v1/oauth`                            |
+     | `oauth-token`        | `/api/oauth/token`                     |
+     | `oauth-authorize`    | `/api/oauth/authorize`                 |
+     | `oauth-revoke`       | `/api/oauth/revoke`                    |
+     | `cli-create-api-key` | `/api/oauth/claude_cli/create_api_key` |
+     | `v1-org-api-keys`    | `/v1/organizations/api_keys`           |
+     | `v1-org-x-api-keys`  | `/v1/organizations/<uuid>/api_keys`    |
+     | `org-x-api-keys`     | `/api/organizations/<uuid>/api_keys`   |
+     | `v1-org-invites`     | `/v1/organizations/invites`            |
+     | `v1-org-users`       | `/v1/organizations/users`              |
+     | `v1-org-x-invites`   | `/v1/organizations/<uuid>/invites`     |
+     | `v1-org-x-users`     | `/v1/organizations/<uuid>/users`       |
+     | `org-x-invites`      | `/api/organizations/<uuid>/invites`    |
+     | `org-x-members`      | `/api/organizations/<uuid>/members`    |
+     | `api-auth`           | `/api/auth`                            |
+
+  5. the mode, set by the edge's `--machine-paths permissive|strict` (permissive
+     when absent; another value is a usage error). Permissive forwards every
+     other method and path. Strict forwards only the listed templates and
+     refuses the rest 403 `forbidden`.
+
+  The listed templates are the calls Claude Code was seen to make (`:uuid` a
+  lower-case 8-4-4-4-12 UUID, `:slug` 1 to 128 of `A-Za-z0-9._-`, never `.` or
+  `..`). On `/anthropic`: `POST /v1/messages` and `/v1/messages/count_tokens`;
+  `POST /api/oauth/validate`; `GET /api/oauth/usage`; `GET`
+  `/api/claude_cli/bootstrap`, `/api/claude_code_penguin_mode`,
+  `/api/claude_code/policy_limits` and `/api/claude_code/settings`;
+  `GET /api/organizations/:uuid/model_selector/cc`; `GET` under
+  `/api/oauth/organizations/:uuid/`: `marketplaces`, `plugins/list-plugins`,
+  `plugins/:slug/download`, `skills/list-skills` and `skills/:slug/download`;
+  `GET /v1/mcp_servers`; `POST /api/artifacts/mcp`;
+  `POST /api/event_logging/v2/batch` and `/api/claude_code/metrics`; `GET`
+  `/api/directory/server-urls` and `/api/web/domain_info`; and the literal
+  `POST /api/eval/sdk-zAZezfDKGoZuXXKe`, a feature-flag key compiled into the
+  observed Claude Code build, which a new build may change (strict mode then
+  refuses it until the list follows). On `/anthropic-mcp`: `POST /v1/mcp/:slug`.
+  Bodies, queries and headers stay opaque in both modes: the rules read only the
+  method and pathname.
+
+  A lease-shaped bearer on a token route is the lease path, unchanged: engine
+  and server leases reach only their exact lists (`/anthropic-mcp` has none),
+  and their records are not marked.
+
 - **Machine lease.** At most one live per (client, account), granted when a pin
-  first lands there and saved in `leases.json`. It has no TTL. It ends when the
-  machine is revoked, the account is removed, or no pin of that client uses the
-  account any more (the sweep). A grant that cannot be saved refuses that
-  request (500) and the gateway keeps serving.
+  or a fresh selection (below) first lands there and saved in `leases.json`. It
+  has no TTL. It ends when the machine is revoked, the account is removed, or no
+  pin of that client uses the account any more and no fresh request holds it
+  (the sweep). A grant that cannot be saved refuses that request (500) and the
+  gateway keeps serving.
 - **Pools and pins** (`gateway/machinePool.ts`). Usable: a login account of the
   client's user, of the route's provider, enabled and not needing a login.
   Eligible: usable and not benched. Ranking is Pandeck's
@@ -2337,16 +2412,26 @@ changes the target and `Host` ("Interception" below).
     unreadable file starts empty, and sessions re-pin.
   - A pin idle 7 days is dropped, and a client keeps at most 1,024 (least
     recently used first). Revoking the machine drops its pins.
+- **Fresh selection.** A token-route request that is not a model run
+  (`POST /anthropic/v1/messages`) and carries no session key (account, usage,
+  `count_tokens`, MCP and other calls) picks an account as a new pin would, but
+  writes no pin, saves nothing and runs no sweep. It holds its account's machine
+  lease from the pick until its record is written, an upload still pending
+  included, so a sweep in between keeps the lease. A re-select (step 4 above)
+  takes the new hold before it drops the old one. With a session key, such a
+  request uses that session's pin as before.
 - **Stickiness.** A pin moves only when its account cannot serve: it is unusable
   (removed, disabled, needs a login, no longer the user's) or has a long limit.
   It never moves for ranking, or because an account it left recovered: the
   provider's prompt cache stays on one account.
-- **Limits.** Each model-run answer (`POST /v1/messages`,
-  `POST /backend-api/codex/responses`) from any lease kind is evidence; usage,
-  credit, consume and `count_tokens` answers are not. A 2xx clears the account's
-  bench. A 429 passes through unchanged, every header field and repeat included
-  (gateway and relay drop only hop-by-hop, `proxy-*` and `set-cookie` fields).
-  The decision reads only the upstream's raw headers, never a body.
+- **Limits.** Each model-run answer (`POST /anthropic/v1/messages`,
+  `POST /chatgpt/backend-api/codex/responses`) from any lease kind is evidence;
+  the route decides, so the same path on `/anthropic-mcp` is not. Usage, credit,
+  consume, `count_tokens`, account and MCP answers are not: they never bench,
+  clear a bench or move a pin. A 2xx clears the account's bench. A 429 passes
+  through unchanged, every header field and repeat included (gateway and relay
+  drop only hop-by-hop, `proxy-*` and `set-cookie` fields). The decision reads
+  only the upstream's raw headers, never a body.
   - On `/anthropic` a 429 is a limit only when Anthropic states one:
     `anthropic-ratelimit-unified-status: rejected` or a valid `retry-after`,
     each sent exactly once. Any other 429 is no evidence: no bench, no tried
@@ -2393,8 +2478,13 @@ changes the target and `Host` ("Interception" below).
   | `machine-retry`           | 503    | this machine's account changed while the request waited; retry.                                              |
   | `duplicate-rid`           | 409    | this relay request was already recorded.                                                                     |
 
+  | `denied` | 403 | model access from this machine never covers this request. |
+  | `non-canonical-path` | 403 | model access from this machine needs a
+  canonical path (no empty, dot or encoded-unreserved segments). |
+
   The vault's needs-login 401 never reaches a machine request: a dead login is a
-  changed selection.
+  changed selection. A 401 from `mcp-proxy.anthropic.com` passes through and
+  never forces a token renewal; one from `api.anthropic.com` does, as before.
 
 - **Logs.** Every forward line on a client's port names
   `kind=<engine|server|machine>` and `client=<id>`, and every forward line
@@ -2426,12 +2516,16 @@ recorded `failed` at once, and a credential, refusal or error that settles later
 writes no answer, no second record and contacts no upstream.
 
 - **Record** (`GatewayUiRequest` in `shared/gatewayUi.ts`): `seq` and `epoch`;
-  `at`; the client's `{id, label}`; `via` (`gateway`; the relay, PR2, adds
+  `at`; the client's `{id, label}`; `listed` (PR3, token-route machine requests
+  only, set at admission so an early refusal carries it too: whether the method
+  and path match a listed template); `via` (`gateway`; the relay, PR2, adds
   `relay` with its `rid`; on the model port PR2a adds the validated `rid` to the
   `AdmittedClient` that `clientListener.ts` `serveModel` builds, and
   `forward.ts` `startTrace` copies it into the entry; PR1 sets none); `host`
   (the route's upstream, `""` when none matched), `method`, `path` (pathname
-  only, cut to 200 characters) and `pathKey`; `status` (what the client was
+  only, cut to 200 characters) and `pathKey` (on a token-route machine request
+  the matched listed template, else the pathname), both without query text;
+  gateway-originated rows also omit fragment text; `status` (what the client was
   answered, `null` if none); `outcome` and `reason`; `account` (the registry
   name, set only once the lease is the client's own or the pool picked it);
   `session` (the first 12 hex of the session key's SHA-256, provider routes
@@ -2447,7 +2541,14 @@ writes no answer, no second record and contacts no upstream.
   waits for upload finish too. A later upload abort/error is failed; a peer that
   stops reading before upload finish settles that failed lifetime rather than
   leaving a pending record. No record holds a header value, credential, lease
-  token, query, body or raw session key: the log copies only these fields.
+  token, query, body or raw session key: the log copies only these fields. For
+  gateway-originated rows, paths in records, text lines and persisted first-seen
+  identities omit everything from the first `?` or `#`.
+- **Relay fragment limitation.** Relay-originated local-refusal and fallback
+  paths still retain raw fragment text in records, text lines and persisted
+  first-seen identities. Task-1435 will address this after PR2b merges, per
+  requester ruling RD-1430-PR3-3. The gateway-originated fragment guarantee
+  above does not cover those relay rows.
 - **Outcomes.** `forwarded` with the upstream's status; `refused` with the
   refusal case as `reason` (a WebSocket upgrade's is `upgrade`); `failed` with a
   Node error code, `unreachable`, `upstream-truncated` (after the headers,
@@ -2459,18 +2560,26 @@ writes no answer, no second record and contacts no upstream.
   5xx mapping applies to adapter answers, not marked gateway refusals.
   `observed` and `overflow` are the relay's (PR2).
 - **Answered by the edge.** `/mcp` and the listener's refusals have `host` `""`
-  and no account or session. `requestBytes` counts the body's `data` chunks
-  whoever reads them (`req.emit` is wrapped, so the handler's reads are
-  unchanged), `responseBytes` what the handler wrote; lengths only. A completed
-  gate refusal is `refused` with `mcp-origin` (403) or `mcp-token` (401) and
-  counts no body. Completion is the response's `finish`, not an `end()` call
-  with output still queued. A completed answer is classed by status: below 400
-  `forwarded`; 4xx `refused` (`bad-request` 400, `method-not-allowed` 405,
-  `too-large` 413, else `client-error`); 5xx `failed` (`internal-error` 500,
-  `timeout` 504, else `server-error`). A close before completion is `failed`
-  even for 4xx, status `null` before headers: `aborted` when the handler
-  destroyed it, else `client-closed`. No tool name, JSON-RPC method or other
-  content is recorded.
+  and no account or session. A `CONNECT` is recorded `refused` with
+  `denied:method` (403), `forbidden` for an inactive client, or
+  `registry-unavailable` (503). A repeated relay id instead gets a marked 409
+  `duplicate-rid` and only the duplicate diagnostic line, without a new record.
+  An origin-form target on a token route keeps its route's host, path and
+  marking. Display paths omit query and fragment text; authority-form targets
+  cut both before stripping userinfo, so an `@` in either suffix is never
+  mistaken for userinfo. Origin-form path `@` stays. A request the HTTP parser
+  rejects (such as `TRACK`) reaches no handler and is not recorded.
+  `requestBytes` counts the body's `data` chunks whoever reads them (`req.emit`
+  is wrapped, so the handler's reads are unchanged), `responseBytes` what the
+  handler wrote; lengths only. A completed gate refusal is `refused` with
+  `mcp-origin` (403) or `mcp-token` (401) and counts no body. Completion is the
+  response's `finish`, not an `end()` call with output still queued. A completed
+  answer is classed by status: below 400 `forwarded`; 4xx `refused`
+  (`bad-request` 400, `method-not-allowed` 405, `too-large` 413, else
+  `client-error`); 5xx `failed` (`internal-error` 500, `timeout` 504, else
+  `server-error`). A close before completion is `failed` even for 4xx, status
+  `null` before headers: `aborted` when the handler destroyed it, else
+  `client-closed`. No tool name, JSON-RPC method or other content is recorded.
 - **Line.** Today's forward line plus `outcome=` and `via=gateway`; no session
   tag. A request without a resolved client gets the line only, including the
   loopback listener. On an already-authenticated model socket, a fresh registry

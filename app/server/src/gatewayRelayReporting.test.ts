@@ -13,6 +13,7 @@ import {
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
+import tls from "node:tls";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, test, vi } from "vitest";
@@ -450,6 +451,240 @@ function post(
     ...extra,
   });
 }
+
+/** Raw mTLS CONNECT, optionally after a request has cached the client identity. */
+function connectRaw(
+  r: Rig,
+  headers: string[],
+  beforeConnect?: () => void,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = tls.connect(r.tlsOptions());
+    let priming = beforeConnect !== undefined;
+    let reply = "";
+    const connect = () =>
+      socket.write(
+        `CONNECT /anthropic/v1/x?q=SENTINEL HTTP/1.1\r\nHost: localhost\r\n${headers.map((value, i) => (i % 2 === 0 ? `${value}: ` : `${value}\r\n`)).join("")}\r\n`,
+      );
+    socket.on("secureConnect", () => {
+      if (priming)
+        socket.write("GET /unknown HTTP/1.1\r\nHost: localhost\r\n\r\n");
+      else connect();
+    });
+    socket.on("data", (chunk: Buffer) => {
+      reply += chunk.toString("utf8");
+      if (!priming) return;
+      const boundary = reply.indexOf("\r\n\r\n");
+      if (boundary < 0) return;
+      const length = /content-length: (\d+)/i.exec(reply.slice(0, boundary));
+      if (
+        !length ||
+        Buffer.byteLength(reply) < boundary + 4 + Number(length[1])
+      )
+        return;
+      priming = false;
+      reply = "";
+      beforeConnect!();
+      connect();
+    });
+    socket.on("close", () => resolve(reply));
+    socket.on("error", reject);
+    socket.setTimeout(5000, () => {
+      socket.destroy();
+      reject(new Error("CONNECT did not close."));
+    });
+  });
+}
+
+test("I001: CONNECT reserves its rid, records it once and suppresses repeated CONNECT and fallback", async () => {
+  const r = await rig();
+  const before = r.records().length;
+  const select = vi.spyOn(r.gateway.clients!.machinePool, "select");
+  const selectFresh = vi.spyOn(r.gateway.clients!.machinePool, "selectFresh");
+  open.push(() => {
+    select.mockRestore();
+    selectFresh.mockRestore();
+  });
+  const headers = ["x-pandeck-relay-id", rid(1)];
+  const first = await connectRaw(r, headers);
+  assert.match(first, /^HTTP\/1\.1 403 /);
+  assert.match(first, /Pandeck gateway:/);
+  const rows = r.records().filter((row) => row.method === "CONNECT");
+  assert.equal(rows.length, 1);
+  assert.deepEqual(
+    [rows[0]!.rid, rows[0]!.reason, rows[0]!.listed, rows[0]!.pathKey],
+    [rid(1), "denied:method", false, "/v1/x"],
+  );
+  assert.equal(
+    r.lines.filter(
+      (line) => line.includes(" CONNECT ") && line.includes(`rid=${rid(1)}`),
+    ).length,
+    1,
+  );
+  const duplicate = await connectRaw(r, headers);
+  assert.match(duplicate, /^HTTP\/1\.1 409 /);
+  assert.match(duplicate, /Pandeck gateway:/);
+  assert.equal(r.records().length, before + 1);
+  assert.equal(
+    r.lines.filter((line) => line.includes(`rid=${rid(1)} duplicate-rid`))
+      .length,
+    1,
+  );
+  const fallback = await post(r, {
+    boot,
+    records: [{ ...report(1, 1), method: "CONNECT", path: "/v1/x" }],
+  });
+  assert.equal(fallback.status, 200);
+  assert.equal(JSON.parse(fallback.body).ack, 1);
+  assert.equal(r.records().length, before + 1);
+  assert.equal(select.mock.calls.length + selectFresh.mock.calls.length, 0);
+  assert.equal(r.gateway.leases.records().length, 0);
+  assert.equal(upstreams.anthropic.length + upstreams.platform.length, 0);
+  assert.ok(!JSON.stringify([r.records(), r.lines]).includes("SENTINEL"));
+});
+
+test("I001: CONNECT shares ordinary and fallback ids but never reserves ingest transport metadata", async () => {
+  const r = await rig();
+  const ordinary = await send(r, "/unknown", {
+    direct: true,
+    headers: ["x-pandeck-relay-id", rid(1)],
+  });
+  assert.equal(ordinary.status, 404);
+  assert.match(
+    await connectRaw(r, ["x-pandeck-relay-id", rid(1)]),
+    /^HTTP\/1\.1 409 /,
+  );
+  const batch = await send(r, "/relay/observations", {
+    direct: true,
+    method: "POST",
+    headers: ["x-pandeck-relay-id", rid(2)],
+    body: JSON.stringify({ boot, records: [report(3, 1)] }),
+  });
+  assert.equal(batch.status, 200);
+  assert.match(
+    await connectRaw(r, ["x-pandeck-relay-id", rid(3)]),
+    /^HTTP\/1\.1 409 /,
+  );
+  assert.match(
+    await connectRaw(r, ["x-pandeck-relay-id", rid(2)]),
+    /^HTTP\/1\.1 403 /,
+  );
+  assert.equal(
+    (
+      await send(r, "/unknown", {
+        direct: true,
+        headers: ["x-pandeck-relay-id", rid(2)],
+      })
+    ).status,
+    409,
+  );
+  assert.equal(r.records().filter((row) => row.method === "CONNECT").length, 1);
+  assert.equal(r.records().filter((row) => row.rid === rid(2)).length, 1);
+  assert.equal(upstreams.anthropic.length, 0);
+});
+
+test("I001: CONNECT invalid and repeated rid fields are diagnosed without echo or reservation", async () => {
+  const r = await rig();
+  for (const headers of [
+    ["x-pandeck-relay-id", "SENTINEL"],
+    ["x-pandeck-relay-id", rid(1), "X-Pandeck-Relay-Id", rid(1)],
+  ])
+    assert.match(await connectRaw(r, headers), /^HTTP\/1\.1 403 /);
+  const rows = r.records().filter((row) => row.method === "CONNECT");
+  assert.equal(rows.length, 2);
+  assert.ok(rows.every((row) => row.rid === undefined));
+  assert.equal(
+    r.lines.filter(
+      (line) => line.includes(" CONNECT ") && line.includes("rid=invalid"),
+    ).length,
+    2,
+  );
+  assert.match(
+    await connectRaw(r, ["x-pandeck-relay-id", rid(1)]),
+    /^HTTP\/1\.1 403 /,
+  );
+  assert.equal(r.records().filter((row) => row.rid === rid(1)).length, 1);
+  assert.ok(!JSON.stringify([r.records(), r.lines]).includes("SENTINEL"));
+  assert.equal(upstreams.anthropic.length, 0);
+});
+
+test("I001: CONNECT below-floor ids remain recorded and diagnosed, not refused as duplicates", async () => {
+  const r = await rig({ intervals: 1 });
+  for (const n of [1, 3, 1])
+    assert.match(
+      await connectRaw(r, ["x-pandeck-relay-id", rid(n)]),
+      /^HTTP\/1\.1 403 /,
+    );
+  assert.equal(r.records().filter((row) => row.method === "CONNECT").length, 3);
+  assert.equal(
+    r.lines.filter(
+      (line) =>
+        line.includes(" CONNECT ") &&
+        line.includes(`rid=below-floor relay-id=${rid(1)}`),
+    ).length,
+    1,
+  );
+  assert.equal(upstreams.anthropic.length, 0);
+});
+
+test.each([
+  ["registry-unavailable", 503],
+  ["forbidden", 403],
+] as const)(
+  "I001: cached CONNECT %s admission reserves ids before refusal and duplicate handling",
+  async (reason, status) => {
+    const r = await rig();
+    const file = join(r.stateDir, "clients.json");
+    const good = readFileSync(file, "utf8");
+    let restoreActive: (() => void) | undefined;
+    const change = () => {
+      if (reason === "forbidden") {
+        const inactive = vi
+          .spyOn(r.gateway.clients!.registry, "active")
+          .mockReturnValue(undefined);
+        restoreActive = () => {
+          inactive.mockRestore();
+        };
+      } else writeFileSync(file, "temporarily invalid JSON");
+    };
+    const restore = () => {
+      restoreActive?.();
+      writeFileSync(file, good);
+    };
+    try {
+      assert.match(
+        await connectRaw(r, ["x-pandeck-relay-id", rid(1)], change),
+        new RegExp(`^HTTP/1\\.1 ${status} `),
+      );
+    } finally {
+      restore();
+    }
+    const rows = r.records().filter((row) => row.method === "CONNECT");
+    assert.equal(rows.length, 1);
+    assert.deepEqual([rows[0]!.rid, rows[0]!.reason], [rid(1), reason]);
+    const before = r.records().length;
+    try {
+      assert.match(
+        await connectRaw(r, ["x-pandeck-relay-id", rid(1)], change),
+        /^HTTP\/1\.1 409 /,
+      );
+    } finally {
+      restore();
+    }
+    // Each priming GET has its own ordinary row; duplicate CONNECT adds none.
+    assert.equal(r.records().length, before + 1);
+    assert.equal(
+      r.records().filter((row) => row.method === "CONNECT").length,
+      1,
+    );
+    assert.equal(
+      (await post(r, { boot, records: [report(1, 1)] })).status,
+      200,
+    );
+    assert.equal(r.records().filter((row) => row.rid === rid(1)).length, 1);
+    assert.equal(upstreams.anthropic.length, 0);
+  },
+);
 
 test("T1/T15 real forwarding replaces forged metadata, strips it upstream and preserves opaque body bytes", async () => {
   const r = await rig();

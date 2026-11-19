@@ -225,31 +225,39 @@ describe("session keys", () => {
 });
 
 describe("evidence routes", () => {
-  test("only model runs are evidence", () => {
-    assert.equal(isModelRun("claude", "POST", "/v1/messages"), true);
+  test("only model runs are evidence, bound to the route (C7)", () => {
+    assert.equal(isModelRun("/anthropic", "POST", "/v1/messages"), true);
     assert.equal(
-      isModelRun("claude", "POST", "/v1/messages/count_tokens"),
+      isModelRun("/anthropic", "POST", "/v1/messages/count_tokens"),
       false,
     );
-    assert.equal(isModelRun("claude", "GET", "/api/oauth/usage"), false);
-    assert.equal(isModelRun("claude", "GET", "/v1/messages"), false);
+    assert.equal(isModelRun("/anthropic", "GET", "/api/oauth/usage"), false);
     assert.equal(
-      isModelRun("openai-codex", "POST", "/backend-api/codex/responses"),
+      isModelRun("/anthropic", "GET", "/api/claude_code/settings"),
+      false,
+    );
+    assert.equal(isModelRun("/anthropic", "GET", "/v1/messages"), false);
+    // `/anthropic-mcp` is never a model run, whatever its path.
+    assert.equal(isModelRun("/anthropic-mcp", "POST", "/v1/messages"), false);
+    assert.equal(isModelRun("/anthropic-mcp", "POST", "/v1/mcp/x"), false);
+    assert.equal(
+      isModelRun("/chatgpt", "POST", "/backend-api/codex/responses"),
       true,
     );
     assert.equal(
-      isModelRun("openai-codex", "GET", "/backend-api/wham/usage"),
+      isModelRun("/chatgpt", "GET", "/backend-api/wham/usage"),
       false,
     );
     assert.equal(
       isModelRun(
-        "openai-codex",
+        "/chatgpt",
         "POST",
         "/backend-api/wham/rate-limit-reset-credits/consume",
       ),
       false,
     );
-    assert.equal(isModelRun("openai-codex", "POST", "/v1/messages"), false);
+    assert.equal(isModelRun("/chatgpt", "POST", "/v1/messages"), false);
+    assert.equal(isModelRun("/compat", "POST", "/v1/messages"), false);
   });
 });
 
@@ -1617,5 +1625,158 @@ describe("bounds (AC14)", () => {
     assert.ok(own.some((r) => r.keyHash === sha("one-more")));
     // The evicted pin was the only one on codex-c: its lease ends.
     assert.equal(f.leases.isLive(first.leaseId), false);
+  });
+});
+
+describe("fresh selection (Task-1430 S4)", () => {
+  function fresh(outcome: ReturnType<MachinePool["selectFresh"]>) {
+    assert.ok(outcome.ok, `refused: ${JSON.stringify(outcome)}`);
+    return outcome;
+  }
+
+  test("picks what a new pin would get, and stores nothing", () => {
+    const f = fixture();
+    // Another account's null-key pin, from a key-less model run.
+    const pinned = served(f.pool.select("u1", claudeRef(null)));
+    const before = f.pool.records();
+    const saves = f.saves.length;
+    const held = fresh(f.pool.selectFresh("u1", claudeRef(null)));
+    assert.equal(held.selection.kind, "fresh");
+    const other = fixture();
+    assert.equal(
+      held.selection.binding.profileId,
+      profileOf(other.pool.select("u1", claudeRef("new"))),
+    );
+    assert.equal(pinned.kind, "pinned");
+    assert.deepEqual(f.pool.records(), before);
+    assert.equal(f.saves.length, saves, "no save");
+    assert.equal(f.leases.isLive(held.selection.leaseId), true);
+    held.release();
+  });
+
+  test("an empty pool is refused", () => {
+    const f = fixture({ accounts: { u1: [login("codex-c", "openai-codex")] } });
+    assert.deepEqual(f.pool.selectFresh("u1", claudeRef(null)), {
+      ok: false,
+      refusal: "machine-pool-empty",
+    });
+  });
+
+  test("never sweeps, even when a sweep is due", () => {
+    const f = fixture();
+    const old = served(f.pool.select("u1", codexRef("old")));
+    f.clock.now += PIN_IDLE_MS;
+    fresh(f.pool.selectFresh("u1", claudeRef(null))).release();
+    assert.equal(f.pool.records().length, 1);
+    assert.equal(f.leases.isLive(old.leaseId), true);
+  });
+
+  test("a held lease survives a sweep; released, the next sweep revokes it", () => {
+    const f = fixture();
+    const held = fresh(f.pool.selectFresh("u1", claudeRef(null)));
+    const { leaseId } = held.selection;
+    f.pool.sweep();
+    assert.equal(f.leases.isLive(leaseId), true);
+    held.release();
+    held.release();
+    assert.equal(
+      f.leases.isLive(leaseId),
+      true,
+      "a zero count revokes nothing",
+    );
+    f.pool.sweep();
+    assert.equal(f.leases.isLive(leaseId), false);
+  });
+
+  test("two holds keep the lease until both are released; a double release counts once", () => {
+    const f = fixture();
+    const one = fresh(f.pool.selectFresh("u1", claudeRef(null)));
+    const two = fresh(f.pool.selectFresh("u1", claudeRef(null)));
+    assert.equal(one.selection.leaseId, two.selection.leaseId);
+    one.release();
+    one.release();
+    f.pool.sweep();
+    assert.equal(f.leases.isLive(one.selection.leaseId), true);
+    two.release();
+    f.pool.sweep();
+    assert.equal(f.leases.isLive(one.selection.leaseId), false);
+  });
+
+  test("a grant whose save throws leaves no hold", () => {
+    const clock = { now: T0 };
+    let failing = true;
+    const leases = new LeaseTable({
+      now: () => clock.now,
+      persist: () => {
+        if (failing) throw new Error("disk full");
+      },
+    });
+    const profile = login("claude-a", "claude");
+    const pool = new MachinePool({
+      leases,
+      accountsOf: () => [profile.id],
+      profile: (id) => (id === profile.id ? profile : undefined),
+      needsLogin: () => [],
+      now: () => clock.now,
+    });
+    assert.throws(() => pool.selectFresh("u1", claudeRef(null)));
+    failing = false;
+    const held = fresh(pool.selectFresh("u1", claudeRef(null)));
+    held.release();
+    pool.sweep();
+    assert.equal(leases.isLive(held.selection.leaseId), false);
+  });
+
+  test("isCurrent ignores pins, and fails on a revoked lease, a removed, disabled or needs-login account", () => {
+    const check = (
+      change: (f: ReturnType<typeof fixture>, leaseId: string) => void,
+    ): boolean => {
+      const f = fixture();
+      const held = fresh(f.pool.selectFresh("u1", claudeRef(null)));
+      change(f, held.selection.leaseId);
+      return f.pool.isCurrent(held.selection);
+    };
+    assert.equal(
+      check(() => {}),
+      true,
+    );
+    // A null-key pin elsewhere changes nothing for a fresh selection.
+    assert.equal(
+      check((f) => {
+        f.pool.select("u1", claudeRef(null));
+      }),
+      true,
+    );
+    assert.equal(
+      check((f, leaseId) =>
+        f.leases.revokeWhere((r) => r.leaseId === leaseId, "session-ended"),
+      ),
+      false,
+    );
+    assert.equal(
+      check((f) => f.owners.set("u1", ["claude-b", "codex-c"])),
+      false,
+    );
+    assert.equal(
+      check((f) => {
+        f.profiles.get("claude-a")!.enabled = false;
+      }),
+      false,
+    );
+    assert.equal(
+      check((f) => f.needsLogin.add("claude-a")),
+      false,
+    );
+  });
+
+  test("a fresh selection's 429 moves no pin", () => {
+    const f = fixture();
+    const pinned = served(f.pool.select("u1", claudeRef(null)));
+    const held = fresh(f.pool.selectFresh("u1", claudeRef(null)));
+    const before = f.pool.records();
+    answer(f.pool, held.selection, 429, [...REJECTED, ...LONG]);
+    assert.deepEqual(f.pool.records(), before);
+    assert.equal(pinned.binding.profileId, f.pool.records()[0]!.profileId);
+    held.release();
   });
 });

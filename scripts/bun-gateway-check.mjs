@@ -18,7 +18,9 @@
  * `--vault-host` or unpaired, links to a paired `vault.js`, serves an enrolled
  * relay's client protocol and `/mcp` (whose Jira tool answers "not
  * connected"), lets a relay intercept the token hosts for a packaged-Bun
- * client (Task-1430), refuses peers without a certificate of its CA on the model and
+ * client (Task-1430), answers the relay's CONNECT on the model port with the
+ * marked 403 and its TRACK with the parser's 400, refuses peers without a
+ * certificate of its CA on the model and
  * client ports, serves the packaged gateway UI from `gateway-web/` with
  * `--ui-config`, and exits 0 on SIGTERM. No provider is reached.
  *
@@ -657,6 +659,35 @@ async function assertRefusedPeer(port, caPem, identity, what) {
   assert(answered === 0, `The edge answered ${what}.`);
 }
 
+/**
+ * Writes `request` raw to the edge as `identity` and answers every byte the
+ * edge sent before it closed the connection (within 10 s).
+ */
+async function edgeExchange(port, caPem, identity, request, what) {
+  const peer = tls.connect({
+    host: "127.0.0.1",
+    port,
+    ca: caPem,
+    checkServerIdentity: () => undefined,
+    key: identity.keyPem,
+    cert: identity.certPem,
+  });
+  const chunks = [];
+  peer.on("secureConnect", () => peer.write(request));
+  peer.on("data", (chunk) => chunks.push(chunk));
+  peer.on("error", () => {});
+  try {
+    await within(
+      new Promise((done) => peer.once("close", done)),
+      10_000,
+      `the edge to answer and close ${what}`,
+    );
+  } finally {
+    peer.destroy();
+  }
+  return Buffer.concat(chunks).toString("latin1");
+}
+
 /** One request; answers status, headers and the body's bytes. */
 function fetchBytes(url, options = {}) {
   const { body, ...rest } = options;
@@ -1182,6 +1213,43 @@ export async function checkEdgeEntry(runtimeRoot) {
       modelPort,
     });
 
+    // (6c) Methods the model port never serves (Task-1430 PR3), as the
+    // enrolled relay's own certificate: a CONNECT gets the listener's marked
+    // 403 in full, a TRACK only the runtime parser's 400 (D-PR3-7); both
+    // close the connection, and neither opens a tunnel or reaches a provider.
+    const relayIdentity = {
+      keyPem: readFileSync(join(relayDir, "client-key.pem"), "utf8"),
+      certPem: readFileSync(join(relayDir, "client-cert.pem"), "utf8"),
+    };
+    const connected = await edgeExchange(
+      modelPort,
+      caPem,
+      relayIdentity,
+      "CONNECT api.anthropic.com:443 HTTP/1.1\r\nhost: api.anthropic.com:443\r\n\r\n",
+      "a CONNECT",
+    );
+    const [connectHead, connectBody = ""] = connected.split("\r\n\r\n");
+    const connectLength = /\r\ncontent-length: (\d+)/i.exec(connectHead);
+    assert(
+      connectHead.startsWith("HTTP/1.1 403 ") &&
+        connectLength !== null &&
+        Buffer.byteLength(connectBody, "latin1") === Number(connectLength[1]) &&
+        connectBody.includes(GATEWAY_REFUSAL_MARKER),
+      `A CONNECT on the model port got ${JSON.stringify(connected.slice(0, 200))}.`,
+    );
+    const tracked = await edgeExchange(
+      modelPort,
+      caPem,
+      relayIdentity,
+      "TRACK /anthropic/v1/messages HTTP/1.1\r\nhost: 127.0.0.1\r\ncontent-length: 0\r\n\r\n",
+      "a TRACK",
+    );
+    assert(
+      /^HTTP\/1\.[01] 400 /.test(tracked) &&
+        !tracked.includes(GATEWAY_REFUSAL_MARKER),
+      `A TRACK on the model port got ${JSON.stringify(tracked.slice(0, 200))}.`,
+    );
+
     // (7) Mutual TLS: no certificate, and one the edge's CA did not issue.
     const stranger = selfSignedIdentity("stranger", "client");
     for (const [port, name] of [
@@ -1310,7 +1378,7 @@ export async function checkEdgeEntry(runtimeRoot) {
     vault.kill("SIGTERM");
     const stopVault = await within(vault.exited, 30_000, "vault.js's stop");
     assert(stopVault === 0, `vault.js's stop exited with ${stopVault}.`);
-    return `refused unpaired and vault-less starts, vault link up, client protocol and /mcp through a relay (Jira not connected), CONNECT interception (Bun fetch via HTTPS_PROXY reached the edge's marked refusal; IP and outside-name leaves refused by the CA; IP literal tunnelled), no-cert and stranger peers refused on both ports, gateway-web served with --ui-config, SIGTERM exit 0`;
+    return `refused unpaired and vault-less starts, vault link up, client protocol and /mcp through a relay (Jira not connected), CONNECT interception (Bun fetch via HTTPS_PROXY reached the edge's marked refusal; IP and outside-name leaves refused by the CA; IP literal tunnelled), CONNECT 403 and TRACK 400 on the model port, no-cert and stranger peers refused on both ports, gateway-web served with --ui-config, SIGTERM exit 0`;
   } finally {
     link?.end("check done");
     await relay?.close();

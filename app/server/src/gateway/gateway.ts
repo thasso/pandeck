@@ -61,6 +61,7 @@ import { RENEW_TICK_MS, type CodexRenewPort } from "./renewal.ts";
 import { openGatewayState } from "./state.ts";
 import { createRequestLog, type RequestLog } from "./requestLog.ts";
 import type { ObservationsCommitted } from "./relayObservations.ts";
+import type { MachinePathMode } from "./machinePaths.ts";
 import { createRemoteVault, type RemoteVaultOptions } from "./remoteVault.ts";
 import { createVault, type Vault } from "./vault.ts";
 import type { AtlassianEndpoint } from "./vaultAtlassian.ts";
@@ -73,8 +74,13 @@ export interface GatewayOptions {
   /** 0 picks a free port. The host is always `127.0.0.1`. */
   port?: number;
   log?: (line: string) => void;
-  /** Per-provider connect address and CA; TLS name and `Host` stay logical. */
+  /** Per-host connect address and CA; TLS name and `Host` stay logical. */
   upstreams?: UpstreamOverrides;
+  /**
+   * The machine kind's mode on the token routes of the client listener's
+   * model port (`machinePaths.ts`); permissive when absent.
+   */
+  machinePaths?: MachinePathMode;
   /** Test seam: the CA an https compatible endpoint is checked against. */
   compatCa?: string | string[];
   /** Where leases and profiles persist; without it they live in memory. */
@@ -316,6 +322,7 @@ export async function startGateway(
             ...forwarderDeps,
             clientOf: peerClientId,
             machine,
+            machinePaths: options.machinePaths,
             observe: (evidence, status, rawHeaders) =>
               machine.pool.observe(evidence, status, rawHeaders),
             requests: {

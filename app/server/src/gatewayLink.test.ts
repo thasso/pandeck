@@ -151,7 +151,7 @@ function link(options: Partial<GatewayLinkOptions> = {}): GatewayLink {
     port: 0,
     log: (line) => lines.push(line),
     upstreams: {
-      "openai-codex": {
+      "chatgpt.com": {
         connect: { host: "127.0.0.1", port: upstreamPort },
         ca,
       },
