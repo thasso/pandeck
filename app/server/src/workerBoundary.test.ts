@@ -536,12 +536,16 @@ const GATEWAY_VAULT = [
   // Atlassian's token endpoint and site list, from the vault only (Task-1411).
   "vaultAtlassian",
   "vaultControl",
+  // The one HTTPS call the vault's OAuth clients make (Task-1452).
+  "vaultHttps",
   // Users' integration credentials (Task-1397), sealed like token files, and
-  // their OAuth records' lanes, refresh and stop (Task-1411).
+  // their OAuth records' lanes, refresh and stop (Task-1411, Task-1452).
   "vaultIntegrations",
   "vaultLogins",
   // The vault in its own process, serving gateway-vault/1.1.
   "vaultServer",
+  // Slack's OAuth and auth.test endpoints, from the vault only (Task-1452).
+  "vaultSlack",
 ];
 const GATEWAY_EDGE = [
   // The client listener's enrollment, CA and protocol.

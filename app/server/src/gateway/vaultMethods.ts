@@ -162,6 +162,13 @@ export function isCloudId(value: unknown): value is string {
   return typeof value === "string" && CLOUD_ID_RE.test(value);
 }
 
+const SLACK_TEAM_ID_RE = /^T[A-Z0-9]{2,30}$/;
+
+/** A Slack workspace (team) id. */
+export function isSlackTeamId(value: unknown): value is string {
+  return typeof value === "string" && SLACK_TEAM_ID_RE.test(value);
+}
+
 /**
  * The directory of a user's integration credential under `accounts/`: a hash,
  * so user ids stay off the disk, with a prefix no login account id has.

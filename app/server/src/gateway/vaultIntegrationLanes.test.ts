@@ -3,8 +3,9 @@
  * AC4b): access reads that refresh once per expiry and write the rotation
  * before answering, a caller's abort that loses nothing, rejected and
  * transient refreshes, one writer per record (put, clear, connect, refresh),
- * and a close that refuses queued work and waits for the running item.
- * An injected clock; a loopback Atlassian fake; every value fake.
+ * and a close that refuses queued work and waits for the running item. Slack
+ * records share the lane and the stop (Task-1452, AC4). An injected clock;
+ * loopback Atlassian and Slack fakes; every value fake.
  */
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
@@ -33,6 +34,13 @@ import {
   type AtlassianFake,
 } from "../test/atlassianFake.ts";
 import {
+  FAKE_SLACK_CLIENT,
+  FAKE_SLACK_CODE,
+  FAKE_SLACK_REDIRECT,
+  startSlackFake,
+  type SlackFake,
+} from "../test/slackFake.ts";
+import {
   createSealedStore,
   recipientOf,
   writeRecipients,
@@ -47,18 +55,22 @@ import type { IntegrationRecord } from "./vaultPort.ts";
 const root = mkdtempSync(join(tmpdir(), "vault-lanes-"));
 let fake: AtlassianFake;
 let defaultToken: AtlassianFake["token"];
+let slack: SlackFake;
 
 beforeAll(async () => {
   fake = await startAtlassianFake();
   defaultToken = fake.token;
+  slack = await startSlackFake();
 });
 afterEach(() => {
   fake.seen.length = 0;
   fake.token = defaultToken;
   fake.expiresInS = 3600;
+  slack.reset();
 });
 afterAll(async () => {
   await fake.close();
+  await slack.close();
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -486,4 +498,115 @@ test("close: refuses queued and later work, waits for the running refresh with i
   const before = fake.seen.length;
   assert.deepEqual(await h.get(), { ok: false, unavailable: true });
   assert.equal(fake.seen.length, before);
+});
+
+// --- Slack records share the lane and the stop (Task-1452, AC4) ------------
+
+/** `expires_in` less four minutes: inside the refresh margin. */
+const SLACK_DUE_MS = (43_200 - 4 * 60) * 1000;
+
+function slackHarness(
+  dir = mkdtempSync(join(root, "s-")),
+  hooks: Pick<VaultIntegrationOptions, "written" | "discarded"> = {},
+) {
+  const clock = { now: 1_000_000_000 };
+  const port = createVaultIntegrations(
+    {
+      stateDir: dir,
+      clients: { slack: FAKE_SLACK_CLIENT },
+      slackEndpoint: slack.endpoint,
+      ...hooks,
+    },
+    () => {},
+    () => clock.now,
+  );
+  const file = join(
+    dir,
+    "accounts",
+    integrationDirId("u1", "slack"),
+    INTEGRATION_FILE,
+  );
+  return {
+    clock,
+    port,
+    file,
+    stored: (): Record<string, unknown> =>
+      JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>,
+    connect: () =>
+      port.integrationConnect("u1", "slack", {
+        code: FAKE_SLACK_CODE,
+        redirectUri: FAKE_SLACK_REDIRECT,
+      }),
+    get: () => port.integrationGet("u1", "slack"),
+  };
+}
+
+test("Slack: a clear behind a held refresh wins and the record stays absent", async () => {
+  const s = slackHarness();
+  assert.equal((await s.connect()).ok, true);
+  s.clock.now += SLACK_DUE_MS;
+  const held = slack.hold("access");
+  const refreshed = s.get();
+  await held.arrived;
+  const cleared = s.port.integrationClear("u1", "slack");
+  held.release();
+  view(await refreshed);
+  assert.deepEqual(await cleared, { ok: true });
+  assert.equal(existsSync(s.file), false);
+  assert.deepEqual(await s.get(), { ok: false, absent: true });
+  assert.equal(slack.refreshesSent().length, 1);
+  await s.port.close();
+});
+
+test("Slack: close waits for a connect held at auth.test, which writes and seals its record", async () => {
+  const dir = mkdtempSync(join(root, "slack-sealed-"));
+  const { publicKey, privateKey } = generateKeyPairSync("ec", {
+    namedCurve: "prime256v1",
+  });
+  const privateKeyFile = join(dir, "fake-software-key.pem");
+  writeFileSync(
+    privateKeyFile,
+    privateKey.export({ type: "pkcs8", format: "pem" }),
+    { mode: 0o600 },
+  );
+  writeRecipients(dir, [
+    recipientOf(publicKey.export({ type: "spki", format: "pem" }) as string, {
+      privateKeyFile,
+    }),
+  ]);
+  const sealed = createSealedStore({ stateDir: dir, log: () => {} })!;
+  await sealed.unlock("unused");
+  const s = slackHarness(dir, {
+    written: sealed.written,
+    discarded: sealed.discarded,
+  });
+  const held = slack.hold("authTest");
+  const connected = s.connect();
+  await held.arrived;
+  let closed = false;
+  const closing = s.port.close().then(() => (closed = true));
+  // Nothing later is admitted while the connect runs.
+  assert.deepEqual(await s.port.integrationClear("u1", "slack"), {
+    ok: false,
+    unavailable: true,
+  });
+  await delay(50);
+  assert.equal(closed, false);
+  held.release();
+  assert.equal((await connected).ok, true);
+  await closing;
+  assert.equal(s.stored().kind, "slack-oauth");
+  assert.equal(s.stored().refreshToken, slack.issuedRefresh.at(-1));
+  assert.equal(
+    existsSync(
+      join(
+        dir,
+        "sealed",
+        integrationDirId("u1", "slack"),
+        `${INTEGRATION_FILE}.sealed`,
+      ),
+    ),
+    true,
+  );
+  assert.deepEqual(await sealed.flush(), []);
 });

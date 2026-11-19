@@ -13,11 +13,12 @@
  * Atlassian credential, clients and MCP tokens), so the page and enrolled
  * clients run the same implementation.
  *
- * The UI config's Atlassian OAuth client follows the vault's topology
- * (`atlassianClientFor`, Task-1411): the in-process vault takes
- * `atlassian.clientId` and `atlassian.clientSecret` together or neither; a
- * remote vault holds its own client, so the edge keeps only the id (for the
- * page's sign-in link) and never passes or uses a secret it finds.
+ * The UI config's OAuth clients (Atlassian, Task-1411; Slack, Task-1452)
+ * follow the vault's topology, each on its own (`integrationClientFor`): the
+ * in-process vault takes a provider's `clientId` and `clientSecret` together
+ * or neither; a remote vault holds its own clients, so the edge keeps only
+ * the id (for the page's sign-in link) and never passes or uses a secret it
+ * finds.
  *
  * It imports `gateway/`, `gatewayTools/`, `gatewayWeb/` and `node:` only: no
  * login driver, harness or SDK, so the packaged entry's closure holds none
@@ -56,7 +57,6 @@ import {
   GatewayWebConfigError,
   admittedEmail,
   loadGatewayWebConfig,
-  type AtlassianPreset,
 } from "./gatewayWeb/config.ts";
 import {
   IntegrationsRefusal,
@@ -309,31 +309,59 @@ function webClients(operations: UserOperations): GatewayWebClients {
 /** A start the operator must fix (exit 2): not paired, a bad UI config. */
 export class EdgeStartRefusal extends Error {}
 
+/** The OAuth providers whose client the UI config may name. */
+type OAuthProvider = keyof IntegrationClients;
+
 /**
- * The UI config's Atlassian OAuth client for this vault topology: with the
- * vault in this process, both halves or neither (else `EdgeStartRefusal`)
- * and the pair goes to it; with a remote vault nothing goes anywhere, and a
- * configured secret only earns the fixed `warning`. No text holds a value.
+ * The UI config's OAuth client of `provider` for this vault topology: with
+ * the vault in this process, both halves or neither (else
+ * `EdgeStartRefusal`) and the pair goes to it; with a remote vault nothing
+ * goes anywhere, and a configured secret only earns the fixed `warning`. No
+ * text holds a value.
  */
-export function atlassianClientFor(
-  preset: AtlassianPreset | undefined,
+export function integrationClientFor(
+  provider: OAuthProvider,
+  preset: { clientId?: string; clientSecret?: string } | undefined,
   remoteVault: boolean,
 ): { integrationClients?: IntegrationClients; warning?: string } {
   const clientId = preset?.clientId;
   const clientSecret = preset?.clientSecret;
+  const name = provider === "atlassian" ? "Atlassian" : "Slack";
   if (remoteVault)
     return clientSecret !== undefined
       ? {
-          warning:
-            "atlassian.clientSecret in the UI config is ignored: the remote vault holds the Atlassian client secret; remove it from this file",
+          warning: `${provider}.clientSecret in the UI config is ignored: the remote vault holds the ${name} client secret; remove it from this file`,
         }
       : {};
   if (clientId === undefined && clientSecret === undefined) return {};
   if (clientId === undefined || clientSecret === undefined)
     throw new EdgeStartRefusal(
-      "atlassian.clientId and atlassian.clientSecret must both be set, or neither, with the vault in this process",
+      `${provider}.clientId and ${provider}.clientSecret must both be set, or neither, with the vault in this process`,
     );
-  return { integrationClients: { atlassian: { clientId, clientSecret } } };
+  return { integrationClients: { [provider]: { clientId, clientSecret } } };
+}
+
+/**
+ * Every provider's client for this vault topology (`integrationClientFor`),
+ * merged: what goes to an in-process vault, and the fixed warnings to log.
+ */
+export function integrationClientsFor(
+  presets: Partial<
+    Record<OAuthProvider, { clientId?: string; clientSecret?: string }>
+  >,
+  remoteVault: boolean,
+): { integrationClients?: IntegrationClients; warnings: string[] } {
+  const each = (["atlassian", "slack"] as const).map((provider) =>
+    integrationClientFor(provider, presets[provider], remoteVault),
+  );
+  const clients: IntegrationClients = Object.assign(
+    {},
+    ...each.map((one) => one.integrationClients ?? {}),
+  );
+  return {
+    ...(Object.keys(clients).length > 0 ? { integrationClients: clients } : {}),
+    warnings: each.flatMap((one) => (one.warning ? [one.warning] : [])),
+  };
 }
 
 export interface EdgeExtras {
@@ -388,11 +416,8 @@ export async function startEdge(
       throw err;
     }
   }
-  const atlassianClient = atlassianClientFor(
-    ui?.atlassian,
-    vault !== undefined,
-  );
-  if (atlassianClient.warning) extras.log(atlassianClient.warning);
+  const oauthClients = integrationClientsFor(ui ?? {}, vault !== undefined);
+  for (const warning of oauthClients.warnings) extras.log(warning);
 
   const gateway = await startGateway({
     stateDir,
@@ -434,8 +459,8 @@ export async function startEdge(
       : extras.loginDrivers
         ? { loginDrivers: extras.loginDrivers }
         : {}),
-    ...(atlassianClient.integrationClients
-      ? { integrationClients: atlassianClient.integrationClients }
+    ...(oauthClients.integrationClients
+      ? { integrationClients: oauthClients.integrationClients }
       : {}),
   });
   const edge = gateway.clients!;

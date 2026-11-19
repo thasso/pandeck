@@ -1,7 +1,8 @@
 /**
- * The vault's `--integrations-config` loader (Task-1411, AC1): a 0600 JSON
- * file of OAuth clients by provider. Every refusal is a fixed text holding no
- * value from the file; unknown providers are ignored. Every value is fake.
+ * The vault's `--integrations-config` loader (Task-1411, AC1; Slack,
+ * Task-1452 AC1): a 0600 JSON file of OAuth clients by provider. Every
+ * refusal is a fixed text holding no value from the file; unknown providers
+ * are ignored. Every value is fake.
  */
 import assert from "node:assert/strict";
 import {
@@ -15,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, test } from "vitest";
 import { FAKE_CLIENT } from "../test/atlassianFake.ts";
+import { FAKE_SLACK_CLIENT } from "../test/slackFake.ts";
 import {
   IntegrationClientsRefusal,
   loadIntegrationClients,
@@ -44,17 +46,58 @@ function refusal(file: string): string {
   assert.fail("expected a refusal");
 }
 
-test("a 0600 file with an Atlassian client loads; other providers are ignored", () => {
+test("a 0600 file with Atlassian and Slack clients loads; other providers are ignored", () => {
   const file = configFile(
     JSON.stringify({
       atlassian: { clientId: ID, clientSecret: SECRET },
-      slack: { clientId: "fake-slack-id" },
+      slack: FAKE_SLACK_CLIENT,
+      github: { clientId: "fake-github-id" },
     }),
   );
   assert.deepEqual(loadIntegrationClients(file), {
     atlassian: { clientId: ID, clientSecret: SECRET },
+    slack: FAKE_SLACK_CLIENT,
   });
+  const atlassianOnly = loadIntegrationClients(
+    configFile(
+      JSON.stringify({ atlassian: { clientId: ID, clientSecret: SECRET } }),
+    ),
+  );
+  assert.equal(atlassianOnly.slack, undefined);
+  assert.deepEqual(
+    loadIntegrationClients(
+      configFile(JSON.stringify({ slack: FAKE_SLACK_CLIENT })),
+    ),
+    { slack: FAKE_SLACK_CLIENT },
+  );
   assert.deepEqual(loadIntegrationClients(configFile("{}")), {});
+});
+
+test("an unusable slack entry refuses with a fixed text naming slack and nothing from the file", () => {
+  const { clientId, clientSecret } = FAKE_SLACK_CLIENT;
+  for (const slack of [
+    { clientId },
+    { clientSecret },
+    { clientId: "", clientSecret },
+    { clientId, clientSecret: "" },
+    { clientId: `${clientId} with spaces`, clientSecret },
+    { clientId, clientSecret: `${clientSecret}\u0007` },
+    clientSecret,
+  ]) {
+    const message = refusal(
+      configFile(
+        JSON.stringify({
+          atlassian: { clientId: ID, clientSecret: SECRET },
+          slack,
+        }),
+      ),
+    );
+    assert.equal(
+      message,
+      "the integrations config's slack entry needs a non-empty clientId and clientSecret",
+    );
+    assert.doesNotMatch(message, /fake-|sentinel/);
+  }
 });
 
 test("each unusable file refuses with a fixed text that holds nothing from it", () => {

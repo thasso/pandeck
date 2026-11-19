@@ -2740,32 +2740,73 @@ host and a standalone MCP endpoint, and the first tool, `jira_get_issue`.
   and the next get retries with the same stored token. Every Atlassian call from
   the vault goes to the fixed `auth.atlassian.com` or `api.atlassian.com` (TLS
   name and `Host` fixed), follows no redirect, reads at most 64 KiB and is
-  bounded at 8 s; no answer, log line or refusal holds provider text, a token, a
-  code or the secret. API-token records stay opaque and are answered verbatim;
-  only connect creates an OAuth record, so an edge cannot plant a refresh token
-  through a put. "Sign in with Atlassian" on the gateway's page starts every
-  connect (Task-1411, "The gateway's sign-in and UI"); the edge hands the
-  callback's code and redirect URI to the vault, which exchanges, picks the site
-  and stores the record.
+  bounded at 8 s (`gateway/vaultHttps.ts`, shared with Slack); no answer, log
+  line or refusal holds provider text, a token, a code or the secret. API-token
+  records stay opaque and are answered verbatim; only connect creates an OAuth
+  record, so an edge cannot plant a refresh token through a put (a put claiming
+  either provider's record kind is refused). "Sign in with Atlassian" on the
+  gateway's page starts every connect (Task-1411, "The gateway's sign-in and
+  UI"); the edge hands the callback's code and redirect URI to the vault, which
+  exchanges, picks the site and stores the record.
+- **Slack OAuth records** (Task-1452, Task-1420 PR1). The vault holds a user's
+  Slack user token with token rotation the same way, beside an Atlassian record
+  of the same user (records are per user and integration). Connect
+  (`gateway/vaultSlack.ts`): `POST https://slack.com/api/oauth.v2.access` with
+  the client, code and redirect URI as form fields; only the answer's
+  `authed_user` counts (`token_type: "user"`, header-safe access and refresh
+  tokens of at most 8 192 characters, `expires_in` a positive integer of at most
+  a year, a `U…`/`W…` user id) with the top-level `team` id (`T…`); a top-level
+  (bot) token is never read. No refresh token means rotation is off on the app:
+  `rejected`, with the fixed log line "Slack granted no refresh token". With the
+  deployment's `team` preset another workspace answers `team: "mismatch"`. Then
+  `POST https://slack.com/api/auth.test` with the new token as Bearer must name
+  the same team and user and an `https://<workspace>.slack.com/` (or
+  `.enterprise.slack.com`) URL, whose host is kept. The record is
+  `{kind: "slack-oauth", v: 1, teamId, teamName?, workspaceHost, userId, refreshToken, scope}`;
+  a get answers the access view
+  `{kind, teamId, teamName?, workspaceHost, userId, scope, accessToken, expiresAt}`
+  and refreshes by the Atlassian rule (5-minute margin, single-flight, written
+  and sealed before cached or answered). A refresh succeeds only with a
+  top-level `token_type: "user"` answer carrying a new refresh token unlike the
+  stored one: Slack has already consumed the stored token, so an `ok: true`
+  answer without a usable replacement (missing, empty or unchanged refresh
+  token, another `token_type`, tokens nested under `authed_user`) writes and
+  caches nothing, answers `unavailable` and logs "Slack refresh answer
+  unusable". Slack's protocol is documented but not yet observed against the app
+  (owner decision, 2026-11-19), so every shape outside it fails closed; the
+  first live sign-in is its first observation. Both calls classify alike: HTTP
+  200 `{ok: false}` with `ratelimited`, `internal_error`, `fatal_error`,
+  `service_unavailable` or `request_timeout`, HTTP 3xx, 429, 5xx, a network
+  error, the deadline or an unreadable body are `unreachable` at connect and
+  `unavailable` at refresh (the record kept, the next get retrying the same
+  token); any other `ok: false` or 4xx is `rejected`. Only connect writes a
+  Slack record: a put for Slack is refused, and a Slack record of another kind
+  is malformed (`unavailable`).
 - **Rotation recovery.** Sealing is best-effort, as for every vault writer: the
   rename can succeed while the seal fails (logged, the sweep retries), or the
   vault can die between the two. The rotated record then exists only in the
   tmpfs `accounts/` and is gone at restart; the sealed record holds the previous
   refresh token, which Atlassian still accepts within its 10-minute reuse
-  interval. After that the user connects again.
+  interval and Slack within a "short grace period" (length undocumented). After
+  that the provider answers `rejected` and the user connects again. A Slack
+  refresh whose answer is unusable has the same outcome: within the grace period
+  the next get's refresh may still succeed with the stored token, after it Slack
+  refuses it and the user reconnects; it never counts as a success.
 - **OAuth client config.** A remote vault reads its OAuth clients from
   `--integrations-config <file>` (`gateway/integrationClients.ts`), a regular
-  0600 JSON file `{"atlassian": {"clientId": "…", "clientSecret": "…"}}`: both
-  printable non-empty strings, other provider keys ignored, refusals fixed and
-  holding no value from the file. Without it connect answers `notConfigured`.
-  The edge's UI config may carry `atlassian.clientId` and
-  `atlassian.clientSecret`, each checked alone; what they do depends on where
-  the vault runs (`gatewayEdge.ts` `atlassianClientFor`): with the vault in the
-  edge's process both or neither (half a client refuses the start with a fixed
-  text before anything listens) and the pair goes to that vault; with a remote
-  vault the edge keeps only the id, for the page's sign-in link, never passes or
-  uses a secret, and logs one fixed line at start while the file still holds
-  one.
+  0600 JSON file keyed by provider, `atlassian` and `slack`, each
+  `{"clientId": "…", "clientSecret": "…"}`: both printable non-empty strings,
+  other provider keys ignored, refusals fixed (naming the provider) and holding
+  no value from the file. Without a provider's client its connect answers
+  `notConfigured`. The edge's UI config may carry `atlassian.clientId` and
+  `atlassian.clientSecret`, and `slack.clientId` and `slack.clientSecret`, each
+  checked alone; what they do depends on where the vault runs, per provider
+  (`gatewayEdge.ts` `integrationClientFor`): with the vault in the edge's
+  process both or neither (half a client refuses the start with a fixed text
+  before anything listens) and the pair goes to that vault; with a remote vault
+  the edge keeps only the id, for the page's sign-in link, never passes or uses
+  a secret, and logs one fixed line per provider at start while the file still
+  holds one.
 - **Bearer destinations.** On an OAuth view the tools call Jira with
   `Authorization: Bearer` at `https://api.atlassian.com/ex/jira/<cloudId>`
   (`atlassian/atlassianFetch.ts`; Confluence at `/ex/confluence/<cloudId>`, for

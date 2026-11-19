@@ -41,7 +41,9 @@ import {
 } from "./vaultMethods.ts";
 import type { CredentialProblem } from "./refusals.ts";
 import type {
+  Integration,
   IntegrationConnect,
+  IntegrationConnectRequests,
   IntegrationRecord,
   IntegrationWrite,
   LoginDriverEvents,
@@ -456,7 +458,9 @@ export function createRemoteVault(
     if (r.locked === true) return { ok: false, locked: true };
     return { ok: false, unavailable: true };
   };
-  const decodeConnect = (body: Record<string, unknown>): IntegrationConnect => {
+  const decodeConnect = (
+    body: Record<string, unknown>,
+  ): IntegrationConnect<"atlassian"> => {
     const answer = body.connect;
     if (typeof answer !== "object" || answer === null)
       return { ok: false, unavailable: true };
@@ -474,6 +478,29 @@ export function createRemoteVault(
     return { ok: false, unavailable: true };
   };
   const written = (): IntegrationWrite => ({ ok: true });
+  /** Each integration's connect over the link. */
+  const connects: {
+    [I in Integration]: (
+      userId: string,
+      request: IntegrationConnectRequests[I],
+    ) => Promise<IntegrationConnect<I>>;
+  } = {
+    atlassian: (userId, { code, redirectUri, site }) =>
+      integrationCall(
+        VAULT_METHODS.integrationConnect,
+        {
+          userId,
+          integration: "atlassian",
+          code,
+          redirectUri,
+          ...(site !== undefined ? { site } : {}),
+        },
+        decodeConnect,
+        INTEGRATION_CONNECT_TIMEOUT_MS,
+      ),
+    // gateway-vault/1.1 carries no Slack connect.
+    slack: () => Promise.resolve({ ok: false, unavailable: true }),
+  };
 
   void connect();
 
@@ -580,19 +607,8 @@ export function createRemoteVault(
         written,
         INTEGRATION_WRITE_TIMEOUT_MS,
       ),
-    integrationConnect: (userId, integration, { code, redirectUri, site }) =>
-      integrationCall(
-        VAULT_METHODS.integrationConnect,
-        {
-          userId,
-          integration,
-          code,
-          redirectUri,
-          ...(site !== undefined ? { site } : {}),
-        },
-        decodeConnect,
-        INTEGRATION_CONNECT_TIMEOUT_MS,
-      ),
+    integrationConnect: (userId, integration, request) =>
+      connects[integration](userId, request),
     inputsChanged() {
       if (sendQueued) return;
       sendQueued = true;
