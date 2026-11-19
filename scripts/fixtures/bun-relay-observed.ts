@@ -97,6 +97,9 @@ const edgeTls = edgeTlsFor(["127.0.0.1"], undefined);
 const clientKey = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
 const batches: ObservationBatch[] = [];
 const edgeRequests: string[] = [];
+/** Model requests' framing and body, and ingest hits holding no batch. */
+const edgeSeen: { url: string; te: string[]; bodySha256: string }[] = [];
+let foreignIngest = 0;
 const receiver = https.createServer(
   {
     key: edgeTls.serverKeyPem,
@@ -111,12 +114,27 @@ const receiver = https.createServer(
     req.on("end", () => {
       if (req.url !== "/relay/observations") {
         edgeRequests.push(req.url ?? "");
+        edgeSeen.push({
+          url: req.url ?? "",
+          te: fieldValues(req.rawHeaders, "transfer-encoding"),
+          bodySha256: sha(Buffer.concat(chunks)),
+        });
         res.writeHead(500).end();
         return;
       }
-      const batch = JSON.parse(
-        Buffer.concat(chunks).toString("utf8"),
-      ) as ObservationBatch;
+      let batch: ObservationBatch | undefined;
+      try {
+        batch = JSON.parse(
+          Buffer.concat(chunks).toString("utf8"),
+        ) as ObservationBatch;
+      } catch {
+        batch = undefined;
+      }
+      if (!Array.isArray(batch?.records) || !batch.records.length) {
+        foreignIngest += 1;
+        res.writeHead(400).end();
+        return;
+      }
       batches.push(batch);
       const body = JSON.stringify({ ack: batch.records.at(-1)!.d });
       res.writeHead(200, {
@@ -540,6 +558,116 @@ async function main(): Promise<void> {
   const surfaces = JSON.stringify(batches) + logs.join("\n");
   for (const sentinel of ["QUERY-SENTINEL", "SENTINEL", "fake-upstream"])
     assert.ok(!surfaces.includes(sentinel), `${sentinel} leaked`);
+
+  // 4. A chunked DELETE body is sent chunked on every ingress (F001/F002):
+  //    unframed, these bytes would be a second, reserved request.
+  {
+    const smuggled = Buffer.concat([
+      Buffer.from(
+        "POST /relay/observations HTTP/1.1\r\nHost: 127.0.0.1\r\ncontent-length: 2\r\n\r\n{}",
+      ),
+      Buffer.from([0x00, 0xff, 0x0d, 0x0a, 0x81]),
+    ]);
+    const chunked = (path: string, host: string): Buffer =>
+      Buffer.concat([
+        Buffer.from(
+          `DELETE ${path} HTTP/1.1\r\nHost: ${host}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n${smuggled.length.toString(16)}\r\n`,
+        ),
+        smuggled,
+        Buffer.from("\r\n0\r\n\r\n"),
+      ]);
+    const exchange = async (
+      socket: net.Socket,
+      request: Buffer,
+    ): Promise<string> => {
+      sockets.add(socket);
+      const chunks: Buffer[] = [];
+      socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+      const closed = once(socket, "close");
+      socket.write(request);
+      await within(closed, 5000, "a framed exchange");
+      return Buffer.concat(chunks).toString("latin1");
+    };
+    const plainSocket = net.connect(relay.port, "127.0.0.1");
+    plainSocket.on("error", () => {});
+    await once(plainSocket, "connect");
+    assert.match(
+      await exchange(plainSocket, chunked("/v1/framed", "127.0.0.1")),
+      /^HTTP\/1\.1 500 /,
+    );
+    assert.match(
+      await exchange(
+        await decrypted(relay.port, "api.anthropic.com", interceptCa.certPem),
+        chunked("/v1/framed", "api.anthropic.com"),
+      ),
+      /^HTTP\/1\.1 500 /,
+    );
+    assert.match(
+      await exchange(
+        await decrypted(relay.port, "claude.ai", interceptCa.certPem),
+        chunked("/api/framed", "claude.ai"),
+      ),
+      /^HTTP\/1\.1 200 /,
+    );
+    assert.deepEqual(edgeSeen, [
+      { url: "/v1/framed", te: ["chunked"], bodySha256: sha(smuggled) },
+      {
+        url: "/anthropic/v1/framed",
+        te: ["chunked"],
+        bodySha256: sha(smuggled),
+      },
+    ]);
+    const others = upstreamSeen.filter((seen) => seen.url !== "/api/bootstrap");
+    assert.deepEqual(
+      upstreamSeen
+        .filter((seen) => seen.url === "/api/framed")
+        .map((seen) => [
+          fieldValues(seen.rawHeaders, "transfer-encoding"),
+          seen.bodySha256,
+        ]),
+      [[["chunked"], sha(smuggled)]],
+    );
+    assert.ok(
+      !others.some((seen) => seen.url.startsWith("/relay/")),
+      "no smuggled request at the upstream",
+    );
+    await reported(
+      (r) => r.path === "/api/framed" && r.requestBytes === smuggled.length,
+      "the framed observed request",
+    );
+  }
+
+  // 5. A /relay/ target on an observed host is the marked 403 (F003).
+  {
+    const secure = await decrypted(
+      relay.port,
+      "claude.ai",
+      interceptCa.certPem,
+    );
+    sockets.add(secure);
+    const chunks: Buffer[] = [];
+    secure.on("data", (chunk: Buffer) => chunks.push(chunk));
+    const closed = once(secure, "close");
+    secure.write(
+      "GET /relay/observations HTTP/1.1\r\nHost: claude.ai\r\nconnection: close\r\n\r\n",
+    );
+    await within(closed, 5000, "the reserved-path refusal");
+    const text = Buffer.concat(chunks).toString("utf8");
+    assert.match(text, /^HTTP\/1\.1 403 /);
+    assert.ok(text.includes(GATEWAY_REFUSAL_MARKER), "a marked refusal");
+    const record = await reported(
+      (r) => r.path === "/relay/observations",
+      "the reserved-path refusal",
+    );
+    assert.equal(record.reason, "reserved-path");
+  }
+  assert.equal(foreignIngest, 0, "the reserved ingest was never reached");
+  assert.equal(
+    upstreamSeen.filter((seen) => seen.url.startsWith("/relay/")).length,
+    0,
+  );
+  assert.equal(destinations.length, 4, "the reserved path dialled nothing");
+  console.log("framing: chunked on plain, token and observed; reserved 403");
 
   const started = Date.now();
   await within(relay.close(), 5000, "the relay's close");

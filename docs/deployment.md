@@ -449,10 +449,14 @@ relay's test seam, which must receive each host's production destination (port
 443, SNI equal to the host, default verification). Under Bun's TLS it checks
 request and response fidelity including repeated `set-cookie`, a 101 upgrade
 with both heads and bytes both ways and no record until it closes, an untrusted
-upstream's marked 502 with a failed record, no request at the edge's model port,
-and a bounded close. It writes only under the scratch directory and fails unless
-the fixture prints its success line within 30 s. It is not part of
-`nix flake check` and does not replace the install check.
+upstream's marked 502 with a failed record, and no observed request at the
+edge's model port. A chunked `DELETE` body shaped like a whole `/relay/` request
+must then arrive as one chunked request with the same bytes on the plain, token
+and observed ingresses, the edge's ingest never reached; an observed `/relay/`
+target gets the marked 403 `reserved-path`. Last, the close must be bounded. It
+writes only under the scratch directory and fails unless the fixture prints its
+success line within 30 s. It is not part of `nix flake check` and does not
+replace the install check.
 
 The package must not use `bun build --compile` or Bun's ordinary bundler. As
 observed on Bun 1.3.13, and not re-measured on 1.4.2 since the package uses

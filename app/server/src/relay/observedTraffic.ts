@@ -10,7 +10,11 @@
  *   hop-by-hop fields, every field `Connection` names and caller
  *   `x-pandeck-*` fields. No credential or cookie is added or removed; a
  *   response `set-cookie` reaches the client. Bodies are piped both ways and
- *   never read; the counters see lengths only.
+ *   never read; the counters see lengths only. A chunked request is sent
+ *   chunked whatever its method (`withRequestFraming`).
+ * - An upgrade request goes up as its head alone, with no
+ *   `Transfer-Encoding`: nothing the client sent after its head is written
+ *   upstream before the `101`, so no body can frame a second request.
  * - An upgrade keeps its `Upgrade` fields and one `Connection: Upgrade`.
  *   After the upstream's `101`, both buffered heads go first, then bytes are
  *   piped both ways; any other answer is an ordinary response.
@@ -30,6 +34,7 @@ import {
   errorCode,
   HOP_BY_HOP,
   stripReservedHeaders,
+  withRequestFraming,
   type Lifetime,
   type ModelTraffic,
 } from "./modelTraffic.ts";
@@ -259,7 +264,10 @@ export function createObservedTraffic(options: {
         agent: options.agent,
         method: req.method ?? "GET",
         path: target,
-        headers: requestFields(req.rawHeaders, host, false),
+        headers: withRequestFraming(
+          req.rawHeaders,
+          requestFields(req.rawHeaders, host, false),
+        ),
       });
     } catch (err) {
       done.fail(errorCode(err, "UNKNOWN"));

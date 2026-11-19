@@ -39,6 +39,47 @@ function forwardable(rawHeaders: readonly string[]): string[] {
 }
 
 /**
+ * Puts a request's own body framing back on the fields it is forwarded
+ * with. `Transfer-Encoding` is hop-by-hop and dropped with the rest, but
+ * without it Node and Bun write a piped body unframed for the methods they
+ * do not chunk by default (GET, DELETE, OPTIONS, …), and the next hop would
+ * parse that body as further requests. Both parsers admit a request with
+ * `Transfer-Encoding` only when its last coding is `chunked`, so the
+ * received fields, sent again unchanged, make the client chunk-encode the
+ * decoded body whatever the method; a `Content-Length` cannot frame it too.
+ */
+export function withRequestFraming(
+  received: readonly string[],
+  fields: readonly string[],
+): string[] {
+  const codings: string[] = [];
+  for (let i = 0; i + 1 < received.length; i += 2)
+    if (received[i]!.toLowerCase() === "transfer-encoding")
+      codings.push(received[i]!, received[i + 1]!);
+  if (!codings.length) return [...fields];
+  const out: string[] = [];
+  for (let i = 0; i + 1 < fields.length; i += 2)
+    if (fields[i]!.toLowerCase() !== "content-length")
+      out.push(fields[i]!, fields[i + 1]!);
+  out.push(...codings);
+  return out;
+}
+
+/**
+ * C5: a local target under `/relay/` is the relay's own; every ingress,
+ * plain and decrypted, refuses it with this before any upstream contact.
+ */
+export function isReservedPath(target: string | undefined): boolean {
+  return (target ?? "").startsWith("/relay/");
+}
+export const RESERVED_PATH = {
+  status: 403,
+  reason: "reserved-path",
+  errorType: "permission_error",
+  text: "this path is reserved for the relay.",
+} as const;
+
+/**
  * Query- and fragment-free printable ASCII, bounded after UTF-8 byte
  * escaping: the target is cut at its first `?` or `#` before anything else
  * (Task-1435), so neither ever reaches a record.
@@ -296,17 +337,12 @@ export function createModelTraffic(options: {
     target: ForwardTarget,
   ): void {
     // Strip reserved metadata even when the ingress prepared its own headers.
-    const headers = forwardable(
-      stripReservedHeaders(target.headers ?? req.rawHeaders),
+    const headers = withRequestFraming(
+      req.rawHeaders,
+      forwardable(stripReservedHeaders(target.headers ?? req.rawHeaders)),
     );
-    if (closing || (req.url ?? "").startsWith("/relay/")) {
-      refuse(req, res, {
-        ...target,
-        status: 403,
-        reason: "reserved-path",
-        errorType: "permission_error",
-        text: "this path is reserved for the relay.",
-      });
+    if (closing || isReservedPath(req.url)) {
+      refuse(req, res, { ...target, ...RESERVED_PATH });
       return;
     }
     const admission = admit(req, res, target);

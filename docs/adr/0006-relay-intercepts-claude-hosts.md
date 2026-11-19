@@ -52,8 +52,9 @@ the flag it has no CONNECT handler, as before.
   `127.0.0.1:<relay port>`, so the edge sees a loopback caller as through the
   base URL, and an `Origin` still reaches the edge, which refuses it; every
   caller `x-pandeck-*` field is dropped. All other fields pass as received,
-  repeats and order kept, hop-by-hop fields dropped. Bodies are piped both ways
-  and never read. The inner server offers ALPN `http/1.1` only.
+  repeats and order kept, hop-by-hop fields dropped; a chunked body is sent
+  chunked again whatever the method. Bodies are piped both ways and never read.
+  The inner server offers ALPN `http/1.1` only.
 - **Observed hosts go direct, unchanged** (`relay/observedTraffic.ts`). A
   request to any other named host goes to that CONNECT host on 443, with SNI
   equal to it and the default CA verification; the inner `Host` and SNI choose
@@ -61,17 +62,21 @@ the flag it has no CONNECT handler, as before.
   credential: at most the client's own placeholder reaches the host. Header
   fields pass as received without hop-by-hop ones (fixed and `Connection`-named)
   and caller `x-pandeck-*` fields; no credential or cookie is added or removed;
-  bodies are piped unread; an upgrade is piped both ways after the upstream's
-  `101`. Its slot is reserved at admission and held for the request's whole
-  lifetime, which writes one `observed` (or `failed`) record when it ends. A
-  test-only programmatic seam may replace the address and trust root, never SNI
-  or verification, and no flag or environment variable reaches it.
+  bodies are piped unread, a chunked one sent chunked whatever the method; an
+  upgrade goes up as its head alone and is piped both ways after the upstream's
+  `101`. `/relay/…` is the relay's own on every ingress, so here too it gets the
+  403 `reserved-path` before any upstream contact. Its slot is reserved at
+  admission and held for the request's whole lifetime, which writes one
+  `observed` (or `failed`) record when it ends. A test-only programmatic seam
+  may replace the address and trust root, never SNI or verification, and no flag
+  or environment variable reaches it.
 - **Local refusals are marked.** Every refusal the relay answers itself here
   (`connect-port`, `connect-target`, `origin-form` for an absolute-form target,
-  `upgrade` for a WebSocket upgrade to a token host, the 502 for an observed
-  host it cannot reach, and a malformed target) has Anthropic's error shape and
-  carries the gateway's refusal marker, so the server's classifier never reads
-  it as a dead login.
+  `reserved-path` for `/relay/…` on any decrypted host, `upgrade` for a
+  WebSocket upgrade to a token host, the 502 for an observed host it cannot
+  reach, and a malformed target) has Anthropic's error shape and carries the
+  gateway's refusal marker, so the server's classifier never reads it as a dead
+  login.
 - **Reporting is the precondition.** Interception is never enabled in a release
   without the relay's reporting channel (Task-1430 split plan, C2/C4/C5): every
   decrypted request gets a relay request id and a record (the edge's for a token

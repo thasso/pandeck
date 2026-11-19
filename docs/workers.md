@@ -2085,12 +2085,14 @@ placeholder as its key. Any process on the machine can do this; Thasso accepted
 that. The relay's client certificate is the capability, and revoking the machine
 ends access at once. The relay forwards request and response header fields with
 repeats and verifies the edge by its enrolled address whatever the `Host`
-(above). It drops hop-by-hop fields. Request fields starting with `x-pandeck-`
-are reserved: every caller value is removed, regardless of case or repeats, and
-one `x-pandeck-relay-id` is added. Bodies still stream unchanged; no credential
-is added or removed. For the two Claude token hosts it intercepts, ADR-0006
-changes the target and `Host`; every other named host it decrypts goes directly
-to that host ("Interception" below).
+(above). It drops hop-by-hop fields, but a chunked request body is sent chunked
+again whatever its method (the client's own `Transfer-Encoding` fields go up
+with it), so a body can never be read as a further request. Request fields
+starting with `x-pandeck-` are reserved: every caller value is removed,
+regardless of case or repeats, and one `x-pandeck-relay-id` is added. Bodies
+still stream unchanged; no credential is added or removed. For the two Claude
+token hosts it intercepts, ADR-0006 changes the target and `Host`; every other
+named host it decrypts goes directly to that host ("Interception" below).
 
 - **Placeholder.** One literal, JWT-shaped because pi and Codex accept only
   that, pinned in `gatewayMachinePool.test.ts`:
@@ -2263,10 +2265,10 @@ to that host ("Interception" below).
     never the inner authority. Closing and overflow use the shared 503 refusal.
     Every refusal is marked and has Anthropic's error shape.
   - **Token hosts.** A WebSocket upgrade gets 501 `upgrade` without reaching the
-    edge; `/relay/…` gets 403 `reserved-path`. Each request keeps its header
-    fields as received except hop-by-hop fields, caller `x-pandeck-*` fields and
-    `Host`, which becomes one `127.0.0.1:<relay port>`; `Origin` still reaches
-    the edge, which refuses it. Bodies pass unread.
+    edge; `/relay/…`, an upgrade's included, gets 403 `reserved-path`. Each
+    request keeps its header fields as received except hop-by-hop fields, caller
+    `x-pandeck-*` fields and `Host`, which becomes one `127.0.0.1:<relay port>`;
+    `Origin` still reaches the edge, which refuses it. Bodies pass unread.
   - **Observed hosts** (PR4, `observedTraffic.ts`). Each request goes directly
     to the CONNECT host on 443: SNI is that host and the certificate is checked
     against the default CA store. The inner `Host` and SNI never choose the
@@ -2280,9 +2282,13 @@ to that host ("Interception" below).
     keeps its `Upgrade` fields and one `Connection: Upgrade`. After the
     upstream's `101`, the relay writes the `101`, then each side's buffered
     bytes to the other, then pipes both ways; any other answer is an ordinary
-    response followed by a close. No path is reserved: `/relay/…` is forwarded
-    like any other. An upstream that cannot be reached or fails verification
-    gets the marked 502 `the relay cannot reach this host.`
+    response followed by a close. A chunked request body is sent chunked
+    whatever the method; an upgrade request goes up as its head alone, so
+    nothing the client sends after it reaches the upstream before the `101`.
+    `/relay/…`, an upgrade's included, gets 403 `reserved-path` before any
+    upstream contact, as on every ingress; closing and a full queue answer their
+    503 first. An upstream that cannot be reached or fails verification gets the
+    marked 502 `the relay cannot reach this host.`
   - **Reporting.** A token-host request takes the plain listener's path through
     the relay (admission, one rid, reserved fields dropped, a fallback record
     when no edge headers arrive), its record naming the token host and the
@@ -2294,12 +2300,12 @@ to that host ("Interception" below).
     upstream status (`101` for an upgrade) once upstream headers arrived, plus
     `client-closed`, `relay-closing` or a Node error code if it ended early;
     otherwise `failed` with the local 502 or null and that reason (`UNKNOWN` for
-    an error without a code). `connect-port`, `connect-target`, `origin-form`
-    and `upgrade` reserve a slot and are recorded (a refused CONNECT as method
-    `CONNECT`, path `/`, its credential class read from the CONNECT's own
-    fields, `Proxy-Authorization` included). Every class answers the 503
-    `overflow` without upstream or edge contact when the queue is full. A
-    malformed target and a failed TLS handshake are only counted in the relay
+    an error without a code). `connect-port`, `connect-target`, `origin-form`,
+    `reserved-path` and `upgrade` reserve a slot and are recorded (a refused
+    CONNECT as method `CONNECT`, path `/`, its credential class read from the
+    CONNECT's own fields, `Proxy-Authorization` included). Every class answers
+    the 503 `overflow` without upstream or edge contact when the queue is full.
+    A malformed target and a failed TLS handshake are only counted in the relay
     summary; blind tunnels are neither recorded nor counted. Decrypted
     connections join the relay's close: they drain with the plain listener's
     work and are then cut.

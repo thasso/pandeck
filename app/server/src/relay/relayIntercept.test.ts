@@ -51,6 +51,7 @@ let interceptCa: InterceptCa;
 let upstreamCa: InterceptCa;
 
 interface Recorded {
+  method: string;
   url: string;
   rawHeaders: string[];
   bodySha256: string;
@@ -66,6 +67,8 @@ interface RecordingEdge {
   requests: Recorded[];
   batches: ObservationBatch[];
   connections: number;
+  /** `/relay/observations` requests that held no relay batch. */
+  foreignIngest: number;
   /** Resolves once a batch holding a record that matches arrives. */
   reported(match: (record: Delivery) => boolean): Promise<Delivery>;
 }
@@ -87,6 +90,7 @@ async function recordingEdge(): Promise<RecordingEdge> {
     requests: [],
     batches: [],
     connections: 0,
+    foreignIngest: 0,
     reported: (match) =>
       new Promise((resolve) => {
         const check = (): void => {
@@ -114,9 +118,20 @@ async function recordingEdge(): Promise<RecordingEdge> {
         const chunks: Buffer[] = [];
         req.on("data", (chunk: Buffer) => chunks.push(chunk));
         req.on("end", () => {
-          const batch = JSON.parse(
-            Buffer.concat(chunks).toString("utf8"),
-          ) as ObservationBatch;
+          let batch: ObservationBatch | undefined;
+          try {
+            batch = JSON.parse(
+              Buffer.concat(chunks).toString("utf8"),
+            ) as ObservationBatch;
+          } catch {
+            batch = undefined;
+          }
+          if (!Array.isArray(batch?.records) || !batch.records.length) {
+            edge.foreignIngest += 1;
+            res.writeHead(400, { "content-length": 0 });
+            res.end();
+            return;
+          }
           edge.batches.push(batch);
           const body = JSON.stringify({ ack: batch.records.at(-1)!.d });
           res.writeHead(200, {
@@ -133,6 +148,7 @@ async function recordingEdge(): Promise<RecordingEdge> {
       req.on("end", () => {
         const peer = (req.socket as tls.TLSSocket).getPeerCertificate();
         edge.requests.push({
+          method: req.method ?? "",
           url: req.url ?? "",
           rawHeaders: [...req.rawHeaders],
           bodySha256: hash.digest("hex"),
@@ -441,6 +457,7 @@ const SHAPES = {
   "connect-target": { status: 403, type: "permission_error" },
   "origin-form": { status: 400, type: "invalid_request_error" },
   upgrade: { status: 501, type: "api_error" },
+  "reserved-path": { status: 403, type: "permission_error" },
   malformed: { status: 400, type: "invalid_request_error" },
 } as const;
 
@@ -611,6 +628,7 @@ test("summary: TLS failures and malformed targets are counted, classed by the CO
 // so SNI and default verification are still exercised.
 
 interface UpstreamRequest {
+  method: string;
   url: string;
   servername: string | false | null;
   rawHeaders: string[];
@@ -679,6 +697,7 @@ async function fakeUpstream(): Promise<FakeUpstream> {
       }
       req.on("end", () => {
         upstream.requests.push({
+          method: req.method ?? "",
           url: req.url ?? "",
           servername,
           rawHeaders: [...req.rawHeaders],
@@ -1294,4 +1313,239 @@ test("PR4: an early upstream answer reaches the client at once; the record waits
   secure.destroy();
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.equal(relayRecords(r.edge).length, 1);
+});
+
+/**
+ * A body that, written unframed, is a whole reserved request followed by
+ * binary bytes: what F001/F002 let reach the next hop as a second request.
+ */
+const SMUGGLED = Buffer.concat([
+  Buffer.from(
+    "POST /relay/observations HTTP/1.1\r\nHost: 127.0.0.1\r\ncontent-type: application/json\r\ncontent-length: 2\r\n\r\n{}",
+  ),
+  Buffer.from([0x00, 0xff, 0x0d, 0x0a, 0x30, 0x0d, 0x0a, 0x0d, 0x0a, 0x81]),
+]);
+
+/** A raw request with `body` in two chunks, then the connection closes. */
+function chunkedRequest(
+  method: string,
+  path: string,
+  host: string,
+  body: Buffer,
+): Buffer {
+  const chunk = (part: Buffer): Buffer =>
+    Buffer.concat([
+      Buffer.from(`${part.length.toString(16)}\r\n`),
+      part,
+      Buffer.from("\r\n"),
+    ]);
+  const half = Math.floor(body.length / 2);
+  return Buffer.concat([
+    Buffer.from(
+      `${method} ${path} HTTP/1.1\r\nHost: ${host}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n`,
+    ),
+    chunk(body.subarray(0, half)),
+    chunk(body.subarray(half)),
+    Buffer.from("0\r\n\r\n"),
+  ]);
+}
+
+/** One raw HTTP/1.1 exchange on the relay's plain model listener. */
+async function plain(relayPort: number, request: Buffer): Promise<HttpAnswer> {
+  const socket = net.connect(relayPort, "127.0.0.1");
+  const answer = readToClose(socket);
+  socket.write(request);
+  return parseAnswer(await answer);
+}
+
+const sha256 = (bytes: Buffer): string =>
+  createHash("sha256").update(bytes).digest("hex");
+
+test("F001/F002: a chunked GET or DELETE body is sent chunked on the plain, token and observed ingresses: one request each, the same bytes, none of them parsed as a request", async () => {
+  const r = await observedRig();
+  for (const method of ["GET", "DELETE"]) {
+    const viaPlain = await plain(
+      r.relay.port,
+      chunkedRequest(method, "/v1/thing", "127.0.0.1", SMUGGLED),
+    );
+    assert.equal(viaPlain.status, 200, viaPlain.head);
+    const viaToken = await decrypted(
+      r.relay.port,
+      "api.anthropic.com",
+      chunkedRequest(method, "/v1/thing", "api.anthropic.com", SMUGGLED),
+    );
+    assert.equal(viaToken.status, 200, viaToken.head);
+    const viaObserved = await decrypted(
+      r.relay.port,
+      "claude.ai",
+      chunkedRequest(method, "/api/thing", "claude.ai", SMUGGLED),
+    );
+    assert.equal(viaObserved.status, 200, viaObserved.head);
+  }
+  await reportedRecord(
+    r.edge,
+    (record) => record.host === "claude.ai" && record.method === "DELETE",
+  );
+  // The edge: exactly the four requests, each re-chunked with its own rid.
+  assert.deepEqual(
+    r.edge.requests.map((seen) => [seen.method, seen.url]),
+    [
+      ["GET", "/v1/thing"],
+      ["GET", "/anthropic/v1/thing"],
+      ["DELETE", "/v1/thing"],
+      ["DELETE", "/anthropic/v1/thing"],
+    ],
+  );
+  for (const seen of r.edge.requests) {
+    assert.equal(seen.bodySha256, sha256(SMUGGLED), seen.url);
+    assert.deepEqual(fieldValues(seen.rawHeaders, "transfer-encoding"), [
+      "chunked",
+    ]);
+    assert.deepEqual(fieldValues(seen.rawHeaders, "content-length"), []);
+    assert.equal(fieldValues(seen.rawHeaders, "x-pandeck-relay-id").length, 1);
+  }
+  assert.equal(r.edge.foreignIngest, 0, "the reserved ingest was never hit");
+  // The observed upstream: exactly the two requests, the same bytes.
+  assert.deepEqual(
+    r.upstream.requests.map((seen) => [
+      seen.method,
+      seen.url,
+      seen.body.equals(SMUGGLED),
+      fieldValues(seen.rawHeaders, "transfer-encoding"),
+    ]),
+    [
+      ["GET", "/api/thing", true, ["chunked"]],
+      ["DELETE", "/api/thing", true, ["chunked"]],
+    ],
+  );
+  // The edge records the forwarded ones; the relay each observed one, once,
+  // with the whole body counted.
+  assert.deepEqual(
+    relayRecords(r.edge).map((record) => [
+      record.host,
+      record.method,
+      record.path,
+      record.status,
+      record.requestBytes,
+    ]),
+    [
+      ["claude.ai", "GET", "/api/thing", 200, SMUGGLED.length],
+      ["claude.ai", "DELETE", "/api/thing", 200, SMUGGLED.length],
+    ],
+  );
+});
+
+const upgradeTo = (host: string, path: string): string =>
+  `GET ${path} HTTP/1.1\r\nHost: ${host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n`;
+
+test("F001 audit: an observed upgrade with a chunked body goes up as its head alone; the body is never a second request", async () => {
+  const r = await observedRig();
+  const secure = await secureTo(r.relay.port, "claude.ai");
+  const opened = readUntil(secure, (received) => {
+    const end = received.indexOf("\r\n\r\n");
+    return end !== -1 && received.length >= end + 4 + SERVER_HEAD.length;
+  });
+  const request = chunkedRequest("GET", "/ws", "claude.ai", SMUGGLED)
+    .toString("latin1")
+    .replace(
+      "Connection: close\r\n",
+      "Upgrade: websocket\r\nConnection: Upgrade\r\n",
+    );
+  secure.write(Buffer.from(request, "latin1"));
+  assert.match((await opened).toString("latin1"), /^HTTP\/1\.1 101 /);
+  secure.destroy();
+  await reportedRecord(r.edge, (record) => record.status === 101);
+  assert.equal(r.upstream.upgrades.length, 1);
+  assert.deepEqual(
+    fieldValues(r.upstream.upgrades[0]!.rawHeaders, "transfer-encoding"),
+    [],
+  );
+  assert.deepEqual(r.upstream.requests, [], "no request beside the upgrade");
+});
+
+test("F003: a /relay/ target on an observed host, request or upgrade, and on a token host's upgrade is the marked 403 reserved-path before any upstream contact; one refused record each", async () => {
+  const r = await observedRig();
+  assertMarked(
+    await decrypted(
+      r.relay.port,
+      "claude.ai",
+      "GET /relay/observations HTTP/1.1\r\nHost: claude.ai\r\nconnection: close\r\n\r\n",
+    ),
+    "reserved-path",
+  );
+  assertMarked(
+    await decrypted(
+      r.relay.port,
+      "platform.claude.com",
+      "POST /relay/x?q=1 HTTP/1.1\r\nHost: platform.claude.com\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}",
+    ),
+    "reserved-path",
+  );
+  assertMarked(
+    await decrypted(
+      r.relay.port,
+      "claude.ai",
+      upgradeTo("claude.ai", "/relay/ws"),
+    ),
+    "reserved-path",
+  );
+  assertMarked(
+    await decrypted(
+      r.relay.port,
+      "api.anthropic.com",
+      upgradeTo("api.anthropic.com", "/relay/ws"),
+    ),
+    "reserved-path",
+  );
+  await reportedRecord(r.edge, (record) => record.host === "api.anthropic.com");
+  assert.deepEqual(r.destinations, [], "no observed destination was dialled");
+  assert.deepEqual(r.upstream.requests, []);
+  assert.deepEqual(r.upstream.upgrades, []);
+  assert.deepEqual(r.edge.requests, []);
+  assert.deepEqual(
+    relayRecords(r.edge).map((record) => [
+      record.host,
+      record.path,
+      record.status,
+      record.outcome,
+      record.reason,
+    ]),
+    [
+      ["claude.ai", "/relay/observations", 403, "refused", "reserved-path"],
+      ["platform.claude.com", "/relay/x", 403, "refused", "reserved-path"],
+      ["claude.ai", "/relay/ws", 403, "refused", "reserved-path"],
+      ["api.anthropic.com", "/relay/ws", 403, "refused", "reserved-path"],
+    ],
+  );
+});
+
+test("F003: with every reporting slot held, an observed /relay/ target is the counted overflow 503, as on the shared forward, and dials nothing", async () => {
+  const r = await observedRig({ capacity: 3 });
+  const holders = [
+    await secureTo(r.relay.port, "claude.ai"),
+    await secureTo(r.relay.port, "claude.ai"),
+  ];
+  for (const [i, secure] of holders.entries())
+    secure.write(
+      `GET /hold${i} HTTP/1.1\r\nHost: claude.ai\r\nconnection: close\r\n\r\n`,
+    );
+  const deadline = Date.now() + 5000;
+  while (r.upstream.held.length < 2 && Date.now() < deadline)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(r.upstream.held.length, 2);
+  const refused = await decrypted(
+    r.relay.port,
+    "claude.ai",
+    "GET /relay/observations HTTP/1.1\r\nHost: claude.ai\r\nconnection: close\r\n\r\n",
+  );
+  assert.equal(refused.status, 503, refused.head);
+  assert.ok(isGatewayRefusal(refused.body.toString("utf8")));
+  assert.equal(r.destinations.length, 2, "only the held requests dialled");
+  for (const { res } of r.upstream.held) res.end();
+  for (const secure of holders) secure.destroy();
+  const overflow = await r.edge.reported(
+    (record) => "note" in record && record.note === "overflow",
+  );
+  assert.ok("note" in overflow && overflow.note === "overflow");
+  assert.equal(overflow.count, 1);
 });

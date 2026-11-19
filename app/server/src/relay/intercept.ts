@@ -16,9 +16,10 @@
  *   piped untouched, not recorded, nothing logged but a failure's error code.
  * - A named host on a port other than 443, or spelled with a trailing dot, is
  *   refused with a marked 403; an absolute-form target inside the tunnel with
- *   a marked 400; an upgrade on a token host with a marked 501, without
- *   contacting the edge. Each reserves a reporting slot and is recorded like
- *   any refusal.
+ *   a marked 400; a `/relay/…` target on any decrypted host, upgrades
+ *   included, with the marked 403 `reserved-path` (C5); an upgrade on a token
+ *   host with a marked 501. None contacts an upstream. Each reserves a
+ *   reporting slot and is recorded like any refusal.
  * - A target that is not a valid authority gets a marked 400, a summary count
  *   and a fixed log line; it is never recorded and its text never logged.
  *
@@ -33,6 +34,8 @@ import { classifyClientCredential } from "./credentialClass.ts";
 import type { InterceptCa } from "./interceptCa.ts";
 import {
   answerUnrecorded,
+  isReservedPath,
+  RESERVED_PATH,
   type LocalRefusal,
   type ModelTraffic,
 } from "./modelTraffic.ts";
@@ -152,7 +155,9 @@ export function attachInterception(
       return;
     }
     if (route === undefined) {
-      observed.forward(req, res, host);
+      if (isReservedPath(target))
+        traffic.refuse(req, res, { host, path: target, ...RESERVED_PATH });
+      else observed.forward(req, res, host);
       return;
     }
     // `/relay/…`, admission, rid and the fallback record are the shared
@@ -177,24 +182,24 @@ export function attachInterception(
         return;
       }
       const { host, route } = opened;
-      if (route === undefined) {
-        if ((req.url ?? "").startsWith("/"))
-          observed.upgrade(req, socket, head, host);
-        else
-          traffic.refuse(req, socket, {
-            host,
-            path: "/",
-            reason: "origin-form",
-            ...REFUSALS["origin-form"],
-          });
-        return;
-      }
-      traffic.refuse(req, socket, {
-        host,
-        path: req.url ?? "/",
-        reason: "upgrade",
-        ...REFUSALS.upgrade,
-      });
+      const target = req.url ?? "";
+      if (route === undefined && !target.startsWith("/"))
+        traffic.refuse(req, socket, {
+          host,
+          path: "/",
+          reason: "origin-form",
+          ...REFUSALS["origin-form"],
+        });
+      else if (isReservedPath(target))
+        traffic.refuse(req, socket, { host, path: target, ...RESERVED_PATH });
+      else if (route === undefined) observed.upgrade(req, socket, head, host);
+      else
+        traffic.refuse(req, socket, {
+          host,
+          path: target || "/",
+          reason: "upgrade",
+          ...REFUSALS.upgrade,
+        });
     },
   );
   // CONNECT is dispatched here, not to the request callback. It never
