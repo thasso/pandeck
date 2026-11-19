@@ -35,6 +35,8 @@ export interface GatewayWebConfig {
    * user enters both.
    */
   atlassian?: AtlassianPreset;
+  /** Slack through the vault (Task-1420): absent, the page offers no Slack. */
+  slack?: SlackPreset;
   /**
    * Devbox zero-click (Task-1410 PR2): Coder's Google OAuth client, whose
    * owner tokens the edge accepts as a devbox's proof, and whether it does.
@@ -70,6 +72,16 @@ export interface AtlassianPreset {
    * `offline_access`, so the vault gets a refresh token.
    */
   scopes: string[];
+}
+
+interface SlackPreset {
+  /**
+   * The Slack OAuth client (Task-1452), each checked alone like Atlassian's:
+   * whether the pair is needed depends on the vault's topology
+   * (`gatewayEdge.ts`). Neither reaches the page.
+   */
+  clientId?: string;
+  clientSecret?: string;
 }
 
 /** Asked for when the file names no `atlassian.scopes`. */
@@ -213,6 +225,21 @@ function atlassianPreset(value: unknown): AtlassianPreset | undefined {
   };
 }
 
+function slackPreset(value: unknown): SlackPreset | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    refuse("slack must be an object");
+  const raw = value as Record<string, unknown>;
+  return {
+    ...(raw.clientId !== undefined
+      ? { clientId: text(raw.clientId, "slack.clientId") }
+      : {}),
+    ...(raw.clientSecret !== undefined
+      ? { clientSecret: text(raw.clientSecret, "slack.clientSecret") }
+      : {}),
+  };
+}
+
 /**
  * `coder`: both keys required and nothing else, so a key this build does not
  * use (an `apiToken`, say) refuses rather than sits unread. The refusal names
@@ -270,6 +297,7 @@ export function loadGatewayWebConfig(file: string): GatewayWebConfig {
   const clientSecret = text(oidc.clientSecret, "oidc.clientSecret");
   const allow = allowRule(raw.allow);
   const atlassian = atlassianPreset(raw.atlassian);
+  const slack = slackPreset(raw.slack);
   const issuer = text(oidc.issuer, "oidc.issuer");
   const coder = coderPreset(raw.coder, issuer);
 
@@ -289,6 +317,7 @@ export function loadGatewayWebConfig(file: string): GatewayWebConfig {
     oidc: { issuer, clientId, clientSecret },
     allow,
     ...(atlassian ? { atlassian } : {}),
+    ...(slack ? { slack } : {}),
     ...(coder ? { coder } : {}),
   };
 }

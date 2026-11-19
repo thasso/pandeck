@@ -1,5 +1,5 @@
 /**
- * The edge's `VaultPort` over `gateway-vault/1.1` (plan Task-1394,
+ * The edge's `VaultPort` over `gateway-vault/1.2` (plan Task-1394,
  * `vaultMethods.ts`): a vault in its own process, dialed over mutual TLS
  * with each side's self-signed certificate pinned. The edge then holds no
  * refresh token. It dials at once and again with backoff whenever the link
@@ -33,6 +33,8 @@ import {
   accountTokenFile,
   isAtlassianSite,
   isCloudId,
+  isSlackTeamId,
+  isSlackTeamName,
   isPinnedPeer,
   vaultBody,
   vaultMessage,
@@ -41,7 +43,10 @@ import {
 } from "./vaultMethods.ts";
 import type { CredentialProblem } from "./refusals.ts";
 import type {
+  ConnectFailure,
+  Integration,
   IntegrationConnect,
+  IntegrationConnectRequests,
   IntegrationRecord,
   IntegrationWrite,
   LoginDriverEvents,
@@ -456,24 +461,95 @@ export function createRemoteVault(
     if (r.locked === true) return { ok: false, locked: true };
     return { ok: false, unavailable: true };
   };
-  const decodeConnect = (body: Record<string, unknown>): IntegrationConnect => {
-    const answer = body.connect;
-    if (typeof answer !== "object" || answer === null)
-      return { ok: false, unavailable: true };
-    const a = answer as Record<string, unknown>;
-    if (a.ok === true)
-      return isAtlassianSite(a.site) && isCloudId(a.cloudId)
-        ? { ok: true, site: a.site, cloudId: a.cloudId }
-        : { ok: false, unavailable: true };
+  /**
+   * A connect answer's failures every integration shares; `undefined` for
+   * anything else, which the integration's own decoder reads.
+   */
+  const connectFailure = (
+    a: Record<string, unknown>,
+  ): ConnectFailure | undefined => {
+    if (a.ok === true) return undefined;
     if (a.rejected === true) return { ok: false, rejected: true };
     if (a.unreachable === true) return { ok: false, unreachable: true };
-    if (a.site === "missing" || a.site === "ambiguous")
-      return { ok: false, site: a.site };
     if (a.notConfigured === true) return { ok: false, notConfigured: true };
     if (a.locked === true) return { ok: false, locked: true };
-    return { ok: false, unavailable: true };
+    return undefined;
+  };
+  const connectAnswer = (
+    body: Record<string, unknown>,
+  ): Record<string, unknown> | undefined => {
+    const answer = body.connect;
+    return typeof answer === "object" && answer !== null
+      ? (answer as Record<string, unknown>)
+      : undefined;
+  };
+  /** Each integration's connect answer; any other shape is unavailable. */
+  const decodeConnect: {
+    [I in Integration]: (
+      body: Record<string, unknown>,
+    ) => IntegrationConnect<I>;
+  } = {
+    atlassian: (body) => {
+      const a = connectAnswer(body);
+      if (!a) return { ok: false, unavailable: true };
+      if (a.ok === true)
+        return isAtlassianSite(a.site) && isCloudId(a.cloudId)
+          ? { ok: true, site: a.site, cloudId: a.cloudId }
+          : { ok: false, unavailable: true };
+      if (a.site === "missing" || a.site === "ambiguous")
+        return { ok: false, site: a.site };
+      return connectFailure(a) ?? { ok: false, unavailable: true };
+    },
+    slack: (body) => {
+      const a = connectAnswer(body);
+      if (!a) return { ok: false, unavailable: true };
+      if (a.ok === true) {
+        const { teamId, teamName } = a;
+        if (!isSlackTeamId(teamId)) return { ok: false, unavailable: true };
+        if (teamName === undefined) return { ok: true, teamId };
+        return isSlackTeamName(teamName)
+          ? { ok: true, teamId, teamName }
+          : { ok: false, unavailable: true };
+      }
+      if (a.team === "mismatch") return { ok: false, team: "mismatch" };
+      return connectFailure(a) ?? { ok: false, unavailable: true };
+    },
   };
   const written = (): IntegrationWrite => ({ ok: true });
+  /** Each integration's connect over the link. */
+  const connects: {
+    [I in Integration]: (
+      userId: string,
+      request: IntegrationConnectRequests[I],
+    ) => Promise<IntegrationConnect<I>>;
+  } = {
+    atlassian: (userId, { code, redirectUri, site }) =>
+      integrationCall(
+        VAULT_METHODS.integrationConnect,
+        {
+          userId,
+          integration: "atlassian",
+          code,
+          redirectUri,
+          ...(site !== undefined ? { site } : {}),
+        },
+        decodeConnect.atlassian,
+        INTEGRATION_CONNECT_TIMEOUT_MS,
+      ),
+    slack: (userId, { code, redirectUri, team }) =>
+      integrationCall(
+        VAULT_METHODS.integrationConnect,
+        {
+          userId,
+          integration: "slack",
+          code,
+          redirectUri,
+          ...(team !== undefined ? { team } : {}),
+        },
+        decodeConnect.slack,
+        INTEGRATION_CONNECT_TIMEOUT_MS,
+      ),
+  };
 
   void connect();
 
@@ -580,19 +656,8 @@ export function createRemoteVault(
         written,
         INTEGRATION_WRITE_TIMEOUT_MS,
       ),
-    integrationConnect: (userId, integration, { code, redirectUri, site }) =>
-      integrationCall(
-        VAULT_METHODS.integrationConnect,
-        {
-          userId,
-          integration,
-          code,
-          redirectUri,
-          ...(site !== undefined ? { site } : {}),
-        },
-        decodeConnect,
-        INTEGRATION_CONNECT_TIMEOUT_MS,
-      ),
+    integrationConnect: (userId, integration, request) =>
+      connects[integration](userId, request),
     inputsChanged() {
       if (sendQueued) return;
       sendQueued = true;

@@ -370,7 +370,7 @@ export function createUserOperations(deps: UserOperationsDeps): UserOperations {
   const connectWith: AtlassianKind = deps.atlassianSignIn ? "oauth" : "token";
   /** A connect's refusal as its fixed code, every outcome named. */
   const connectRefusal = (
-    outcome: Exclude<IntegrationConnect, { ok: true }>,
+    outcome: Exclude<IntegrationConnect<"atlassian">, { ok: true }>,
   ): UserOperationRefusal =>
     new UserOperationRefusal(
       "rejected" in outcome

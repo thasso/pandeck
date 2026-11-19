@@ -6,24 +6,38 @@
  * record on clear (`discarded`); the sweep, unlock and reseal cover it like a
  * token file (`sealedStore.ts`).
  *
- * A record is either an API token the edge put, kept opaque and answered
- * verbatim, or an Atlassian OAuth record this module wrote itself after a
- * code exchange: `{kind: "atlassian-oauth", v: 1, site, cloudId,
- * refreshToken, scope}`. Only those are parsed. A get of one answers the
- * access view `{kind, site, cloudId, accessToken, expiresAt}`; the access
- * token lives only in memory, so the first get after a restart refreshes.
+ * A record is an OAuth record this module wrote itself after a code
+ * exchange, or, for Atlassian only, an API token the edge put, kept opaque
+ * and answered verbatim. One entry per OAuth provider (`PROVIDERS`) names
+ * its record kind and whether token records exist beside it; the lane,
+ * cache, single-flight refresh and `close()` are shared.
+ *
+ * - Atlassian (Task-1411): `{kind: "atlassian-oauth", v: 1, site, cloudId,
+ *   refreshToken, scope}`, access view `{kind, site, cloudId, accessToken,
+ *   expiresAt}`. A refresh that answers no new refresh token keeps the stored
+ *   one.
+ * - Slack (Task-1452): `{kind: "slack-oauth", v: 1, teamId, teamName?,
+ *   workspaceHost, userId, refreshToken, scope}`, access view `{kind, teamId,
+ *   teamName?, workspaceHost, userId, scope, accessToken, expiresAt}`. A
+ *   connect checks the workspace preset and `auth.test`; a refresh must hand
+ *   back a new refresh token (`vaultSlack.ts`), else nothing is written or
+ *   cached and the get answers unavailable. A put for Slack is refused.
+ *
+ * Only these records are parsed; a record of another provider's kind, or a
+ * non-record under Slack, is malformed. The access token lives only in
+ * memory, so the first get after a restart refreshes.
  *
  * Every write to a record (put, clear, connect, refresh) runs in its lane,
  * one at a time and in order. A refresh is single-flight per record, re-reads
  * the record in the lane, and writes the rotated refresh token before it
- * caches or answers anything: Atlassian rotates it on every use. Neither a
- * refresh nor a connect follows a caller's signal; a caller that stops
+ * caches or answers anything: both providers rotate it on every use. Neither
+ * a refresh nor a connect follows a caller's signal; a caller that stops
  * waiting only stops its own wait.
  *
  * `close()` stops admission at once: every later put, clear, connect or
  * refresh answers unavailable, queued ones are refused unrun, and it resolves
  * once each lane's running item, write and seal included, has ended. Running
- * items are bounded by their own Atlassian deadlines, never aborted.
+ * items are bounded by their own provider deadlines, never aborted.
  *
  * No log line holds a record, token, code or the client secret.
  */
@@ -43,24 +57,36 @@ import {
   refreshAtlassian,
   selectAtlassianSite,
   type AtlassianEndpoint,
-  type AtlassianTokens,
 } from "./vaultAtlassian.ts";
 import {
   INTEGRATION_FILE,
   integrationDirId,
   isAtlassianSite,
   isCloudId,
+  isSlackTeamId,
 } from "./vaultMethods.ts";
 import type {
+  Integration,
   IntegrationConnect,
+  IntegrationConnectRequests,
   IntegrationRecord,
   IntegrationWrite,
   VaultPort,
 } from "./vaultPort.ts";
+import {
+  exchangeSlackCode,
+  isSlackUserId,
+  isSlackWorkspaceHost,
+  refreshSlack,
+  slackAuthTest,
+  type SlackEndpoint,
+} from "./vaultSlack.ts";
 
 /** A cached access token this close to expiry is refreshed first. */
 const REFRESH_MARGIN_MS = 5 * 60_000;
-const OAUTH_KIND = "atlassian-oauth";
+const ATLASSIAN_KIND = "atlassian-oauth";
+const SLACK_KIND = "slack-oauth";
+const OAUTH_KINDS: ReadonlySet<unknown> = new Set([ATLASSIAN_KIND, SLACK_KIND]);
 
 export interface VaultIntegrationOptions {
   /** Without one the vault keeps no integration credential. */
@@ -68,10 +94,12 @@ export interface VaultIntegrationOptions {
   /** A sealing vault's seal-after-write and record deletion. */
   written?: ((file: string) => void) | undefined;
   discarded?: ((dirId: string) => void) | undefined;
-  /** The vault's OAuth clients; without Atlassian's a connect is refused. */
+  /** The vault's OAuth clients; without a provider's its connect is refused. */
   clients?: IntegrationClients | undefined;
   /** Test seam: where Atlassian is reached (`vaultAtlassian.ts`). */
   atlassianEndpoint?: AtlassianEndpoint | undefined;
+  /** Test seam: where Slack is reached (`vaultSlack.ts`). */
+  slackEndpoint?: SlackEndpoint | undefined;
 }
 
 export interface VaultIntegrations extends Pick<
@@ -88,9 +116,9 @@ export interface VaultIntegrations extends Pick<
   close(): Promise<void>;
 }
 
-/** The record this module writes; never leaves the vault. */
-interface OAuthRecord {
-  kind: typeof OAUTH_KIND;
+/** The records this module writes; never leave the vault. */
+interface AtlassianRecord {
+  kind: typeof ATLASSIAN_KIND;
   v: 1;
   site: string;
   cloudId: string;
@@ -98,14 +126,44 @@ interface OAuthRecord {
   scope: string;
 }
 
+interface SlackRecord {
+  kind: typeof SLACK_KIND;
+  v: 1;
+  teamId: string;
+  teamName?: string;
+  workspaceHost: string;
+  userId: string;
+  refreshToken: string;
+  scope: string;
+}
+
+type OAuthRecord = AtlassianRecord | SlackRecord;
+
+/**
+ * Each integration's OAuth record kind, and whether an edge's API token
+ * record may stand in its place.
+ */
+const PROVIDERS: Record<
+  Integration,
+  { kind: OAuthRecord["kind"]; tokenRecords: boolean }
+> = {
+  atlassian: { kind: ATLASSIAN_KIND, tokenRecords: true },
+  slack: { kind: SLACK_KIND, tokenRecords: false },
+};
+
 /** The in-memory half of an OAuth record. */
 interface AccessView {
-  site: string;
-  cloudId: string;
+  record: OAuthRecord;
   accessToken: string;
   /** Epoch milliseconds. */
   expiresAt: number;
 }
+
+/** A provider's refresh, as the lane takes it. */
+type Refreshed =
+  | { kind: "ok"; record: OAuthRecord; accessToken: string; expiresInS: number }
+  | { kind: "rejected" }
+  | { kind: "unavailable" };
 
 interface LaneItem {
   run(): Promise<void>;
@@ -125,18 +183,9 @@ function objectOf(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-/**
- * The OAuth record in `text`; `undefined` when the text is not one (an API
- * token record), `"malformed"` when it says it is one but is not.
- */
-function oauthRecordOf(text: string): OAuthRecord | "malformed" | undefined {
-  let fields: Record<string, unknown> | undefined;
-  try {
-    fields = objectOf(JSON.parse(text));
-  } catch {
-    return undefined;
-  }
-  if (fields?.kind !== OAUTH_KIND) return undefined;
+function atlassianRecordOf(
+  fields: Record<string, unknown>,
+): AtlassianRecord | undefined {
   const { v, site, cloudId, refreshToken, scope } = fields;
   return v === 1 &&
     isAtlassianSite(site) &&
@@ -144,18 +193,92 @@ function oauthRecordOf(text: string): OAuthRecord | "malformed" | undefined {
     typeof refreshToken === "string" &&
     refreshToken.length > 0 &&
     typeof scope === "string"
-    ? { kind: OAUTH_KIND, v: 1, site, cloudId, refreshToken, scope }
-    : "malformed";
+    ? { kind: ATLASSIAN_KIND, v: 1, site, cloudId, refreshToken, scope }
+    : undefined;
+}
+
+function slackRecordOf(
+  fields: Record<string, unknown>,
+): SlackRecord | undefined {
+  const { v, teamId, teamName, workspaceHost, userId, refreshToken, scope } =
+    fields;
+  return v === 1 &&
+    isSlackTeamId(teamId) &&
+    (teamName === undefined || typeof teamName === "string") &&
+    isSlackWorkspaceHost(workspaceHost) &&
+    isSlackUserId(userId) &&
+    typeof refreshToken === "string" &&
+    refreshToken.length > 0 &&
+    typeof scope === "string"
+    ? {
+        kind: SLACK_KIND,
+        v: 1,
+        teamId,
+        ...(teamName !== undefined ? { teamName } : {}),
+        workspaceHost,
+        userId,
+        refreshToken,
+        scope,
+      }
+    : undefined;
+}
+
+/** `text`'s JSON object, if it is one. */
+function fieldsOf(text: string): Record<string, unknown> | undefined {
+  try {
+    return objectOf(JSON.parse(text));
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether `text` says it is an OAuth record of any provider. */
+function claimsOAuth(text: string): boolean {
+  return OAUTH_KINDS.has(fieldsOf(text)?.kind);
+}
+
+/**
+ * The integration's OAuth record in `text`; `undefined` when the text is an
+ * API token record (Atlassian only), `"malformed"` when it is neither: it
+ * says it is an OAuth record but is not a valid one of this integration's
+ * kind, or a Slack record is no OAuth record at all.
+ */
+function oauthRecordOf(
+  text: string,
+  integration: Integration,
+): OAuthRecord | "malformed" | undefined {
+  const provider = PROVIDERS[integration];
+  const fields = fieldsOf(text);
+  if (!OAUTH_KINDS.has(fields?.kind))
+    return provider.tokenRecords ? undefined : "malformed";
+  if (fields!.kind !== provider.kind) return "malformed";
+  const record =
+    provider.kind === ATLASSIAN_KIND
+      ? atlassianRecordOf(fields!)
+      : slackRecordOf(fields!);
+  return record ?? "malformed";
 }
 
 /** The access view as the credential string the edge decodes. */
 function viewCredential(view: AccessView): IntegrationRecord {
+  const { record } = view;
+  const fields =
+    record.kind === ATLASSIAN_KIND
+      ? { kind: record.kind, site: record.site, cloudId: record.cloudId }
+      : {
+          kind: record.kind,
+          teamId: record.teamId,
+          ...(record.teamName !== undefined
+            ? { teamName: record.teamName }
+            : {}),
+          workspaceHost: record.workspaceHost,
+          userId: record.userId,
+          scope: record.scope,
+        };
   return {
     ok: true,
     credential: JSON.stringify({
-      kind: OAUTH_KIND,
-      site: view.site,
-      cloudId: view.cloudId,
+      ...fields,
       accessToken: view.accessToken,
       expiresAt: view.expiresAt,
     }),
@@ -260,39 +383,18 @@ export function createVaultIntegrations(
     }
   };
 
-  const viewOf = (
-    stored: OAuthRecord,
-    tokens: AtlassianTokens,
-    issuedAt: number,
-  ): AccessView => ({
-    site: stored.site,
-    cloudId: stored.cloudId,
-    accessToken: tokens.accessToken,
-    expiresAt: issuedAt + tokens.expiresInS * 1000,
-  });
-
   const fresh = (view: AccessView | undefined): view is AccessView =>
     view !== undefined && view.expiresAt - now() > REFRESH_MARGIN_MS;
 
-  /** In the lane: the record as it is now, refreshed when still due. */
-  const refreshInLane = async (
+  const refreshAtlassianRecord = async (
     dirId: string,
-    file: string,
-  ): Promise<IntegrationRecord> => {
-    const read = readRecord(file);
-    if ("answer" in read) return read.answer;
-    const stored = oauthRecordOf(read.text);
-    // Replaced by an API token while queued: answered as it is now.
-    if (stored === undefined) return { ok: true, credential: read.text };
-    if (stored === "malformed") return UNAVAILABLE;
-    const cached = cache.get(dirId);
-    if (fresh(cached)) return viewCredential(cached);
+    stored: AtlassianRecord,
+  ): Promise<Refreshed> => {
     const client = options.clients?.atlassian;
     if (!client) {
       log(`integration ${dirId}: no Atlassian OAuth client to refresh with`);
-      return UNAVAILABLE;
+      return { kind: "unavailable" };
     }
-    const issuedAt = now();
     const result = await refreshAtlassian(
       client,
       stored.refreshToken,
@@ -300,32 +402,111 @@ export function createVaultIntegrations(
     );
     if (result.kind === "rejected") {
       log(`integration ${dirId}: Atlassian rejected the refresh`);
-      return { ok: false, rejected: true };
+      return { kind: "rejected" };
     }
     if (result.kind === "unreachable") {
       log(`integration ${dirId}: refresh failed (${result.code})`);
-      return UNAVAILABLE;
+      return { kind: "unavailable" };
     }
-    const rotated: OAuthRecord = {
-      ...stored,
-      refreshToken: result.tokens.refreshToken ?? stored.refreshToken,
-      scope: result.tokens.scope ?? stored.scope,
+    return {
+      kind: "ok",
+      record: {
+        ...stored,
+        refreshToken: result.tokens.refreshToken ?? stored.refreshToken,
+        scope: result.tokens.scope ?? stored.scope,
+      },
+      accessToken: result.tokens.accessToken,
+      expiresInS: result.tokens.expiresInS,
     };
+  };
+
+  const refreshSlackRecord = async (
+    dirId: string,
+    stored: SlackRecord,
+  ): Promise<Refreshed> => {
+    const client = options.clients?.slack;
+    if (!client) {
+      log(`integration ${dirId}: no Slack OAuth client to refresh with`);
+      return { kind: "unavailable" };
+    }
+    const result = await refreshSlack(
+      client,
+      stored.refreshToken,
+      options.slackEndpoint,
+    );
+    if (result.kind === "rejected") {
+      log(`integration ${dirId}: Slack rejected the refresh`);
+      return { kind: "rejected" };
+    }
+    if (result.kind === "unreachable") {
+      log(`integration ${dirId}: refresh failed (${result.code})`);
+      return { kind: "unavailable" };
+    }
+    if (result.kind === "unusable") {
+      // Slack has likely consumed the stored token; never kept as a success.
+      log(`integration ${dirId}: Slack refresh answer unusable`);
+      return { kind: "unavailable" };
+    }
+    return {
+      kind: "ok",
+      record: {
+        ...stored,
+        refreshToken: result.tokens.refreshToken,
+        scope: result.tokens.scope ?? stored.scope,
+      },
+      accessToken: result.tokens.accessToken,
+      expiresInS: result.tokens.expiresInS,
+    };
+  };
+
+  /** In the lane: the record as it is now, refreshed when still due. */
+  const refreshInLane = async (
+    dirId: string,
+    file: string,
+    integration: Integration,
+  ): Promise<IntegrationRecord> => {
+    const read = readRecord(file);
+    if ("answer" in read) return read.answer;
+    const stored = oauthRecordOf(read.text, integration);
+    // Replaced by an API token while queued: answered as it is now.
+    if (stored === undefined) return { ok: true, credential: read.text };
+    if (stored === "malformed") return UNAVAILABLE;
+    const cached = cache.get(dirId);
+    if (fresh(cached)) return viewCredential(cached);
+    const issuedAt = now();
+    const result =
+      stored.kind === ATLASSIAN_KIND
+        ? await refreshAtlassianRecord(dirId, stored)
+        : await refreshSlackRecord(dirId, stored);
+    if (result.kind === "rejected") return { ok: false, rejected: true };
+    if (result.kind === "unavailable") return UNAVAILABLE;
     // The rotation is on disk before anything is cached or answered.
-    if (!writeRecord(dirname(file), file, JSON.stringify(rotated))) {
+    if (!writeRecord(dirname(file), file, JSON.stringify(result.record))) {
       log(`integration ${dirId}: the refreshed record was not saved`);
       return UNAVAILABLE;
     }
-    const view = viewOf(stored, result.tokens, issuedAt);
+    const view: AccessView = {
+      record: result.record,
+      accessToken: result.accessToken,
+      expiresAt: issuedAt + result.expiresInS * 1000,
+    };
     cache.set(dirId, view);
     return viewCredential(view);
   };
 
   /** Joins the record's refresh in flight, or queues one. */
-  const refresh = (dirId: string, file: string): Promise<IntegrationRecord> => {
+  const refresh = (
+    dirId: string,
+    file: string,
+    integration: Integration,
+  ): Promise<IntegrationRecord> => {
     let flight = refreshing.get(dirId);
     if (!flight) {
-      flight = enqueue(dirId, () => refreshInLane(dirId, file), UNAVAILABLE);
+      flight = enqueue(
+        dirId,
+        () => refreshInLane(dirId, file, integration),
+        UNAVAILABLE,
+      );
       refreshing.set(dirId, flight);
       const settled = flight;
       void settled.finally(() => {
@@ -351,62 +532,34 @@ export function createVaultIntegrations(
     });
   };
 
-  return {
-    integrationPut(userId, integration, credential) {
-      if (!stateDir) return Promise.resolve(UNAVAILABLE);
-      // Only a connect writes an OAuth record: an edge cannot plant one.
-      if (oauthRecordOf(credential) !== undefined)
-        return Promise.resolve(UNAVAILABLE);
-      const { dirId, dir, file } = locate(userId, integration);
-      return enqueue<IntegrationWrite>(
-        dirId,
-        () => {
-          cache.delete(dirId);
-          return Promise.resolve(
-            writeRecord(dir, file, credential) ? { ok: true } : UNAVAILABLE,
-          );
-        },
-        UNAVAILABLE,
-      );
-    },
-    integrationGet(userId, integration, { signal } = {}) {
-      if (!stateDir || signal?.aborted) return Promise.resolve(UNAVAILABLE);
-      const { dirId, file } = locate(userId, integration);
-      const read = readRecord(file);
-      if ("answer" in read) return Promise.resolve(read.answer);
-      const stored = oauthRecordOf(read.text);
-      if (stored === undefined)
-        return Promise.resolve({ ok: true, credential: read.text });
-      if (stored === "malformed") return Promise.resolve(UNAVAILABLE);
-      const cached = cache.get(dirId);
-      if (fresh(cached)) return Promise.resolve(viewCredential(cached));
-      return untilAborted(refresh(dirId, file), signal);
-    },
-    integrationClear(userId, integration) {
-      if (!stateDir) return Promise.resolve(UNAVAILABLE);
-      const { dirId, dir } = locate(userId, integration);
-      return enqueue<IntegrationWrite>(
-        dirId,
-        () => {
-          cache.delete(dirId);
-          try {
-            rmSync(dir, { recursive: true, force: true });
-          } catch {
-            return Promise.resolve(UNAVAILABLE);
-          }
-          options.discarded?.(dirId);
-          return Promise.resolve({ ok: true });
-        },
-        UNAVAILABLE,
-      );
-    },
-    integrationConnect(userId, integration, request) {
-      if (!stateDir) return Promise.resolve(UNAVAILABLE);
+  /** The connect's write and cache, in its lane. */
+  const store = (
+    dirId: string,
+    dir: string,
+    file: string,
+    view: AccessView,
+  ): boolean => {
+    if (!writeRecord(dir, file, JSON.stringify(view.record))) {
+      log(`integration ${dirId}: the connected record was not saved`);
+      return false;
+    }
+    cache.set(dirId, view);
+    return true;
+  };
+
+  /** Each integration's connect, run in the record's lane. */
+  const connects: {
+    [I in Integration]: (
+      userId: string,
+      request: IntegrationConnectRequests[I],
+    ) => Promise<IntegrationConnect<I>>;
+  } = {
+    atlassian(userId, request) {
       const client = options.clients?.atlassian;
       if (!client) return Promise.resolve({ ok: false, notConfigured: true });
-      const { dirId, dir, file } = locate(userId, integration);
+      const { dirId, dir, file } = locate(userId, "atlassian");
       const endpoint = options.atlassianEndpoint;
-      return enqueue<IntegrationConnect>(
+      return enqueue<IntegrationConnect<"atlassian">>(
         dirId,
         async () => {
           cache.delete(dirId);
@@ -436,8 +589,8 @@ export function createVaultIntegrations(
           }
           const choice = selectAtlassianSite(listed.resources, request.site);
           if (!choice.ok) return choice;
-          const stored: OAuthRecord = {
-            kind: OAUTH_KIND,
+          const record: AtlassianRecord = {
+            kind: ATLASSIAN_KIND,
             v: 1,
             site: choice.site,
             cloudId: choice.cloudId,
@@ -445,15 +598,156 @@ export function createVaultIntegrations(
             refreshToken: tokens.refreshToken!,
             scope: tokens.scope ?? "",
           };
-          if (!writeRecord(dir, file, JSON.stringify(stored))) {
-            log(`integration ${dirId}: the connected record was not saved`);
-            return UNAVAILABLE;
-          }
-          cache.set(dirId, viewOf(stored, tokens, issuedAt));
+          const view: AccessView = {
+            record,
+            accessToken: tokens.accessToken,
+            expiresAt: issuedAt + tokens.expiresInS * 1000,
+          };
+          if (!store(dirId, dir, file, view)) return UNAVAILABLE;
           return { ok: true, site: choice.site, cloudId: choice.cloudId };
         },
         UNAVAILABLE,
       );
+    },
+
+    slack(userId, request) {
+      const client = options.clients?.slack;
+      if (!client) return Promise.resolve({ ok: false, notConfigured: true });
+      const { dirId, dir, file } = locate(userId, "slack");
+      const endpoint = options.slackEndpoint;
+      return enqueue<IntegrationConnect<"slack">>(
+        dirId,
+        async () => {
+          cache.delete(dirId);
+          const issuedAt = now();
+          const exchanged = await exchangeSlackCode(client, request, endpoint);
+          if (exchanged.kind === "unreachable") {
+            log(
+              `integration ${dirId}: code exchange failed (${exchanged.code})`,
+            );
+            return { ok: false, unreachable: true };
+          }
+          if (exchanged.kind !== "ok") {
+            log(
+              exchanged.kind === "noRefreshToken"
+                ? `integration ${dirId}: Slack granted no refresh token`
+                : exchanged.kind === "unusable"
+                  ? `integration ${dirId}: Slack exchange answer unusable`
+                  : `integration ${dirId}: code exchange rejected`,
+            );
+            return { ok: false, rejected: true };
+          }
+          const { grant } = exchanged;
+          if (request.team !== undefined && grant.teamId !== request.team) {
+            log(`integration ${dirId}: Slack granted another workspace`);
+            return { ok: false, team: "mismatch" };
+          }
+          const identity = await slackAuthTest(
+            grant.tokens.accessToken,
+            endpoint,
+          );
+          if (identity.kind === "unreachable") {
+            log(
+              `integration ${dirId}: identity check failed (${identity.code})`,
+            );
+            return { ok: false, unreachable: true };
+          }
+          if (
+            identity.kind !== "ok" ||
+            identity.teamId !== grant.teamId ||
+            identity.userId !== grant.userId
+          ) {
+            log(
+              identity.kind === "rejected"
+                ? `integration ${dirId}: identity check rejected`
+                : `integration ${dirId}: Slack identity answer unusable`,
+            );
+            return { ok: false, rejected: true };
+          }
+          const record: SlackRecord = {
+            kind: SLACK_KIND,
+            v: 1,
+            teamId: grant.teamId,
+            ...(grant.teamName !== undefined
+              ? { teamName: grant.teamName }
+              : {}),
+            workspaceHost: identity.workspaceHost,
+            userId: grant.userId,
+            refreshToken: grant.tokens.refreshToken,
+            scope: grant.tokens.scope ?? "",
+          };
+          const view: AccessView = {
+            record,
+            accessToken: grant.tokens.accessToken,
+            expiresAt: issuedAt + grant.tokens.expiresInS * 1000,
+          };
+          if (!store(dirId, dir, file, view)) return UNAVAILABLE;
+          return {
+            ok: true,
+            teamId: grant.teamId,
+            ...(grant.teamName !== undefined
+              ? { teamName: grant.teamName }
+              : {}),
+          };
+        },
+        UNAVAILABLE,
+      );
+    },
+  };
+
+  return {
+    integrationPut(userId, integration, credential) {
+      if (!stateDir) return Promise.resolve(UNAVAILABLE);
+      // Only a connect writes an OAuth record: an edge cannot plant one, and
+      // a Slack credential is never anything else.
+      if (!PROVIDERS[integration].tokenRecords || claimsOAuth(credential))
+        return Promise.resolve(UNAVAILABLE);
+      const { dirId, dir, file } = locate(userId, integration);
+      return enqueue<IntegrationWrite>(
+        dirId,
+        () => {
+          cache.delete(dirId);
+          return Promise.resolve(
+            writeRecord(dir, file, credential) ? { ok: true } : UNAVAILABLE,
+          );
+        },
+        UNAVAILABLE,
+      );
+    },
+    integrationGet(userId, integration, { signal } = {}) {
+      if (!stateDir || signal?.aborted) return Promise.resolve(UNAVAILABLE);
+      const { dirId, file } = locate(userId, integration);
+      const read = readRecord(file);
+      if ("answer" in read) return Promise.resolve(read.answer);
+      const stored = oauthRecordOf(read.text, integration);
+      if (stored === undefined)
+        return Promise.resolve({ ok: true, credential: read.text });
+      if (stored === "malformed") return Promise.resolve(UNAVAILABLE);
+      const cached = cache.get(dirId);
+      if (fresh(cached)) return Promise.resolve(viewCredential(cached));
+      return untilAborted(refresh(dirId, file, integration), signal);
+    },
+    integrationClear(userId, integration) {
+      if (!stateDir) return Promise.resolve(UNAVAILABLE);
+      const { dirId, dir } = locate(userId, integration);
+      return enqueue<IntegrationWrite>(
+        dirId,
+        () => {
+          cache.delete(dirId);
+          try {
+            rmSync(dir, { recursive: true, force: true });
+          } catch {
+            return Promise.resolve(UNAVAILABLE);
+          }
+          options.discarded?.(dirId);
+          return Promise.resolve({ ok: true });
+        },
+        UNAVAILABLE,
+      );
+    },
+    integrationConnect(userId, integration, request) {
+      if (!stateDir) return Promise.resolve(UNAVAILABLE);
+      return connects[integration](userId, request);
     },
     close() {
       closed = true;

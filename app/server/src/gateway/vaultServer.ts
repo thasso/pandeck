@@ -1,7 +1,7 @@
 /**
  * The vault as its own process (plan Task-1394, ADR-0005): today's
  * `createVault` (renewal, token files, the writer lane, login runs) served to
- * one edge over `gateway-vault/1.1` (`vaultMethods.ts`) on mutual TLS. Each
+ * one edge over `gateway-vault/1.2` (`vaultMethods.ts`) on mutual TLS. Each
  * side trusts exactly the other's self-signed certificate, also checked by
  * fingerprint. A newer edge connection replaces the older one.
  *
@@ -50,6 +50,7 @@ import { RENEW_TICK_MS, type CodexRenewPort } from "./renewal.ts";
 import type { IntegrationClients } from "./integrationClients.ts";
 import { createSealedStore } from "./sealedStore.ts";
 import type { AtlassianEndpoint } from "./vaultAtlassian.ts";
+import type { SlackEndpoint } from "./vaultSlack.ts";
 import { createVault } from "./vault.ts";
 import { startVaultControl, type VaultControl } from "./vaultControl.ts";
 import {
@@ -69,6 +70,7 @@ import {
   VAULT_METHODS,
   accountTokenFile,
   isAtlassianSite,
+  isSlackTeamId,
   isIntegration,
   isPinnedPeer,
   isVaultId,
@@ -77,7 +79,7 @@ import {
   type LoginFailure,
   type VaultLinkTls,
 } from "./vaultMethods.ts";
-import type { LoginDrivers, LoginRun } from "./vaultPort.ts";
+import type { Integration, LoginDrivers, LoginRun } from "./vaultPort.ts";
 
 const HANDSHAKE_TIMEOUT_MS = 10_000;
 const KEEPALIVE_MS = 15_000;
@@ -115,6 +117,8 @@ export interface VaultServerOptions {
   integrationClients?: IntegrationClients | undefined;
   /** Test seam: where Atlassian is reached (`vaultAtlassian.ts`). */
   atlassianEndpoint?: AtlassianEndpoint;
+  /** Test seam: where Slack is reached (`vaultSlack.ts`). */
+  slackEndpoint?: SlackEndpoint;
 }
 
 export interface RunningVaultServer {
@@ -263,13 +267,14 @@ export async function startVaultServer(
       discarded: sealed?.discarded,
       clients: options.integrationClients,
       atlassianEndpoint: options.atlassianEndpoint,
+      slackEndpoint: options.slackEndpoint,
     },
   });
 
   /** An integration request's user and integration, decoded. */
   const integrationOf = (
     body: Record<string, unknown>,
-  ): { userId: string; integration: "atlassian" } => {
+  ): { userId: string; integration: Integration } => {
     const { userId, integration } = body;
     if (!isVaultId(userId) || !isIntegration(integration))
       throw invalid("integration");
@@ -427,6 +432,8 @@ export async function startVaultServer(
     [VAULT_METHODS.integrationPut]: async (body) => {
       const { userId, integration } = integrationOf(body);
       const { credential } = body;
+      // Only a connect writes a Slack record.
+      if (integration === "slack") throw invalid("integration");
       if (
         typeof credential !== "string" ||
         credential.length === 0 ||
@@ -451,7 +458,7 @@ export async function startVaultServer(
     },
     [VAULT_METHODS.integrationConnect]: async (body) => {
       const { userId, integration } = integrationOf(body);
-      const { code, redirectUri, site } = body;
+      const { code, redirectUri, site, team } = body;
       if (
         typeof code !== "string" ||
         code.length > MAX_CONNECT_FIELD_CHARS ||
@@ -459,16 +466,27 @@ export async function startVaultServer(
         typeof redirectUri !== "string" ||
         redirectUri.length > MAX_CONNECT_FIELD_CHARS ||
         !isHttpsUrl(redirectUri) ||
-        (site !== undefined && !isAtlassianSite(site))
+        // Each preset only with its own integration.
+        (site !== undefined &&
+          (integration !== "atlassian" || !isAtlassianSite(site))) ||
+        (team !== undefined &&
+          (integration !== "slack" || !isSlackTeamId(team)))
       )
         throw invalid("integration connect");
       refuseLocked();
       return {
-        connect: await vault.integrationConnect(userId, integration, {
-          code,
-          redirectUri,
-          ...(site !== undefined ? { site } : {}),
-        }),
+        connect:
+          integration === "slack"
+            ? await vault.integrationConnect(userId, "slack", {
+                code,
+                redirectUri,
+                ...(team !== undefined ? { team } : {}),
+              })
+            : await vault.integrationConnect(userId, "atlassian", {
+                code,
+                redirectUri,
+                ...(site !== undefined ? { site } : {}),
+              }),
       };
     },
     [VAULT_METHODS.loginStart]: (body) => {

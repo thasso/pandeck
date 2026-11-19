@@ -122,15 +122,16 @@ on the edge"):
   reaches the tools only through the injected `EdgeTools`
   (`gateway/edgeTools.ts`, types only). A boundary test pins both directions.
 - A user's integration credential is a vault record, sealed like a token file:
-  the pilot's Atlassian API token, or an Atlassian OAuth record the vault wrote
-  itself (Task-1411). For an OAuth record the vault holds the confidential
-  client, exchanges the code, does every refresh as the record's only writer and
-  seals each rotated refresh token before answering; the refresh token and the
-  client secret never leave it. The edge gets only a short-lived access token,
-  the cloud id and the site. It reads either from the vault for one tool call,
-  or one set or status check, and never caches, logs or writes it. Every vault
-  integration call is bounded, and a late answer is dropped.
-- An OAuth access token goes only to
+  the pilot's Atlassian API token, or an OAuth record the vault wrote itself,
+  Atlassian's (Task-1411) or Slack's (Task-1452). For an OAuth record the vault
+  holds the confidential client, exchanges the code, does every refresh as the
+  record's only writer and seals each rotated refresh token before answering;
+  the refresh token and the client secret never leave it. The edge gets only a
+  short-lived access token and the record's ids: Atlassian's cloud id and site,
+  or Slack's team, user and workspace host. It reads either from the vault for
+  one tool call, or one set or status check, and never caches, logs or writes
+  it. Every vault integration call is bounded, and a late answer is dropped.
+- An Atlassian OAuth access token goes only to
   `https://api.atlassian.com/ex/<product>/ <cloudId>` with a site-relative path,
   checked before the request; the site makes only browse URLs.
 - The gateway hands tools typed credential outcomes and never builds a tool

@@ -53,6 +53,7 @@ import type {
   IntegrationRecord,
   IntegrationWrite,
   LoginDrivers,
+  VaultPort,
 } from "./vaultPort.ts";
 import type { EdgeTools, IntegrationCheck, ToolAnswer } from "./edgeTools.ts";
 type LoginDriverEvents = Parameters<NonNullable<LoginDrivers["claude"]>>[1];
@@ -1077,7 +1078,7 @@ function stubVault() {
     clearAnswer: undefined as IntegrationWrite | undefined,
     getAnswer: undefined as IntegrationRecord | undefined,
     getDelayMs: 0,
-    connectAnswer: undefined as IntegrationConnect | undefined,
+    connectAnswer: undefined as IntegrationConnect<"atlassian"> | undefined,
     /** Holds every connect until the test calls the release it pushes. */
     connectHeld: false,
     connectReleases: [] as (() => void)[],
@@ -1110,11 +1111,12 @@ function stubVault() {
           ? { ok: false, absent: true }
           : { ok: true, credential };
       },
-      integrationConnect: async (
+      // Answers as the Atlassian connect only; the port's type is generic.
+      integrationConnect: (async (
         userId: string,
         _integration: string,
         request: unknown,
-      ): Promise<IntegrationConnect> => {
+      ): Promise<IntegrationConnect<"atlassian">> => {
         calls.push(`connect ${userId}`);
         stub.connectRequests.push(request);
         if (stub.connectHeld)
@@ -1132,7 +1134,7 @@ function stubVault() {
           }),
         );
         return { ok: true, site: "x.atlassian.net", cloudId: "FAKE-CLOUD" };
-      },
+      }) as VaultPort["integrationConnect"],
     },
   };
   return stub;
@@ -2583,7 +2585,7 @@ test("connectAtlassian maps every vault outcome to its fixed refusal code", asyn
       fakeTools(() => Promise.resolve({ ok: true })),
     )
   ).clients!.userOperations;
-  const cases: [IntegrationConnect, string][] = [
+  const cases: [IntegrationConnect<"atlassian">, string][] = [
     [{ ok: false, rejected: true }, "integration_rejected"],
     [{ ok: false, unreachable: true }, "integration_unreachable"],
     [{ ok: false, site: "missing" }, "integration_site_missing"],

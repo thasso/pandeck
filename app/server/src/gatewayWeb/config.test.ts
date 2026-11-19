@@ -15,6 +15,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, test } from "vitest";
 import { FAKE_CLIENT } from "../test/atlassianFake.ts";
+import { FAKE_SLACK_CLIENT } from "../test/slackFake.ts";
 import {
   admittedEmail,
   defaultDistDir,
@@ -176,6 +177,41 @@ test("the Atlassian OAuth client: clientId and clientSecret each load alone or t
       message,
       new RegExp(`${FAKE_CLIENT.clientId}|${FAKE_CLIENT.clientSecret}`),
     );
+  }
+});
+
+test("the Slack OAuth client: clientId and clientSecret each load alone or together; empty ones refuse without echoing", () => {
+  const { clientId, clientSecret } = FAKE_SLACK_CLIENT;
+  const load = (slack: unknown) =>
+    loadGatewayWebConfig(fixture((c) => (c.slack = slack)).file).slack;
+  assert.equal(loadGatewayWebConfig(fixture().file).slack, undefined);
+  assert.deepEqual(load({}), {});
+  assert.deepEqual(load({ clientId }), { clientId });
+  assert.deepEqual(load({ clientSecret }), { clientSecret });
+  assert.deepEqual(load({ clientId, clientSecret }), {
+    clientId,
+    clientSecret,
+  });
+  // Atlassian's preset is untouched beside it.
+  const both = loadGatewayWebConfig(
+    fixture((c) => {
+      c.slack = { clientId };
+      c.atlassian = { clientId: FAKE_CLIENT.clientId };
+    }).file,
+  );
+  assert.deepEqual(both.slack, { clientId });
+  assert.equal(both.atlassian?.clientId, FAKE_CLIENT.clientId);
+  for (const [slack, field] of [
+    [{ clientId: "", clientSecret }, /slack\.clientId/],
+    [{ clientId: " ", clientSecret }, /slack\.clientId/],
+    [{ clientId, clientSecret: "" }, /slack\.clientSecret/],
+    [{ clientId, clientSecret: 7 }, /slack\.clientSecret/],
+    ["x", /slack must be an object/],
+    [[clientId], /slack must be an object/],
+  ] as const) {
+    const message = refusal(fixture((c) => (c.slack = slack)).file);
+    assert.match(message, field);
+    assert.doesNotMatch(message, new RegExp(`${clientId}|${clientSecret}`));
   }
 });
 

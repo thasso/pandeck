@@ -1,6 +1,6 @@
 /**
  * The UI config's Atlassian OAuth client by vault topology (`gatewayEdge.ts`
- * `atlassianClientFor`, Task-1411): the in-process vault takes both halves or
+ * `integrationClientFor`, Task-1411): the in-process vault takes both halves or
  * neither and `startEdge` refuses a half before anything listens; a remote
  * vault keeps only the id, starts without a secret, and a secret it finds is
  * neither passed nor used, only named once in a fixed line. Every value is
@@ -17,7 +17,7 @@ import { startVaultServer } from "./gateway/vaultServer.ts";
 import { edgeTlsFor, selfSignedIdentity } from "./gateway/x509.ts";
 import {
   EdgeStartRefusal,
-  atlassianClientFor,
+  integrationClientFor,
   startEdge,
 } from "./gatewayEdge.ts";
 
@@ -44,7 +44,8 @@ test("the helper: in-process both or neither, remote never a secret", () => {
   });
   // In process: the pair goes to the vault; neither, nothing.
   assert.deepEqual(
-    atlassianClientFor(
+    integrationClientFor(
+      "atlassian",
       preset({
         clientId: FAKE_EDGE_CLIENT_ID,
         clientSecret: FAKE_EDGE_CLIENT_SECRET,
@@ -60,26 +61,31 @@ test("the helper: in-process both or neither, remote never a secret", () => {
       },
     },
   );
-  assert.deepEqual(atlassianClientFor(undefined, false), {});
-  assert.deepEqual(atlassianClientFor(preset({}), false), {});
+  assert.deepEqual(integrationClientFor("atlassian", undefined, false), {});
+  assert.deepEqual(integrationClientFor("atlassian", preset({}), false), {});
   // In process, half a client is refused with a fixed text.
   for (const half of [
     { clientId: FAKE_EDGE_CLIENT_ID },
     { clientSecret: FAKE_EDGE_CLIENT_SECRET },
   ]) {
     assert.throws(
-      () => atlassianClientFor(preset(half), false),
+      () => integrationClientFor("atlassian", preset(half), false),
       (err: unknown) => err instanceof EdgeStartRefusal && err.message === HALF,
     );
   }
   // Remote: nothing is passed, the id alone is fine, a secret only warns.
   assert.deepEqual(
-    atlassianClientFor(preset({ clientId: FAKE_EDGE_CLIENT_ID }), true),
+    integrationClientFor(
+      "atlassian",
+      preset({ clientId: FAKE_EDGE_CLIENT_ID }),
+      true,
+    ),
     {},
   );
-  assert.deepEqual(atlassianClientFor(undefined, true), {});
+  assert.deepEqual(integrationClientFor("atlassian", undefined, true), {});
   assert.deepEqual(
-    atlassianClientFor(
+    integrationClientFor(
+      "atlassian",
       preset({
         clientId: FAKE_EDGE_CLIENT_ID,
         clientSecret: FAKE_EDGE_CLIENT_SECRET,
@@ -89,7 +95,11 @@ test("the helper: in-process both or neither, remote never a secret", () => {
     { warning: IGNORED },
   );
   assert.deepEqual(
-    atlassianClientFor(preset({ clientSecret: FAKE_EDGE_CLIENT_SECRET }), true),
+    integrationClientFor(
+      "atlassian",
+      preset({ clientSecret: FAKE_EDGE_CLIENT_SECRET }),
+      true,
+    ),
     {
       warning: IGNORED,
     },

@@ -6,39 +6,32 @@
  * the new access token. A test overrides where to connect, the CA and the
  * deadline, never the URL, `Host` or TLS name, so neither a code, a refresh
  * token, the client secret nor an access token can go anywhere else.
- * Redirects are not followed.
+ * Redirects are not followed (`vaultHttps.ts`).
  *
  * Results are typed: `rejected` is Atlassian refusing the grant, `unreachable`
  * everything else, each with a fixed reason for the vault's log (a status, an
  * errno code or a fixed word), never response text or any token.
  */
-import https from "node:https";
-import type { TokenEndpoint } from "./claudeRenewal.ts";
 import type { OAuthClient } from "./integrationClients.ts";
+import {
+  MAX_EXPIRES_IN_S,
+  isToken,
+  vaultCall,
+  type VaultEndpoint,
+} from "./vaultHttps.ts";
 import { isAtlassianSite, isCloudId } from "./vaultMethods.ts";
 
 const AUTH_HOST = "auth.atlassian.com";
 const API_HOST = "api.atlassian.com";
 const TOKEN_PATH = "/oauth/token";
 const RESOURCES_PATH = "/oauth/token/accessible-resources";
-/** Each Atlassian call's deadline, connect to last byte. */
-const ATLASSIAN_HTTP_TIMEOUT_MS = 8_000;
-/** A token or site-list answer is small; anything larger is not one. */
-const MAX_RESPONSE_BYTES = 64 * 1024;
-/** What the edge's decoder takes (`gatewayTools/atlassian.ts`). */
-const MAX_TOKEN_CHARS = 8_192;
-const MAX_EXPIRES_IN_S = 31_536_000;
 const MAX_SCOPE_CHARS = 2_048;
-const HEADER_SAFE_RE = /^[\x21-\x7e]+$/;
 
 /** Where to connect instead of Atlassian's hosts (tests): never the URL. */
-export interface AtlassianEndpoint extends TokenEndpoint {
-  /** Test seam: each call's deadline; 8 s. */
-  timeoutMs?: number;
-}
+export type AtlassianEndpoint = VaultEndpoint;
 
 /** A validated token answer; held in memory only. */
-export interface AtlassianTokens {
+interface AtlassianTokens {
   accessToken: string;
   /** Absent only when Atlassian did not rotate it. */
   refreshToken: string | undefined;
@@ -58,98 +51,10 @@ export type SiteChoice =
   | { ok: true; site: string; cloudId: string }
   | { ok: false; site: "missing" | "ambiguous" };
 
-type HttpAnswer =
-  | { kind: "answer"; status: number; body: string }
-  | { kind: "unreachable"; code: string };
-
-function errnoOf(err: unknown): string {
-  const code = (err as NodeJS.ErrnoException | undefined)?.code;
-  return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code)
-    ? code
-    : "network";
-}
-
-/** One bounded HTTPS request to a fixed Atlassian host; never rejects. */
-function call(
-  host: typeof AUTH_HOST | typeof API_HOST,
-  request: {
-    method: "GET" | "POST";
-    path: string;
-    headers: Record<string, string | number>;
-    body?: string;
-  },
-  endpoint: AtlassianEndpoint | undefined,
-): Promise<HttpAnswer> {
-  return new Promise((resolve) => {
-    let settled = false;
-    const settle = (answer: HttpAnswer): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      req.destroy();
-      resolve(answer);
-    };
-    const req = https.request({
-      host: endpoint?.connect.host ?? host,
-      port: endpoint?.connect.port ?? 443,
-      servername: host,
-      ...(endpoint?.ca ? { ca: endpoint.ca } : {}),
-      agent: false,
-      method: request.method,
-      path: request.path,
-      headers: { ...request.headers, Host: host },
-    });
-    const timer = setTimeout(
-      () => settle({ kind: "unreachable", code: "timeout" }),
-      endpoint?.timeoutMs ?? ATLASSIAN_HTTP_TIMEOUT_MS,
-    );
-    req.on("error", (err) =>
-      settle({ kind: "unreachable", code: errnoOf(err) }),
-    );
-    req.on("response", (response) => {
-      const status = response.statusCode ?? 0;
-      if (status >= 300 && status < 400) {
-        settle({ kind: "unreachable", code: "redirect" });
-        return;
-      }
-      const chunks: Buffer[] = [];
-      let size = 0;
-      response.on("data", (chunk: Buffer) => {
-        size += chunk.length;
-        if (size > MAX_RESPONSE_BYTES)
-          settle({ kind: "unreachable", code: "oversize" });
-        else chunks.push(chunk);
-      });
-      response.on("aborted", () =>
-        settle({ kind: "unreachable", code: "aborted" }),
-      );
-      response.on("error", (err) =>
-        settle({ kind: "unreachable", code: errnoOf(err) }),
-      );
-      response.on("end", () =>
-        settle({
-          kind: "answer",
-          status,
-          body: Buffer.concat(chunks).toString("utf8"),
-        }),
-      );
-    });
-    req.end(request.body);
-  });
-}
-
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
-}
-
-function isToken(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.length <= MAX_TOKEN_CHARS &&
-    HEADER_SAFE_RE.test(value)
-  );
 }
 
 function parseTokens(body: string): AtlassianTokens | undefined {
@@ -202,7 +107,7 @@ async function tokenGrant(
   isRejectedStatus: (status: number) => boolean,
 ): Promise<AtlassianTokenResult> {
   const body = JSON.stringify(grant);
-  const answer = await call(
+  const answer = await vaultCall(
     AUTH_HOST,
     {
       method: "POST",
@@ -274,7 +179,7 @@ export async function atlassianResources(
   accessToken: string,
   endpoint: AtlassianEndpoint | undefined,
 ): Promise<AtlassianResourcesResult> {
-  const answer = await call(
+  const answer = await vaultCall(
     API_HOST,
     {
       method: "GET",

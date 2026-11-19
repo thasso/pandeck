@@ -65,6 +65,7 @@ import type { MachinePathMode } from "./machinePaths.ts";
 import { createRemoteVault, type RemoteVaultOptions } from "./remoteVault.ts";
 import { createVault, type Vault } from "./vault.ts";
 import type { AtlassianEndpoint } from "./vaultAtlassian.ts";
+import type { SlackEndpoint } from "./vaultSlack.ts";
 import type { IntegrationClients } from "./integrationClients.ts";
 
 /** How often a drain looks for streams that have ended. */
@@ -136,6 +137,8 @@ export interface GatewayOptions {
   integrationClients?: IntegrationClients | undefined;
   /** Test seam: where the in-process vault reaches Atlassian. */
   atlassianEndpoint?: AtlassianEndpoint;
+  /** Test seam: where the in-process vault reaches Slack. */
+  slackEndpoint?: SlackEndpoint;
 }
 
 export interface RunningGateway {
@@ -244,6 +247,7 @@ export async function startGateway(
           stateDir: options.stateDir,
           clients: options.integrationClients,
           atlassianEndpoint: options.atlassianEndpoint,
+          slackEndpoint: options.slackEndpoint,
         },
       });
   const vault: VaultPort = remote ?? local!;

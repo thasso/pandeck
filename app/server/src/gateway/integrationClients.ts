@@ -1,15 +1,15 @@
 /**
- * The vault's OAuth clients for users' integrations (Task-1411): read once at
- * start from `vault --integrations-config <file>`, a JSON object keyed by
- * provider, each `{clientId, clientSecret}`. Only `atlassian` is known; other
- * provider keys are ignored, so a file can name a later provider before this
- * vault knows it. The file must be a regular file nobody but its owner may
- * read (mode without group or other bits).
+ * The vault's OAuth clients for users' integrations (Task-1411, Task-1452):
+ * read once at start from `vault --integrations-config <file>`, a JSON object
+ * keyed by provider, each `{clientId, clientSecret}`. Only `atlassian` and
+ * `slack` are known; other provider keys are ignored, so a file can name a
+ * later provider before this vault knows it. The file must be a regular file
+ * nobody but its owner may read (mode without group or other bits).
  *
  * The client secret lives only in the vault's memory: it is sent only to the
- * provider's fixed token endpoint (`vaultAtlassian.ts`), never logged, never
- * answered to the edge. A refusal is a fixed text holding no value from the
- * file.
+ * provider's fixed token endpoint (`vaultAtlassian.ts`, `vaultSlack.ts`),
+ * never logged, never answered to the edge. A refusal is a fixed text holding
+ * no value from the file.
  */
 import { readFileSync, statSync } from "node:fs";
 
@@ -22,7 +22,10 @@ export interface OAuthClient {
 /** The OAuth clients a vault holds, by provider. */
 export interface IntegrationClients {
   atlassian?: OAuthClient | undefined;
+  slack?: OAuthClient | undefined;
 }
+
+const PROVIDERS = ["atlassian", "slack"] as const;
 
 /** Why a config file was refused; the text holds nothing from the file. */
 export class IntegrationClientsRefusal extends Error {}
@@ -84,13 +87,14 @@ export function loadIntegrationClients(file: string): IntegrationClients {
       "the integrations config is not a JSON object",
     );
   const clients: IntegrationClients = {};
-  if (root.atlassian !== undefined) {
-    const entry = objectOf(root.atlassian);
+  for (const provider of PROVIDERS) {
+    if (root[provider] === undefined) continue;
+    const entry = objectOf(root[provider]);
     if (!entry || !isValue(entry.clientId) || !isValue(entry.clientSecret))
       throw new IntegrationClientsRefusal(
-        "the integrations config's atlassian entry needs a non-empty clientId and clientSecret",
+        `the integrations config's ${provider} entry needs a non-empty clientId and clientSecret`,
       );
-    clients.atlassian = {
+    clients[provider] = {
       clientId: entry.clientId,
       clientSecret: entry.clientSecret,
     };

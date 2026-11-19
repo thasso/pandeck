@@ -1,6 +1,6 @@
 /**
  * The vault as its own process (Task-1394, Task-1387), `vault.js` in the Bun
- * package: `startVaultServer` serving one edge over `gateway-vault/1.1`:
+ * package: `startVaultServer` serving one edge over `gateway-vault/1.2`:
  *
  *   vault --state-dir <dir> [--bind-host <address>] [--port <n>]
  *     [--control-socket <path>] [--integrations-config <file>]
@@ -19,9 +19,9 @@
  * must be a tmpfs, it starts locked, and `gateway-admin unlock` unlocks it
  * over `--control-socket` (`/run/pandeck-vault/control.sock` unless given).
  * `--integrations-config` names a 0600 JSON file of users' OAuth clients,
- * `{"atlassian": {"clientId", "clientSecret"}}` (`integrationClients.ts`):
- * with it the vault exchanges Atlassian codes and refreshes those records
- * itself. A file it refuses stops the start.
+ * `{"atlassian" | "slack": {"clientId", "clientSecret"}}`
+ * (`integrationClients.ts`): with a provider's client the vault exchanges its
+ * codes and refreshes those records itself. A file it refuses stops the start.
  *
  * SIGTERM or SIGINT stops it once every login, renewal and running
  * integration operation it started has ended and been sealed; then it exits 0.
