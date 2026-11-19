@@ -27,6 +27,7 @@ import type { RequestRecord } from "./gateway/requestLog.ts";
 import { NAMED_DOMAINS } from "./relay/connectTarget.ts";
 import { MACHINE_PLACEHOLDER } from "./relay/credentialClass.ts";
 import type { InterceptCa } from "./relay/interceptCa.ts";
+import type { ObservedUpstreamSeam } from "./relay/observedTraffic.ts";
 import type { RunningRelay } from "./relay/relay.ts";
 
 const home = mkdtempSync(join(tmpdir(), "relay-intercept-edge-home-"));
@@ -71,7 +72,13 @@ afterAll(async () => {
   rmSync(home, { recursive: true, force: true });
 });
 
-async function rig(extra: { capacity?: number; drainMs?: number } = {}) {
+async function rig(
+  extra: {
+    capacity?: number;
+    drainMs?: number;
+    observedUpstream?: ObservedUpstreamSeam;
+  } = {},
+) {
   const root = mkdtempSync(join(tmpdir(), "relay-intercept-edge-"));
   const stateDir = join(root, "edge");
   const dir = join(root, "relay");
@@ -110,6 +117,9 @@ async function rig(extra: { capacity?: number; drainMs?: number } = {}) {
     },
     drainMs: extra.drainMs ?? 100,
     flushMs: 600,
+    ...(extra.observedUpstream
+      ? { observedUpstream: extra.observedUpstream }
+      : {}),
     log: (line: string) => lines.push(line),
   };
   let relay: RunningRelay = await startRelay(relayOptions);
@@ -145,6 +155,7 @@ async function rig(extra: { capacity?: number; drainMs?: number } = {}) {
   await until(() => commits.length >= 1);
   return {
     dir,
+    stateDir,
     clientId,
     lines,
     commits,
@@ -1039,4 +1050,252 @@ test("T21b: close with an undelivered decrypted fallback logs the dropped count,
   assert.equal(restart.count, undefined);
   assert.equal(r.commits.at(-1)!.batch.records[0]!.d, 1);
   assert.equal(relayRows(r).length, 0, "the dropped fallback never arrives");
+});
+
+// ---------------------------------------------------------------------------
+// PR4 observed hosts and Task-1435 fragments through REAL ingest. The fake
+// observed upstream stands in for every non-token named host; the relay's
+// programmatic seam swaps only its address and trust root.
+
+interface ObservedSeen {
+  url: string;
+  servername: string | false | null;
+  rawHeaders: string[];
+}
+
+async function observedUpstream() {
+  const ca = loadInterceptCa(
+    mkdtempSync(join(tmpdir(), "relay-intercept-upstream-ca-")),
+  );
+  const seen: ObservedSeen[] = [];
+  const fallback = ca.leafFor("claude.ai");
+  const server = https.createServer(
+    {
+      key: fallback.key,
+      cert: fallback.cert,
+      SNICallback: (name, callback) =>
+        callback(null, tls.createSecureContext(ca.leafFor(name))),
+    },
+    (req, res) => {
+      seen.push({
+        url: req.url ?? "",
+        servername: (req.socket as tls.TLSSocket).servername,
+        rawHeaders: [...req.rawHeaders],
+      });
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, {
+          "content-type": "application/json",
+          "set-cookie": "observed=1",
+          "content-length": 11,
+        });
+        res.end('{"ok":true}');
+      });
+    },
+  );
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as net.AddressInfo).port;
+  open.push(
+    () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
+  );
+  const seam: ObservedUpstreamSeam = () => ({
+    host: "127.0.0.1",
+    port,
+    ca: ca.certPem,
+  });
+  return { seen, seam };
+}
+
+/** One request on a fresh decrypted connection to an observed host. */
+function observed(r: Rig, raw: string, host = "claude.ai"): Promise<Answer> {
+  return decrypted(r, raw, host);
+}
+
+/** The persisted seen set of the real edge, `""` before its first write. */
+function seenFile(r: Rig): string {
+  try {
+    return readFileSync(join(r.stateDir, "seenRequests.json"), "utf8");
+  } catch {
+    return "";
+  }
+}
+
+test("PR4 AC3: an observed request is one observed relay row through real ingest, with classes, measured sizes and the query-free path; nothing at the gateway; no sentinel anywhere", async () => {
+  const upstream = await observedUpstream();
+  // Registered first so it is opened before the rig and closed after it.
+  const r = await rig({ observedUpstream: upstream.seam });
+  const body = "BODY-SENTINEL";
+  const answer = await observed(
+    r,
+    request(
+      "POST",
+      "/api/organizations?q=SENTINEL",
+      [`authorization: Bearer ${CLAUDE_ACCESS}`, "cookie: SENTINEL=1"],
+      body,
+      "claude.ai",
+    ),
+  );
+  assert.equal(answer.status, 200, answer.head);
+  assert.match(answer.head, /\r\nset-cookie: observed=1/i);
+  assert.equal(upstream.seen.length, 1);
+  assert.equal(upstream.seen[0]!.url, "/api/organizations?q=SENTINEL");
+  assert.equal(upstream.seen[0]!.servername, "claude.ai");
+  await r.until(() => relayRows(r).length === 1);
+  const [row] = relayRows(r);
+  assert.match(row!.rid!, RID);
+  assert.deepEqual(
+    [row!.via, row!.host, row!.method, row!.path, row!.pathKey],
+    ["relay", "claude.ai", "POST", "/api/organizations", "/api/organizations"],
+  );
+  assert.deepEqual(
+    [row!.status, row!.outcome, row!.reason],
+    [200, "observed", undefined],
+  );
+  assert.equal(row!.clientCredential, "other");
+  assert.equal(row!.clientCookie, true);
+  assert.equal(row!.requestBytes, Buffer.byteLength(body));
+  assert.equal(row!.responseBytes, 11);
+  assert.equal(row!.firstSeen, true);
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(relayRows(r).length, 1, "recorded once");
+  assert.equal(edgeRows(r).length, 0);
+  assert.equal(upstreams.anthropic.length, 0);
+  await r.until(() => seenFile(r).includes("/api/organizations"));
+  for (const surface of [surfaces(r), seenFile(r)]) {
+    assert.ok(!surface.includes("SENTINEL"));
+    assert.ok(!surface.includes(CLAUDE_ACCESS));
+  }
+});
+
+test("PR4 AC4: with the queue full and the edge down, an observed request and an observed upgrade are the counted 503 overflow without upstream contact; the edge later gets one overflow note of 2 and the earlier observed record", async () => {
+  const upstream = await observedUpstream();
+  const r = await rig({ capacity: 2, observedUpstream: upstream.seam });
+  await r.stopEdge();
+  // The one free slot: an observed request whose record cannot be delivered.
+  const first = await observed(
+    r,
+    request("GET", "/api/first", [PLACEHOLDER], "", "claude.ai"),
+  );
+  assert.equal(first.status, 200);
+  assert.equal(upstream.seen.length, 1);
+  const overflowed = [
+    await observed(
+      r,
+      request("GET", "/api/second", [PLACEHOLDER], "", "claude.ai"),
+    ),
+    await observed(
+      r,
+      "GET /api/ws HTTP/1.1\r\nHost: claude.com\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n",
+      "claude.com",
+    ),
+  ];
+  for (const answer of overflowed) assertMarked(answer, 503, "api_error");
+  assert.equal(upstream.seen.length, 1, "no upstream contact on overflow");
+  await r.restartEdge();
+  await r.until(() => r.records().some((row) => row.outcome === "overflow"));
+  await r.until(() => relayRows(r).length === 1);
+  const notes = r.records().filter((row) => row.outcome === "overflow");
+  assert.equal(notes.length, 1);
+  assert.equal(notes[0]!.count, 2);
+  assert.deepEqual(
+    [relayRows(r)[0]!.host, relayRows(r)[0]!.path, relayRows(r)[0]!.outcome],
+    ["claude.ai", "/api/first", "observed"],
+  );
+});
+
+test("Task-1435 AC6: query and fragment never reach a relay row's path or pathKey, the edge's text, the batches or the persisted seen set, on every relay producer; routing and refusals are unchanged", async () => {
+  const upstream = await observedUpstream();
+  const r = await rig({ observedUpstream: upstream.seam });
+  const reserved = [
+    "/relay/blocked#SENTINEL-F",
+    "/relay/blocked?q=SENTINEL-Q#SENTINEL-F",
+    "/relay/blocked#SENTINEL-F?q=SENTINEL-Q",
+  ];
+  // Token host: the relay's reserved-path refusal.
+  for (const target of reserved)
+    assertMarked(
+      await decrypted(r, request("GET", target, [PLACEHOLDER])),
+      403,
+      "permission_error",
+    );
+  // Plain listener: the same refusal.
+  const plain = net.connect(r.relay.port, "127.0.0.1");
+  plain.on("error", () => {});
+  const plainAnswer = readToClose(plain);
+  plain.write(
+    "GET /relay/blocked#SENTINEL-F HTTP/1.1\r\nHost: 127.0.0.1\r\nconnection: close\r\n\r\n",
+  );
+  assertMarked(parse(await plainAnswer), 403, "permission_error");
+  // Token-host upgrade: the relay's 501.
+  assertMarked(
+    await decrypted(
+      r,
+      "GET /v1/stream#SENTINEL-F HTTP/1.1\r\nHost: api.anthropic.com\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n",
+    ),
+    501,
+    "api_error",
+  );
+  // Observed host: forwarded as received, recorded without the fragment.
+  const forwarded = await observed(
+    r,
+    request("GET", "/api/x#SENTINEL-F", [], "", "claude.ai"),
+  );
+  assert.equal(forwarded.status, 200);
+  assert.equal(upstream.seen[0]!.url, "/api/x#SENTINEL-F");
+  await r.until(() => relayRows(r).length === 6);
+  assert.deepEqual(
+    relayRows(r).map((row) => [
+      row.host,
+      row.path,
+      row.pathKey,
+      row.outcome,
+      row.reason ?? null,
+    ]),
+    [
+      [
+        "api.anthropic.com",
+        "/relay/blocked",
+        "/relay/blocked",
+        "refused",
+        "reserved-path",
+      ],
+      [
+        "api.anthropic.com",
+        "/relay/blocked",
+        "/relay/blocked",
+        "refused",
+        "reserved-path",
+      ],
+      [
+        "api.anthropic.com",
+        "/relay/blocked",
+        "/relay/blocked",
+        "refused",
+        "reserved-path",
+      ],
+      [
+        "127.0.0.1",
+        "/relay/blocked",
+        "/relay/blocked",
+        "refused",
+        "reserved-path",
+      ],
+      ["api.anthropic.com", "/v1/stream", "/v1/stream", "refused", "upgrade"],
+      ["claude.ai", "/api/x", "/api/x", "observed", null],
+    ],
+  );
+  assert.equal(edgeRows(r).length, 0);
+  assert.equal(upstreams.anthropic.length, 0);
+  await r.until(
+    () =>
+      seenFile(r).includes("/relay/blocked") && seenFile(r).includes("/api/x"),
+  );
+  const seen = JSON.parse(seenFile(r)) as { seen: { pathKey: string }[] };
+  assert.ok(seen.seen.every((entry) => !/[?#]/.test(entry.pathKey)));
+  for (const surface of [surfaces(r), seenFile(r)])
+    assert.ok(!surface.includes("SENTINEL"), surface);
 });

@@ -2085,11 +2085,18 @@ placeholder as its key. Any process on the machine can do this; Thasso accepted
 that. The relay's client certificate is the capability, and revoking the machine
 ends access at once. The relay forwards request and response header fields with
 repeats and verifies the edge by its enrolled address whatever the `Host`
-(above). It drops hop-by-hop fields. Request fields starting with `x-pandeck-`
+(above). It drops hop-by-hop fields but never a request's framing: the body goes
+up delimited where the relay's own parser delimited it, chunked again whatever
+its method when the client sent `Transfer-Encoding` (the client's own fields go
+up with it), otherwise with the client's `Content-Length`. A `Connection` field
+cannot nominate `Host`, `Content-Length` or `Transfer-Encoding` away. The next
+hop therefore ends each request where the relay did and never reads a body the
+relay forwarded as a further request. Request fields starting with `x-pandeck-`
 are reserved: every caller value is removed, regardless of case or repeats, and
 one `x-pandeck-relay-id` is added. Bodies still stream unchanged; no credential
 is added or removed. For the two Claude token hosts it intercepts, ADR-0006
-changes the target and `Host` ("Interception" below).
+changes the target and `Host`; every other named host it decrypts goes directly
+to that host ("Interception" below).
 
 - **Placeholder.** One literal, JWT-shaped because pi and Codex accept only
   that, pinned in `gatewayMachinePool.test.ts`:
@@ -2180,7 +2187,7 @@ changes the target and `Host` ("Interception" below).
     an ordinary crash.
   - Every 10 minutes and at close, `relay summary:` counts since boot by host,
     relay-view outcome and credential class, plus rejected observation count.
-    With interception it also counts `tls-failed` by token host and `malformed`
+    With interception it also counts `tls-failed` by named host and `malformed`
     CONNECT targets under the host `-`; neither is recorded. `forwarded` means
     edge headers arrived, not necessarily upstream success. This is
     observability, not lossless or exactly-once accounting. Edge dedup can lose
@@ -2246,50 +2253,86 @@ changes the target and `Host` ("Interception" below).
     relay with a message naming the file; delete `intercept-ca-*` and restart.
     Without the flag nothing changes: CONNECT is closed as before.
   - **Which CONNECT.** The target must be a valid authority (IPv6 in brackets,
-    IPv4, or DNS labels, then a port). Only `api.anthropic.com:443` and
-    `mcp-proxy.anthropic.com:443` are decrypted, to `/anthropic…` and
-    `/anthropic-mcp…` on the edge. IP literals and every other host are blind
-    tunnels, not logged by host. A name under `anthropic.com`, `claude.ai` or
-    `claude.com` on another port is refused 403 `connect-port`, spelled with a
-    trailing dot 403 `connect-target`. A target that is not a valid authority,
-    or an IP or other host with a port outside 1-65535, gets 400 and a log line
-    without the target.
+    IPv4, or DNS labels, then a port). Every DNS name equal to or under
+    `anthropic.com`, `claude.ai` or `claude.com` on 443 is decrypted (Task-1430
+    PR4). `api.anthropic.com` and `mcp-proxy.anthropic.com` are the token hosts,
+    sent to `/anthropic…` and `/anthropic-mcp…` on the edge; every other named
+    host is an observed host. IP literals and every other host are blind
+    tunnels, not logged by host. A named host on another port is refused 403
+    `connect-port`, spelled with a trailing dot 403 `connect-target`. A target
+    that is not a valid authority, or an IP or other host with a port outside
+    1-65535, gets 400 and a log line without the target.
   - **Decrypted requests.** Origin-form only (an absolute-form target gets 400
-    `origin-form`); a WebSocket upgrade gets 501 `upgrade` without reaching the
-    edge. An inner CONNECT never opens another tunnel or reaches the edge: it
-    gets 400 `origin-form`, except `/relay/…` gets the existing 403
-    `reserved-path`. Its record uses the outer token host and fixed path `/`,
+    `origin-form`). An inner CONNECT never opens another tunnel or reaches the
+    edge: it gets 400 `origin-form`, except `/relay/…` gets the existing 403
+    `reserved-path`. Its record uses the outer named host and fixed path `/`,
     never the inner authority. Closing and overflow use the shared 503 refusal.
-    Each request keeps its header fields as received except hop-by-hop fields,
-    caller `x-pandeck-*` fields and `Host`, which becomes one
-    `127.0.0.1:<relay port>`; `Origin` still reaches the edge, which refuses it.
-    Bodies pass unread. Every refusal above is marked and has Anthropic's error
-    shape.
-  - **Reporting.** A decrypted request takes the plain listener's path through
+    Every refusal is marked and has Anthropic's error shape.
+  - **Token hosts.** A WebSocket upgrade gets 501 `upgrade` without reaching the
+    edge; `/relay/…`, an upgrade's included, gets 403 `reserved-path`. Each
+    request keeps its header fields as received except hop-by-hop fields, caller
+    `x-pandeck-*` fields and `Host`, which becomes one `127.0.0.1:<relay port>`;
+    `Origin` still reaches the edge, which refuses it. Bodies pass unread.
+  - **Observed hosts** (PR4, `observedTraffic.ts`). Each request goes directly
+    to the CONNECT host on 443: SNI is that host and the certificate is checked
+    against the default CA store. The inner `Host` and SNI never choose the
+    destination. Nothing of the edge link is used: no client certificate, key,
+    edge CA, agent or gateway credential; the observed hosts have their own
+    keep-alive pool, to which a connection whose answer finished before its
+    upload never returns. Header fields pass as received, repeats and order
+    kept, without the fixed hop-by-hop fields, every field a `Connection` field
+    names other than `Host`, `Content-Length` and `Transfer-Encoding`, and
+    caller `x-pandeck-*` fields; `Host` is kept. No credential or cookie is
+    added or removed, the target keeps its query, and a response `set-cookie`
+    reaches the client. Bodies are piped both ways and never read. An upgrade
+    keeps its `Upgrade` fields and one `Connection: Upgrade`. After the
+    upstream's `101`, the relay writes the `101`, then each side's buffered
+    bytes to the other, then pipes both ways; any other answer is an ordinary
+    response followed by a close. A request body goes up framed as the relay
+    parsed it: chunked again whatever the method, or with its `Content-Length`.
+    An upgrade request goes up as its head alone, with neither `Content-Length`
+    nor `Transfer-Encoding`, so nothing the client sends after it reaches the
+    upstream before the `101`. `/relay/…`, an upgrade's included, gets 403
+    `reserved-path` before any upstream contact, as on every ingress; closing
+    and a full queue answer their 503 first. An upstream that cannot be reached
+    or fails verification gets the marked 502
+    `the relay cannot reach this host.`
+  - **Reporting.** A token-host request takes the plain listener's path through
     the relay (admission, one rid, reserved fields dropped, a fallback record
     when no edge headers arrive), its record naming the token host and the
-    original pathname without query. `connect-port`, `connect-target`,
-    `origin-form` and `upgrade` reserve a slot and are recorded (a refused
-    CONNECT as method `CONNECT`, path `/`, its credential class read from the
-    CONNECT's own fields, `Proxy-Authorization` included), or answer the 503
-    `overflow` when the queue is full. A malformed target and a failed TLS
-    handshake are only counted in the relay summary; blind tunnels are neither
-    recorded nor counted. Decrypted connections join the relay's close: they
-    drain with the plain listener's work and are then cut.
+    original pathname without query. An observed-host request reserves its slot
+    at admission and keeps it, and stays in the relay's drain, for its whole
+    lifetime, an upgraded stream's included. When that lifetime ends (complete,
+    early answer, client or upstream abort, failure or the close's cut) exactly
+    one record is written with the final byte counts: `observed` with the
+    upstream status (`101` for an upgrade) once upstream headers arrived, plus
+    `client-closed`, `relay-closing` or a Node error code if it ended early;
+    otherwise `failed` with the local 502 or null and that reason (`UNKNOWN` for
+    an error without a code). An answer that finishes before the upload ends the
+    lifetime right there, on Node and Bun alike, whatever the client does next:
+    a backed-up upload is paused and may never show its end or its client's
+    close. The record is `observed` with the upstream status, and `requestBytes`
+    counts what was read by then. The upload stops; the inner server discards
+    the rest of that body by its own framing, so the client's next request on
+    that connection is read as a request. The upstream connection is destroyed,
+    never pooled: Bun's server ends such a request at its answer and calls it
+    complete with its body short, so a whole upload cannot be told from a cut
+    one. `connect-port`, `connect-target`, `origin-form`, `reserved-path` and
+    `upgrade` reserve a slot and are recorded (a refused CONNECT as method
+    `CONNECT`, path `/`, its credential class read from the CONNECT's own
+    fields, `Proxy-Authorization` included). Every class answers the 503
+    `overflow` without upstream or edge contact when the queue is full. A
+    malformed target and a failed TLS handshake are only counted in the relay
+    summary; blind tunnels are neither recorded nor counted. Decrypted
+    connections join the relay's close: they drain with the plain listener's
+    work and are then cut.
   - **Setup.** `HTTPS_PROXY=http://127.0.0.1:<port>` (never `HTTP_PROXY`),
     `NODE_EXTRA_CA_CERTS=<path>`, `ANTHROPIC_BASE_URL` unset, and none of the
     three domains in `NO_PROXY`; the IDB `claude-gateway` wrapper owns this.
     Only that process trusts the CA.
-  - **Until the permissive machine path and observed hosts land** (Task-1430
-    PR3, PR4): account calls such as `/api/oauth/profile` get the machine path's
-    403, `mcp-proxy.anthropic.com` gets the edge's `unknown-prefix` 404. That
-    refusal's record still names `mcp-proxy.anthropic.com` and the original
-    query-free path, derived only from the fixed `/anthropic-mcp` prefix, not
-    the caller's `Host`. No MCP routing is enabled. `claude.ai`,
-    `downloads.claude.ai`, `www.anthropic.com` and the other named hosts are
-    tunnelled, neither decrypted nor recorded. Interception is for testing
-    devboxes until then, and never enabled in a release without the relay's
-    reporting (ADR-0006).
+  - Interception is never enabled in a release without the relay's reporting
+    (ADR-0006). Turning the flag off (or reverting) is the recovery; no state
+    needs a migration or a wipe.
 - **Machine path.** On a client's model port, a request whose bearer is not
   lease-shaped (three base64url segments whose payload names a lease), or that
   has none, is a machine request. A lease-shaped bearer takes the lease path
@@ -2524,31 +2567,29 @@ writes no answer, no second record and contacts no upstream.
   `forward.ts` `startTrace` copies it into the entry; PR1 sets none); `host`
   (the route's upstream, `""` when none matched), `method`, `path` (pathname
   only, cut to 200 characters) and `pathKey` (on a token-route machine request
-  the matched listed template, else the pathname), both without query text;
-  gateway-originated rows also omit fragment text; `status` (what the client was
-  answered, `null` if none); `outcome` and `reason`; `account` (the registry
-  name, set only once the lease is the client's own or the pool picked it);
-  `session` (the first 12 hex of the session key's SHA-256, provider routes
-  only); `clientCredential` (`none`, `placeholder`, `lease` or `other`, from
-  `authorization`, `x-api-key` and `proxy-authorization`, every repeat, the most
-  sensitive winning; `requestCredential.ts`) and `clientCookie`; `requestBytes`
-  (body bytes read from the client, 0 for a refusal), `responseBytes` (body
-  bytes sent to the client, a refusal's body included, but 0 when HTTP
-  suppresses the body for HEAD, 1xx, 204 or 304), `durationMs` (nonnegative
-  integer elapsed time from a monotonic clock, while `at` remains wall-clock
-  time); `firstSeen`. A forwarded body passes one counting Transform each way,
-  lengths only. An early upstream reply is delivered immediately, but its record
-  waits for upload finish too. A later upload abort/error is failed; a peer that
-  stops reading before upload finish settles that failed lifetime rather than
-  leaving a pending record. No record holds a header value, credential, lease
-  token, query, body or raw session key: the log copies only these fields. For
-  gateway-originated rows, paths in records, text lines and persisted first-seen
-  identities omit everything from the first `?` or `#`.
-- **Relay fragment limitation.** Relay-originated local-refusal and fallback
-  paths still retain raw fragment text in records, text lines and persisted
-  first-seen identities. Task-1435 will address this after PR2b merges, per
-  requester ruling RD-1430-PR3-3. The gateway-originated fragment guarantee
-  above does not cover those relay rows.
+  the matched listed template, else the pathname), both without query or
+  fragment text; `status` (what the client was answered, `null` if none);
+  `outcome` and `reason`; `account` (the registry name, set only once the lease
+  is the client's own or the pool picked it); `session` (the first 12 hex of the
+  session key's SHA-256, provider routes only); `clientCredential` (`none`,
+  `placeholder`, `lease` or `other`, from `authorization`, `x-api-key` and
+  `proxy-authorization`, every repeat, the most sensitive winning;
+  `requestCredential.ts`) and `clientCookie`; `requestBytes` (body bytes read
+  from the client, 0 for a refusal), `responseBytes` (body bytes sent to the
+  client, a refusal's body included, but 0 when HTTP suppresses the body for
+  HEAD, 1xx, 204 or 304), `durationMs` (nonnegative integer elapsed time from a
+  monotonic clock, while `at` remains wall-clock time); `firstSeen`. A forwarded
+  body passes one counting Transform each way, lengths only. An early upstream
+  reply is delivered immediately, but its record waits for upload finish too. A
+  later upload abort/error is failed; a peer that stops reading before upload
+  finish settles that failed lifetime rather than leaving a pending record. No
+  record holds a header value, credential, lease token, query, body or raw
+  session key: the log copies only these fields. For every producer, gateway and
+  relay alike, paths in records, text lines and persisted first-seen identities
+  omit everything from the first `?` or `#`: the relay cuts its reported path
+  there before escaping and capping it (Task-1435), on every ingress and
+  refusal, observed hosts and upgrades included. Only the forwarded target keeps
+  them.
 - **Outcomes.** `forwarded` with the upstream's status; `refused` with the
   refusal case as `reason` (a WebSocket upgrade's is `upgrade`); `failed` with a
   Node error code, `unreachable`, `upstream-truncated` (after the headers,
@@ -2558,7 +2599,9 @@ writes no answer, no second record and contacts no upstream.
   response `finish`; a pipelined reply queued without a socket has sent no
   status. Completed marked refusals keep their reason even at 503; status-only
   5xx mapping applies to adapter answers, not marked gateway refusals.
-  `observed` and `overflow` are the relay's (PR2).
+  `observed` and `overflow` are the relay's: `observed` is an observed-host
+  request (Task-1430 PR4) with the upstream's status, any status, plus a reason
+  only when its lifetime was cut ("Interception" above).
 - **Answered by the edge.** `/mcp` and the listener's refusals have `host` `""`
   and no account or session. A `CONNECT` is recorded `refused` with
   `denied:method` (403), `forbidden` for an inactive client, or

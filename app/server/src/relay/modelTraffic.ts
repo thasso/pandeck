@@ -11,7 +11,8 @@ import {
 import type { Observation, Observations } from "./observations.ts";
 
 export const RELAY_REFUSAL_MARKER = "Pandeck gateway:";
-const HOP_BY_HOP = new Set([
+/** Fixed hop-by-hop fields, never forwarded on any relay ingress. */
+export const HOP_BY_HOP: ReadonlySet<string> = new Set([
   "connection",
   "keep-alive",
   "proxy-connection",
@@ -37,9 +38,71 @@ function forwardable(rawHeaders: readonly string[]): string[] {
   return out;
 }
 
-/** Query-free printable ASCII, bounded after UTF-8 byte escaping. */
+/** Every `name` field of `rawHeaders`, as name/value pairs in order. */
+function fieldsNamed(rawHeaders: readonly string[], name: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i + 1 < rawHeaders.length; i += 2)
+    if (rawHeaders[i]!.toLowerCase() === name)
+      out.push(rawHeaders[i]!, rawHeaders[i + 1]!);
+  return out;
+}
+
+/**
+ * Puts a request's own body framing, as the inner server parsed it, on the
+ * fields it is forwarded with, whatever filtering removed. Without it Node
+ * and Bun write a piped body unframed for the methods they do not chunk by
+ * default (GET, DELETE, OPTIONS, …), and the next hop would parse that body
+ * as further requests (F001/F002).
+ *
+ * - `Transfer-Encoding` is hop-by-hop and dropped with the rest. Both parsers
+ *   admit it on a request only with `chunked` last and never beside a
+ *   `Content-Length`, so the received fields, sent again unchanged, make the
+ *   client chunk-encode the decoded body whatever the method.
+ * - Otherwise the received `Content-Length` frames the body: kept where it
+ *   still is, put back where a filter (a `Connection` nomination) took it.
+ */
+export function withRequestFraming(
+  received: readonly string[],
+  fields: readonly string[],
+): string[] {
+  const codings = fieldsNamed(received, "transfer-encoding");
+  if (codings.length) {
+    const out: string[] = [];
+    for (let i = 0; i + 1 < fields.length; i += 2) {
+      const name = fields[i]!.toLowerCase();
+      if (name !== "content-length" && name !== "transfer-encoding")
+        out.push(fields[i]!, fields[i + 1]!);
+    }
+    out.push(...codings);
+    return out;
+  }
+  const length = fieldsNamed(received, "content-length");
+  if (!length.length || fieldsNamed(fields, "content-length").length)
+    return [...fields];
+  return [...fields, ...length];
+}
+
+/**
+ * C5: a local target under `/relay/` is the relay's own; every ingress,
+ * plain and decrypted, refuses it with this before any upstream contact.
+ */
+export function isReservedPath(target: string | undefined): boolean {
+  return (target ?? "").startsWith("/relay/");
+}
+export const RESERVED_PATH = {
+  status: 403,
+  reason: "reserved-path",
+  errorType: "permission_error",
+  text: "this path is reserved for the relay.",
+} as const;
+
+/**
+ * Query- and fragment-free printable ASCII, bounded after UTF-8 byte
+ * escaping: the target is cut at its first `?` or `#` before anything else
+ * (Task-1435), so neither ever reaches a record.
+ */
 export function observationPath(raw: string): string {
-  const path = raw.split("?", 1)[0] ?? "/";
+  const path = raw.split(/[?#]/, 1)[0] ?? "/";
   if (!path.startsWith("/")) return "/";
   let out = "";
   for (const byte of Buffer.from(path)) {
@@ -98,11 +161,19 @@ export function answerUnrecorded(
   answer: Answer,
   refusal: Pick<LocalRefusal, "status" | "errorType" | "text">,
 ): void {
-  answerLocal(
-    answer,
-    refusal.status,
-    refusalBody(refusal.errorType, refusal.text),
-  );
+  answerMarked(answer, refusal);
+}
+/**
+ * A marked local answer with connection close; returns its body's length.
+ * The caller records it, if at all.
+ */
+export function answerMarked(
+  answer: Answer,
+  refusal: Pick<LocalRefusal, "status" | "errorType" | "text">,
+): number {
+  const body = refusalBody(refusal.errorType, refusal.text);
+  answerLocal(answer, refusal.status, body);
+  return Buffer.byteLength(body);
 }
 function httpStatus(status: number): string {
   return status === 403
@@ -111,13 +182,30 @@ function httpStatus(status: number): string {
       ? "Service Unavailable"
       : status === 501
         ? "Not Implemented"
-        : "Bad Request";
+        : status === 502
+          ? "Bad Gateway"
+          : "Bad Request";
 }
-function errorCode(err: unknown): string {
+/** A bounded Node error code, else `fallback`: never an error's text. */
+export function errorCode(err: unknown, fallback = "edge-unreachable"): string {
   const code = (err as { code?: unknown } | undefined)?.code;
   return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code)
     ? code
-    : "edge-unreachable";
+    : fallback;
+}
+
+/** An admitted request the relay ends itself; see `open`. */
+export interface Lifetime {
+  /** The method as recorded. */
+  method: string;
+  durationMs(): number;
+  /** Records the one final observation; later calls do nothing. */
+  end(
+    value: Pick<
+      Observation,
+      "status" | "outcome" | "reason" | "requestBytes" | "responseBytes"
+    >,
+  ): void;
 }
 
 export interface ForwardTarget extends RequestIdentity {
@@ -219,23 +307,59 @@ export function createModelTraffic(options: {
     });
     req.resume();
   }
+  /**
+   * Admits a request the relay ends itself, an observed host's: while closing
+   * it is the marked 503 `relay-closing` refusal, with a full queue the
+   * counted 503 overflow, and `undefined` is returned for both. Otherwise its
+   * reservation stays held and it stays active (the drain waits for it) until
+   * `end` records it, exactly once, with its final counters. At the drain
+   * deadline `shutdown` is called and must call `end` before it returns.
+   */
+  function open(
+    req: http.IncomingMessage,
+    answer: Answer,
+    target: RequestIdentity,
+    shutdown: () => void,
+  ): Lifetime | undefined {
+    if (closing) {
+      refuse(req, answer, {
+        ...target,
+        status: 503,
+        reason: "relay-closing",
+        errorType: "api_error",
+        text: "the relay is restarting; retry shortly.",
+      });
+      return undefined;
+    }
+    const admission = admit(req, answer, target);
+    if (!admission) return undefined;
+    let ended = false;
+    const entry = (): void => shutdown();
+    active.add(entry);
+    return {
+      method: admission.base.method,
+      durationMs: admission.durationMs,
+      end(value) {
+        if (ended) return;
+        ended = true;
+        admission.record(value);
+        active.delete(entry);
+        if (!active.size) onDrained?.();
+      },
+    };
+  }
   function forward(
     req: http.IncomingMessage,
     res: http.ServerResponse,
     target: ForwardTarget,
   ): void {
     // Strip reserved metadata even when the ingress prepared its own headers.
-    const headers = forwardable(
-      stripReservedHeaders(target.headers ?? req.rawHeaders),
+    const headers = withRequestFraming(
+      req.rawHeaders,
+      forwardable(stripReservedHeaders(target.headers ?? req.rawHeaders)),
     );
-    if (closing || (req.url ?? "").startsWith("/relay/")) {
-      refuse(req, res, {
-        ...target,
-        status: 403,
-        reason: "reserved-path",
-        errorType: "permission_error",
-        text: "this path is reserved for the relay.",
-      });
+    if (closing || isReservedPath(req.url)) {
+      refuse(req, res, { ...target, ...RESERVED_PATH });
       return;
     }
     const admission = admit(req, res, target);
@@ -378,6 +502,7 @@ export function createModelTraffic(options: {
   }
   return {
     forward,
+    open,
     refuse,
     count,
     isClosing() {

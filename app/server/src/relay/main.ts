@@ -14,7 +14,7 @@
  * - `run --state-dir <dir> --port <loopback port> --socket <path>
  *   [--intercept-ca-cert <path>]`: with the flag, loads or makes the
  *   interception CA in the state directory, writes its certificate (never the
- *   key) to the path for `NODE_EXTRA_CA_CERTS`, and decrypts the token hosts
+ *   key) to the path for `NODE_EXTRA_CA_CERTS`, and decrypts the named hosts
  *   (ADR-0006)
  *
  * It runs as Pandeck's server account, so agents can read neither its key

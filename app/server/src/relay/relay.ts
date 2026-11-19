@@ -16,11 +16,13 @@
  * - A Unix socket (0600, the relay's account) for the client protocol: each
  *   accepted connection is piped byte for byte to the edge's client port.
  * - With an interception CA (`--intercept-ca-cert`, Task-1430, ADR-0006), the
- *   model listener also answers CONNECT (`intercept.ts`): it decrypts
- *   `api.anthropic.com` and `mcp-proxy.anthropic.com` and sends their requests
+ *   model listener also answers CONNECT (`intercept.ts`): it decrypts every
+ *   named host on 443. `api.anthropic.com` and `mcp-proxy.anthropic.com` go
  *   to the edge as `/anthropic…` and `/anthropic-mcp…`, the one place where
- *   the relay rewrites a target and `Host`; bodies still pass unread. Other
- *   targets are blind tunnels. Without the CA there is no CONNECT handler.
+ *   the relay rewrites a target and `Host`; every other named host is
+ *   observed: forwarded directly to itself (`observedTraffic.ts`), never with
+ *   the edge's identity. Bodies still pass unread. Other targets are blind
+ *   tunnels. Without the CA there is no CONNECT handler.
  *
  * `enrollRelay` makes the key and the MCP token with `node:crypto`, redeems a
  * one-time code at the edge's enrollment port with the public key and the
@@ -51,6 +53,10 @@ import type { InterceptCa } from "./interceptCa.ts";
 import { createModelTraffic } from "./modelTraffic.ts";
 import { observationTransport } from "./observationTransport.ts";
 import { createObservations } from "./observations.ts";
+import {
+  createObservedTraffic,
+  type ObservedUpstreamSeam,
+} from "./observedTraffic.ts";
 
 const KEY_FILE = "client-key.pem";
 const CERT_FILE = "client-cert.pem";
@@ -578,10 +584,15 @@ export interface RelayOptions {
   /** The client protocol's Unix socket. */
   socketPath: string;
   /**
-   * With it, CONNECT on the model listener decrypts the token hosts
+   * With it, CONNECT on the model listener decrypts the named hosts
    * (`intercept.ts`); without it, CONNECT is closed as before.
    */
   interceptCa?: InterceptCa;
+  /**
+   * Test seam, never set by `relay run`: a local address and trust root for
+   * the observed hosts' direct forwarding (`observedTraffic.ts`).
+   */
+  observedUpstream?: ObservedUpstreamSeam;
   log?: (line: string) => void;
   /** Test seams; production uses 20,000 slots and the documented deadlines. */
   observations?: {
@@ -659,11 +670,21 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
   model.on("connection", track);
   model.on("clientError", (_err, socket) => socket.destroy());
   let port = 0;
+  // The observed hosts' own pool: no TLS option of the edge's link.
+  const observedAgent = new https.Agent({ keepAlive: true });
   const interception = options.interceptCa
     ? attachInterception(model, {
         ca: options.interceptCa,
         relayPort: () => port,
         traffic,
+        observed: createObservedTraffic({
+          traffic,
+          agent: observedAgent,
+          ...(options.observedUpstream
+            ? { upstream: options.observedUpstream }
+            : {}),
+          log,
+        }),
         track,
         log,
       })
@@ -724,10 +745,11 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
     for (const socket of sockets) socket.destroy();
     await observations.close(0);
     agent.destroy();
+    observedAgent.destroy();
     throw err;
   }
   log(
-    `client ${identity.clientId}: model on 127.0.0.1:${port}, client protocol on ${options.socketPath}${interception ? ", intercepting the token hosts" : ""}`,
+    `client ${identity.clientId}: model on 127.0.0.1:${port}, client protocol on ${options.socketPath}${interception ? ", intercepting the named hosts" : ""}`,
   );
   let closePromise: Promise<void> | undefined;
   return {
@@ -752,6 +774,7 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
         await observations.close(options.flushMs ?? 5_000);
         traffic.summary();
         agent.destroy();
+        observedAgent.destroy();
       })();
       return closePromise;
     },

@@ -4,9 +4,10 @@
  * over a raw CONNECT target. Pure; imports only `node:` modules.
  *
  * A target is decrypted only when it is a DNS name (never an IP literal), it
- * equals a named domain or ends in `.` plus one, and its port is 443; of
- * those, only the token hosts until other named hosts are observed (PR4).
- * Every other valid target is a blind tunnel. The target is validated before
+ * equals a named domain or ends in `.` plus one, and its port is 443. A token
+ * host goes to its fixed gateway route; every other named host is observed:
+ * forwarded directly to itself on 443 (`observedTraffic.ts`). Every other
+ * valid target is a blind tunnel. The target is validated before
  * anything is decided, so a query, userinfo, path or bad port never becomes a
  * host that is recorded or logged.
  */
@@ -34,6 +35,8 @@ type ConnectRefusal = "connect-port" | "connect-target";
 export type ConnectDecision =
   /** Decrypt and send to the edge's `route`; `host` is a token host. */
   | { kind: "intercept"; host: string; route: string }
+  /** Decrypt and forward directly to `host:443`; never a token host. */
+  | { kind: "observe"; host: string }
   /** Pipe bytes to `host:port` untouched; `port` is always 1-65535. */
   | { kind: "tunnel"; host: string; port: number }
   /** A named host refused locally; `host` is validated and lower-case. */
@@ -85,7 +88,7 @@ export function connectTarget(authority: string): ConnectDecision {
     const route = TOKEN_HOSTS.get(name);
     return route
       ? { kind: "intercept", host: name, route }
-      : { kind: "tunnel", host: name, port };
+      : { kind: "observe", host: name };
   }
   return portOk ? { kind: "tunnel", host: lower, port } : { kind: "malformed" };
 }

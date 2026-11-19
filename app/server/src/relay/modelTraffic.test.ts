@@ -3,7 +3,11 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import net from "node:net";
 import { afterEach, test } from "vitest";
-import { createModelTraffic } from "./modelTraffic.ts";
+import {
+  createModelTraffic,
+  observationPath,
+  withRequestFraming,
+} from "./modelTraffic.ts";
 import { createObservations, type Delivery } from "./observations.ts";
 
 const cleanups: (() => Promise<void>)[] = [];
@@ -262,4 +266,39 @@ test("gateway forwarding accepts caller-supplied fallback host and original path
   assert.equal(record.path, "/original");
   assert.equal(record.reason, "ECONNREFUSED");
   assert.ok(!JSON.stringify(r.records).includes("SENTINEL"));
+});
+
+test("Task-1435: observationPath cuts at the first ? or #, before escaping and bounding", () => {
+  for (const [raw, expected] of [
+    ["/relay/blocked#SENTINEL", "/relay/blocked"],
+    ["/relay/blocked?q=SENTINEL#F", "/relay/blocked"],
+    ["/relay/blocked#F?q=SENTINEL", "/relay/blocked"],
+    ["/a/b?", "/a/b"],
+    ["/a/b#", "/a/b"],
+    ["#SENTINEL", "/"],
+    ["?SENTINEL", "/"],
+    ["https://claude.ai/x#SENTINEL", "/"],
+    ["/ü#SENTINEL", "/%C3%BC"],
+    [`/${"a".repeat(250)}#SENTINEL`, `/${"a".repeat(199)}`],
+  ])
+    assert.equal(observationPath(raw!), expected, raw);
+});
+
+test("F001 (m2): withRequestFraming puts back the framing a filter took", () => {
+  const chunked = ["Host", "h", "Transfer-Encoding", "chunked"];
+  const sized = ["Host", "h", "Content-Length", "5"];
+  // The received coding goes up again; a Content-Length never goes beside it.
+  assert.deepEqual(withRequestFraming(chunked, ["Host", "h"]), chunked);
+  assert.deepEqual(
+    withRequestFraming(chunked, ["Host", "h", "content-length", "9"]),
+    chunked,
+  );
+  // The received length is kept where it is and put back where it was taken.
+  assert.deepEqual(withRequestFraming(sized, sized), sized);
+  assert.deepEqual(withRequestFraming(sized, ["Host", "h"]), sized);
+  // No framing received, none invented.
+  assert.deepEqual(withRequestFraming(["Host", "h"], ["Host", "h"]), [
+    "Host",
+    "h",
+  ]);
 });

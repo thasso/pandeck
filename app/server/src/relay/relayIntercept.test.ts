@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync, X509Certificate } from "node:crypto";
 import { once } from "node:events";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import type http from "node:http";
 import https from "node:https";
 import net from "node:net";
 import { tmpdir } from "node:os";
@@ -25,8 +26,12 @@ import { edgeTlsFor, issueClientCertificate } from "../gateway/x509.ts";
 import { loadInterceptCa, type InterceptCa } from "./interceptCa.ts";
 import { MACHINE_PLACEHOLDER } from "./credentialClass.ts";
 import { RELAY_REFUSAL_MARKER } from "./modelTraffic.ts";
-import type { Delivery, ObservationBatch } from "./observations.ts";
-import { startRelay, type RunningRelay } from "./relay.ts";
+import type {
+  Delivery,
+  Observation,
+  ObservationBatch,
+} from "./observations.ts";
+import { startRelay, type RelayOptions, type RunningRelay } from "./relay.ts";
 
 const CLIENT_ID = "c_intercept_test";
 const edgeTls = edgeTlsFor(["127.0.0.1"], undefined);
@@ -42,8 +47,11 @@ const clientCertPem = issueClientCertificate(
 ).certificatePem;
 const root = mkdtempSync(join(tmpdir(), "relay-intercept-"));
 let interceptCa: InterceptCa;
+/** PR4: signs the fake observed upstream's leaves; never the relay's CA. */
+let upstreamCa: InterceptCa;
 
 interface Recorded {
+  method: string;
   url: string;
   rawHeaders: string[];
   bodySha256: string;
@@ -59,6 +67,8 @@ interface RecordingEdge {
   requests: Recorded[];
   batches: ObservationBatch[];
   connections: number;
+  /** `/relay/observations` requests that held no relay batch. */
+  foreignIngest: number;
   /** Resolves once a batch holding a record that matches arrives. */
   reported(match: (record: Delivery) => boolean): Promise<Delivery>;
 }
@@ -69,6 +79,7 @@ afterEach(async () => {
 });
 beforeAll(() => {
   interceptCa = loadInterceptCa(mkdtempSync(join(root, "ca-")));
+  upstreamCa = loadInterceptCa(mkdtempSync(join(root, "upstream-ca-")));
 });
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
@@ -79,6 +90,7 @@ async function recordingEdge(): Promise<RecordingEdge> {
     requests: [],
     batches: [],
     connections: 0,
+    foreignIngest: 0,
     reported: (match) =>
       new Promise((resolve) => {
         const check = (): void => {
@@ -106,9 +118,20 @@ async function recordingEdge(): Promise<RecordingEdge> {
         const chunks: Buffer[] = [];
         req.on("data", (chunk: Buffer) => chunks.push(chunk));
         req.on("end", () => {
-          const batch = JSON.parse(
-            Buffer.concat(chunks).toString("utf8"),
-          ) as ObservationBatch;
+          let batch: ObservationBatch | undefined;
+          try {
+            batch = JSON.parse(
+              Buffer.concat(chunks).toString("utf8"),
+            ) as ObservationBatch;
+          } catch {
+            batch = undefined;
+          }
+          if (!Array.isArray(batch?.records) || !batch.records.length) {
+            edge.foreignIngest += 1;
+            res.writeHead(400, { "content-length": 0 });
+            res.end();
+            return;
+          }
           edge.batches.push(batch);
           const body = JSON.stringify({ ack: batch.records.at(-1)!.d });
           res.writeHead(200, {
@@ -122,9 +145,16 @@ async function recordingEdge(): Promise<RecordingEdge> {
       }
       const hash = createHash("sha256");
       req.on("data", (chunk: Buffer) => hash.update(chunk));
+      if (req.url?.endsWith("/early")) {
+        // Answers before reading the upload, which still arrives.
+        res.writeHead(413, { "content-length": 5 });
+        res.end("early");
+      }
       req.on("end", () => {
+        if (req.url?.endsWith("/early")) return;
         const peer = (req.socket as tls.TLSSocket).getPeerCertificate();
         edge.requests.push({
+          method: req.method ?? "",
           url: req.url ?? "",
           rawHeaders: [...req.rawHeaders],
           bodySha256: hash.digest("hex"),
@@ -158,7 +188,13 @@ interface Started {
 }
 
 /** A relay enrolled against the test edge CA, its model port the recorder. */
-async function started(withCa = true): Promise<Started> {
+async function started(
+  withCa = true,
+  extra: Pick<
+    RelayOptions,
+    "observedUpstream" | "observations" | "drainMs" | "flushMs"
+  > = {},
+): Promise<Started> {
   const edge = await recordingEdge();
   const stateDir = mkdtempSync(join(root, "relay-"));
   writeFileSync(join(stateDir, "client-key.pem"), clientKeyPem, {
@@ -182,6 +218,7 @@ async function started(withCa = true): Promise<Started> {
     port: 0,
     socketPath: join(stateDir, "r.sock"),
     ...(withCa ? { interceptCa } : {}),
+    ...extra,
     log: (line) => logs.push(line),
   });
   open.push({ close: () => relay.close() });
@@ -426,6 +463,7 @@ const SHAPES = {
   "connect-target": { status: 403, type: "permission_error" },
   "origin-form": { status: 400, type: "invalid_request_error" },
   upgrade: { status: 501, type: "api_error" },
+  "reserved-path": { status: 403, type: "permission_error" },
   malformed: { status: 400, type: "invalid_request_error" },
 } as const;
 
@@ -586,5 +624,1319 @@ test("summary: TLS failures and malformed targets are counted, classed by the CO
   assert.deepEqual(
     edge.batches.flatMap((batch) => batch.records).filter((r) => "rid" in r),
     [],
+  );
+});
+
+// ---------------------------------------------------------------------------
+// PR4: observed hosts, forwarded directly against a FAKE upstream. The relay's
+// programmatic seam swaps only the address and trust root; the upstream's
+// certificate comes from a separate synthetic CA and names the observed host,
+// so SNI and default verification are still exercised.
+
+interface UpstreamRequest {
+  method: string;
+  url: string;
+  servername: string | false | null;
+  rawHeaders: string[];
+  body: Buffer;
+}
+interface UpstreamUpgrade {
+  url: string;
+  servername: string | false | null;
+  rawHeaders: string[];
+  head: Buffer;
+  received: Buffer[];
+  closed: Promise<void>;
+}
+interface FakeUpstream {
+  port: number;
+  requests: UpstreamRequest[];
+  upgrades: UpstreamUpgrade[];
+  /** Requests whose answer is held (`/hold…`), first one first. */
+  held: { req: http.IncomingMessage; res: http.ServerResponse }[];
+  aborted: number;
+  /** TLS connections accepted: a reused one is not counted again. */
+  connections: number;
+}
+
+const RESPONSE_BODY = Buffer.from(
+  Array.from({ length: 300 }, (_, i) => (i * 7) & 0xff),
+);
+const SERVER_HEAD = Buffer.from([0x00, 0xff, 0x81, 0x02, 0x53, 0x48]);
+const CLIENT_HEAD = Buffer.from([0x82, 0x00, 0x0d, 0x0a, 0xfe]);
+
+async function fakeUpstream(): Promise<FakeUpstream> {
+  const upstream: FakeUpstream = {
+    port: 0,
+    requests: [],
+    upgrades: [],
+    held: [],
+    aborted: 0,
+    connections: 0,
+  };
+  const fallback = upstreamCa.leafFor("claude.ai");
+  const server = https.createServer(
+    {
+      key: fallback.key,
+      cert: fallback.cert,
+      SNICallback: (name, callback) =>
+        callback(null, tls.createSecureContext(upstreamCa.leafFor(name))),
+    },
+    (req, res) => {
+      const servername = (req.socket as tls.TLSSocket).servername;
+      if (req.url === "/reset") {
+        req.socket.destroy();
+        return;
+      }
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("aborted", () => (upstream.aborted += 1));
+      req.on("close", () => {
+        if (!req.complete) upstream.aborted += 1;
+      });
+      if (req.url?.startsWith("/hold")) {
+        upstream.held.push({ req, res });
+        return;
+      }
+      if (req.url === "/early") {
+        // Answers before reading the upload, which still arrives.
+        res.writeHead(413, { "content-length": 5 });
+        res.end("early");
+        return;
+      }
+      if (req.url === "/pressure") {
+        // Answers a little later, never reading the upload: the relay's
+        // upload to it backs up.
+        setTimeout(() => {
+          res.writeHead(413, { "content-length": 5 });
+          res.end("early");
+        }, 50);
+        return;
+      }
+      if (req.url === "/early-close") {
+        // Answers before reading the upload, then closes its connection.
+        res.writeHead(413, { "content-length": 5, connection: "close" });
+        res.end("early");
+        return;
+      }
+      req.on("end", () => {
+        upstream.requests.push({
+          method: req.method ?? "",
+          url: req.url ?? "",
+          servername,
+          rawHeaders: [...req.rawHeaders],
+          body: Buffer.concat(chunks),
+        });
+        res.writeHead(200, [
+          "content-type",
+          "application/octet-stream",
+          "set-cookie",
+          "session=UPSTREAM-COOKIE; Secure; HttpOnly",
+          "set-cookie",
+          "second=2",
+          "x-upstream",
+          "one",
+          "content-length",
+          String(RESPONSE_BODY.length),
+        ]);
+        res.end(RESPONSE_BODY);
+      });
+    },
+  );
+  server.on(
+    "upgrade",
+    (req: http.IncomingMessage, socket: net.Socket, head) => {
+      socket.on("error", () => {});
+      if (req.url === "/no-upgrade") {
+        socket.end(
+          "HTTP/1.1 426 Upgrade Required\r\ncontent-type: text/plain\r\ncontent-length: 4\r\nconnection: close\r\n\r\nnope",
+        );
+        return;
+      }
+      const seen: UpstreamUpgrade = {
+        url: req.url ?? "",
+        servername: (req.socket as tls.TLSSocket).servername,
+        rawHeaders: [...req.rawHeaders],
+        head: Buffer.from(head),
+        received: [],
+        closed: new Promise((resolve) => socket.once("close", () => resolve())),
+      };
+      upstream.upgrades.push(seen);
+      // The 101 and the upstream's first protocol bytes in ONE write.
+      socket.write(
+        Buffer.concat([
+          Buffer.from(
+            "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nKeep-Alive: timeout=5\r\nx-upstream: upgraded\r\n\r\n",
+          ),
+          SERVER_HEAD,
+        ]),
+      );
+      const echo = (chunk: Buffer): void => {
+        seen.received.push(chunk);
+        socket.write(Buffer.concat([Buffer.from("echo:"), chunk]));
+      };
+      if (head.length) echo(head);
+      socket.on("data", echo);
+    },
+  );
+  server.on("secureConnection", () => (upstream.connections += 1));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  upstream.port = (server.address() as net.AddressInfo).port;
+  open.push({
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
+  });
+  return upstream;
+}
+
+interface ObservedRig extends Started {
+  upstream: FakeUpstream;
+  /** Every production destination the relay asked the seam to replace. */
+  destinations: unknown[];
+}
+
+/** A relay whose observed hosts reach the fake upstream; `ca` is its trust. */
+async function observedRig(
+  options: { ca?: string; capacity?: number; drainMs?: number } = {},
+): Promise<ObservedRig> {
+  const upstream = await fakeUpstream();
+  const destinations: unknown[] = [];
+  const rig = await started(true, {
+    observedUpstream: (production) => {
+      assert.ok(Object.isFrozen(production));
+      destinations.push({ ...production });
+      return {
+        host: "127.0.0.1",
+        port: upstream.port,
+        ca: options.ca ?? upstreamCa.certPem,
+      };
+    },
+    ...(options.capacity
+      ? { observations: { capacity: options.capacity } }
+      : {}),
+    drainMs: options.drainMs ?? 200,
+    flushMs: 1000,
+  });
+  return { ...rig, upstream, destinations };
+}
+
+/** A decrypted connection to `host` through the relay, trusting its CA. */
+async function secureTo(relayPort: number, host: string) {
+  const connected = await connectThrough(relayPort, `${host}:443`);
+  assert.equal(connected.status, 200, connected.head);
+  const secure = tls.connect({
+    socket: connected.socket,
+    servername: host,
+    ca: [interceptCa.certPem],
+  });
+  secure.on("error", () => {});
+  await once(secure, "secureConnect");
+  return secure;
+}
+
+/** Reads from `socket` until `done` holds for everything received. */
+function readUntil(
+  socket: net.Socket,
+  done: (received: Buffer) => boolean,
+): Promise<Buffer> {
+  let received = Buffer.alloc(0);
+  return new Promise((resolve, reject) => {
+    const onData = (chunk: Buffer): void => {
+      received = Buffer.concat([received, chunk]);
+      if (!done(received)) return;
+      socket.removeListener("data", onData);
+      socket.removeListener("close", onClose);
+      resolve(received);
+    };
+    const onClose = (): void =>
+      reject(new Error(`Closed early: ${received.toString("latin1")}`));
+    socket.on("data", onData);
+    socket.on("close", onClose);
+  });
+}
+
+const relayRecords = (edge: RecordingEdge): (Observation & { d: number })[] =>
+  edge.batches
+    .flatMap((batch) => batch.records)
+    .filter((record) => !("note" in record)) as (Observation & {
+    d: number;
+  })[];
+
+/** The first relay record matching `match`, once it was reported. */
+async function reportedRecord(
+  edge: RecordingEdge,
+  match: (record: Observation) => boolean = () => true,
+): Promise<Observation> {
+  return (await edge.reported(
+    (delivery) => !("note" in delivery) && match(delivery),
+  )) as Observation;
+}
+
+function production(host: string) {
+  return { host, port: 443, servername: host, rejectUnauthorized: true };
+}
+
+test("PR4: every named host on 443 decrypts; each observed host goes to itself on 443 with SNI = host and default verification, never to the edge", async () => {
+  const r = await observedRig();
+  const hosts = [
+    "anthropic.com",
+    "claude.ai",
+    "claude.com",
+    "downloads.claude.ai",
+    "platform.claude.com",
+    "statsig.anthropic.com",
+  ];
+  for (const host of hosts) {
+    const answer = await decrypted(
+      r.relay.port,
+      host,
+      `GET /ping HTTP/1.1\r\nHost: ${host}\r\nconnection: close\r\n\r\n`,
+    );
+    assert.equal(answer.status, 200, answer.head);
+  }
+  assert.deepEqual(r.destinations, hosts.map(production));
+  assert.deepEqual(
+    r.upstream.requests.map((seen) => seen.servername),
+    hosts,
+    "SNI is the CONNECT host",
+  );
+  assert.deepEqual(r.edge.requests, [], "no observed request at the edge");
+  await r.edge.reported(() => relayRecords(r.edge).length === hosts.length);
+  assert.deepEqual(
+    relayRecords(r.edge).map((record) => [
+      record.host,
+      record.outcome,
+      record.status,
+    ]),
+    hosts.map((host) => [host, "observed", 200]),
+  );
+});
+
+test("PR4: the inner Host never chooses the destination; the CONNECT host does", async () => {
+  const r = await observedRig();
+  const answer = await decrypted(
+    r.relay.port,
+    "claude.ai",
+    "GET /x HTTP/1.1\r\nHost: api.anthropic.com\r\nconnection: close\r\n\r\n",
+  );
+  assert.equal(answer.status, 200);
+  assert.deepEqual(r.destinations, [production("claude.ai")]);
+  assert.equal(r.upstream.requests[0]!.servername, "claude.ai");
+  assert.deepEqual(fieldValues(r.upstream.requests[0]!.rawHeaders, "host"), [
+    "api.anthropic.com",
+  ]);
+  assert.deepEqual(r.edge.requests, []);
+});
+
+test("PR4: an observed request reaches the upstream with its end-to-end fields, credentials, cookies, query and binary body; set-cookie reaches the client; one observed report with classes and lengths only", async () => {
+  const r = await observedRig();
+  const body = Buffer.from(
+    Array.from({ length: 1000 }, (_, i) => (i * 31 + 5) & 0xff),
+  );
+  const head = [
+    "POST /api/oauth/thing?code=QUERY-SENTINEL HTTP/1.1",
+    "Host: claude.ai",
+    "authorization: Bearer CREDENTIAL_SENTINEL",
+    "cookie: SENTINEL=1",
+    "x-repeat: one",
+    "Cookie: second=2",
+    "x-pandeck-relay-id: 00000000000000000000000000000000:1",
+    "X-Pandeck-Other: forged",
+    "x-repeat: two",
+    "Connection: keep-alive, X-Nominated",
+    "x-nominated: hop",
+    "Keep-Alive: timeout=5",
+    "Proxy-Connection: keep-alive",
+    "TE: trailers",
+    "content-type: application/octet-stream",
+    `content-length: ${body.length}`,
+    "",
+    "",
+  ].join("\r\n");
+  const secure = await secureTo(r.relay.port, "claude.ai");
+  const raw = readUntil(secure, (received) => {
+    const end = received.indexOf("\r\n\r\n");
+    return end !== -1 && received.length >= end + 4 + RESPONSE_BODY.length;
+  });
+  secure.write(Buffer.concat([Buffer.from(head), body]));
+  const answer = parseAnswer(await raw);
+  secure.destroy();
+  assert.equal(answer.status, 200, answer.head);
+  assert.deepEqual(answer.body, RESPONSE_BODY);
+  const answered = answer.head.split("\r\n").slice(1);
+  assert.deepEqual(
+    answered.filter((line) => /^set-cookie:/i.test(line)),
+    [
+      "set-cookie: session=UPSTREAM-COOKIE; Secure; HttpOnly",
+      "set-cookie: second=2",
+    ],
+  );
+  assert.ok(answered.includes("x-upstream: one"));
+
+  const [seen] = r.upstream.requests;
+  assert.equal(seen!.url, "/api/oauth/thing?code=QUERY-SENTINEL");
+  assert.equal(seen!.servername, "claude.ai");
+  assert.deepEqual(seen!.body, body);
+  // Everything end-to-end, in order and with repeats; no hop-by-hop field,
+  // nothing `Connection` named, no caller x-pandeck-*. Node adds only its own
+  // `Connection` for the relay's link.
+  const fields = seen!.rawHeaders.filter(
+    (name, i) => i % 2 === 1 || name.toLowerCase() !== "connection",
+  );
+  const pairs: string[] = [];
+  for (let i = 0; i + 1 < fields.length; i += 2)
+    if (fields[i]!.toLowerCase() !== "connection")
+      pairs.push(`${fields[i]}: ${fields[i + 1]}`);
+  assert.deepEqual(pairs, [
+    "Host: claude.ai",
+    "authorization: Bearer CREDENTIAL_SENTINEL",
+    "cookie: SENTINEL=1",
+    "x-repeat: one",
+    "Cookie: second=2",
+    "x-repeat: two",
+    "content-type: application/octet-stream",
+    `content-length: ${body.length}`,
+  ]);
+  assert.deepEqual(fieldValues(seen!.rawHeaders, "connection"), ["keep-alive"]);
+  assert.deepEqual(r.edge.requests, []);
+
+  const record = await reportedRecord(
+    r.edge,
+    (delivery) => delivery.host === "claude.ai",
+  );
+  assert.deepEqual(
+    {
+      ...record,
+      rid: undefined,
+      at: undefined,
+      durationMs: undefined,
+      d: undefined,
+    },
+    {
+      rid: undefined,
+      at: undefined,
+      durationMs: undefined,
+      d: undefined,
+      host: "claude.ai",
+      method: "POST",
+      path: "/api/oauth/thing",
+      status: 200,
+      outcome: "observed",
+      clientCredential: "other",
+      clientCookie: true,
+      requestBytes: body.length,
+      responseBytes: RESPONSE_BODY.length,
+    },
+  );
+  assert.match(record.rid, /^[0-9a-f]{32}:[1-9][0-9]*$/);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(relayRecords(r.edge).length, 1, "reported once");
+  const surfaces = JSON.stringify(r.edge.batches) + r.logs.join("\n");
+  for (const sentinel of ["QUERY-SENTINEL", "SENTINEL", "UPSTREAM-COOKIE"])
+    assert.ok(!surfaces.includes(sentinel), sentinel);
+});
+
+test("PR4: an upgrade is piped after the upstream's 101 with both buffered heads first, bidirectional binary bytes, and one final report only when the stream ends", async () => {
+  const r = await observedRig();
+  const secure = await secureTo(r.relay.port, "claude.ai");
+  const request = Buffer.concat([
+    Buffer.from(
+      [
+        "GET /api/ws?token=QUERY-SENTINEL HTTP/1.1",
+        "Host: claude.ai",
+        "Upgrade: websocket",
+        "Connection: Upgrade, X-Nominated",
+        "x-nominated: hop",
+        "Keep-Alive: timeout=5",
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+        "Sec-WebSocket-Version: 13",
+        "cookie: SENTINEL=1",
+        "x-pandeck-relay-id: forged",
+        "",
+        "",
+      ].join("\r\n"),
+    ),
+    CLIENT_HEAD,
+  ]);
+  const echoHead = Buffer.concat([Buffer.from("echo:"), CLIENT_HEAD]);
+  const first = readUntil(secure, (received) => {
+    const end = received.indexOf("\r\n\r\n");
+    return (
+      end !== -1 &&
+      received.length >= end + 4 + SERVER_HEAD.length + echoHead.length
+    );
+  });
+  secure.write(request);
+  const opened = await first;
+  const end = opened.indexOf("\r\n\r\n");
+  const head = opened.subarray(0, end).toString("latin1").split("\r\n");
+  assert.equal(head[0], "HTTP/1.1 101 Switching Protocols");
+  assert.deepEqual(head.slice(1), [
+    "Upgrade: websocket",
+    "x-upstream: upgraded",
+    "Connection: Upgrade",
+  ]);
+  assert.deepEqual(
+    opened.subarray(end + 4),
+    Buffer.concat([SERVER_HEAD, echoHead]),
+    "the upstream's head first, then the echo of the client's",
+  );
+  const [upgrade] = r.upstream.upgrades;
+  assert.equal(upgrade!.url, "/api/ws?token=QUERY-SENTINEL");
+  assert.equal(upgrade!.servername, "claude.ai");
+  assert.deepEqual(fieldValues(upgrade!.rawHeaders, "upgrade"), ["websocket"]);
+  assert.deepEqual(fieldValues(upgrade!.rawHeaders, "connection"), ["Upgrade"]);
+  assert.deepEqual(fieldValues(upgrade!.rawHeaders, "x-nominated"), []);
+  assert.deepEqual(fieldValues(upgrade!.rawHeaders, "keep-alive"), []);
+  assert.deepEqual(fieldValues(upgrade!.rawHeaders, "x-pandeck-relay-id"), []);
+  assert.deepEqual(fieldValues(upgrade!.rawHeaders, "cookie"), ["SENTINEL=1"]);
+  assert.deepEqual(Buffer.concat(upgrade!.received), CLIENT_HEAD);
+
+  const more = Buffer.from(Array.from({ length: 256 }, (_, i) => i));
+  const echoed = readUntil(
+    secure,
+    (received) => received.length >= 5 + more.length,
+  );
+  secure.write(more);
+  assert.deepEqual(await echoed, Buffer.concat([Buffer.from("echo:"), more]));
+  // Still open: nothing recorded at the 101.
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.deepEqual(relayRecords(r.edge), []);
+
+  secure.end();
+  await upgrade!.closed;
+  const record = await reportedRecord(r.edge);
+  assert.equal(record.host, "claude.ai");
+  assert.equal(record.method, "GET");
+  assert.equal(record.path, "/api/ws");
+  assert.equal(record.status, 101);
+  assert.equal(record.outcome, "observed");
+  assert.equal(record.reason, undefined);
+  assert.equal(record.clientCookie, true);
+  assert.equal(record.requestBytes, CLIENT_HEAD.length + more.length);
+  assert.equal(
+    record.responseBytes,
+    SERVER_HEAD.length + echoHead.length + 5 + more.length,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(relayRecords(r.edge).length, 1);
+  const surfaces = JSON.stringify(r.edge.batches) + r.logs.join("\n");
+  assert.ok(!surfaces.includes("SENTINEL"));
+});
+
+test("PR4: an upgrade the upstream does not accept is an ordinary answer, then the connection closes; one observed report", async () => {
+  const r = await observedRig();
+  const answer = await decrypted(
+    r.relay.port,
+    "claude.ai",
+    "GET /no-upgrade HTTP/1.1\r\nHost: claude.ai\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n",
+  );
+  assert.equal(answer.status, 426, answer.head);
+  assert.equal(answer.body.toString(), "nope");
+  assert.match(answer.head, /\r\nConnection: close/);
+  const record = await reportedRecord(r.edge);
+  assert.equal(record.status, 426);
+  assert.equal(record.outcome, "observed");
+  assert.equal(record.responseBytes, 4);
+});
+
+test("PR4: an upstream whose certificate the default verification refuses is the relay's marked 502, one failed report with its code, for requests and upgrades", async () => {
+  // Trusting a different CA than the one that signed the upstream's leaf.
+  const r = await observedRig({ ca: interceptCa.certPem });
+  const answers = [
+    await decrypted(
+      r.relay.port,
+      "claude.ai",
+      "GET /x?q=SENTINEL HTTP/1.1\r\nHost: claude.ai\r\nconnection: close\r\n\r\n",
+    ),
+    await decrypted(
+      r.relay.port,
+      "claude.com",
+      "GET /ws HTTP/1.1\r\nHost: claude.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n",
+    ),
+  ];
+  for (const answer of answers) {
+    assert.equal(answer.status, 502, answer.head);
+    assert.ok(isGatewayRefusal(answer.body.toString()));
+  }
+  assert.deepEqual(r.upstream.requests, []);
+  assert.deepEqual(r.upstream.upgrades, []);
+  assert.deepEqual(r.destinations, [
+    production("claude.ai"),
+    production("claude.com"),
+  ]);
+  await r.edge.reported(() => relayRecords(r.edge).length === 2);
+  for (const [record, answer] of relayRecords(r.edge).map(
+    (record, i) => [record, answers[i]!] as const,
+  )) {
+    assert.equal(record.outcome, "failed");
+    assert.equal(record.status, 502);
+    assert.match(record.reason ?? "", /^[A-Z][A-Z0-9_]{0,63}$/);
+    assert.equal(record.responseBytes, answer.body.length);
+  }
+  assert.ok(!r.logs.join("\n").includes("SENTINEL"));
+});
+
+test("PR4: a client gone mid-upload aborts the upstream request; one failed client-closed report with measured lengths", async () => {
+  const r = await observedRig();
+  const secure = await secureTo(r.relay.port, "claude.ai");
+  secure.write(
+    "POST /hold HTTP/1.1\r\nHost: claude.ai\r\ncontent-length: 1000\r\n\r\n0123456789",
+  );
+  const deadline = Date.now() + 5000;
+  while (!r.upstream.held.length && Date.now() < deadline)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(r.upstream.held.length, 1);
+  secure.destroy();
+  const record = await reportedRecord(r.edge);
+  assert.equal(record.outcome, "failed");
+  assert.equal(record.status, null);
+  assert.equal(record.reason, "client-closed");
+  assert.equal(record.requestBytes, 10);
+  assert.equal(record.responseBytes, 0);
+  while (!r.upstream.aborted && Date.now() < deadline)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.ok(r.upstream.aborted >= 1, "the upstream request was cut");
+});
+
+test("PR4: no lifetime strands its reservation: after success, reset, abort, refused and accepted upgrades, two concurrent upgrades still fit the two free slots", async () => {
+  const r = await observedRig({ capacity: 3 });
+  const settled = async (count: number): Promise<void> => {
+    await r.edge.reported(() => relayRecords(r.edge).length === count);
+    // The acknowledgement frees the record's slot just after the batch.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  };
+  const get = (path: string) =>
+    decrypted(
+      r.relay.port,
+      "claude.ai",
+      `GET ${path} HTTP/1.1\r\nHost: claude.ai\r\nconnection: close\r\n\r\n`,
+    );
+  assert.equal((await get("/ok")).status, 200);
+  await settled(1);
+  assert.equal((await get("/reset")).status, 502);
+  await settled(2);
+  const aborted = await secureTo(r.relay.port, "claude.ai");
+  aborted.write(
+    "POST /hold HTTP/1.1\r\nHost: claude.ai\r\ncontent-length: 5\r\n\r\nab",
+  );
+  const deadline = Date.now() + 5000;
+  while (!r.upstream.held.length && Date.now() < deadline)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  aborted.destroy();
+  await settled(3);
+  assert.equal(
+    (
+      await decrypted(
+        r.relay.port,
+        "claude.ai",
+        "GET /no-upgrade HTTP/1.1\r\nHost: claude.ai\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n",
+      )
+    ).status,
+    426,
+  );
+  await settled(4);
+  const upgraded = async () => {
+    const secure = await secureTo(r.relay.port, "claude.ai");
+    const opened = readUntil(secure, (received) => {
+      const end = received.indexOf("\r\n\r\n");
+      return end !== -1 && received.length >= end + 4 + SERVER_HEAD.length;
+    });
+    secure.write(
+      "GET /ws HTTP/1.1\r\nHost: claude.ai\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n",
+    );
+    assert.match((await opened).toString("latin1"), /^HTTP\/1\.1 101 /);
+    return secure;
+  };
+  const one = await upgraded();
+  one.destroy();
+  await settled(5);
+  const both = [await upgraded(), await upgraded()];
+  for (const secure of both) secure.destroy();
+  await settled(7);
+  assert.deepEqual(
+    relayRecords(r.edge).map((record) => [record.status, record.outcome]),
+    [
+      [200, "observed"],
+      [502, "failed"],
+      [null, "failed"],
+      [426, "observed"],
+      [101, "observed"],
+      [101, "observed"],
+      [101, "observed"],
+    ],
+  );
+  assert.equal(r.logs.filter((line) => line.includes("overflow")).length, 0);
+});
+
+test("PR4: close with an open upgraded stream and a held request ends both at the drain deadline, each reported once as relay-closing", async () => {
+  const r = await observedRig({ drainMs: 150 });
+  const stream = await secureTo(r.relay.port, "claude.ai");
+  const opened = readUntil(stream, (received) => {
+    const end = received.indexOf("\r\n\r\n");
+    return end !== -1 && received.length >= end + 4 + SERVER_HEAD.length;
+  });
+  stream.write(
+    "GET /ws HTTP/1.1\r\nHost: claude.ai\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n",
+  );
+  await opened;
+  const held = await secureTo(r.relay.port, "downloads.claude.ai");
+  held.write("GET /hold HTTP/1.1\r\nHost: downloads.claude.ai\r\n\r\n");
+  const deadline = Date.now() + 5000;
+  while (!r.upstream.held.length && Date.now() < deadline)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  const streamClosed = once(stream, "close");
+  const heldClosed = once(held, "close");
+  const started = Date.now();
+  await r.relay.close();
+  assert.ok(Date.now() - started < 3000, "close is bounded");
+  await Promise.all([streamClosed, heldClosed, r.upstream.upgrades[0]!.closed]);
+  const records = relayRecords(r.edge);
+  assert.deepEqual(
+    records
+      .map((record) => [
+        record.host,
+        record.status,
+        record.outcome,
+        record.reason,
+      ])
+      .sort(),
+    [
+      ["claude.ai", 101, "observed", "relay-closing"],
+      ["downloads.claude.ai", null, "failed", "relay-closing"],
+    ],
+  );
+  assert.equal(new Set(records.map((record) => record.rid)).size, 2);
+  assert.ok(!r.logs.some((line) => line.includes("not delivered")));
+});
+
+test("PR4: an early upstream answer reaches the client at once and settles its record there, counting the bytes read by then; the rest of the upload changes nothing", async () => {
+  const r = await observedRig();
+  const secure = await secureTo(r.relay.port, "claude.ai");
+  const answered = readUntil(secure, (received) => {
+    const end = received.indexOf("\r\n\r\n");
+    return end !== -1 && received.length >= end + 4 + 5;
+  });
+  secure.write(
+    "POST /early HTTP/1.1\r\nHost: claude.ai\r\ncontent-length: 20\r\n\r\n0123456789",
+  );
+  const answer = parseAnswer(await answered);
+  assert.equal(answer.status, 413);
+  assert.equal(answer.body.toString(), "early");
+  // The upload is still open: the record does not wait for it (F004).
+  const record = await reportedRecord(r.edge);
+  assert.equal(record.status, 413);
+  assert.equal(record.outcome, "observed");
+  assert.equal(record.reason, undefined);
+  assert.equal(record.requestBytes, 10);
+  assert.equal(record.responseBytes, 5);
+  secure.write("abcdefghij");
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  secure.destroy();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(relayRecords(r.edge).length, 1);
+});
+
+/**
+ * A body that, written unframed, is a whole reserved request followed by
+ * binary bytes: what F001/F002 let reach the next hop as a second request.
+ */
+const SMUGGLED = Buffer.concat([
+  Buffer.from(
+    "POST /relay/observations HTTP/1.1\r\nHost: 127.0.0.1\r\ncontent-type: application/json\r\ncontent-length: 2\r\n\r\n{}",
+  ),
+  Buffer.from([0x00, 0xff, 0x0d, 0x0a, 0x30, 0x0d, 0x0a, 0x0d, 0x0a, 0x81]),
+]);
+
+/** A raw request with `body` in two chunks, then the connection closes. */
+function chunkedRequest(
+  method: string,
+  path: string,
+  host: string,
+  body: Buffer,
+): Buffer {
+  const chunk = (part: Buffer): Buffer =>
+    Buffer.concat([
+      Buffer.from(`${part.length.toString(16)}\r\n`),
+      part,
+      Buffer.from("\r\n"),
+    ]);
+  const half = Math.floor(body.length / 2);
+  return Buffer.concat([
+    Buffer.from(
+      `${method} ${path} HTTP/1.1\r\nHost: ${host}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n`,
+    ),
+    chunk(body.subarray(0, half)),
+    chunk(body.subarray(half)),
+    Buffer.from("0\r\n\r\n"),
+  ]);
+}
+
+/** One raw HTTP/1.1 exchange on the relay's plain model listener. */
+async function plain(relayPort: number, request: Buffer): Promise<HttpAnswer> {
+  const socket = net.connect(relayPort, "127.0.0.1");
+  const answer = readToClose(socket);
+  socket.write(request);
+  return parseAnswer(await answer);
+}
+
+const sha256 = (bytes: Buffer): string =>
+  createHash("sha256").update(bytes).digest("hex");
+
+test("F001/F002: a chunked GET or DELETE body is sent chunked on the plain, token and observed ingresses: one request each, the same bytes, none of them parsed as a request", async () => {
+  const r = await observedRig();
+  for (const method of ["GET", "DELETE"]) {
+    const viaPlain = await plain(
+      r.relay.port,
+      chunkedRequest(method, "/v1/thing", "127.0.0.1", SMUGGLED),
+    );
+    assert.equal(viaPlain.status, 200, viaPlain.head);
+    const viaToken = await decrypted(
+      r.relay.port,
+      "api.anthropic.com",
+      chunkedRequest(method, "/v1/thing", "api.anthropic.com", SMUGGLED),
+    );
+    assert.equal(viaToken.status, 200, viaToken.head);
+    const viaObserved = await decrypted(
+      r.relay.port,
+      "claude.ai",
+      chunkedRequest(method, "/api/thing", "claude.ai", SMUGGLED),
+    );
+    assert.equal(viaObserved.status, 200, viaObserved.head);
+  }
+  await reportedRecord(
+    r.edge,
+    (record) => record.host === "claude.ai" && record.method === "DELETE",
+  );
+  // The edge: exactly the four requests, each re-chunked with its own rid.
+  assert.deepEqual(
+    r.edge.requests.map((seen) => [seen.method, seen.url]),
+    [
+      ["GET", "/v1/thing"],
+      ["GET", "/anthropic/v1/thing"],
+      ["DELETE", "/v1/thing"],
+      ["DELETE", "/anthropic/v1/thing"],
+    ],
+  );
+  for (const seen of r.edge.requests) {
+    assert.equal(seen.bodySha256, sha256(SMUGGLED), seen.url);
+    assert.deepEqual(fieldValues(seen.rawHeaders, "transfer-encoding"), [
+      "chunked",
+    ]);
+    assert.deepEqual(fieldValues(seen.rawHeaders, "content-length"), []);
+    assert.equal(fieldValues(seen.rawHeaders, "x-pandeck-relay-id").length, 1);
+  }
+  assert.equal(r.edge.foreignIngest, 0, "the reserved ingest was never hit");
+  // The observed upstream: exactly the two requests, the same bytes.
+  assert.deepEqual(
+    r.upstream.requests.map((seen) => [
+      seen.method,
+      seen.url,
+      seen.body.equals(SMUGGLED),
+      fieldValues(seen.rawHeaders, "transfer-encoding"),
+    ]),
+    [
+      ["GET", "/api/thing", true, ["chunked"]],
+      ["DELETE", "/api/thing", true, ["chunked"]],
+    ],
+  );
+  // The edge records the forwarded ones; the relay each observed one, once,
+  // with the whole body counted.
+  assert.deepEqual(
+    relayRecords(r.edge).map((record) => [
+      record.host,
+      record.method,
+      record.path,
+      record.status,
+      record.requestBytes,
+    ]),
+    [
+      ["claude.ai", "GET", "/api/thing", 200, SMUGGLED.length],
+      ["claude.ai", "DELETE", "/api/thing", 200, SMUGGLED.length],
+    ],
+  );
+});
+
+const upgradeTo = (host: string, path: string): string =>
+  `GET ${path} HTTP/1.1\r\nHost: ${host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n`;
+
+test("F001 audit: an observed upgrade with a chunked body goes up as its head alone; the body is never a second request", async () => {
+  const r = await observedRig();
+  const secure = await secureTo(r.relay.port, "claude.ai");
+  const opened = readUntil(secure, (received) => {
+    const end = received.indexOf("\r\n\r\n");
+    return end !== -1 && received.length >= end + 4 + SERVER_HEAD.length;
+  });
+  const request = chunkedRequest("GET", "/ws", "claude.ai", SMUGGLED)
+    .toString("latin1")
+    .replace(
+      "Connection: close\r\n",
+      "Upgrade: websocket\r\nConnection: Upgrade\r\n",
+    );
+  secure.write(Buffer.from(request, "latin1"));
+  assert.match((await opened).toString("latin1"), /^HTTP\/1\.1 101 /);
+  secure.destroy();
+  await reportedRecord(r.edge, (record) => record.status === 101);
+  assert.equal(r.upstream.upgrades.length, 1);
+  assert.deepEqual(
+    fieldValues(r.upstream.upgrades[0]!.rawHeaders, "transfer-encoding"),
+    [],
+  );
+  assert.deepEqual(r.upstream.requests, [], "no request beside the upgrade");
+});
+
+test("F003: a /relay/ target on an observed host, request or upgrade, and on a token host's upgrade is the marked 403 reserved-path before any upstream contact; one refused record each", async () => {
+  const r = await observedRig();
+  assertMarked(
+    await decrypted(
+      r.relay.port,
+      "claude.ai",
+      "GET /relay/observations HTTP/1.1\r\nHost: claude.ai\r\nconnection: close\r\n\r\n",
+    ),
+    "reserved-path",
+  );
+  assertMarked(
+    await decrypted(
+      r.relay.port,
+      "platform.claude.com",
+      "POST /relay/x?q=1 HTTP/1.1\r\nHost: platform.claude.com\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}",
+    ),
+    "reserved-path",
+  );
+  assertMarked(
+    await decrypted(
+      r.relay.port,
+      "claude.ai",
+      upgradeTo("claude.ai", "/relay/ws"),
+    ),
+    "reserved-path",
+  );
+  assertMarked(
+    await decrypted(
+      r.relay.port,
+      "api.anthropic.com",
+      upgradeTo("api.anthropic.com", "/relay/ws"),
+    ),
+    "reserved-path",
+  );
+  await reportedRecord(r.edge, (record) => record.host === "api.anthropic.com");
+  assert.deepEqual(r.destinations, [], "no observed destination was dialled");
+  assert.deepEqual(r.upstream.requests, []);
+  assert.deepEqual(r.upstream.upgrades, []);
+  assert.deepEqual(r.edge.requests, []);
+  assert.deepEqual(
+    relayRecords(r.edge).map((record) => [
+      record.host,
+      record.path,
+      record.status,
+      record.outcome,
+      record.reason,
+    ]),
+    [
+      ["claude.ai", "/relay/observations", 403, "refused", "reserved-path"],
+      ["platform.claude.com", "/relay/x", 403, "refused", "reserved-path"],
+      ["claude.ai", "/relay/ws", 403, "refused", "reserved-path"],
+      ["api.anthropic.com", "/relay/ws", 403, "refused", "reserved-path"],
+    ],
+  );
+});
+
+test("F003: with every reporting slot held, an observed /relay/ target is the counted overflow 503, as on the shared forward, and dials nothing", async () => {
+  const r = await observedRig({ capacity: 3 });
+  const holders = [
+    await secureTo(r.relay.port, "claude.ai"),
+    await secureTo(r.relay.port, "claude.ai"),
+  ];
+  for (const [i, secure] of holders.entries())
+    secure.write(
+      `GET /hold${i} HTTP/1.1\r\nHost: claude.ai\r\nconnection: close\r\n\r\n`,
+    );
+  const deadline = Date.now() + 5000;
+  while (r.upstream.held.length < 2 && Date.now() < deadline)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(r.upstream.held.length, 2);
+  const refused = await decrypted(
+    r.relay.port,
+    "claude.ai",
+    "GET /relay/observations HTTP/1.1\r\nHost: claude.ai\r\nconnection: close\r\n\r\n",
+  );
+  assert.equal(refused.status, 503, refused.head);
+  assert.ok(isGatewayRefusal(refused.body.toString("utf8")));
+  assert.equal(r.destinations.length, 2, "only the held requests dialled");
+  for (const { res } of r.upstream.held) res.end();
+  for (const secure of holders) secure.destroy();
+  const overflow = await r.edge.reported(
+    (record) => "note" in record && record.note === "overflow",
+  );
+  assert.ok("note" in overflow && overflow.note === "overflow");
+  assert.equal(overflow.count, 1);
+});
+
+/** A request the next hop would parse as a further one if sent unframed. */
+const FURTHER = Buffer.from(
+  "GET /smuggled-unrecorded HTTP/1.1\r\nHost: claude.ai\r\n\r\n",
+);
+
+/** A request whose `Connection` field nominates its framing and `Host`. */
+function nominatingRequest(method: string, path: string, host: string): Buffer {
+  return Buffer.concat([
+    Buffer.from(
+      `${method} ${path} HTTP/1.1\r\nHost: ${host}\r\nConnection: content-length, host, transfer-encoding, close\r\nContent-Length: ${FURTHER.length}\r\n\r\n`,
+    ),
+    FURTHER,
+  ]);
+}
+
+test("F001 (m2): a Connection field never removes an observed request's Content-Length or Host; GET and POST go up framed, one request and one record each", async () => {
+  const r = await observedRig();
+  for (const method of ["GET", "POST"]) {
+    const answer = await decrypted(
+      r.relay.port,
+      "claude.ai",
+      nominatingRequest(method, "/api/thing", "inner.claude.ai"),
+    );
+    assert.equal(answer.status, 200, answer.head);
+  }
+  await reportedRecord(r.edge, (record) => record.method === "POST");
+  assert.deepEqual(
+    r.upstream.requests.map((seen) => [
+      seen.method,
+      seen.url,
+      seen.body.equals(FURTHER),
+      fieldValues(seen.rawHeaders, "content-length"),
+      fieldValues(seen.rawHeaders, "host"),
+    ]),
+    [
+      [
+        "GET",
+        "/api/thing",
+        true,
+        [String(FURTHER.length)],
+        ["inner.claude.ai"],
+      ],
+      [
+        "POST",
+        "/api/thing",
+        true,
+        [String(FURTHER.length)],
+        ["inner.claude.ai"],
+      ],
+    ],
+  );
+  assert.deepEqual(
+    relayRecords(r.edge).map((record) => [
+      record.method,
+      record.path,
+      record.status,
+      record.requestBytes,
+    ]),
+    [
+      ["GET", "/api/thing", 200, FURTHER.length],
+      ["POST", "/api/thing", 200, FURTHER.length],
+    ],
+  );
+});
+
+test("F001 (m2) sibling: the plain and token forward keep a Connection-nominated Content-Length; one edge request each with the same body", async () => {
+  const r = await observedRig();
+  for (const method of ["GET", "DELETE"]) {
+    const viaPlain = await plain(
+      r.relay.port,
+      nominatingRequest(method, "/v1/thing", "127.0.0.1"),
+    );
+    assert.equal(viaPlain.status, 200, viaPlain.head);
+    const viaToken = await decrypted(
+      r.relay.port,
+      "api.anthropic.com",
+      nominatingRequest(method, "/v1/thing", "api.anthropic.com"),
+    );
+    assert.equal(viaToken.status, 200, viaToken.head);
+  }
+  assert.deepEqual(
+    r.edge.requests.map((seen) => [
+      seen.method,
+      seen.url,
+      seen.bodySha256 === sha256(FURTHER),
+      fieldValues(seen.rawHeaders, "content-length"),
+    ]),
+    [
+      ["GET", "/v1/thing", true, [String(FURTHER.length)]],
+      ["GET", "/anthropic/v1/thing", true, [String(FURTHER.length)]],
+      ["DELETE", "/v1/thing", true, [String(FURTHER.length)]],
+      ["DELETE", "/anthropic/v1/thing", true, [String(FURTHER.length)]],
+    ],
+  );
+  assert.equal(r.edge.foreignIngest, 0);
+});
+
+test("F001 (m2) audit: an observed upgrade head goes up without a Content-Length or Transfer-Encoding, nominated or not; its body is never a request", async () => {
+  const r = await observedRig();
+  for (const connection of ["Upgrade", "Upgrade, content-length"]) {
+    const secure = await secureTo(r.relay.port, "claude.ai");
+    const opened = readUntil(secure, (received) => {
+      const end = received.indexOf("\r\n\r\n");
+      return end !== -1 && received.length >= end + 4 + SERVER_HEAD.length;
+    });
+    secure.write(
+      Buffer.concat([
+        Buffer.from(
+          `GET /ws HTTP/1.1\r\nHost: claude.ai\r\nUpgrade: websocket\r\nConnection: ${connection}\r\nContent-Length: ${FURTHER.length}\r\n\r\n`,
+        ),
+        FURTHER,
+      ]),
+    );
+    assert.match((await opened).toString("latin1"), /^HTTP\/1\.1 101 /);
+    secure.destroy();
+  }
+  await r.edge.reported(
+    () =>
+      relayRecords(r.edge).filter((record) => record.status === 101).length ===
+      2,
+  );
+  assert.equal(r.upstream.upgrades.length, 2);
+  for (const upgrade of r.upstream.upgrades) {
+    assert.deepEqual(fieldValues(upgrade.rawHeaders, "content-length"), []);
+    assert.deepEqual(fieldValues(upgrade.rawHeaders, "transfer-encoding"), []);
+  }
+  assert.deepEqual(r.upstream.requests, [], "no request beside the upgrades");
+});
+
+/** Fails after `ms` unless `promise` settles first. */
+async function within<T>(promise: Promise<T>, ms: number, what: string) {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`no ${what}`)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Sends a head and part of its body, then reads the whole early answer. */
+async function earlyAnswer(
+  socket: net.Socket,
+  head: string,
+  part: string,
+): Promise<HttpAnswer> {
+  const answered = readUntil(socket, (received) => {
+    const end = received.indexOf("\r\n\r\n");
+    return end !== -1 && received.length >= end + 4 + 5;
+  });
+  socket.write(head + part);
+  const answer = parseAnswer(await answered);
+  assert.equal(answer.status, 413, answer.head);
+  assert.equal(answer.body.toString(), "early");
+  return answer;
+}
+
+const settledSlot = (): Promise<void> =>
+  // The acknowledgement frees the record's slot just after the batch.
+  new Promise((resolve) => setTimeout(resolve, 50));
+
+test("F004 (A): an early answer whose upstream then closes settles at once, its upload finished or not; the slot is free for the next request", async () => {
+  const r = await observedRig({ capacity: 2 });
+  const secure = await secureTo(r.relay.port, "claude.ai");
+  await earlyAnswer(
+    secure,
+    "POST /early-close HTTP/1.1\r\nHost: claude.ai\r\ncontent-length: 20\r\n\r\n",
+    "0123456789",
+  );
+  secure.write("abcdefghij");
+  const record = await within(
+    reportedRecord(r.edge, (record) => record.path === "/early-close"),
+    2000,
+    "record for the early-closed request",
+  );
+  assert.equal(record.status, 413);
+  assert.equal(record.outcome, "observed");
+  assert.equal(record.reason, undefined);
+  assert.equal(record.requestBytes, 10);
+  assert.equal(record.responseBytes, 5);
+  await settledSlot();
+  const next = await decrypted(
+    r.relay.port,
+    "claude.ai",
+    "GET /next HTTP/1.1\r\nHost: claude.ai\r\nconnection: close\r\n\r\n",
+  );
+  assert.equal(next.status, 200, next.head);
+  secure.destroy();
+  await reportedRecord(r.edge, (record) => record.path === "/next");
+  assert.equal(
+    relayRecords(r.edge).filter((record) => record.path === "/early-close")
+      .length,
+    1,
+  );
+});
+
+test("F004 (B): an early answer, then the client gone mid-upload: recorded at the answer's finish, its slot and drain entry free", async () => {
+  const r = await observedRig({ capacity: 2 });
+  const secure = await secureTo(r.relay.port, "claude.ai");
+  await earlyAnswer(
+    secure,
+    "POST /early HTTP/1.1\r\nHost: claude.ai\r\ncontent-length: 1000\r\n\r\n",
+    "abc",
+  );
+  secure.destroy();
+  const record = await within(
+    reportedRecord(r.edge, (record) => record.path === "/early"),
+    2000,
+    "record for the abandoned upload",
+  );
+  assert.deepEqual(
+    [
+      record.status,
+      record.outcome,
+      record.reason,
+      record.requestBytes,
+      record.responseBytes,
+    ],
+    [413, "observed", undefined, 3, 5],
+  );
+  await settledSlot();
+  const next = await decrypted(
+    r.relay.port,
+    "claude.ai",
+    "GET /next HTTP/1.1\r\nHost: claude.ai\r\nconnection: close\r\n\r\n",
+  );
+  assert.equal(next.status, 200, next.head);
+  const after = await reportedRecord(
+    r.edge,
+    (record) => record.path === "/next",
+  );
+  assert.equal(after.status, 200);
+  // Nothing is left for the drain: the close does not wait out its deadline.
+  const started = Date.now();
+  await r.relay.close();
+  assert.ok(Date.now() - started < 150, "the drain had nothing to wait for");
+  assert.equal(relayRecords(r.edge).length, 2);
+});
+
+test("F005: an early-answered upstream connection never returns to the pool; the next request to the host gets its own answer and record", async () => {
+  const r = await observedRig();
+  const secure = await secureTo(r.relay.port, "claude.ai");
+  await earlyAnswer(
+    secure,
+    "POST /early HTTP/1.1\r\nHost: claude.ai\r\ncontent-length: 20\r\n\r\n",
+    "0123456789",
+  );
+  secure.write("abcdefghij");
+  const early = await reportedRecord(
+    r.edge,
+    (record) => record.path === "/early",
+  );
+  assert.deepEqual(
+    [early.status, early.reason, early.requestBytes],
+    [413, undefined, 10],
+  );
+  const next = await decrypted(
+    r.relay.port,
+    "claude.ai",
+    "GET /after HTTP/1.1\r\nHost: claude.ai\r\nconnection: close\r\n\r\n",
+  );
+  assert.equal(next.status, 200, next.head);
+  assert.ok(next.body.equals(RESPONSE_BODY));
+  const after = await reportedRecord(
+    r.edge,
+    (record) => record.path === "/after",
+  );
+  assert.deepEqual([after.status, after.outcome], [200, "observed"]);
+  assert.equal(r.upstream.connections, 2, "a fresh upstream connection");
+  assert.deepEqual(
+    r.upstream.requests.map((seen) => [seen.method, seen.url]),
+    [["GET", "/after"]],
+  );
+  secure.destroy();
+});
+
+test("F005 sibling: after an early edge answer, the plain and token forward give the next request its own answer", async () => {
+  const r = await observedRig();
+  const viaPlain = net.connect(r.relay.port, "127.0.0.1");
+  viaPlain.on("error", () => {});
+  await once(viaPlain, "connect");
+  const viaToken = await secureTo(r.relay.port, "api.anthropic.com");
+  for (const [socket, host] of [
+    [viaPlain, "127.0.0.1"],
+    [viaToken, "api.anthropic.com"],
+  ] as const) {
+    await earlyAnswer(
+      socket,
+      `POST /v1/early HTTP/1.1\r\nHost: ${host}\r\ncontent-length: 20\r\n\r\n`,
+      "0123456789",
+    );
+    socket.write("abcdefghij");
+  }
+  const afterPlain = await plain(
+    r.relay.port,
+    Buffer.from(
+      "GET /v1/after HTTP/1.1\r\nHost: 127.0.0.1\r\nconnection: close\r\n\r\n",
+    ),
+  );
+  assert.equal(afterPlain.status, 200, afterPlain.head);
+  assert.equal(afterPlain.body.toString(), "recorded");
+  const afterToken = await decrypted(
+    r.relay.port,
+    "api.anthropic.com",
+    "GET /v1/after HTTP/1.1\r\nHost: api.anthropic.com\r\nconnection: close\r\n\r\n",
+  );
+  assert.equal(afterToken.status, 200, afterToken.head);
+  assert.equal(afterToken.body.toString(), "recorded");
+  assert.deepEqual(
+    r.edge.requests.map((seen) => [seen.method, seen.url]),
+    [
+      ["GET", "/v1/after"],
+      ["GET", "/anthropic/v1/after"],
+    ],
+  );
+  assert.equal(r.edge.foreignIngest, 0);
+  viaPlain.destroy();
+  viaToken.destroy();
+});
+
+test("F004 (backpressure): an early answer during a large, backed-up upload is recorded at once though its client neither finishes nor leaves; its slot is free for the next request", async () => {
+  const r = await observedRig({ capacity: 2 });
+  const secure = await secureTo(r.relay.port, "claude.ai");
+  const answered = readUntil(secure, (received) => {
+    const end = received.indexOf("\r\n\r\n");
+    return end !== -1 && received.length >= end + 4 + 5;
+  });
+  const declared = 16 * 1024 * 1024;
+  secure.write(
+    `POST /pressure HTTP/1.1\r\nHost: claude.ai\r\ncontent-length: ${declared}\r\n\r\n`,
+  );
+  secure.write(Buffer.alloc(8 * 1024 * 1024, 0x41));
+  const answer = parseAnswer(await answered);
+  assert.equal(answer.status, 413);
+  // The client stays connected with its upload half sent and idle.
+  const record = await within(
+    reportedRecord(r.edge, (record) => record.path === "/pressure"),
+    2000,
+    "record for the backed-up upload",
+  );
+  assert.deepEqual(
+    [record.status, record.outcome, record.reason, record.responseBytes],
+    [413, "observed", undefined, 5],
+  );
+  assert.ok(record.requestBytes > 0 && record.requestBytes < declared);
+  await settledSlot();
+  const next = await decrypted(
+    r.relay.port,
+    "claude.ai",
+    "GET /next HTTP/1.1\r\nHost: claude.ai\r\nconnection: close\r\n\r\n",
+  );
+  assert.equal(next.status, 200, next.head);
+  await reportedRecord(r.edge, (record) => record.path === "/next");
+  secure.destroy();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(
+    relayRecords(r.edge).length,
+    2,
+    "the client's leaving adds none",
   );
 });
