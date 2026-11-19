@@ -21,25 +21,44 @@ import {
   jiraGet,
   jiraPost,
   jiraPut,
-  normalizeAvatarUrls,
   normalizeIssueInput,
   normalizeJiraIssue,
-  pickAvatarUrl,
-  type JiraApiConfig,
 } from "../../jiraClient.ts";
 import {
-  getJiraIssueLinkTypes,
+  resolveFieldName,
   resolveIssueLinkType,
   type JiraIssueLinkType,
-} from "../../jiraIssueLinkTypeCache.ts";
+} from "../../jiraFields.ts";
+import { getJiraIssueLinkTypes } from "../../jiraIssueLinkTypeCache.ts";
 import {
   getCustomFieldProfile,
   getJiraFieldMap,
-  resolveFieldName,
   updateCustomFieldProfile,
   type JiraCustomFieldProfile,
-  type JiraFieldMeta,
 } from "../../jiraFieldCache.ts";
+import {
+  JIRA_LOOKUP_DESCRIPTION,
+  lookupParamsSchema,
+  runJiraLookup,
+  type LookupParams,
+} from "../../jiraLookup.ts";
+import {
+  isEmptyValue,
+  normalizeStringList,
+  truncate,
+  unique,
+  valueToText,
+  type JiraFieldSchema,
+  type JiraIssueResponse,
+} from "../../jiraRead.ts";
+import {
+  JIRA_SEARCH_ISSUES_DESCRIPTION,
+  normalizeJql,
+  resolveJiraFieldInputs,
+  runJiraSearchIssues,
+  searchIssuesParamsSchema,
+  type SearchIssuesParams,
+} from "../../jiraSearch.ts";
 import { errorText } from "../../errors.ts";
 import { resolveUserNames } from "../../jiraUsers.ts";
 import { assertIssuePermission } from "./jiraPermissions.ts";
@@ -53,14 +72,11 @@ import {
   executeJiraSprintItem,
   jiraSprintItemLabel,
   jiraSprintResultText,
-  lookupSprints,
   type JiraSprintItemInput,
 } from "./jiraSprint.ts";
 import { markdownToAdf } from "../../atlassian/adfFromMarkdown.ts";
-import { adfToText } from "../../atlassian/adfToMarkdown.ts";
 
 type CustomFieldMode = "none" | "known" | "selected" | "discoverNonEmpty";
-type DetailLevel = "compact" | "standard" | "full";
 
 type GetIssueParams = {
   issue: string;
@@ -72,43 +88,7 @@ type GetIssueParams = {
   includeRawCustomFieldValues?: boolean;
 };
 
-type SearchIssuesParams = {
-  jql: string;
-  maxResults?: number;
-  startAt?: number;
-  fields?: string[];
-  detailLevel?: DetailLevel;
-  render?: boolean;
-  renderFields?: string[];
-  includeDescription?: boolean;
-};
-
-type LookupKind =
-  "fields" | "projects" | "users" | "issueLinkTypes" | "sprints";
-
 /** Unified discovery params for jira_lookup; each field applies to specific kinds. */
-type LookupParams = {
-  kind: LookupKind;
-  query?: string;
-  maxResults?: number;
-  startAt?: number;
-  // kind=fields
-  custom?: boolean;
-  orderable?: boolean;
-  searchable?: boolean;
-  // kind=projects
-  orderBy?: string;
-  // kind=users | sprints
-  projectKey?: string;
-  // kind=users
-  assignableOnly?: boolean;
-  // kind=sprints
-  boardId?: number;
-  sprintStates?: string[];
-  // kind=projects | users
-  fields?: string[];
-  render?: boolean;
-};
 
 type JiraMutationParams = {
   render?: boolean;
@@ -154,34 +134,6 @@ type JiraLinkChangeInput = {
   linkId?: string;
 };
 
-type JiraIssueResponse = {
-  id?: string;
-  key?: string;
-  self?: string;
-  fields?: Record<string, any>;
-  names?: Record<string, string>;
-  schema?: Record<string, JiraFieldSchema>;
-};
-
-type JiraFieldSchema = {
-  type?: string;
-  items?: string;
-  system?: string;
-  custom?: string;
-  customId?: number;
-};
-
-type JiraSearchResponse = {
-  issues?: JiraIssueResponse[];
-  total?: number;
-  maxResults?: number;
-  startAt?: number;
-  nextPageToken?: string;
-  isLast?: boolean;
-  names?: Record<string, string>;
-  schema?: Record<string, JiraFieldSchema>;
-};
-
 type JiraTransition = {
   id?: string;
   name?: string;
@@ -208,37 +160,6 @@ type JiraCreateMetaResponse = {
   }>;
 };
 
-type JiraProjectSearchResponse = {
-  values?: JiraProjectResponse[];
-  total?: number;
-  maxResults?: number;
-  startAt?: number;
-  isLast?: boolean;
-};
-
-type JiraProjectResponse = {
-  id?: string;
-  key?: string;
-  name?: string;
-  self?: string;
-  description?: string;
-  projectTypeKey?: string;
-  simplified?: boolean;
-  style?: string;
-  isPrivate?: boolean;
-  url?: string;
-  lead?: any;
-  avatarUrls?: Record<string, string>;
-  issueTypes?: Array<{
-    id?: string;
-    name?: string;
-    description?: string;
-    iconUrl?: string;
-    subtask?: boolean;
-  }>;
-  projectCategory?: { id?: string; name?: string; description?: string };
-};
-
 type NormalizedCustomField = {
   id: string;
   name: string;
@@ -248,14 +169,6 @@ type NormalizedCustomField = {
   rawValue?: unknown;
 };
 
-type RenderField = {
-  id: string;
-  name: string;
-  type: string | null;
-  valueText: string | null;
-  value?: unknown;
-};
-
 const TECHNICAL_FIELD_NAME_RE =
   /^(Rank|Development|\[CHART\] Time in Status)$/i;
 const TECHNICAL_CUSTOM_TYPES = new Set([
@@ -263,54 +176,6 @@ const TECHNICAL_CUSTOM_TYPES = new Set([
   "com.atlassian.jira.plugins.jira-development-integration-plugin:devsummarycf",
   "com.atlassian.jira.ext.charting:timeinstatus",
 ]);
-
-const JIRA_ISSUE_PAGE_SIZE = 100;
-const JIRA_PROJECT_PAGE_SIZE = 100;
-const JIRA_USER_PAGE_SIZE = 100;
-const DEFAULT_ISSUE_FIELDS = [
-  "key",
-  "summary",
-  "status",
-  "assignee",
-  "updated",
-];
-const DEFAULT_PROJECT_FIELDS = [
-  "id",
-  "key",
-  "name",
-  "projectUrl",
-  "projectTypeKey",
-  "category",
-];
-const RENDER_PROJECT_FIELDS = [
-  "id",
-  "key",
-  "name",
-  "projectUrl",
-  "description",
-  "projectTypeKey",
-  "category",
-  "lead",
-  "avatarUrl",
-  "issueTypes",
-];
-const DEFAULT_USER_FIELDS = [
-  "accountId",
-  "displayName",
-  "emailAddress",
-  "active",
-  "accountType",
-];
-const RENDER_USER_FIELDS = [
-  "accountId",
-  "displayName",
-  "emailAddress",
-  "active",
-  "accountType",
-  "timeZone",
-  "userUrl",
-  "avatarUrl",
-];
 
 const getIssueParamsSchema = {
   type: "object",
@@ -351,135 +216,6 @@ const getIssueParamsSchema = {
       type: "boolean",
       description:
         "Include raw custom-field JSON values. Defaults to false to keep output small.",
-    },
-  },
-} as const;
-
-const searchIssuesParamsSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["jql", "maxResults"],
-  properties: {
-    jql: {
-      type: "string",
-      description:
-        "Jira Query Language expression, for example project = OPS AND statusCategory != Done ORDER BY updated DESC.",
-    },
-    maxResults: {
-      type: "number",
-      description:
-        "Total issues desired across all pages. The tool paginates internally. Defaults to 25, maximum 1000.",
-    },
-    startAt: {
-      type: "number",
-      description: "Zero-based result offset. Defaults to 0.",
-    },
-    fields: {
-      type: "array",
-      items: { type: "string" },
-      description:
-        "Jira fields to fetch/return by name or id. Keep this minimal. For counts use [key]; for tables include only columns/details needed, for example summary,status,assignee,updated,Sprint. Use jira_lookup (kind=fields) to discover exact custom-field names/ids.",
-    },
-    detailLevel: {
-      type: "string",
-      enum: ["compact", "standard", "full"],
-      description:
-        "How much issue detail to return when render=false. compact is the default and returns concise rows plus text-only requested fieldValues. standard includes more common normalized fields. full returns verbose render/detail fields and should be used only for small targeted searches.",
-    },
-    render: {
-      type: "boolean",
-      description:
-        "Set true when the user explicitly asks for a visual Jira search results table. The UI renders a responsive expandable table and receives full row details.",
-    },
-    renderFields: {
-      type: "array",
-      items: { type: "string" },
-      description:
-        "Columns the UI should render, chosen by the agent. Accepts key, summary, status, issueType, assignee, reporter, priority, project, created, updated, labels, components, or Jira field names/ids.",
-    },
-    includeDescription: {
-      type: "boolean",
-      description:
-        "Include issue descriptions for expanded table details. Defaults to false unless render=true.",
-    },
-  },
-} as const;
-
-const lookupParamsSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["kind"],
-  properties: {
-    kind: {
-      type: "string",
-      enum: ["fields", "projects", "users", "issueLinkTypes", "sprints"],
-      description:
-        "What to look up: Jira fields (incl. custom fields/JQL clause names), projects, users/accountIds, issueLinkTypes (site-global issue link relationship types), or sprints (a board's sprints with ids, state and dates).",
-    },
-    query: {
-      type: "string",
-      description:
-        "fields: substring over field id/key/name/clauseNames. projects: project key/name. users: user name/email. issueLinkTypes: substring over type name/inward/outward phrases. sprints: substring of the sprint name.",
-    },
-    maxResults: {
-      type: "number",
-      description:
-        "Total results desired; the tool paginates internally. Defaults to 50 (max: fields 500, projects 1000, users 10000, sprints 200).",
-    },
-    startAt: {
-      type: "number",
-      description: "projects|users: zero-based result offset. Defaults to 0.",
-    },
-    custom: {
-      type: "boolean",
-      description:
-        "fields: true=only custom fields, false=only system fields; omit for both.",
-    },
-    orderable: {
-      type: "boolean",
-      description: "fields: filter to fields Jira marks orderable.",
-    },
-    searchable: {
-      type: "boolean",
-      description:
-        "fields: filter to fields Jira marks searchable/JQL-addressable.",
-    },
-    orderBy: {
-      type: "string",
-      description:
-        "projects: orderBy e.g. key, name, category, lead, issueCount, lastIssueUpdatedTime. Defaults to key.",
-    },
-    projectKey: {
-      type: "string",
-      description:
-        "users: project key; with assignableOnly limits to users assignable in it. sprints: list the sprints of the project's boards (or give boardId).",
-    },
-    assignableOnly: {
-      type: "boolean",
-      description:
-        "users: use Jira's assignable-user search for projectKey. Requires projectKey. Defaults to false.",
-    },
-    boardId: {
-      type: "integer",
-      description:
-        "sprints: Jira Agile board id whose sprints to list. A board is read to 500 sprints and projectKey alone to 10 boards; a capped read sets exhausted=false and a note.",
-    },
-    sprintStates: {
-      type: "array",
-      items: { type: "string", enum: ["future", "active", "closed"] },
-      description:
-        "sprints: states to include. Defaults to active and future; closed sprints list newest first.",
-    },
-    fields: {
-      type: "array",
-      items: { type: "string" },
-      description:
-        "projects|users: fields to return, kept minimal. projects: id,key,name,projectUrl,description,projectTypeKey,category,lead,avatarUrl,issueTypes. users: accountId,accountType,displayName,emailAddress,active,timeZone,userUrl,avatarUrl (use [accountId] for counts).",
-    },
-    render: {
-      type: "boolean",
-      description:
-        "projects|users: set true only when the user asks for a visual table.",
     },
   },
 } as const;
@@ -759,95 +495,16 @@ export const jiraGetIssueTool = defineAgentTool<GetIssueParams>({
 const jiraSearchIssuesTool = defineAgentTool<SearchIssuesParams>({
   name: "jira_search_issues",
   label: "Jira: Search Issues",
-  description:
-    "Run a read-only Jira JQL search and return normalized issue rows. Supports an optional rendered table with agent-selected columns. Pass precise JQL and never invent a project, user, or field key — resolve it with jira_lookup first, preferring candidate keys from the session's Project context.",
+  description: JIRA_SEARCH_ISSUES_DESCRIPTION,
   parameters: searchIssuesParamsSchema,
-  async execute(params) {
-    const jql = normalizeJql(params.jql);
-    const maxResults = clampDesiredResults(params.maxResults, 25, 1000);
-    const startAt = clampStartAt(params.startAt);
+  async execute(params, ctx) {
+    // An empty or overlong JQL is refused before the settings are read.
+    normalizeJql(params.jql);
     const config = getJiraToolConfig();
-    const renderRequested = params.render === true;
-    const detailLevel = normalizeDetailLevel(
-      params.detailLevel,
-      renderRequested ? "full" : "compact",
-    );
-    const verboseRows = renderRequested || detailLevel === "full";
-    const includeDescription =
-      params.includeDescription === true || renderRequested;
-    const renderFieldNames = renderRequested
-      ? normalizeStringList(params.renderFields).length > 0
-        ? normalizeStringList(params.renderFields)
-        : DEFAULT_ISSUE_FIELDS
-      : normalizeStringList(params.renderFields);
-    const explicitFields = normalizeStringList(params.fields);
-    const requestedFields = unique([
-      ...(explicitFields.length > 0
-        ? explicitFields
-        : renderRequested
-          ? renderFieldNames
-          : DEFAULT_ISSUE_FIELDS),
-      ...(includeDescription ? ["description"] : []),
-      ...(renderRequested
-        ? renderFieldNames.filter((field) => !isVirtualIssueField(field))
-        : []),
-    ]);
-    const fieldResolution = await resolveJiraFieldInputs(
-      config,
-      requestedFields,
-    );
-
-    const search = await fetchAllIssuePages(config, {
-      jql,
-      startAt,
-      maxResults,
-      fields: fieldResolution.apiFieldIds,
-      expand: "names,schema",
+    const payload = await runJiraSearchIssues(config, params, {
+      signal: ctx.signal,
+      fieldMap: () => getJiraFieldMap(config),
     });
-    const names = mergeSearchNames(search.pages);
-    const schema = mergeSearchSchema(search.pages);
-    const renderColumns = buildIssueRenderColumns(
-      renderFieldNames,
-      names,
-      schema,
-    );
-    const issues = search.issues.map((issue) => {
-      if (!verboseRows)
-        return compactSearchIssue(
-          issue,
-          config.jiraHost,
-          names,
-          schema,
-          fieldResolution.requested,
-          detailLevel,
-        );
-      const normalized = normalizeJiraIssue(issue, config.jiraHost, {
-        includeDescription,
-      });
-      return {
-        ...normalized,
-        fields: normalizeIssueRenderFields(issue, names, schema),
-      };
-    });
-
-    const payload = {
-      jiraHost: config.jiraHost,
-      jql,
-      jiraSearchUrl: jiraSearchUrl(config.jiraHost, jql),
-      startAt,
-      maxResults,
-      total: search.total ?? issues.length,
-      returned: issues.length,
-      pagesFetched: search.pagesFetched,
-      exhausted: search.exhausted,
-      nextStartAt: search.nextStartAt,
-      renderRequested,
-      detailLevel,
-      renderColumns,
-      fieldResolution,
-      issues,
-    };
-
     return {
       content: [{ type: "text", text: JSON.stringify(payload) }],
       details: payload,
@@ -855,210 +512,18 @@ const jiraSearchIssuesTool = defineAgentTool<SearchIssuesParams>({
   },
 });
 
-/** Shallow-drop null/undefined/empty-string/empty-array keys to keep discovery payloads compact. */
-export function dropNulls<T extends Record<string, unknown>>(
-  obj: T,
-): Partial<T> {
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(obj)) {
-    if (value === null || value === undefined) continue;
-    if (typeof value === "string" && value === "") continue;
-    if (Array.isArray(value) && value.length === 0) continue;
-    out[key] = value;
-  }
-  return out as Partial<T>;
-}
-
-async function lookupFields(
-  config: JiraApiConfig,
-  params: LookupParams,
-): Promise<Record<string, unknown>> {
-  const fieldMap = await getJiraFieldMap(config);
-  const query = params.query?.trim().toLowerCase() ?? "";
-  const maxResults = clampDesiredResults(params.maxResults, 50, 500);
-  const fields = [...fieldMap.byId.values()]
-    .filter(
-      (field) => params.custom === undefined || field.custom === params.custom,
-    )
-    .filter(
-      (field) =>
-        params.orderable === undefined || field.orderable === params.orderable,
-    )
-    .filter(
-      (field) =>
-        params.searchable === undefined ||
-        field.searchable === params.searchable,
-    )
-    .filter((field) => !query || fieldMatchesQuery(field, query))
-    .sort(
-      (a, b) =>
-        Number(b.custom) - Number(a.custom) ||
-        a.name.localeCompare(b.name) ||
-        a.id.localeCompare(b.id),
-    );
-  const selected = fields.slice(0, maxResults).map((field) =>
-    dropNulls({
-      id: field.id,
-      key: field.key ?? null,
-      name: field.name,
-      custom: field.custom,
-      orderable: field.orderable ?? null,
-      navigable: field.navigable ?? null,
-      searchable: field.searchable ?? null,
-      clauseNames: field.clauseNames ?? [],
-      schemaType: field.schema?.type ?? null,
-      schemaItems: field.schema?.items ?? null,
-      system: field.schema?.system ?? null,
-      customType: field.schema?.custom ?? null,
-      customId: field.schema?.customId ?? null,
-    }),
-  );
-  const meta = dropNulls({
-    kind: "fields",
-    jiraHost: config.jiraHost,
-    query: params.query ?? null,
-    custom: params.custom ?? null,
-    orderable: params.orderable ?? null,
-    searchable: params.searchable ?? null,
-    returned: selected.length,
-    totalMatched: fields.length,
-    exhausted: selected.length >= fields.length,
-    fetchedAt: new Date(fieldMap.fetchedAt).toISOString(),
-  });
-  return { ...meta, fields: selected };
-}
-
-async function lookupProjects(
-  config: JiraApiConfig,
-  params: LookupParams,
-): Promise<Record<string, unknown>> {
-  const maxResults = clampDesiredResults(params.maxResults, 50, 1000);
-  const startAt = clampStartAt(params.startAt);
-  const projectFields = normalizeProjectFields(
-    params.fields,
-    params.render === true,
-  );
-  const queryValue = normalizeOptionalString(params.query);
-  const search = await fetchAllProjectPages(config, {
-    ...(queryValue !== undefined ? { query: queryValue } : {}),
-    startAt,
-    maxResults,
-    orderBy: normalizeOptionalString(params.orderBy) ?? "key",
-    expand: projectExpandForFields(projectFields),
-  });
-  const projects = search.projects.map((project) =>
-    selectFields(normalizeProject(project, config.jiraHost), projectFields),
-  );
-  const meta = dropNulls({
-    kind: "projects",
-    jiraHost: config.jiraHost,
-    query: normalizeOptionalString(params.query) ?? null,
-    startAt,
-    maxResults,
-    total: search.total ?? projects.length,
-    returned: projects.length,
-    pagesFetched: search.pagesFetched,
-    exhausted: search.exhausted,
-    nextStartAt: search.nextStartAt,
-    fields: projectFields,
-  });
-  return { ...meta, projects };
-}
-
-async function lookupUsers(
-  config: JiraApiConfig,
-  params: LookupParams,
-): Promise<Record<string, unknown>> {
-  const maxResults = clampDesiredResults(params.maxResults, 50, 10000);
-  const startAt = clampStartAt(params.startAt);
-  const query = normalizeOptionalString(params.query) ?? "";
-  const projectKey = normalizeOptionalString(params.projectKey);
-  const assignableOnly = params.assignableOnly === true;
-  if (assignableOnly && !projectKey)
-    throw new Error("projectKey is required when assignableOnly=true.");
-  const userFields = normalizeUserFields(params.fields, params.render === true);
-  const search = await fetchAllUserPages(config, {
-    query,
-    ...(projectKey !== undefined ? { projectKey } : {}),
-    assignableOnly,
-    startAt,
-    maxResults,
-  });
-  const users = search.users.map((user) =>
-    selectFields(normalizeJiraUser(user, config.jiraHost), userFields),
-  );
-  const meta = dropNulls({
-    kind: "users",
-    jiraHost: config.jiraHost,
-    query: query || null,
-    projectKey: projectKey ?? null,
-    assignableOnly,
-    startAt,
-    maxResults,
-    returned: users.length,
-    pagesFetched: search.pagesFetched,
-    exhausted: search.exhausted,
-    nextStartAt: search.nextStartAt,
-    fields: userFields,
-  });
-  return { ...meta, users };
-}
-
-async function lookupIssueLinkTypes(
-  config: JiraApiConfig,
-  params: LookupParams,
-): Promise<Record<string, unknown>> {
-  const maxResults = clampDesiredResults(params.maxResults, 50, 500);
-  const query = normalizeOptionalString(params.query)?.toLowerCase() ?? "";
-  const all = await getJiraIssueLinkTypes(config);
-  const matched = all
-    .filter(
-      (type) =>
-        !query ||
-        `${type.name}\n${type.inward}\n${type.outward}`
-          .toLowerCase()
-          .includes(query),
-    )
-    .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
-  const linkTypes = matched.slice(0, maxResults).map((type) => ({
-    id: type.id,
-    name: type.name,
-    inward: type.inward,
-    outward: type.outward,
-  }));
-  const meta = dropNulls({
-    kind: "issueLinkTypes",
-    jiraHost: config.jiraHost,
-    query: normalizeOptionalString(params.query) ?? null,
-    returned: linkTypes.length,
-    totalMatched: matched.length,
-    exhausted: linkTypes.length >= matched.length,
-  });
-  return { ...meta, linkTypes };
-}
-
 export const jiraLookupTool = defineAgentTool<LookupParams>({
   name: "jira_lookup",
   label: "Jira: Lookup",
-  description:
-    "Read-only Jira discovery in one tool: kind=fields (system/custom fields + JQL clause names), kind=projects (visible projects), kind=users (users/accountIds), kind=issueLinkTypes (site-global issue link relationship types), or kind=sprints (sprints of a board or a project's boards, with ids and dates).",
+  description: JIRA_LOOKUP_DESCRIPTION,
   parameters: lookupParamsSchema,
-  async execute(params) {
+  async execute(params, ctx) {
     const config = getJiraToolConfig();
-    const payload =
-      params.kind === "projects"
-        ? await lookupProjects(config, params)
-        : params.kind === "users"
-          ? await lookupUsers(config, params)
-          : params.kind === "issueLinkTypes"
-            ? await lookupIssueLinkTypes(config, params)
-            : params.kind === "sprints"
-              ? await lookupSprints(
-                  config,
-                  params,
-                  clampDesiredResults(params.maxResults, 50, 200),
-                )
-              : await lookupFields(config, params);
+    const payload = await runJiraLookup(config, params, {
+      signal: ctx.signal,
+      fieldMap: () => getJiraFieldMap(config),
+      issueLinkTypes: () => getJiraIssueLinkTypes(config),
+    });
     return {
       content: [{ type: "text", text: JSON.stringify(payload) }],
       details: payload,
@@ -1490,671 +955,9 @@ function summarizeProfile(
   };
 }
 
-async function fetchAllIssuePages(
-  config: ReturnType<typeof getJiraToolConfig>,
-  args: {
-    jql: string;
-    startAt: number;
-    maxResults: number;
-    fields: string[];
-    expand: string;
-  },
-): Promise<{
-  issues: JiraIssueResponse[];
-  pages: JiraSearchResponse[];
-  total: number | null;
-  pagesFetched: number;
-  exhausted: boolean;
-  nextStartAt: number | null;
-}> {
-  const issues: JiraIssueResponse[] = [];
-  const pages: JiraSearchResponse[] = [];
-  let nextPageToken: string | undefined;
-  let skipped = 0;
-
-  while (issues.length < args.maxResults) {
-    const remainingToSkip = Math.max(0, args.startAt - skipped);
-    const pageSize = Math.min(
-      JIRA_ISSUE_PAGE_SIZE,
-      remainingToSkip + (args.maxResults - issues.length),
-    );
-    const page = await jiraPost<JiraSearchResponse>(
-      config,
-      "/rest/api/3/search/jql",
-      {
-        jql: args.jql,
-        nextPageToken,
-        maxResults: pageSize,
-        fields: args.fields.length > 0 ? args.fields : undefined,
-        expand: args.expand,
-      },
-      undefined,
-      { retry: true },
-    );
-    const batch = page.issues ?? [];
-    pages.push(page);
-
-    if (remainingToSkip > 0) {
-      const keepFrom = Math.min(remainingToSkip, batch.length);
-      skipped += keepFrom;
-      issues.push(...batch.slice(keepFrom));
-    } else {
-      issues.push(...batch);
-    }
-
-    nextPageToken = page.nextPageToken;
-    if (page.isLast === true || !nextPageToken || batch.length === 0) break;
-  }
-
-  const exhausted = !nextPageToken || pages[pages.length - 1]?.isLast === true;
-  return {
-    issues: issues.slice(0, args.maxResults),
-    pages,
-    total: null,
-    pagesFetched: pages.length,
-    exhausted,
-    nextStartAt: exhausted
-      ? null
-      : args.startAt + Math.min(issues.length, args.maxResults),
-  };
-}
-
-async function fetchAllProjectPages(
-  config: ReturnType<typeof getJiraToolConfig>,
-  args: {
-    query?: string;
-    startAt: number;
-    maxResults: number;
-    orderBy: string;
-    expand: string | undefined;
-  },
-): Promise<{
-  projects: JiraProjectResponse[];
-  total: number | null;
-  pagesFetched: number;
-  exhausted: boolean;
-  nextStartAt: number | null;
-}> {
-  const projects: JiraProjectResponse[] = [];
-  let cursor = args.startAt;
-  let total: number | null = null;
-  let pagesFetched = 0;
-  while (projects.length < args.maxResults) {
-    const pageSize = Math.min(
-      JIRA_PROJECT_PAGE_SIZE,
-      args.maxResults - projects.length,
-    );
-    const page = await jiraGet<JiraProjectSearchResponse>(
-      config,
-      "/rest/api/3/project/search",
-      {
-        query: args.query,
-        startAt: cursor,
-        maxResults: pageSize,
-        orderBy: args.orderBy,
-        expand: args.expand,
-      },
-    );
-    const batch = page.values ?? [];
-    pagesFetched += 1;
-    total = typeof page.total === "number" ? page.total : total;
-    projects.push(...batch);
-    cursor = (page.startAt ?? cursor) + batch.length;
-    if (
-      page.isLast === true ||
-      batch.length < pageSize ||
-      (total !== null && cursor >= total)
-    )
-      break;
-  }
-  return {
-    projects,
-    total,
-    pagesFetched,
-    exhausted:
-      total !== null
-        ? args.startAt + projects.length >= total
-        : projects.length < args.maxResults,
-    nextStartAt:
-      total !== null && args.startAt + projects.length < total
-        ? args.startAt + projects.length
-        : null,
-  };
-}
-
-async function fetchAllUserPages(
-  config: ReturnType<typeof getJiraToolConfig>,
-  args: {
-    query: string;
-    projectKey?: string;
-    assignableOnly: boolean;
-    startAt: number;
-    maxResults: number;
-  },
-): Promise<{
-  users: any[];
-  pagesFetched: number;
-  exhausted: boolean;
-  nextStartAt: number | null;
-}> {
-  const users: any[] = [];
-  let cursor = args.startAt;
-  let pagesFetched = 0;
-  const path = args.assignableOnly
-    ? "/rest/api/3/user/assignable/search"
-    : "/rest/api/3/user/search";
-  while (users.length < args.maxResults) {
-    const pageSize = Math.min(
-      JIRA_USER_PAGE_SIZE,
-      args.maxResults - users.length,
-    );
-    const batch = await jiraGet<any[]>(config, path, {
-      query: args.query,
-      project: args.assignableOnly ? args.projectKey : undefined,
-      startAt: cursor,
-      maxResults: pageSize,
-    });
-    pagesFetched += 1;
-    users.push(...batch);
-    cursor += batch.length;
-    if (batch.length < pageSize) break;
-  }
-  const exhausted = users.length < args.maxResults;
-  return {
-    users,
-    pagesFetched,
-    exhausted,
-    nextStartAt: exhausted ? null : args.startAt + users.length,
-  };
-}
-
-async function resolveJiraFieldInputs(
-  config: ReturnType<typeof getJiraToolConfig>,
-  fieldNames: string[],
-): Promise<{
-  requested: string[];
-  apiFieldIds: string[];
-  unresolved: string[];
-}> {
-  const requested = normalizeStringList(fieldNames).map(normalizeFieldAlias);
-  const fieldMap = await getJiraFieldMap(config);
-  const apiFieldIds: string[] = [];
-  const unresolved: string[] = [];
-  for (const name of requested) {
-    if (isVirtualIssueField(name)) continue;
-    const direct = fieldMap.byId.get(name);
-    if (direct) {
-      apiFieldIds.push(direct.id);
-      continue;
-    }
-    const resolved = resolveFieldName(fieldMap, name);
-    if (resolved?.id) apiFieldIds.push(resolved.id);
-    else if (
-      /^[a-z][a-zA-Z0-9_]*$/.test(name) ||
-      /^customfield_\d+$/.test(name)
-    )
-      apiFieldIds.push(name);
-    else unresolved.push(name);
-  }
-  return { requested, apiFieldIds: unique(apiFieldIds), unresolved };
-}
-
-function buildIssueRenderColumns(
-  fieldNames: string[],
-  names: Record<string, string>,
-  schema: Record<string, JiraFieldSchema>,
-) {
-  return normalizeStringList(fieldNames).map((field) => {
-    const id = resolveReturnedFieldId(normalizeFieldAlias(field), names);
-    return {
-      id,
-      name: issueFieldLabel(id, names),
-      type: schema[id]?.type ?? virtualIssueFieldType(id),
-    };
-  });
-}
-
-function resolveReturnedFieldId(
-  field: string,
-  names: Record<string, string>,
-): string {
-  if (field === "key" || names[field]) return field;
-  const match = Object.entries(names).find(
-    ([, name]) => name.toLowerCase() === field.toLowerCase(),
-  );
-  return match?.[0] ?? field;
-}
-
-const COMPACT_BASE_FIELD_IDS = new Set([
-  "summary",
-  "project",
-  "issuetype",
-  "status",
-  "priority",
-  "assignee",
-  "reporter",
-  "creator",
-  "labels",
-  "components",
-  "fixVersions",
-  "created",
-  "updated",
-  "duedate",
-  "parent",
-  "subtasks",
-  "issuelinks",
-  "description",
-]);
-
-function normalizeDetailLevel(
-  value: DetailLevel | undefined,
-  fallback: DetailLevel,
-): DetailLevel {
-  return value === "compact" || value === "standard" || value === "full"
-    ? value
-    : fallback;
-}
-
-function compactSearchIssue(
-  issue: JiraIssueResponse,
-  jiraHost: string,
-  names: Record<string, string>,
-  schema: Record<string, JiraFieldSchema>,
-  requestedFields: string[],
-  detailLevel: DetailLevel,
-): Record<string, unknown> {
-  const fields = issue.fields ?? {};
-  const key = issue.key ?? null;
-  const row: Record<string, unknown> = {
-    ...(detailLevel === "standard" ? { id: issue.id ?? null } : {}),
-    key,
-    issueUrl: key
-      ? `${jiraBaseUrl(jiraHost)}/browse/${encodeURIComponent(key)}`
-      : null,
-    summary: stringOrNull(fields.summary),
-    project: fields.project ? compactProjectRef(fields.project) : null,
-    issueType: fields.issuetype?.name ?? null,
-    status: fields.status?.name ?? null,
-    statusCategory: fields.status?.statusCategory?.name ?? null,
-    priority: fields.priority?.name ?? null,
-    assignee: compactUserText(fields.assignee),
-    reporter:
-      detailLevel === "standard" ? compactUserText(fields.reporter) : null,
-    updated: fields.updated ?? null,
-    created: detailLevel === "standard" ? (fields.created ?? null) : null,
-    dueDate: fields.duedate ?? null,
-    parent: compactIssueRef(fields.parent),
-    labels:
-      Array.isArray(fields.labels) && fields.labels.length
-        ? fields.labels
-        : null,
-    components: compactNamedArray(fields.components),
-    fixVersions:
-      detailLevel === "standard" ? compactNamedArray(fields.fixVersions) : null,
-    subtasks:
-      detailLevel === "standard" &&
-      Array.isArray(fields.subtasks) &&
-      fields.subtasks.length
-        ? fields.subtasks.map(compactIssueRef).filter(Boolean)
-        : null,
-  };
-
-  const requested = new Set(
-    requestedFields.map((field) => resolveReturnedFieldId(field, names)),
-  );
-  const fieldValues = Object.entries(fields)
-    .filter(
-      ([id]) =>
-        !COMPACT_BASE_FIELD_IDS.has(id) &&
-        (requested.size === 0 || requested.has(id)),
-    )
-    .map(([id, value]) => ({
-      id,
-      name: issueFieldLabel(id, names),
-      type: schema[id]?.type ?? inferJiraValueType(id, value),
-      valueText: valueToText(value),
-    }))
-    .filter((field) => field.valueText !== null);
-  if (fieldValues.length > 0) row.fieldValues = fieldValues;
-
-  return compactObject(row);
-}
-
-function compactProjectRef(value: any): Record<string, unknown> | null {
-  if (!value) return null;
-  return compactObject({ key: value.key ?? null, name: value.name ?? null });
-}
-
-function compactIssueRef(value: any): Record<string, unknown> | null {
-  if (!value) return null;
-  return compactObject({
-    key: value.key ?? null,
-    summary: value.fields?.summary ?? null,
-    status: value.fields?.status?.name ?? null,
-  });
-}
-
-function compactUserText(value: any): string | null {
-  if (!value) return null;
-  return value.displayName ?? value.emailAddress ?? value.accountId ?? null;
-}
-
-function compactNamedArray(value: any): string[] | null {
-  if (!Array.isArray(value) || value.length === 0) return null;
-  return value
-    .map((item) => item?.name ?? item?.value ?? item?.key ?? null)
-    .filter(
-      (item): item is string => typeof item === "string" && item.length > 0,
-    );
-}
-
-function stringOrNull(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function compactObject<T extends Record<string, unknown>>(value: T): T {
-  const out: Record<string, unknown> = {};
-  for (const [key, item] of Object.entries(value)) {
-    if (item === null || item === undefined) continue;
-    if (Array.isArray(item) && item.length === 0) continue;
-    if (typeof item === "object" && !Array.isArray(item)) {
-      const nested = compactObject(item as Record<string, unknown>);
-      if (Object.keys(nested).length === 0) continue;
-      out[key] = nested;
-      continue;
-    }
-    out[key] = item;
-  }
-  return out as T;
-}
-
-function fieldMatchesQuery(field: JiraFieldMeta, query: string): boolean {
-  return [
-    field.id,
-    field.key,
-    field.name,
-    ...(field.clauseNames ?? []),
-    field.schema?.type,
-    field.schema?.system,
-    field.schema?.custom,
-  ]
-    .filter(Boolean)
-    .join("\n")
-    .toLowerCase()
-    .includes(query);
-}
-
-function normalizeIssueRenderFields(
-  issue: JiraIssueResponse,
-  names: Record<string, string>,
-  schema: Record<string, JiraFieldSchema>,
-): RenderField[] {
-  const fields = issue.fields ?? {};
-  const out: RenderField[] = [
-    {
-      id: "key",
-      name: "Key",
-      type: "issueKey",
-      valueText: issue.key ?? null,
-      value: {
-        key: issue.key ?? null,
-        issueUrl: issue.key ? jiraIssueUrlFromHost(issue.key) : null,
-      },
-    },
-  ];
-  for (const [id, value] of Object.entries(fields)) {
-    out.push({
-      id,
-      name: issueFieldLabel(id, names),
-      type: schema[id]?.type ?? inferJiraValueType(id, value),
-      valueText: valueToText(value),
-      value: normalizeRenderValue(id, value),
-    });
-  }
-  return out.sort(
-    (a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id),
-  );
-}
-
-function mergeSearchNames(pages: JiraSearchResponse[]): Record<string, string> {
-  return Object.assign(
-    {},
-    ...pages.map((page) => page.names ?? {}),
-    ...pages
-      .flatMap((page) => page.issues ?? [])
-      .map((issue) => issue.names ?? {}),
-  );
-}
-
-function mergeSearchSchema(
-  pages: JiraSearchResponse[],
-): Record<string, JiraFieldSchema> {
-  return Object.assign(
-    {},
-    ...pages.map((page) => page.schema ?? {}),
-    ...pages
-      .flatMap((page) => page.issues ?? [])
-      .map((issue) => issue.schema ?? {}),
-  );
-}
-
-function normalizeRenderValue(id: string, value: unknown): unknown {
-  if (value === null || value === undefined) return null;
-  if (id === "assignee" || id === "reporter" || id === "creator")
-    return normalizeJiraUser(value, "");
-  if (id === "project" && typeof value === "object")
-    return normalizeProject(value as JiraProjectResponse, "");
-  if (id === "status" && typeof value === "object") {
-    const item = value as any;
-    return {
-      id: item.id ?? null,
-      name: item.name ?? null,
-      category: item.statusCategory?.name ?? null,
-      colorName: item.statusCategory?.colorName ?? null,
-    };
-  }
-  if ((id === "issuetype" || id === "priority") && typeof value === "object") {
-    const item = value as any;
-    return {
-      id: item.id ?? null,
-      name: item.name ?? null,
-      iconUrl: item.iconUrl ?? null,
-    };
-  }
-  if (Array.isArray(value))
-    return value.map((item) => normalizeRenderArrayItem(item));
-  return value;
-}
-
-function normalizeRenderArrayItem(value: unknown): unknown {
-  if (!value || typeof value !== "object") return value;
-  const item = value as any;
-  return {
-    id: item.id ?? null,
-    key: item.key ?? null,
-    name: item.name ?? item.value ?? item.displayName ?? null,
-    self: item.self ?? null,
-  };
-}
-
-function normalizeProject(project: JiraProjectResponse, jiraHost: string) {
-  const avatarUrls = normalizeAvatarUrls(project.avatarUrls);
-  const key = project.key ?? null;
-  const base = jiraHost ? jiraBaseUrl(jiraHost) : null;
-  return {
-    id: project.id ?? null,
-    key,
-    name: project.name ?? null,
-    self: project.self ?? null,
-    projectUrl:
-      key && base ? `${base}/browse/${encodeURIComponent(key)}` : null,
-    description: project.description ?? null,
-    projectTypeKey: project.projectTypeKey ?? null,
-    simplified:
-      typeof project.simplified === "boolean" ? project.simplified : null,
-    style: project.style ?? null,
-    isPrivate:
-      typeof project.isPrivate === "boolean" ? project.isPrivate : null,
-    url: project.url ?? null,
-    category: project.projectCategory
-      ? {
-          id: project.projectCategory.id ?? null,
-          name: project.projectCategory.name ?? null,
-          description: project.projectCategory.description ?? null,
-        }
-      : null,
-    lead: project.lead ? normalizeJiraUser(project.lead, jiraHost) : null,
-    avatarUrl: pickAvatarUrl(avatarUrls),
-    issueTypes: (project.issueTypes ?? []).map((issueType) => ({
-      id: issueType.id ?? null,
-      name: issueType.name ?? null,
-      description: issueType.description ?? null,
-      iconUrl: issueType.iconUrl ?? null,
-      subtask:
-        typeof issueType.subtask === "boolean" ? issueType.subtask : null,
-    })),
-  };
-}
-
-function normalizeJiraUser(user: any, jiraHost: string) {
-  const avatarUrls = normalizeAvatarUrls(user?.avatarUrls);
-  const accountId = user?.accountId ?? null;
-  const base = jiraHost ? jiraBaseUrl(jiraHost) : null;
-  return {
-    accountId,
-    accountType: user?.accountType ?? null,
-    displayName: user?.displayName ?? null,
-    emailAddress: user?.emailAddress ?? null,
-    active: typeof user?.active === "boolean" ? user.active : null,
-    timeZone: user?.timeZone ?? null,
-    locale: user?.locale ?? null,
-    self: user?.self ?? null,
-    userUrl:
-      accountId && base
-        ? `${base}/jira/people/${encodeURIComponent(accountId)}`
-        : null,
-    avatarUrl: pickAvatarUrl(avatarUrls),
-  };
-}
-
-function normalizeProjectFields(
-  fields: string[] | undefined,
-  render: boolean,
-): string[] {
-  const requested = normalizeStringList(fields);
-  const base = requested.length > 0 ? requested : DEFAULT_PROJECT_FIELDS;
-  return unique([...(render ? RENDER_PROJECT_FIELDS : []), ...base]).filter(
-    (field) => PROJECT_FIELD_ALLOWLIST.has(field),
-  );
-}
-
-function normalizeUserFields(
-  fields: string[] | undefined,
-  render: boolean,
-): string[] {
-  const requested = normalizeStringList(fields);
-  const base = requested.length > 0 ? requested : DEFAULT_USER_FIELDS;
-  return unique([...(render ? RENDER_USER_FIELDS : []), ...base]).filter(
-    (field) => USER_FIELD_ALLOWLIST.has(field),
-  );
-}
-
-const PROJECT_FIELD_ALLOWLIST = new Set([
-  "id",
-  "key",
-  "name",
-  "self",
-  "projectUrl",
-  "description",
-  "projectTypeKey",
-  "simplified",
-  "style",
-  "isPrivate",
-  "url",
-  "category",
-  "lead",
-  "avatarUrl",
-  "issueTypes",
-]);
-
-const USER_FIELD_ALLOWLIST = new Set([
-  "accountId",
-  "accountType",
-  "displayName",
-  "emailAddress",
-  "active",
-  "timeZone",
-  "locale",
-  "self",
-  "userUrl",
-  "avatarUrl",
-]);
-
-function projectExpandForFields(fields: string[]): string | undefined {
-  const expand = [];
-  if (fields.includes("description")) expand.push("description");
-  if (fields.includes("lead")) expand.push("lead");
-  if (fields.includes("issueTypes")) expand.push("issueTypes");
-  return expand.length > 0 ? expand.join(",") : undefined;
-}
-
-function selectFields<T extends Record<string, unknown>>(
-  value: T,
-  fields: string[],
-): Partial<T> {
-  const out: Partial<T> = {};
-  for (const field of fields) {
-    if (Object.prototype.hasOwnProperty.call(value, field))
-      out[field as keyof T] = value[field] as T[keyof T];
-  }
-  return out;
-}
-
-function isVirtualIssueField(field: string): boolean {
-  return ["key", "issueKey", "issueUrl"].includes(field.trim());
-}
-
-function normalizeFieldAlias(field: string): string {
-  const trimmed = field.trim();
-  if (/^issueKey$/i.test(trimmed)) return "key";
-  if (/^issueType$/i.test(trimmed)) return "issuetype";
-  if (/^dueDate$/i.test(trimmed)) return "duedate";
-  return trimmed;
-}
-
-function issueFieldLabel(id: string, names: Record<string, string>): string {
-  if (id === "key") return "Key";
-  if (id === "issuetype") return "Type";
-  if (id === "duedate") return "Due";
-  return (
-    names[id] ??
-    id.replace(/_/g, " ").replace(/\b\w/g, (value) => value.toUpperCase())
-  );
-}
-
-function virtualIssueFieldType(id: string): string | null {
-  if (id === "key") return "issueKey";
-  return null;
-}
-
-function inferJiraValueType(id: string, value: unknown): string | null {
-  if (id === "assignee" || id === "reporter" || id === "creator") return "user";
-  if (id === "project") return "project";
-  if (id === "status") return "status";
-  if (id === "issuetype") return "issuetype";
-  if (id === "priority") return "priority";
-  if (id === "created" || id === "updated" || id === "duedate") return "date";
-  if (Array.isArray(value)) return "array";
-  return typeof value === "object" ? "object" : typeof value;
-}
-
 function jiraIssueUrlFromHost(issueKey: string): string | null {
   const config = getJiraToolConfig();
   return `${jiraBaseUrl(config.jiraHost)}/browse/${encodeURIComponent(issueKey)}`;
-}
-
-function jiraSearchUrl(jiraHost: string, jql: string): string {
-  return `${jiraBaseUrl(jiraHost)}/issues/?jql=${encodeURIComponent(jql)}`;
 }
 
 async function buildJiraMutationItems(
@@ -2670,7 +1473,10 @@ async function addAdvancedFieldChanges(
 ): Promise<void> {
   const rawFieldNames = Object.keys(fields ?? {});
   if (rawFieldNames.length === 0) return;
-  const resolution = await resolveJiraFieldInputs(config, rawFieldNames);
+  const resolution = resolveJiraFieldInputs(
+    await getJiraFieldMap(config),
+    rawFieldNames,
+  );
   if (resolution.unresolved.length > 0)
     throw new Error(
       `Could not resolve Jira field(s): ${resolution.unresolved.join(", ")}`,
@@ -2933,20 +1739,6 @@ function applyCollectionUpdate(
   if (ops.length) update[fieldId] = ops;
 }
 
-function normalizeJql(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) throw new Error("jql must not be empty.");
-  if (trimmed.length > 5000) throw new Error("jql is too long.");
-  return trimmed;
-}
-
-function normalizeOptionalString(
-  value: string | undefined,
-): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed || undefined;
-}
-
 function normalizeOptionalMarkdown(
   value: string | null | undefined,
 ): string | undefined {
@@ -2962,74 +1754,11 @@ function normalizeOptionalIssue(
   return normalizeIssueInput(value).toUpperCase();
 }
 
-function normalizeStringList(
-  values: string[] | undefined | readonly string[],
-): string[] {
-  return unique(
-    (values ?? []).map((value) => String(value).trim()).filter(Boolean),
-  );
-}
-
-function clampDesiredResults(
-  value: number | undefined,
-  defaultValue: number,
-  maxValue: number,
-): number {
-  if (value === undefined) return defaultValue;
-  if (!Number.isFinite(value) || value <= 0) return defaultValue;
-  return Math.min(maxValue, Math.floor(value));
-}
-
-function clampStartAt(value: number | undefined): number {
-  if (value === undefined || !Number.isFinite(value) || value < 0) return 0;
-  return Math.floor(value);
-}
-
 function isTechnicalCustomField(field: NormalizedCustomField): boolean {
   return (
     TECHNICAL_FIELD_NAME_RE.test(field.name) ||
     Boolean(field.customType && TECHNICAL_CUSTOM_TYPES.has(field.customType))
   );
-}
-
-function valueToText(value: unknown): string | null {
-  if (isEmptyValue(value)) return null;
-  if (typeof value === "string") return truncate(value);
-  if (typeof value === "number" || typeof value === "boolean")
-    return String(value);
-  if (Array.isArray(value)) {
-    const parts = value
-      .map(valueToText)
-      .filter((item): item is string => Boolean(item));
-    return parts.length > 0 ? truncate(parts.join(", ")) : null;
-  }
-  if (typeof value === "object") {
-    const docText = adfToText(value);
-    if (docText) return truncate(docText);
-    const obj = value as Record<string, unknown>;
-    for (const key of ["value", "name", "title", "displayName", "key", "id"]) {
-      if (typeof obj[key] === "string" && obj[key]) return truncate(obj[key]);
-    }
-    return truncate(JSON.stringify(value));
-  }
-  return null;
-}
-
-function isEmptyValue(value: unknown): boolean {
-  return (
-    value === null ||
-    value === undefined ||
-    value === "" ||
-    (Array.isArray(value) && value.length === 0)
-  );
-}
-
-function truncate(value: string): string {
-  return value.length > 1000 ? `${value.slice(0, 997)}…` : value;
-}
-
-function unique<T>(items: T[]): T[] {
-  return [...new Set(items)];
 }
 
 function normalizeCustomFieldMode(value: unknown): CustomFieldMode {

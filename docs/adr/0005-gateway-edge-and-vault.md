@@ -135,7 +135,12 @@ on the edge"):
   `https://api.atlassian.com/ex/<product>/ <cloudId>` with a site-relative path,
   checked before the request; the site makes only browse URLs.
 - The gateway hands tools typed credential outcomes and never builds a tool
-  error; only fixed, edge-owned tool texts reach a caller.
+  error; only fixed, edge-owned tool texts reach a caller. The single exception
+  (Task-1439 D4, amended 2026-11-19): Jira's own `errorMessages` and `errors`
+  reasons for a `jira_search_issues` HTTP 400, never with credential material
+  (any form of the call's token or an authorization marker drops all of them for
+  the fixed text), sanitized and capped. They may quote the user's JQL, field
+  names or a URL Jira chose to mention, and reach only that user's caller.
 - The MCP endpoint needs the client's certificate and that client's MCP token,
   kept only as a hash; it never forwards and spends no lease.
 - Gateway client 1.0's `tools.list` and `tools.call` (Task-1398) are the second

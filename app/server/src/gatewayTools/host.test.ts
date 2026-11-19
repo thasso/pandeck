@@ -56,11 +56,15 @@ function caller(
   };
 }
 
-test("the registry lists jira_get_issue with its schema, effect and action key", () => {
+test("the registry lists Jira's read tools with their schemas, effect and action key", () => {
   const host = createToolHost(EDGE_TOOLS, { log: () => {} });
   assert.deepEqual(
     host.list().map((t) => [t.name, t.effect, t.actionKey]),
-    [["jira_get_issue", "read", "jira:read"]],
+    [
+      ["jira_get_issue", "read", "jira:read"],
+      ["jira_search_issues", "read", "jira:read"],
+      ["jira_lookup", "read", "jira:read"],
+    ],
   );
   const [listed] = host.list();
   assert.deepEqual(listed!.inputSchema.required, ["issue"]);

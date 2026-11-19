@@ -4,7 +4,10 @@
  * and stored by the gateway only as the opaque JSON `encodeAtlassianCredential`
  * makes. The site is a bare `<name>.atlassian.net` host, so a stored
  * credential can only ever be sent to Atlassian (SSRF guard). Errors become
- * fixed texts; no upstream body or credential reaches a caller.
+ * fixed texts; no upstream body or credential reaches a caller. The single
+ * exception: a rejected `jira_search_issues` (HTTP 400) may show Jira's own
+ * `errorMessages`/`errors` reasons (D4-yes, `jiraSearchIssues.ts`), never
+ * with credential material, sanitized and capped.
  *
  * Or the vault's OAuth access view (Task-1411), `{kind: "atlassian-oauth",
  * site, cloudId, accessToken, expiresAt}`, decoded and checked per call and
@@ -178,14 +181,19 @@ export function jiraFailure(
 ): never {
   if (err instanceof AtlassianHttpError) {
     if (err.status === 401 || err.status === 403)
-      throw new ToolError(
-        "accessToken" in credential
-          ? "Atlassian rejected the credential; sign in with Atlassian again on the gateway's page."
-          : "Atlassian rejected the credential; reconnect Jira in Pandeck's Settings.",
-      );
+      throw new ToolError(credentialRejectedText(credential));
     if (err.status === 404)
       throw new ToolError("Jira has no such issue, or the user can't see it.");
     throw new ToolError(`Jira answered HTTP ${err.status}.`);
   }
   throw err;
+}
+
+/** The 401/403 remedy, by the credential's kind. */
+export function credentialRejectedText(
+  credential: AtlassianCredential,
+): string {
+  return "accessToken" in credential
+    ? "Atlassian rejected the credential; sign in with Atlassian again on the gateway's page."
+    : "Atlassian rejected the credential; reconnect Jira in Pandeck's Settings.";
 }

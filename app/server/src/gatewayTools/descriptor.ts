@@ -6,6 +6,11 @@
  * Only `ToolError` text reaches a caller, and it must be fixed text this
  * module tree owns: never a credential, an upstream body, a request string or
  * any other error's message. `ToolError` exists only inside `gatewayTools/`.
+ * The single exception (Task-1439 D4, ADR-0005): Jira's own `errorMessages`
+ * and `errors` reasons for a `jira_search_issues` HTTP 400
+ * (`jiraSearchIssues.ts`). They are never shown with credential material,
+ * and are sanitized and capped. They may quote the user's JQL, field names or
+ * a URL Jira chose to mention.
  */
 
 /** An API token the user set for their site. */
@@ -32,26 +37,43 @@ interface AtlassianOAuthCredential {
 export type AtlassianCredential =
   AtlassianTokenCredential | AtlassianOAuthCredential;
 
-/** What the closed schema checker (`schema.ts`) understands. */
+/**
+ * What the closed schema checker (`schema.ts`) understands. Readonly, so a
+ * local tool's `as const` schema is the edge's schema too (Task-1439).
+ */
 type PropertySchema =
   | {
-      type: "string";
-      description?: string;
-      pattern?: string;
-      maxLength?: number;
+      readonly type: "string";
+      readonly description?: string;
+      readonly pattern?: string;
+      readonly maxLength?: number;
+      readonly enum?: readonly string[];
     }
-  | { type: "boolean"; description?: string; default?: boolean }
   | {
-      type: "integer";
-      description?: string;
-      minimum?: number;
-      maximum?: number;
-      default?: number;
+      readonly type: "boolean";
+      readonly description?: string;
+      readonly default?: boolean;
+    }
+  | {
+      readonly type: "integer";
+      readonly description?: string;
+      readonly minimum?: number;
+      readonly maximum?: number;
+      readonly default?: number;
+    }
+  | { readonly type: "number"; readonly description?: string }
+  | {
+      readonly type: "array";
+      readonly description?: string;
+      readonly items: {
+        readonly type: "string";
+        readonly enum?: readonly string[];
+      };
     };
 
 export interface ObjectSchema {
   type: "object";
-  properties: Record<string, PropertySchema>;
+  properties: Readonly<Record<string, PropertySchema>>;
   required?: readonly string[];
   additionalProperties: false;
 }

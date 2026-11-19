@@ -5,7 +5,14 @@
  */
 import assert from "node:assert/strict";
 import { test } from "vitest";
+import { JIRA_LOOKUP_DESCRIPTION, lookupParamsSchema } from "../jiraLookup.ts";
+import {
+  JIRA_SEARCH_ISSUES_DESCRIPTION,
+  searchIssuesParamsSchema,
+} from "../jiraSearch.ts";
 import { createEdgeTools } from "./index.ts";
+import { jiraLookup } from "./jiraLookup.ts";
+import { jiraSearchIssues } from "./jiraSearchIssues.ts";
 import { EDGE_TOOLS } from "./tools.ts";
 
 test("every edge tool's descriptor is within the client's bounds", () => {
@@ -31,6 +38,10 @@ test("the edge's tools offer the host's listing", () => {
   const listed = createEdgeTools({ log: () => {} }).host.list();
   assert.deepEqual(
     listed.map((tool) => tool.name),
+    ["jira_get_issue", "jira_search_issues", "jira_lookup"],
+  );
+  assert.deepEqual(
+    listed.map((tool) => tool.name),
     EDGE_TOOLS.map((tool) => tool.name),
   );
   const jira = listed.find((tool) => tool.name === "jira_get_issue");
@@ -38,4 +49,12 @@ test("the edge's tools offer the host's listing", () => {
   assert.equal(jira.effect, "read");
   assert.equal(jira.actionKey, "jira:read");
   assert.equal(jira.inputSchema.additionalProperties, false);
+});
+
+test("search and lookup share the local tools' schema and description objects", () => {
+  // Identity, not equality: one constant serves both, so they cannot drift.
+  assert.ok(jiraSearchIssues.inputSchema === searchIssuesParamsSchema);
+  assert.ok(jiraSearchIssues.description === JIRA_SEARCH_ISSUES_DESCRIPTION);
+  assert.ok(jiraLookup.inputSchema === lookupParamsSchema);
+  assert.ok(jiraLookup.description === JIRA_LOOKUP_DESCRIPTION);
 });
