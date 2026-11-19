@@ -428,10 +428,10 @@ restarts its reply deadline.
   conversation or sender, so a coordinator's corrections interleaved with a
   helper's handoffs were read one turn each, hours late. A turn's reply without
   `inReplyTo` continues the batch's newest request, or else its newest message,
-  and the Peer prompts history shows a batch once, in that message's
-  conversation. The envelope ends with how many unread messages still wait
-  behind the batch, when any do, so the recipient does not answer a point a
-  waiting message changed.
+  and the Peer prompts history shows a batch once, in its newest member's
+  conversation (which may differ from the reply's). The envelope ends with how
+  many unread messages still wait behind the batch, when any do, so the
+  recipient does not answer a point a waiting message changed.
 - **Settled.** The recipient may close a request without a message (a settle
   row): `settled` is terminal and recipient-written, carries the reason in
   `settle_reason`, and is owed by nobody. Like `replied`, it can be written

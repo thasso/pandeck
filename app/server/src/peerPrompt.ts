@@ -265,6 +265,7 @@ export async function sendPeerPrompt(
       )
     : resolveConversation(input.senderSessionId, target.id);
   let message: PeerPromptRecord;
+  let replaced: PeerPromptRecord[] = [];
   try {
     message = peerPromptStore.enqueueRouted({
       conversationId: routing.conversationId,
@@ -292,6 +293,19 @@ export async function sendPeerPrompt(
         ? { expiresAt: Date.now() + RESPONSE_TTL_MS }
         : {}),
       ...(input.hold ? { held: input.hold } : {}),
+      // Cancels the sender's unread messages in the enqueue's own
+      // transaction: both commit or neither does.
+      ...(input.replacesUnread
+        ? {
+            replaceUnread: {
+              reasonFor: (id: string) =>
+                `Replaced before delivery by a newer message (${peerPromptKey(id)}).`,
+              onReplaced: (rows: PeerPromptRecord[]) => {
+                replaced = rows;
+              },
+            },
+          }
+        : {}),
     });
   } catch (err) {
     if (err instanceof PeerPromptHopLimitError) {
@@ -333,16 +347,6 @@ export async function sendPeerPrompt(
     const original = peerPromptStore.getById(id);
     if (original) void broadcastCardUpdateFor(original);
   }
-  // Queued first, then the older ones go: a failed send never leaves the
-  // target with neither. One already being delivered is past recalling.
-  const replaced = input.replacesUnread
-    ? peerPromptStore.cancelUnreadFromSender(
-        target.id,
-        input.senderSessionId,
-        message.id,
-        `Replaced before delivery by a newer message (${peerPromptKey(message.id)}).`,
-      )
-    : [];
   if (replaced.length > 0) broadcastPeerPromptChanges(replaced);
   const backlog = input.hold ? undefined : sendBacklog(message, target);
   // Fire-and-forget delivery; the send call never blocks on the recipient turn.

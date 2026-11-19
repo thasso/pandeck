@@ -600,6 +600,16 @@ interface RoutedEnqueueInput {
    * waiting children follows admission order, whichever creation finishes first.
    */
   held?: { queueSeq: number };
+  /**
+   * The new message supersedes the sender's unread messages to this recipient:
+   * they are cancelled in this same transaction, so both commit or neither
+   * does. `reasonFor` gets the new message's id; `onReplaced` receives the
+   * cancelled rows after the commit.
+   */
+  replaceUnread?: {
+    reasonFor: (newMessageId: string) => string;
+    onReplaced: (rows: PeerPromptRecord[]) => void;
+  };
 }
 
 const INSERT_MESSAGE_SQL = `
@@ -624,6 +634,48 @@ function ensureChain(
     )
     .get(chainId) as { next_hop: number; closed: number };
   return { nextHop: row.next_hop, closed: Boolean(row.closed) };
+}
+
+/**
+ * Cancel, inside the caller's transaction, every message the sender queued for
+ * that recipient that it has not read yet, except `keepId` (Task-1442). A
+ * `held` opening prompt is never replaced (it is a spawned child's first turn
+ * and its slot), and a `dispatching` row is past recalling.
+ */
+function cancelUnreadInTxn(
+  db: ReturnType<typeof getDb>,
+  input: Pick<RoutedEnqueueInput, "recipientSessionId" | "senderSessionId">,
+  keepId: string,
+  reason: string,
+  now: number,
+): string[] {
+  const rows = db
+    .prepare(
+      `SELECT id FROM peer_prompts
+        WHERE recipient_session_id = ? AND sender_session_id = ? AND id != ?
+          AND status IN ('queued', 'retryable_failed')
+        ORDER BY queue_seq`,
+    )
+    .all(input.recipientSessionId, input.senderSessionId, keepId) as {
+    id: string;
+  }[];
+  return rows
+    .filter((row) =>
+      transitionInTxn(
+        db,
+        row.id,
+        ["queued", "retryable_failed"],
+        "cancelled",
+        {
+          failureReason: reason,
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          nextAttemptAt: null,
+        },
+        now,
+      ),
+    )
+    .map((row) => row.id);
 }
 
 /**
@@ -711,7 +763,11 @@ function enqueueRouted(
     );
     if (input.strictReplies && closed.length > 0)
       throw new PeerPromptRequestClosedError(closed);
+    const replacedIds = input.replaceUnread
+      ? cancelUnreadInTxn(db, input, id, input.replaceUnread.reasonFor(id), now)
+      : [];
     db.exec("COMMIT");
+    input.replaceUnread?.onReplaced(replacedIds.map((r) => map(getRow(r)!)));
     return map(getRow(id)!);
   } catch (err) {
     if (!(err instanceof PeerPromptHopLimitError)) {
@@ -1383,56 +1439,6 @@ function cancelPending(
       )
         cancelled.push(map(getRow(row.id)!));
     }
-    db.exec("COMMIT");
-    return cancelled;
-  } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
-  }
-}
-
-/**
- * Cancel what one sender queued for one recipient that the recipient has not
- * read, except `keepId` — the newer message replacing them. A `held` opening
- * prompt is never replaced: it is a spawned child's first turn and its slot.
- * A `dispatching` row is past recalling, as in {@link cancelPending}.
- */
-function cancelUnreadFromSender(
-  recipientSessionId: string,
-  senderSessionId: string,
-  keepId: string,
-  reason: string,
-  now = Date.now(),
-): PeerPromptRecord[] {
-  const db = getDb();
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const rows = db
-      .prepare(
-        `SELECT id FROM peer_prompts
-          WHERE recipient_session_id = ? AND sender_session_id = ? AND id != ?
-            AND status IN ('queued', 'retryable_failed')
-          ORDER BY queue_seq`,
-      )
-      .all(recipientSessionId, senderSessionId, keepId) as { id: string }[];
-    const cancelled: PeerPromptRecord[] = [];
-    for (const row of rows)
-      if (
-        transitionInTxn(
-          db,
-          row.id,
-          ["queued", "retryable_failed"],
-          "cancelled",
-          {
-            failureReason: reason,
-            leaseOwner: null,
-            leaseExpiresAt: null,
-            nextAttemptAt: null,
-          },
-          now,
-        )
-      )
-        cancelled.push(map(getRow(row.id)!));
     db.exec("COMMIT");
     return cancelled;
   } catch (err) {
@@ -2794,7 +2800,6 @@ export const peerPromptStore = {
   markFailed,
   markExpired,
   cancelPending,
-  cancelUnreadFromSender,
   cancelOne,
   allocateQueueSeq,
   promoteHeld,

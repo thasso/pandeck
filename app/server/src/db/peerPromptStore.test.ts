@@ -875,28 +875,69 @@ describe("peerPromptStore", () => {
     );
   });
 
-  it("cancels a sender's unread messages for a newer one, keeping held, dispatching and other senders' rows", () => {
+  it("replaces a sender's unread messages in the enqueue's own transaction, keeping held, dispatching and other senders' rows", () => {
     const recipient = `r-${seq++}`;
     const sending = enqueue(recipient, { sender: "coord" });
     store.claimBatch(recipient, "d", 60_000, 1, 10_000);
     const stale = enqueue(recipient, { sender: "coord" });
     const other = enqueue(recipient, { sender: "helper" });
-    const newer = enqueue(recipient, { sender: "coord" });
-    const cancelled = store.cancelUnreadFromSender(
-      recipient,
-      "coord",
-      newer.id,
-      "replaced",
+    const routed = (prompt: string) => {
+      const { conversationId, chainId } = conv();
+      return {
+        conversationId,
+        chainId,
+        senderSessionId: "coord",
+        recipientSessionId: recipient,
+        participants: ["coord", recipient],
+        maxHops: 100,
+        prompt,
+        responseRequested: false,
+      };
+    };
+
+    let replaced: ReturnType<typeof store.getById>[] = [];
+    const replacing = (reasonFor: (id: string) => string) => ({
+      reasonFor,
+      onReplaced: (rows: ReturnType<typeof store.getById>[]) => {
+        replaced = rows;
+      },
+    });
+    // A failure inside the transaction commits neither half.
+    assert.throws(
+      () =>
+        store.enqueueRouted({
+          ...routed("lost brief"),
+          replaceUnread: replacing(() => {
+            throw new Error("disk full");
+          }),
+        }),
+      /disk full/,
     );
+    assert.equal(store.getById(stale.id)?.status, "queued");
     assert.deepEqual(
-      cancelled.map((m) => m.id),
+      store
+        .listUndeliveredForRecipient(recipient)
+        .map((m) => m.prompt)
+        .filter((p) => p === "lost brief"),
+      [],
+    );
+
+    const message = store.enqueueRouted({
+      ...routed("brief v2"),
+      replaceUnread: replacing((id) => `replaced by ${id}`),
+    });
+    assert.deepEqual(
+      replaced.map((m) => m?.id),
       [stale.id],
     );
     assert.equal(store.getById(stale.id)?.status, "cancelled");
-    assert.equal(store.getById(stale.id)?.failureReason, "replaced");
+    assert.equal(
+      store.getById(stale.id)?.failureReason,
+      `replaced by ${message.id}`,
+    );
     assert.equal(store.getById(sending.id)?.status, "dispatching");
     assert.equal(store.getById(other.id)?.status, "queued");
-    assert.equal(store.getById(newer.id)?.status, "queued");
+    assert.equal(store.getById(message.id)?.status, "queued");
   });
 
   it("reserves a claimed batch before its append only while the claim holds every row", () => {

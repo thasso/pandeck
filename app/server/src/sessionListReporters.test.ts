@@ -277,7 +277,6 @@ const CLASSIFIED: Record<
       markFailed: "projected-write",
       markExpired: "projected-write",
       cancelPending: "projected-write",
-      cancelUnreadFromSender: "projected-write",
       cancelOne: "projected-write",
       allocateQueueSeq: "non-projected-write",
       promoteHeld: "projected-write",

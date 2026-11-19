@@ -426,11 +426,12 @@ the outcome:
   ("Replaced before delivery by a newer message (k…)"), and the row lists them
   in `replaced`, which the web shows as a withdraw row under the sent card. A
   `held` opening prompt is never replaced (it is the child's first turn and its
-  slot), and one already dispatching is past recalling. Queued first, then
-  cancelled, so a refused send never leaves the target with neither. The
-  developer persona tells agents to send complete briefs, to replace unread ones
-  rather than correct them, and not to send acknowledgements, which each cost
-  the recipient a turn.
+  slot), and one already dispatching is past recalling. The cancel runs in the
+  enqueue's own transaction (`enqueueRouted` with `replaceUnread`): both commit
+  or neither does, so a crash or failed write never leaves the stale messages
+  deliverable beside their replacement. The developer persona tells agents to
+  send complete briefs, to replace unread ones rather than correct them, and not
+  to send acknowledgements, which each cost the recipient a turn.
 
   The same `responseRequested` rows tell the user when a tree needs a poke: each
   session row lists the peers that still owe it a reply — the turn ended without
