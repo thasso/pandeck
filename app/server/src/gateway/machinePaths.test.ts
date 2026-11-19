@@ -252,11 +252,25 @@ describe("the listed templates", () => {
       "/api/directory/server-urls",
     ],
     ["/anthropic", "GET", "/api/web/domain_info", "/api/web/domain_info"],
+    [
+      "/anthropic",
+      "GET",
+      "/api/oauth/account/settings",
+      "/api/oauth/account/settings",
+    ],
+    ["/anthropic", "GET", "/api/claude_code_grove", "/api/claude_code_grove"],
+    [
+      "/anthropic",
+      "GET",
+      `/api/oauth/organizations/${UUID}/sync/github/auth`,
+      "/api/oauth/organizations/:uuid/sync/github/auth",
+    ],
+    ["/anthropic", "GET", "/v1/ultrareview/quota", "/v1/ultrareview/quota"],
     ["/anthropic-mcp", "POST", "/v1/mcp/linear", "/v1/mcp/:slug"],
   ];
 
   test("every template has an example, and marks it", () => {
-    assert.equal(EXAMPLES.length, 22);
+    assert.equal(EXAMPLES.length, 26);
     for (const [prefix, method, path, template] of EXAMPLES) {
       assert.equal(listedTemplate(prefix, method, path), template, path);
       assert.deepEqual(
@@ -286,6 +300,14 @@ describe("the listed templates", () => {
       "GET",
       "/api/organizations/not-a-uuid/model_selector/cc",
     );
+    // Only the reads are listed (Task-1437), never a write beside them.
+    unlisted(
+      "/anthropic",
+      "POST",
+      `/api/oauth/organizations/${UUID}/sync/github/auth`,
+    );
+    unlisted("/anthropic", "POST", "/v1/code/github/import-token");
+    unlisted("/anthropic", "PATCH", "/api/oauth/account/settings");
     unlisted("/anthropic-mcp", "POST", "/v1/mcp/..");
     unlisted("/anthropic-mcp", "POST", "/v1/mcp/.");
     unlisted("/anthropic-mcp", "POST", "/v1/mcp/%2e");

@@ -1,5 +1,6 @@
 /** Relay-local C3 classifier. The closed node-only boundary requires this copy. */
-export type ClientCredentialClass = "none" | "placeholder" | "lease" | "other";
+export type ClientCredentialClass =
+  "none" | "placeholder" | "lease" | "mcp-token" | "other";
 
 export const MACHINE_PLACEHOLDER =
   "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoicGFuZGVjay1nYXRld2F5In0sInBhbmRlY2siOnsidiI6MSwibWFjaGluZSI6dHJ1ZX19.pandeck";
@@ -8,8 +9,12 @@ const RANK: Record<ClientCredentialClass, number> = {
   none: 0,
   placeholder: 1,
   lease: 2,
-  other: 3,
+  "mcp-token": 3,
+  other: 4,
 };
+
+/** Same MCP token shape as gateway/requestCredential.ts. */
+const MCP_TOKEN_RE = /^pgmcp_[A-Za-z0-9_-]{43}$/;
 
 /** Same lease shape as gateway/leases.ts, without checking authenticity. */
 function leaseShaped(token: string): boolean {
@@ -57,9 +62,11 @@ export function classifyClientCredential(
       ? "other"
       : token === MACHINE_PLACEHOLDER
         ? "placeholder"
-        : leaseShaped(token)
-          ? "lease"
-          : "other";
+        : MCP_TOKEN_RE.test(token)
+          ? "mcp-token"
+          : leaseShaped(token)
+            ? "lease"
+            : "other";
     if (RANK[found] > RANK[worst]) worst = found;
   }
   return worst;

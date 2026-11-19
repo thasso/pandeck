@@ -5,14 +5,16 @@
  *
  * Every value of `authorization`, `x-api-key` and `proxy-authorization`
  * counts, repeats included and names in any case. The most sensitive class
- * wins: `other` > `lease` > `placeholder` > `none`. A bearer (or an
- * `x-api-key` value) equal to the public machine placeholder is
- * `placeholder`, a lease-shaped one `lease`; anything else, an empty or
- * malformed value included, is `other`.
+ * wins: `other` > `mcp-token` > `lease` > `placeholder` > `none`. A bearer
+ * (or an `x-api-key` value) equal to the public machine placeholder is
+ * `placeholder`, a lease-shaped one `lease`, one shaped like a client's MCP
+ * token `mcp-token` (Task-1437); anything else, an empty or malformed value
+ * included, is `other`. Shapes only: whether a token is valid is not read.
  */
 import { isLeaseShaped } from "./leases.ts";
 
-export type ClientCredentialClass = "none" | "placeholder" | "lease" | "other";
+export type ClientCredentialClass =
+  "none" | "placeholder" | "lease" | "mcp-token" | "other";
 
 /**
  * The fixed, public placeholder a standalone harness sends as its key
@@ -26,8 +28,15 @@ const RANK: Record<ClientCredentialClass, number> = {
   none: 0,
   placeholder: 1,
   lease: 2,
-  other: 3,
+  "mcp-token": 3,
+  other: 4,
 };
+
+/**
+ * A client's MCP token as minted (`clientRegistry.ts`, the relay's
+ * enrollment): `pgmcp_` and 32 random bytes, base64url.
+ */
+const MCP_TOKEN_RE = /^pgmcp_[A-Za-z0-9_-]{43}$/;
 
 /** A bearer's token, or undefined when the value is not `Bearer <token>`. */
 const BEARER_RE = /^Bearer +(\S+)$/i;
@@ -35,6 +44,7 @@ const BEARER_RE = /^Bearer +(\S+)$/i;
 function tokenClass(token: string | undefined): ClientCredentialClass {
   if (!token) return "other";
   if (token === MACHINE_PLACEHOLDER) return "placeholder";
+  if (MCP_TOKEN_RE.test(token)) return "mcp-token";
   return isLeaseShaped(token) ? "lease" : "other";
 }
 

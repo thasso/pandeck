@@ -460,9 +460,13 @@ record for the observed one. A `POST` answered before its upload finishes must
 then be recorded once on the observed host, also when a large upload is backed
 up behind the answer and its client stays idle, and the next request on each
 ingress must get its own answer, the upstream never parsing the rest of that
-body as a request. Last, the close must be bounded. It writes only under the
-scratch directory and fails unless the fixture prints its success line within 30
-s. It is not part of `nix flake check` and does not replace the install check.
+body as a request; the backed-up record's `requestBytes` must not exceed what
+the client sent. A raw TLS upstream answering in `gzip, chunked`, to a request
+and as an upgrade's non-101 answer, must get the marked 502 `transfer-coding`
+with none of the coded body and one failed record each. Last, the close must be
+bounded. It writes only under the scratch directory and fails unless the fixture
+prints its success line within 30 s. It is not part of `nix flake check` and
+does not replace the install check.
 
 The package must not use `bun build --compile` or Bun's ordinary bundler. As
 observed on Bun 1.3.13, and not re-measured on 1.4.2 since the package uses

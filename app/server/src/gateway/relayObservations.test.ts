@@ -449,3 +449,27 @@ test.each([
     assert.deepEqual(r.lines, ["relay observations: invalid batch"]);
   },
 );
+
+test("Task-1436/1437: an mcp-token class and a transfer-coding refusal are accepted; an unknown class or reason refuses the batch", async () => {
+  const r = await rig(["localhost"]);
+  const coded = {
+    ...report("claude.ai", 1),
+    reason: "transfer-coding",
+    clientCredential: "mcp-token",
+  };
+  for (const bad of [
+    { ...coded, clientCredential: "mcp" },
+    { ...coded, reason: "transfer-codings" },
+  ])
+    assert.equal(await r.post({ boot, records: [bad] }), 400);
+  assert.equal(r.records.length, 0);
+  assert.equal(await r.post({ boot, records: [coded] }), 200);
+  assert.deepEqual(
+    [
+      r.records[0]!.reason,
+      r.records[0]!.clientCredential,
+      r.records[0]!.status,
+    ],
+    ["transfer-coding", "mcp-token", 502],
+  );
+});

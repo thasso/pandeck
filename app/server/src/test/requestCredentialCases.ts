@@ -6,7 +6,7 @@
  * fake.
  */
 
-type CredentialClass = "none" | "placeholder" | "lease" | "other";
+type CredentialClass = "none" | "placeholder" | "lease" | "mcp-token" | "other";
 
 /** The public machine placeholder (`docs/workers.md` "Standalone harnesses"). */
 export const PLACEHOLDER_FIXTURE =
@@ -22,8 +22,12 @@ export const LEASE_FIXTURE = [
   "Zml4dHVyZQ",
 ].join(".");
 
+/** MCP-token-shaped: `pgmcp_` and 43 base64url characters (32 bytes). */
+const MCP_TOKEN_FIXTURE = `pgmcp_${"f".repeat(42)}A`;
+
 const P = `Bearer ${PLACEHOLDER_FIXTURE}`;
 const L = `Bearer ${LEASE_FIXTURE}`;
+const M = `Bearer ${MCP_TOKEN_FIXTURE}`;
 
 /** Raw header pairs (as `IncomingMessage.rawHeaders`) and their class. */
 export const CREDENTIAL_CASES: readonly {
@@ -52,6 +56,37 @@ export const CREDENTIAL_CASES: readonly {
     name: "lease api key",
     rawHeaders: ["x-api-key", LEASE_FIXTURE],
     expected: "lease",
+  },
+  {
+    name: "mcp token bearer",
+    rawHeaders: ["Authorization", M],
+    expected: "mcp-token",
+  },
+  {
+    name: "mcp token api key",
+    rawHeaders: ["x-api-key", MCP_TOKEN_FIXTURE],
+    expected: "mcp-token",
+  },
+  ...[
+    `Bearer ${MCP_TOKEN_FIXTURE}A`,
+    `Bearer ${MCP_TOKEN_FIXTURE.slice(0, -1)}`,
+    `Bearer ${MCP_TOKEN_FIXTURE.slice(0, -1)}=`,
+    `Bearer ${MCP_TOKEN_FIXTURE.replace("pgmcp_", "PGMCP_")}`,
+    `Bearer pgmcp-${MCP_TOKEN_FIXTURE.slice(6)}`,
+  ].map((value) => ({
+    name: `not mcp-token-shaped ${JSON.stringify(value.slice(7, 20))}…`,
+    rawHeaders: ["authorization", value],
+    expected: "other" as const,
+  })),
+  {
+    name: "lease and an mcp token",
+    rawHeaders: ["authorization", L, "x-api-key", MCP_TOKEN_FIXTURE],
+    expected: "mcp-token",
+  },
+  {
+    name: "mcp token and a real api key",
+    rawHeaders: ["authorization", M, "x-api-key", "sk-ant-api03-real"],
+    expected: "other",
   },
   ...[
     "Bearer sk-ant-something",

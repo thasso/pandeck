@@ -276,6 +276,7 @@ const GATEWAY_UI_CLIENT_CREDENTIALS = [
   "none",
   "placeholder",
   "lease",
+  "mcp-token",
   "other",
 ] as const;
 type GatewayUiClientCredential = (typeof GATEWAY_UI_CLIENT_CREDENTIALS)[number];
