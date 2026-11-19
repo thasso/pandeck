@@ -1,15 +1,19 @@
 /**
- * The closed argument checker for edge tools: an object of string, boolean
- * and integer properties with `required`, `additionalProperties: false`,
- * `pattern`, `maxLength`, `minimum` and `maximum`, and `default` applied.
- * A refusal names the property as the schema names it, never the value or a
- * name the caller sent.
+ * The closed argument checker for edge tools: an object of string, boolean,
+ * integer, number and string-array properties with `required`,
+ * `additionalProperties: false`, `pattern`, `maxLength`, `minimum`,
+ * `maximum`, `enum` (on a string or an array's string items), and `default`
+ * applied. A number must be finite. A refusal names the property as the
+ * schema names it, never the value or a name the caller sent.
  */
 import type { ObjectSchema } from "./descriptor.ts";
 
 export type SchemaCheck =
   | { ok: true; params: Record<string, unknown> }
   | { ok: false; message: string };
+
+const listed = (allowed: readonly string[] | undefined, value: string) =>
+  allowed === undefined || allowed.includes(value);
 
 export function checkArguments(
   schema: ObjectSchema,
@@ -50,6 +54,8 @@ export function checkArguments(
           !new RegExp(property.pattern).test(value)
         )
           return refuse(`${name} does not have the expected form.`);
+        if (!listed(property.enum, value))
+          return refuse(`${name} must be one of the listed values.`);
         break;
       case "boolean":
         if (typeof value !== "boolean")
@@ -63,6 +69,19 @@ export function checkArguments(
           (property.maximum !== undefined && value > property.maximum)
         )
           return refuse(`${name} is out of range.`);
+        break;
+      case "number":
+        if (typeof value !== "number" || !Number.isFinite(value))
+          return refuse(`${name} must be a number.`);
+        break;
+      case "array":
+        if (
+          !Array.isArray(value) ||
+          !value.every((item) => typeof item === "string")
+        )
+          return refuse(`${name} must be a list of strings.`);
+        if (!value.every((item: string) => listed(property.items.enum, item)))
+          return refuse(`${name} must hold only the listed values.`);
         break;
     }
     params[name] = value;

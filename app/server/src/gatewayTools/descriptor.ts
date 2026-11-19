@@ -32,26 +32,43 @@ interface AtlassianOAuthCredential {
 export type AtlassianCredential =
   AtlassianTokenCredential | AtlassianOAuthCredential;
 
-/** What the closed schema checker (`schema.ts`) understands. */
+/**
+ * What the closed schema checker (`schema.ts`) understands. Readonly, so a
+ * local tool's `as const` schema is the edge's schema too (Task-1439).
+ */
 type PropertySchema =
   | {
-      type: "string";
-      description?: string;
-      pattern?: string;
-      maxLength?: number;
+      readonly type: "string";
+      readonly description?: string;
+      readonly pattern?: string;
+      readonly maxLength?: number;
+      readonly enum?: readonly string[];
     }
-  | { type: "boolean"; description?: string; default?: boolean }
   | {
-      type: "integer";
-      description?: string;
-      minimum?: number;
-      maximum?: number;
-      default?: number;
+      readonly type: "boolean";
+      readonly description?: string;
+      readonly default?: boolean;
+    }
+  | {
+      readonly type: "integer";
+      readonly description?: string;
+      readonly minimum?: number;
+      readonly maximum?: number;
+      readonly default?: number;
+    }
+  | { readonly type: "number"; readonly description?: string }
+  | {
+      readonly type: "array";
+      readonly description?: string;
+      readonly items: {
+        readonly type: "string";
+        readonly enum?: readonly string[];
+      };
     };
 
 export interface ObjectSchema {
   type: "object";
-  properties: Record<string, PropertySchema>;
+  properties: Readonly<Record<string, PropertySchema>>;
   required?: readonly string[];
   additionalProperties: false;
 }

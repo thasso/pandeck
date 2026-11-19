@@ -2667,7 +2667,8 @@ writes no answer, no second record and contacts no upstream.
 #### Tools on the edge
 
 The edge runs integration tools for its clients' users (Task-1397, M22): a tool
-host and a standalone MCP endpoint, and the first tool, `jira_get_issue`.
+host and a standalone MCP endpoint, and three Jira read tools: `jira_get_issue`,
+plus `jira_search_issues` and `jira_lookup` (Task-1439).
 
 - **Host** (`gatewayTools/`, loaded only by the edge's composition
   `gatewayEdge.ts`, which both edge entries run): one module per tool
@@ -2682,7 +2683,27 @@ host and a standalone MCP endpoint, and the first tool, `jira_get_issue`.
   `EdgeTools` (`gateway/edgeTools.ts`, types only) through `startGateway`'s
   `tools`, and the vault process never loads them. Without them `/mcp` is an
   unknown path and the integration methods answer `tools_unavailable`; the
-  packaged entry wires none yet (D1).
+  packaged entry wires none yet (D1). The closed schema covers strings
+  (`maxLength`, `pattern`, `enum`), booleans, integers with a range, finite
+  numbers and arrays of strings (with an item `enum`); a refusal names the
+  property, never a value.
+- **Jira search and lookup** (Task-1439). `jira_search_issues` and `jira_lookup`
+  run the same read path as the local tools (`jiraSearch.ts`, `jiraLookup.ts`,
+  `jiraSprintLookup.ts`, `jiraFields.ts`, `jiraRead.ts` beside `tools/jira/`,
+  which wraps them) with the same schema and description objects, so the payload
+  text is the same for the same Jira answers. The edge keeps no disk cache: each
+  call reads the field list or the issue link types it needs. Every request
+  carries the call's signal and a paging loop stops once it aborts. Known
+  difference from local (D5): a result over the host's 60,000 characters answers
+  `result_too_large`, where the local tool answers it whole. Input refusals are
+  fixed texts that hold no input value (for example "No Jira board shows that
+  project."). Jira's answers map by status only: 401 or 403 is the credential
+  remedy for the credential's kind, any other status "Jira answered HTTP
+  `<status>`.", and a 400 to a search "Jira refused the search (HTTP 400); check
+  the JQL, and resolve project, user and field names with jira_lookup." Jira's
+  body never reaches the caller. Over OAuth, `jira_lookup kind=sprints` needs
+  Jira Software scopes the gateway does not ask for yet, so Jira refuses it
+  until they are added (Task-1439 D3).
 - **`/mcp`** on the model port, reached by a harness through the box's relay at
   `http://127.0.0.1:<relay port>/mcp`: stateless Streamable HTTP with JSON
   responses, one fresh SDK server and transport per POST. The gate needs the

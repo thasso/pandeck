@@ -178,14 +178,19 @@ export function jiraFailure(
 ): never {
   if (err instanceof AtlassianHttpError) {
     if (err.status === 401 || err.status === 403)
-      throw new ToolError(
-        "accessToken" in credential
-          ? "Atlassian rejected the credential; sign in with Atlassian again on the gateway's page."
-          : "Atlassian rejected the credential; reconnect Jira in Pandeck's Settings.",
-      );
+      throw new ToolError(credentialRejectedText(credential));
     if (err.status === 404)
       throw new ToolError("Jira has no such issue, or the user can't see it.");
     throw new ToolError(`Jira answered HTTP ${err.status}.`);
   }
   throw err;
+}
+
+/** The 401/403 remedy, by the credential's kind. */
+export function credentialRejectedText(
+  credential: AtlassianCredential,
+): string {
+  return "accessToken" in credential
+    ? "Atlassian rejected the credential; sign in with Atlassian again on the gateway's page."
+    : "Atlassian rejected the credential; reconnect Jira in Pandeck's Settings.";
 }

@@ -352,13 +352,63 @@ async function twoUsers(deadlineMs?: number) {
   return { e, a1, a2, b1, tokens, linkA, linkB };
 }
 
+test("the relay lists Jira's read tools as read-only, with their schemas whole, and runs jira_lookup", async () => {
+  const { a1, tokens } = await twoUsers();
+  const client = await mcpClient(a1.url, tokens.a1);
+  const { tools } = await client.listTools();
+  for (const tool of tools)
+    assert.equal(tool.annotations?.readOnlyHint, true, tool.name);
+  const lookup = tools.find((tool) => tool.name === "jira_lookup")!;
+  assert.deepEqual(
+    (lookup.inputSchema.properties as Record<string, { enum?: string[] }>).kind!
+      .enum,
+    ["fields", "projects", "users", "issueLinkTypes", "sprints"],
+  );
+  onIssue = (url) =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify(
+          url.pathname === "/rest/api/3/issueLinkType"
+            ? {
+                issueLinkTypes: [
+                  {
+                    id: "1",
+                    name: "Blocks",
+                    inward: "is blocked by",
+                    outward: "blocks",
+                  },
+                ],
+              }
+            : {},
+        ),
+      ),
+    );
+  const answer = await client.callTool({
+    name: "jira_lookup",
+    arguments: { kind: "issueLinkTypes" },
+  });
+  assert.equal(answer.isError, undefined);
+  assert.deepEqual(JSON.parse(textOf(answer)), {
+    kind: "issueLinkTypes",
+    jiraHost: A_SITE,
+    returned: 1,
+    totalMatched: 1,
+    exhausted: true,
+    linkTypes: [
+      { id: "1", name: "Blocks", inward: "is blocked by", outward: "blocks" },
+    ],
+  });
+  assert.equal(outbound.at(-1)!.url.host, A_SITE);
+  assert.equal(outbound.at(-1)!.auth, basic("a@x.test", A_TOKEN));
+});
+
 test("an SDK client lists and calls jira_get_issue through the relay, with its own user's credential", async () => {
   const { a1, a2, b1, tokens } = await twoUsers();
   const clientA = await mcpClient(a1.url, tokens.a1);
   const listed = await clientA.listTools();
   assert.deepEqual(
     listed.tools.map((tool) => tool.name),
-    ["jira_get_issue"],
+    ["jira_get_issue", "jira_search_issues", "jira_lookup"],
   );
   assert.deepEqual(listed.tools[0]!.inputSchema.required, ["issue"]);
   const a = await clientA.callTool({
