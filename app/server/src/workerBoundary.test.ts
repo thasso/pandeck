@@ -542,7 +542,7 @@ const GATEWAY_VAULT = [
   // their OAuth records' lanes, refresh and stop (Task-1411, Task-1452).
   "vaultIntegrations",
   "vaultLogins",
-  // The vault in its own process, serving gateway-vault/1.1.
+  // The vault in its own process, serving gateway-vault/1.2.
   "vaultServer",
   // Slack's OAuth and auth.test endpoints, from the vault only (Task-1452).
   "vaultSlack",
@@ -566,7 +566,7 @@ const GATEWAY_EDGE = [
   "machinePool",
   // The token routes' machine rules: floors, mode, listed templates (Task-1430).
   "machinePaths",
-  // The edge's VaultPort over gateway-vault/1.1.
+  // The edge's VaultPort over gateway-vault/1.2.
   "remoteVault",
   // Client-scoped relay identity and observation ingest (Task-1430 PR2a).
   "relayDedup",

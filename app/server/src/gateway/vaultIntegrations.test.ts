@@ -1,11 +1,13 @@
 /**
  * Users' integration credentials in the vault (Task-1397): `integrations.*`
- * over `gateway-vault/1.1` to a vault process in this one, sealed to a
+ * over `gateway-vault/1.2` to a vault process in this one, sealed to a
  * software recipient, locked after a restart, swept and resealed like token
  * files, and every remote call bounded. Atlassian OAuth records (Task-1411):
  * connect, refresh and stop over the real link against a loopback Atlassian
  * fake, sealed, with nothing lost to an edge timeout, a stop or a failed
- * seal. Every value is fake.
+ * seal. Slack OAuth records (Task-1452): the same over the link against a
+ * loopback Slack fake, the 1.2 wire's refusals and answer decoding, and both
+ * integrations side by side. Every value is fake.
  */
 import assert from "node:assert/strict";
 import { X509Certificate, generateKeyPairSync } from "node:crypto";
@@ -34,6 +36,19 @@ import {
   startAtlassianFake,
   type AtlassianFake,
 } from "../test/atlassianFake.ts";
+import {
+  FAKE_SLACK_CLIENT,
+  FAKE_SLACK_CODE,
+  FAKE_SLACK_REDIRECT,
+  FAKE_SLACK_SCOPE,
+  FAKE_TEAM_ID,
+  FAKE_TEAM_NAME,
+  FAKE_USER_ID,
+  FAKE_WORKSPACE_HOST,
+  slackJson,
+  startSlackFake,
+  type SlackFake,
+} from "../test/slackFake.ts";
 import { WorkerConnection } from "../workerProtocol/connection.ts";
 import { socketEndpoint } from "../workerProtocol/unixSocketTransport.ts";
 import { createRemoteVault, type RemoteVault } from "./remoteVault.ts";
@@ -48,8 +63,10 @@ import {
   VAULT_METHODS,
   integrationDirId,
   isPinnedPeer,
+  vaultBody,
   vaultMessage,
 } from "./vaultMethods.ts";
+import type { Integration } from "./vaultPort.ts";
 import {
   startVaultServer,
   type RunningVaultServer,
@@ -70,20 +87,27 @@ const CREDENTIAL = JSON.stringify({
   token: "FAKE-INT-TOKEN",
 });
 
-/** The Atlassian fake for the OAuth records' tests (Task-1411). */
+/**
+ * The Atlassian (Task-1411) and Slack (Task-1452) fakes for the OAuth
+ * records' tests.
+ */
 let atl: AtlassianFake;
 let atlToken: AtlassianFake["token"];
+let slack: SlackFake;
 beforeAll(async () => {
   atl = await startAtlassianFake();
   atlToken = atl.token;
+  slack = await startSlackFake();
 });
 afterEach(async () => {
   while (open.length) await open.pop()!.close();
   atl.token = atlToken;
   atl.expiresInS = 3600;
+  slack.reset();
 });
 afterAll(async () => {
   await atl.close();
+  await slack.close();
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -353,7 +377,7 @@ test("the vault refuses a profile whose token file is an integration record", as
 });
 
 /** A vault that answers hello and holds every integration reply. */
-async function holdingVault(): Promise<{
+async function holdingVault(connectAnswers: unknown[] = []): Promise<{
   port: number;
   held: number;
   release(): void;
@@ -406,6 +430,9 @@ async function holdingVault(): Promise<{
           [VAULT_METHODS.integrationGet]: hold,
           [VAULT_METHODS.integrationPut]: hold,
           [VAULT_METHODS.integrationClear]: hold,
+          // Scripted answers, in order (Task-1452's decoding).
+          [VAULT_METHODS.integrationConnect]: () =>
+            Promise.resolve(vaultMessage({ connect: connectAnswers.shift() })),
         },
       });
       open.push({ close: () => connection.end("test done") });
@@ -751,4 +778,334 @@ test("a failed seal after a refresh still answers; the record is sealed later an
   accessOf(await again.remote.integrationGet("u1", "atlassian"));
   assert.equal(refreshesSent().at(-1), rotated);
   noSecretsIn([...v.lines, ...again.v.lines]);
+});
+
+// --- Slack OAuth records (Task-1452) ---------------------------------------
+
+const SLACK_DIR_ID = integrationDirId("u1", "slack");
+const slackPlaintextOf = (dir: string, dirId = SLACK_DIR_ID): string =>
+  join(dir, "accounts", dirId, INTEGRATION_FILE);
+const slackSealedOf = (dir: string): string =>
+  join(dir, "sealed", SLACK_DIR_ID, `${INTEGRATION_FILE}.sealed`);
+const slackStored = (dir: string): Record<string, unknown> =>
+  JSON.parse(readFileSync(slackPlaintextOf(dir), "utf8")) as Record<
+    string,
+    unknown
+  >;
+const connectSlackU1 = (remote: RemoteVault, team?: string) =>
+  remote.integrationConnect("u1", "slack", {
+    code: FAKE_SLACK_CODE,
+    redirectUri: FAKE_SLACK_REDIRECT,
+    ...(team !== undefined ? { team } : {}),
+  });
+const noSlackSecretsIn = (lines: string[]): void => {
+  for (const line of lines)
+    assert.doesNotMatch(
+      line,
+      /fake-slack-|fake-atl-|fake-atlassian-|u1\b|UFAKE|TFAKE/,
+      line,
+    );
+};
+
+async function bothVault(dir: string) {
+  return vault(dir, {
+    integrationClients: { atlassian: FAKE_CLIENT, slack: FAKE_SLACK_CLIENT },
+    atlassianEndpoint: atl.endpoint,
+    slackEndpoint: slack.endpoint,
+  });
+}
+
+/**
+ * A bare `gateway-vault` client on the pinned link: sends any body, answers
+ * the reply's body or `refused` for a request error.
+ */
+async function rawLink(
+  port: number,
+): Promise<(method: string, json: unknown) => Promise<unknown>> {
+  const socket = await new Promise<tls.TLSSocket>((resolve, reject) => {
+    const dialed = tls.connect({
+      host: "127.0.0.1",
+      port,
+      key: edgeId.keyPem,
+      cert: edgeId.certPem,
+      ca: vaultId.certPem,
+      rejectUnauthorized: false,
+    });
+    dialed.once("secureConnect", () => resolve(dialed));
+    dialed.once("error", reject);
+  });
+  const connection = new WorkerConnection(socketEndpoint(socket), {
+    handshake: { role: "worker", workerId: "pandeck-gateway-edge" },
+    protocol: GATEWAY_VAULT_PROTOCOL,
+    handlers: {
+      [VAULT_METHODS.report]: () => Promise.resolve(vaultMessage({})),
+    },
+    limits: VAULT_LIMITS,
+  });
+  open.push({ close: () => connection.end("test done") });
+  await connection.request(VAULT_METHODS.hello, vaultMessage({}));
+  return (method, json) =>
+    connection.request(method, vaultMessage(json)).then(
+      (payload) => vaultBody(payload),
+      () => "refused",
+    );
+}
+
+test("Slack over the link: connect seals a record without the access token; get rotates, rejected, clear deletes", async () => {
+  const { dir } = sealingDir();
+  const v = await bothVault(dir);
+  const remote = await link(v.port);
+  assert.deepEqual(await connectSlackU1(remote), { ok: false, locked: true });
+  assert.equal(slack.seen.length, 0, "a locked vault calls nobody");
+  await unlock(v.control);
+  slack.expiresInS = 60;
+  assert.deepEqual(await connectSlackU1(remote, FAKE_TEAM_ID), {
+    ok: true,
+    teamId: FAKE_TEAM_ID,
+    teamName: FAKE_TEAM_NAME,
+  });
+  assert.ok(existsSync(slackSealedOf(dir)));
+  assert.doesNotMatch(readFileSync(slackSealedOf(dir), "utf8"), /fake-slack-/);
+  const plaintext = readFileSync(slackPlaintextOf(dir), "utf8");
+  assert.doesNotMatch(plaintext, /fake-slack-access/);
+  assert.doesNotMatch(plaintext, /accessToken/);
+  const exchanged = slack.issuedRefresh.at(-1);
+  assert.deepEqual(slackStored(dir), {
+    kind: "slack-oauth",
+    v: 1,
+    teamId: FAKE_TEAM_ID,
+    teamName: FAKE_TEAM_NAME,
+    workspaceHost: FAKE_WORKSPACE_HOST,
+    userId: FAKE_USER_ID,
+    refreshToken: exchanged,
+    scope: FAKE_SLACK_SCOPE,
+  });
+  // Due within the margin: the get rotates, and the view crosses the link.
+  const record = await remote.integrationGet("u1", "slack");
+  assert.equal(record.ok, true, JSON.stringify(record));
+  const view = JSON.parse((record as { credential: string }).credential) as {
+    accessToken: string;
+  };
+  assert.deepEqual(Object.keys(view), [
+    "kind",
+    "teamId",
+    "teamName",
+    "workspaceHost",
+    "userId",
+    "scope",
+    "accessToken",
+    "expiresAt",
+  ]);
+  assert.equal(view.accessToken, slack.issuedAccess.at(-1));
+  assert.doesNotMatch(JSON.stringify(record), /fake-slack-refresh/);
+  assert.deepEqual(slack.refreshesSent(), [exchanged]);
+  assert.equal(slackStored(dir).refreshToken, slack.issuedRefresh.at(-1));
+  slack.access = slackJson(200, { ok: false, error: "invalid_refresh_token" });
+  assert.deepEqual(await remote.integrationGet("u1", "slack"), {
+    ok: false,
+    rejected: true,
+  });
+  assert.deepEqual(await remote.integrationClear("u1", "slack"), { ok: true });
+  assert.equal(existsSync(slackPlaintextOf(dir)), false);
+  assert.equal(existsSync(slackSealedOf(dir)), false);
+  assert.deepEqual(await remote.integrationGet("u1", "slack"), {
+    ok: false,
+    absent: true,
+  });
+  noSlackSecretsIn(v.lines);
+});
+
+test("Slack over the link: a team mismatch stores nothing; a put, a site with Slack and a team with Atlassian are refused before any effect", async () => {
+  const { dir } = sealingDir();
+  const v = await bothVault(dir);
+  const remote = await link(v.port);
+  await unlock(v.control);
+  const before = accountsSnapshot(dir);
+  assert.deepEqual(await connectSlackU1(remote, "TOTHER0001"), {
+    ok: false,
+    team: "mismatch",
+  });
+  assert.equal(slack.on("authTest").length, 0);
+  // Only a connect writes a Slack record.
+  assert.deepEqual(await remote.integrationPut("u1", "slack", CREDENTIAL), {
+    ok: false,
+    unavailable: true,
+  });
+  const raw = await rawLink(v.port);
+  const connect = {
+    userId: "u1",
+    code: FAKE_SLACK_CODE,
+    redirectUri: FAKE_SLACK_REDIRECT,
+  };
+  const sent = slack.seen.length + atl.seen.length;
+  for (const body of [
+    { ...connect, integration: "slack", site: FAKE_SITE },
+    { ...connect, integration: "atlassian", team: FAKE_TEAM_ID },
+    { ...connect, integration: "slack", team: "not-a-team" },
+    { ...connect, integration: "slack", team: 7 },
+    { ...connect, integration: "github" },
+  ])
+    assert.equal(
+      await raw(VAULT_METHODS.integrationConnect, body),
+      "refused",
+      JSON.stringify(body),
+    );
+  assert.equal(
+    await raw(VAULT_METHODS.integrationPut, {
+      userId: "u1",
+      integration: "slack",
+      credential: CREDENTIAL,
+    }),
+    "refused",
+  );
+  assert.equal(slack.seen.length + atl.seen.length, sent, "nobody called");
+  assert.equal(accountsSnapshot(dir), before, "nothing written");
+  noSlackSecretsIn(v.lines);
+});
+
+test("connect answers decode per integration; any other shape is unavailable", async () => {
+  const name = "n".repeat(256);
+  const answers: [Integration, unknown, unknown][] = [
+    [
+      "slack",
+      { ok: true, teamId: FAKE_TEAM_ID },
+      { ok: true, teamId: FAKE_TEAM_ID },
+    ],
+    [
+      "slack",
+      { ok: true, teamId: FAKE_TEAM_ID, teamName: name },
+      { ok: true, teamId: FAKE_TEAM_ID, teamName: name },
+    ],
+    ["slack", { ok: false, team: "mismatch" }, { ok: false, team: "mismatch" }],
+    ["slack", { ok: false, rejected: true }, { ok: false, rejected: true }],
+    [
+      "slack",
+      { ok: false, unreachable: true },
+      { ok: false, unreachable: true },
+    ],
+    [
+      "slack",
+      { ok: false, notConfigured: true },
+      { ok: false, notConfigured: true },
+    ],
+    ["slack", { ok: false, locked: true }, { ok: false, locked: true }],
+    ["slack", { ok: true, teamId: "tfake" }, { ok: false, unavailable: true }],
+    [
+      "slack",
+      { ok: true, teamId: FAKE_TEAM_ID, teamName: "" },
+      { ok: false, unavailable: true },
+    ],
+    [
+      "slack",
+      { ok: true, teamId: FAKE_TEAM_ID, teamName: `${name}n` },
+      { ok: false, unavailable: true },
+    ],
+    [
+      "slack",
+      { ok: true, teamId: FAKE_TEAM_ID, teamName: 1 },
+      { ok: false, unavailable: true },
+    ],
+    [
+      "slack",
+      { ok: true, site: FAKE_SITE, cloudId: FAKE_CLOUD_ID },
+      { ok: false, unavailable: true },
+    ],
+    ["slack", { ok: false, site: "missing" }, { ok: false, unavailable: true }],
+    ["slack", { ok: false, team: "other" }, { ok: false, unavailable: true }],
+    ["slack", "ok", { ok: false, unavailable: true }],
+    [
+      "atlassian",
+      { ok: true, teamId: FAKE_TEAM_ID },
+      { ok: false, unavailable: true },
+    ],
+    [
+      "atlassian",
+      { ok: false, team: "mismatch" },
+      { ok: false, unavailable: true },
+    ],
+    [
+      "atlassian",
+      { ok: true, site: FAKE_SITE, cloudId: FAKE_CLOUD_ID },
+      { ok: true, site: FAKE_SITE, cloudId: FAKE_CLOUD_ID },
+    ],
+    [
+      "atlassian",
+      { ok: false, site: "ambiguous" },
+      { ok: false, site: "ambiguous" },
+    ],
+  ];
+  const held = await holdingVault(answers.map(([, answer]) => answer));
+  const remote = await link(held.port);
+  for (const [integration, answer, decoded] of answers) {
+    const request = { code: FAKE_CODE, redirectUri: FAKE_REDIRECT };
+    assert.deepEqual(
+      integration === "slack"
+        ? await remote.integrationConnect("u1", "slack", request)
+        : await remote.integrationConnect("u1", "atlassian", request),
+      decoded,
+      JSON.stringify(answer),
+    );
+  }
+});
+
+test("Slack: an edge-side timeout during a held refresh answers unavailable; the vault still stores and serves the rotation", async () => {
+  const { dir } = sealingDir();
+  const v = await bothVault(dir);
+  const first = await link(v.port);
+  await unlock(v.control);
+  slack.expiresInS = 60;
+  await connectSlackU1(first);
+  first.close();
+  const remote = await link(v.port, 300);
+  slack.expiresInS = 43_200;
+  const held = slack.hold("access");
+  const reading = remote.integrationGet("u1", "slack");
+  await held.arrived;
+  assert.deepEqual(await reading, { ok: false, unavailable: true });
+  held.release();
+  const rotated = (): boolean =>
+    slackStored(dir).refreshToken === slack.issuedRefresh.at(-1);
+  await until(rotated, "the rotated record");
+  assert.ok(existsSync(slackSealedOf(dir)));
+  const sent = slack.refreshesSent().length;
+  // Cached by the finished refresh: no second refresh.
+  const record = await remote.integrationGet("u1", "slack");
+  assert.equal(record.ok, true, JSON.stringify(record));
+  assert.equal(slack.refreshesSent().length, sent);
+  noSlackSecretsIn(v.lines);
+});
+
+test("Atlassian and Slack side by side over the link: separate records and refreshes; clearing one leaves the other", async () => {
+  const { dir } = sealingDir();
+  const v = await bothVault(dir);
+  const remote = await link(v.port);
+  await unlock(v.control);
+  atl.expiresInS = 60;
+  slack.expiresInS = 60;
+  const [atlassian, slackAnswer] = await Promise.all([
+    connectU1(remote),
+    connectSlackU1(remote),
+  ]);
+  assert.equal(atlassian.ok, true, JSON.stringify(atlassian));
+  assert.equal(slackAnswer.ok, true, JSON.stringify(slackAnswer));
+  assert.notEqual(DIR_ID, SLACK_DIR_ID);
+  assert.equal(storedRefresh(dir), atl.issuedRefresh.at(-1));
+  assert.equal(slackStored(dir).refreshToken, slack.issuedRefresh.at(-1));
+  const atlBefore = refreshesSent().length;
+  const [a, s] = await Promise.all([
+    remote.integrationGet("u1", "atlassian"),
+    remote.integrationGet("u1", "slack"),
+  ]);
+  assert.match(accessOf(a), /^fake-atl-access-\d+$/);
+  assert.equal(accessOf(s), slack.issuedAccess.at(-1));
+  assert.equal(refreshesSent().length, atlBefore + 1);
+  assert.equal(slack.refreshesSent().length, 1);
+  assert.deepEqual(await remote.integrationClear("u1", "slack"), { ok: true });
+  assert.deepEqual(await remote.integrationGet("u1", "slack"), {
+    ok: false,
+    absent: true,
+  });
+  accessOf(await remote.integrationGet("u1", "atlassian"));
+  assert.ok(existsSync(sealedOf(dir)));
+  noSlackSecretsIn(v.lines);
 });

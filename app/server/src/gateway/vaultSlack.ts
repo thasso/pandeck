@@ -29,13 +29,12 @@ import {
   type HttpAnswer,
   type VaultEndpoint,
 } from "./vaultHttps.ts";
-import { isSlackTeamId } from "./vaultMethods.ts";
+import { isSlackTeamId, isSlackTeamName } from "./vaultMethods.ts";
 
 const SLACK_HOST = "slack.com";
 const ACCESS_PATH = "/api/oauth.v2.access";
 const AUTH_TEST_PATH = "/api/auth.test";
 const MAX_SCOPE_CHARS = 2_048;
-const MAX_TEAM_NAME_CHARS = 256;
 /** Slack's `error` words that mean "try again later", not "refused". */
 const TRANSIENT_ERRORS = [
   "ratelimited",
@@ -192,7 +191,13 @@ export async function exchangeSlackCode(
   const user = objectOf(answer.body.authed_user);
   if (user?.token_type !== "user" || !isToken(user.access_token))
     return { kind: "unusable" };
-  if (user.refresh_token === undefined) return { kind: "noRefreshToken" };
+  // Rotation off: Slack sends no refresh token (absent, `null` or empty).
+  if (
+    user.refresh_token === undefined ||
+    user.refresh_token === null ||
+    user.refresh_token === ""
+  )
+    return { kind: "noRefreshToken" };
   const team = objectOf(answer.body.team);
   if (
     !isToken(user.refresh_token) ||
@@ -214,12 +219,7 @@ export async function exchangeSlackCode(
       },
       userId: user.id,
       teamId: team.id,
-      teamName:
-        typeof name === "string" &&
-        name.length > 0 &&
-        name.length <= MAX_TEAM_NAME_CHARS
-          ? name
-          : undefined,
+      teamName: isSlackTeamName(name) ? name : undefined,
     },
   };
 }

@@ -1,6 +1,6 @@
 /**
  * The vault as its own process (Task-1394, Task-1387), `vault.js` in the Bun
- * package: `startVaultServer` serving one edge over `gateway-vault/1.1`:
+ * package: `startVaultServer` serving one edge over `gateway-vault/1.2`:
  *
  *   vault --state-dir <dir> [--bind-host <address>] [--port <n>]
  *     [--control-socket <path>] [--integrations-config <file>]

@@ -9,6 +9,7 @@
  */
 import assert from "node:assert/strict";
 import {
+  chmodSync,
   existsSync,
   mkdtempSync,
   readFileSync,
@@ -20,7 +21,7 @@ import {
 import type net from "node:net";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterAll, afterEach, beforeAll, test } from "vitest";
 import {
   FAKE_CLIENT,
@@ -415,6 +416,22 @@ test("an exchange answer outside the documented user-token shape is rejected and
       exchangeAnswer({ refresh_token: undefined, expires_in: undefined }),
       "Slack granted no refresh token",
     ],
+    // Rotation off, as Slack may also say it: PR2's live smoke reads the line.
+    [
+      "a null refresh token (rotation off)",
+      exchangeAnswer({ refresh_token: null, expires_in: undefined }),
+      "Slack granted no refresh token",
+    ],
+    [
+      "an empty refresh token (rotation off)",
+      exchangeAnswer({ refresh_token: "" }),
+      "Slack granted no refresh token",
+    ],
+    [
+      "a non-string refresh token",
+      exchangeAnswer({ refresh_token: 7 }),
+      "Slack exchange answer unusable",
+    ],
     [
       "a bot token_type",
       exchangeAnswer({ token_type: "bot" }),
@@ -452,11 +469,7 @@ test("an exchange answer outside the documented user-token shape is rejected and
       exchangeAnswer({ access_token: "fake slack access" }),
       "Slack exchange answer unusable",
     ],
-    [
-      "an empty refresh token",
-      exchangeAnswer({ refresh_token: "" }),
-      "Slack exchange answer unusable",
-    ],
+
     [
       "a fractional expires_in",
       exchangeAnswer({ expires_in: 1.5 }),
@@ -882,5 +895,54 @@ test("one user holds Atlassian and Slack: each refreshes with its own provider, 
   assert.deepEqual(readdirSync(h.accounts), [
     integrationDirId("u1", "atlassian"),
   ]);
+  await h.port.close();
+});
+
+test("a refreshed record that cannot be saved answers unavailable, caches nothing and holds no token", async () => {
+  const h = harness();
+  assert.equal((await h.connect()).ok, true);
+  const connectedRefresh = h.stored().refreshToken;
+  // The record's directory refuses the write once.
+  chmodSync(dirname(h.file), 0o500);
+  h.clock.now += DUE_MS;
+  let answer: IntegrationRecord;
+  try {
+    answer = await h.get();
+  } finally {
+    chmodSync(dirname(h.file), 0o700);
+  }
+  assert.deepEqual(answer, { ok: false, unavailable: true });
+  assert.equal(h.stored().refreshToken, connectedRefresh);
+  assert.ok(
+    h.lines.some((line) => line.endsWith("the refreshed record was not saved")),
+  );
+  // Nothing was cached: the next get refreshes again.
+  const next = view(await h.get());
+  assert.deepEqual(slack.refreshesSent(), [connectedRefresh, connectedRefresh]);
+  assert.equal(next.accessToken, slack.issuedAccess.at(-1));
+  assert.equal(h.stored().refreshToken, slack.issuedRefresh.at(-1));
+  assertNoSecrets(JSON.stringify(answer));
+  assertNoSecrets(h.lines.join("\n"));
+  await h.port.close();
+});
+
+test("a connected record that cannot be saved answers unavailable and caches nothing", async () => {
+  const h = harness();
+  mkdirSync(dirname(h.file), { recursive: true });
+  chmodSync(dirname(h.file), 0o500);
+  let answer: Awaited<ReturnType<typeof h.connect>>;
+  try {
+    answer = await h.connect();
+  } finally {
+    chmodSync(dirname(h.file), 0o700);
+  }
+  assert.deepEqual(answer, { ok: false, unavailable: true });
+  assert.equal(existsSync(h.file), false);
+  assert.ok(
+    h.lines.some((line) => line.endsWith("the connected record was not saved")),
+  );
+  assert.deepEqual(await h.get(), { ok: false, absent: true });
+  assertNoSecrets(JSON.stringify(answer));
+  assertNoSecrets(h.lines.join("\n"));
   await h.port.close();
 });

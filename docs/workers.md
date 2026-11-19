@@ -3209,10 +3209,11 @@ The vault can run as its own process on another machine (Task-1394, M20), so the
 edge holds no refresh token. Renewal, the token files, the writer lane and the
 login runs then execute in the vault process (`gateway/vaultServer.ts`); the
 edge reaches it through `gateway/remoteVault.ts`, a `VaultPort` over
-**`gateway-vault/1.1`** (`gateway/vaultMethods.ts`; any `1.x` peer links, and an
-edge whose vault lacks `integrations.connect` gets `unavailable` for it, so
-upgrade the vault first). `startGateway`'s `vault` option selects it; without it
-the vault runs in the edge's process, as the server's local gateway does.
+**`gateway-vault/1.2`** (`gateway/vaultMethods.ts`; any `1.x` peer links, and an
+edge whose vault lacks `integrations.connect` (1.1) or Slack (1.2) gets
+`unavailable` for it, so upgrade the vault first). `startGateway`'s `vault`
+option selects it; without it the vault runs in the edge's process, as the
+server's local gateway does.
 
 - **Link.** Worker-protocol framing over mutual TLS. Each side has its own key
   and self-signed certificate and trusts exactly the other's, inside its dates,
@@ -3232,14 +3233,21 @@ the vault runs in the edge's process, as the server's local gateway does.
   `inputs.liveLeases` (the whole registry and live-lease set, on connect and on
   every change), `credential.for`, `credential.upstream401`, `accounts.discard`,
   `logins.start`, `logins.input`, `logins.cancel`, and `integrations.put`,
-  `integrations.get` and `integrations.clear` (a user's integration credential,
-  at most 16 KiB; an API token stays opaque, an OAuth record answers its access
-  view or `rejected`), and `integrations.connect` (1.1:
-  `{userId, integration, code, redirectUri, site?}`, the code at most 2,048
-  characters and the redirect an `https:` URL; answers `{ok, site, cloudId}` or
-  `rejected`, `unreachable`, `site: missing|ambiguous`, `notConfigured`,
-  `locked`, `unavailable`). Vault to edge: `credential.report`, `logins.event`,
-  `logins.done` (a failure code, never driver text) and `logins.commit`.
+  `integrations.get` and `integrations.clear` (a user's integration credential
+  under `integration` `atlassian` or, 1.2, `slack`, at most 16 KiB; an API token
+  stays opaque, an OAuth record answers its access view or `rejected`; a put for
+  `slack` is refused, since only a connect writes a Slack record), and
+  `integrations.connect` (1.1, `slack` 1.2:
+  `{userId, integration, code, redirectUri, site?, team?}`, the code at most
+  2,048 characters, the redirect an `https:` URL, `site` only with `atlassian`
+  and `team` (a Slack team id) only with `slack`, anything else refused before
+  any effect; Atlassian answers `{ok, site, cloudId}` or
+  `site: missing|ambiguous`, Slack `{ok, teamId, teamName?}` or
+  `team: mismatch`, both also `rejected`, `unreachable`, `notConfigured`,
+  `locked`, `unavailable`; the edge decodes each integration's answer on its
+  own, and any other shape is `unavailable`). Vault to edge:
+  `credential.report`, `logins.event`, `logins.done` (a failure code, never
+  driver text) and `logins.commit`.
 - **Rules.** The vault answers an access token and headers only, never a refresh
   token or a token file's content. It keeps only login profiles whose token file
   is under `<stateDir>/accounts/` and is a login credential file (never an
@@ -3261,12 +3269,12 @@ the vault runs in the edge's process, as the server's local gateway does.
   told. A login needs the link. No access token is cached on the edge: one round
   trip per forwarded request. Every integration call is bounded: a put or clear
   at 10 s, a get at 20 s (it may wait for a refresh, at most 8 s plus its lane),
-  a connect at 30 s (two 8 s Atlassian calls plus its lane); a get and a connect
-  also by the caller's signal. No link, the deadline, the abort or any request
-  error answers `unavailable`, and a late reply settles a promise nobody reads.
-  A put or clear that timed out has an unknown result, which the next status
-  shows; a connect or refresh the edge stopped waiting for still finishes in the
-  vault and stores its record.
+  a connect at 30 s (two 8 s Atlassian or Slack calls plus its lane); a get and
+  a connect also by the caller's signal. No link, the deadline, the abort or any
+  request error answers `unavailable`, and a late reply settles a promise nobody
+  reads. A put or clear that timed out has an unknown result, which the next
+  status shows; a connect or refresh the edge stopped waiting for still finishes
+  in the vault and stores its record.
 - **No control.** An edge with a remote vault serves no gateway control 1.4 (its
   holds are the in-process vault's); it is a client-mode edge.
 - **Pairing.**

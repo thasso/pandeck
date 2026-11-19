@@ -4,7 +4,7 @@
  * (renewal, credential reads, the writer lane and the login holds) only
  * through `VaultPort`, and the vault reads the edge only through
  * `VaultInputs`. The tiers run in one process (`vault.ts`) or apart, the edge
- * reaching a vault process over `gateway-vault/1.1` (`remoteVault.ts`,
+ * reaching a vault process over `gateway-vault/1.2` (`remoteVault.ts`,
  * `vaultServer.ts`). This module holds types only, so neither tier's code
  * crosses it (`workerBoundary.test.ts`).
  */
@@ -109,7 +109,7 @@ export interface IntegrationConnectRequests {
  * an unexpected shape); `unreachable` any other failure to talk to it;
  * `notConfigured` a vault without that OAuth client.
  */
-type ConnectFailure =
+export type ConnectFailure =
   | { ok: false; rejected: true }
   | { ok: false; unreachable: true }
   | { ok: false; notConfigured: true }
