@@ -13,7 +13,10 @@
  *   refused with fixed text before the SDK runs.
  * - Every JSON-RPC error the SDK answers is rewritten to a fixed text for its
  *   code, without `data`, so no SDK, schema or request text reaches a client.
- *   A tool failure is an `isError` result with the host's fixed text.
+ *   A tool failure is an `isError` result with the host's fixed text. The
+ *   single exception is Jira's own `errorMessages`/`errors` reasons for a
+ *   rejected `jira_search_issues` (HTTP 400, D4-yes): never shown with
+ *   credential material, sanitized and capped.
  * - The whole exchange is bounded (the host's deadline plus a margin): at
  *   that point the call is aborted, the response ends with a fixed error and
  *   the SDK instances close, whatever the SDK still waits for. A response

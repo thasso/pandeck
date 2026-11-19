@@ -374,6 +374,13 @@ test("a reason holding credential material or an auth marker falls back to the f
   const unpadded = BASIC_VALUE.replace(/=+$/, "");
   assert.notEqual(unpadded, BASIC_VALUE);
   const cut = "x".repeat(480);
+  // Starts before index 500 of the final text and ends after it.
+  const straddle = "x".repeat(500 - REASONS.length - 5);
+  assert.ok(REASONS.length + straddle.length < 500);
+  assert.ok(
+    REASONS.length + straddle.length + FAKE.token.length > 500 &&
+      REASONS.length + straddle.length + FAKE_ACCESS.length > 500,
+  );
   const cases: [string, unknown, ToolCaller][] = [
     ["token", { errorMessages: [`bad ${FAKE.token}`] }, tokenCaller()],
     ["Basic value", { errors: { jql: `v ${BASIC_VALUE}` } }, tokenCaller()],
@@ -388,7 +395,17 @@ test("a reason holding credential material or an auth marker falls back to the f
       { errorMessages: [cut + FAKE.token] },
       tokenCaller(),
     ],
+    [
+      "token straddling the cut",
+      { errorMessages: [straddle + FAKE.token] },
+      tokenCaller(),
+    ],
     ["access token", { errorMessages: [`bad ${FAKE_ACCESS}`] }, oauthCaller()],
+    [
+      "access token straddling the cut",
+      { errorMessages: [straddle + FAKE_ACCESS] },
+      oauthCaller(),
+    ],
     [
       "Bearer value",
       { errorMessages: [`Bearer ${FAKE_ACCESS}`] },
@@ -415,6 +432,17 @@ test("a reason holding credential material or an auth marker falls back to the f
       tokenCaller(),
     ],
     ["basic marker alone", { errorMessages: ["basic search"] }, oauthCaller()],
+    ["Bearer then a tab", { errorMessages: ["Bearer\tX"] }, tokenCaller()],
+    [
+      "basic then a no-break space",
+      { errorMessages: ["basic X"] },
+      tokenCaller(),
+    ],
+    [
+      "Bearer then a C1 control",
+      { errorMessages: ["Bearer\u0085X"] },
+      oauthCaller(),
+    ],
   ];
   for (const [label, body, caller] of cases) {
     const { answer, message, lines } = await rejectedSearch(body, caller);

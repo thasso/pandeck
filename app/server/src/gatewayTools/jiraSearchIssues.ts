@@ -27,8 +27,13 @@ const SEARCH_REFUSED =
   "Jira refused the search (HTTP 400); check the JQL, and resolve project, user and field names with jira_lookup.";
 const REASONS_PREFIX = "Jira refused the search (HTTP 400): ";
 const MAX_TEXT = 500;
-/** Words that mark a header or scheme; a reason holding one is never shown. */
-const AUTH_MARKER = /authorization|bearer |basic /i;
+/**
+ * Words that mark a header or scheme; a reason holding one is never shown.
+ * `bearer`/`basic` count when any whitespace or control character (C0, DEL,
+ * C1) follows, so `Bearer\tX` or `Bearer\u0085X` cannot slip past once the
+ * controls are sanitized.
+ */
+const AUTH_MARKER = /authorization|(?:bearer|basic)[\s\p{Cc}]/iu;
 
 /** C0 and C1 control characters (DEL included) as spaces. */
 function withoutControls(text: string): string {

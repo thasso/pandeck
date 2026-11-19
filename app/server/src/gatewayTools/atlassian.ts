@@ -4,7 +4,10 @@
  * and stored by the gateway only as the opaque JSON `encodeAtlassianCredential`
  * makes. The site is a bare `<name>.atlassian.net` host, so a stored
  * credential can only ever be sent to Atlassian (SSRF guard). Errors become
- * fixed texts; no upstream body or credential reaches a caller.
+ * fixed texts; no upstream body or credential reaches a caller. The single
+ * exception: a rejected `jira_search_issues` (HTTP 400) may show Jira's own
+ * `errorMessages`/`errors` reasons (D4-yes, `jiraSearchIssues.ts`), never
+ * with credential material, sanitized and capped.
  *
  * Or the vault's OAuth access view (Task-1411), `{kind: "atlassian-oauth",
  * site, cloudId, accessToken, expiresAt}`, decoded and checked per call and
