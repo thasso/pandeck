@@ -3242,13 +3242,42 @@ export interface PeerPromptWithdrawnRequest {
   beforeDelivery?: boolean;
 }
 
+/** One of the sender's own messages its recipient has not read yet. */
+export interface PeerPromptUnreadMessage {
+  /** The sent card's key: what a withdraw row names. */
+  messageKey: string;
+  /** An excerpt of the message. */
+  message: string;
+}
+
+/**
+ * What a just-sent message waits behind (Task-1442), so a sender sees a busy
+ * recipient's backlog before piling corrections onto it. Present only when
+ * the message will not be read at once.
+ */
+export interface PeerPromptSendBacklog {
+  /** The recipient's state as the message was queued. */
+  recipient: "running" | "idle" | "not_loaded";
+  /** Unread messages, from any sender, queued before this one. */
+  ahead: number;
+  /** The sender's OTHER messages to this recipient still unread, oldest first. */
+  yourUnread: PeerPromptUnreadMessage[];
+}
+
 /**
  * One row of a `session_send_prompt` result (payload `version: 2`): a message
  * it sent, the requests a settle or withdraw closed, or why that row failed.
  * Rows are independent, so a failed row sits beside the ones that went through.
+ * A message row may carry its backlog, and the unread messages it replaced
+ * (`replacesUnread`), each cancelled before delivery.
  */
 export type PeerPromptToolRow =
-  | { kind: "message"; card: PeerPromptCard }
+  | {
+      kind: "message";
+      card: PeerPromptCard;
+      backlog?: PeerPromptSendBacklog;
+      replaced?: PeerPromptWithdrawnRequest[];
+    }
   | { kind: "settle"; reason: string; settled: PeerPromptSettledRequest[] }
   | {
       kind: "withdraw";

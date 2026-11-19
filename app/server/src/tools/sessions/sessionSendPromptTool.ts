@@ -29,6 +29,7 @@ const MESSAGE_FIELDS = new Set([
   "prompt",
   "responseRequested",
   "inReplyTo",
+  "replacesUnread",
   "taskId",
 ]);
 
@@ -39,6 +40,7 @@ type SendRow =
       prompt: string;
       responseRequested: boolean;
       inReplyTo?: string[];
+      replacesUnread?: true;
       taskId?: string;
     }
   | { kind: "settle"; inReplyTo: string[]; reason: string }
@@ -62,7 +64,7 @@ export function sessionSendPromptTools(): AgentTool[] {
  * `piSdk/sessionSendPromptBoundary.test.ts` holds this against pi's validator.
  */
 const ROW = {
-  description: `One object, of one of three shapes. A message: { targetSessionId, prompt, responseRequested?, inReplyTo?, taskId? }. A settle: { inReplyTo, settle } — closes requests sent to you without sending anything, when acting answered them or they are superseded; the requester's card shows the reason. A withdraw: { withdraw, reason } — closes requests YOU sent whose answer you no longer need; use it instead of a "never mind" message, which leaves the request open. The addressee is not prompted; its reminders stop.`,
+  description: `One object, of one of three shapes. A message: { targetSessionId, prompt, responseRequested?, inReplyTo?, replacesUnread?, taskId? }. A settle: { inReplyTo, settle } — closes requests sent to you without sending anything, when acting answered them or they are superseded; the requester's card shows the reason. A withdraw: { withdraw, reason } — closes requests YOU sent whose answer you no longer need; use it instead of a "never mind" message, which leaves the request open. The addressee is not prompted; its reminders stop.`,
   properties: {
     targetSessionId: {
       description:
@@ -78,6 +80,10 @@ const ROW = {
     inReplyTo: {
       description:
         "array of request keys — the reply keys of requests sent to you, as each delivered request shows them. In a message row: the requests it answers, all from that row's target; this links them whatever turn you answer from. Without it a reply links only when sent in the turn that delivered the request, or when that session has exactly one open request to you. In a settle row: the requests to close.",
+    },
+    replacesUnread: {
+      description:
+        "boolean — this message supersedes every message you sent this target that it has not read yet; they are cancelled and never delivered. Send it with a complete, current brief instead of a correction that would queue behind the stale one.",
     },
     taskId: {
       description: "string — optional related Task id for audit context only.",
@@ -99,7 +105,7 @@ function makeSessionSendPromptTool() {
   return defineAgentTool<{ rows?: unknown }>({
     name: "session_send_prompt",
     label: "Send Session Prompt",
-    description: `Send prompts to other app sessions — ask one to review your work, answer a question, or coordinate — answer or settle requests sent to you, and withdraw your own. Pass rows (1 to ${MAX_SEND_ROWS}); each row is its own message with its own result, and a bad row fails only itself. Delivery is durable and never interrupts a running target: a busy session receives it when it next goes idle. Keep each prompt concise and self-contained; the recipient sees it as a peer message, not as a new user task. A reply reaches you the same way: later, as a new incoming peer message that starts a fresh turn. So after sending, end your turn and go idle — waiting, sleeping, or polling for the reply only delays it. Each message row spends one hop of its conversation's limit; a settle or withdraw row sends nothing and spends none. You cannot prompt your own session or an archived, deleted, or internal one.`,
+    description: `Send prompts to other app sessions — ask one to review your work, answer a question, or coordinate — answer or settle requests sent to you, and withdraw your own. Pass rows (1 to ${MAX_SEND_ROWS}); each row is its own message with its own result, and a bad row fails only itself. Delivery is durable and never interrupts a running target: a busy session receives it when it next goes idle, together with your other unread messages, oldest first. A message row's result shows any backlog: whether the target is running, how many messages wait ahead, and yourUnread — your earlier messages it has not read. When those are stale, send one complete message with replacesUnread rather than adding corrections. Keep each prompt concise and self-contained; the recipient sees it as a peer message, not as a new user task. A reply reaches you the same way: later, as a new incoming peer message that starts a fresh turn. So after sending, end your turn and go idle — waiting, sleeping, or polling for the reply only delays it. Each message row spends one hop of its conversation's limit; a settle or withdraw row sends nothing and spends none. You cannot prompt your own session or an archived, deleted, or internal one.`,
     parameters: {
       type: "object",
       properties: {
@@ -184,16 +190,22 @@ async function runRow(
     });
     return { kind: "settle", reason: row.reason, settled };
   }
-  const { card } = await sendPeerPrompt({
+  const { card, backlog, replaced } = await sendPeerPrompt({
     senderSessionId: session.sessionId,
     ...(session.title ? { senderTitle: session.title } : {}),
     targetSessionId: row.targetSessionId,
     prompt: row.prompt,
     responseRequested: row.responseRequested,
     ...(row.inReplyTo ? { inReplyTo: row.inReplyTo } : {}),
+    ...(row.replacesUnread ? { replacesUnread: true } : {}),
     ...(row.taskId ? { taskId: row.taskId } : {}),
   });
-  return { kind: "message", card };
+  return {
+    kind: "message",
+    card,
+    ...(backlog ? { backlog } : {}),
+    ...(replaced ? { replaced } : {}),
+  };
 }
 
 /**
@@ -251,6 +263,11 @@ function parseRow(raw: unknown): SendRow {
     typeof row.responseRequested !== "boolean"
   )
     throw new Error("responseRequested must be a boolean (true or false).");
+  if (
+    row.replacesUnread !== undefined &&
+    typeof row.replacesUnread !== "boolean"
+  )
+    throw new Error("replacesUnread must be a boolean (true or false).");
   const taskId =
     row.taskId === undefined ? undefined : requiredString(row.taskId, "taskId");
   return {
@@ -261,6 +278,7 @@ function parseRow(raw: unknown): SendRow {
     ...(row.inReplyTo !== undefined
       ? { inReplyTo: requestKeys(row.inReplyTo, "inReplyTo") }
       : {}),
+    ...(row.replacesUnread === true ? { replacesUnread: true as const } : {}),
     ...(taskId ? { taskId } : {}),
   };
 }

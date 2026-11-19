@@ -293,6 +293,7 @@ describe("session_send_prompt tool", () => {
       "inReplyTo",
       "prompt",
       "reason",
+      "replacesUnread",
       "responseRequested",
       "settle",
       "targetSessionId",
@@ -425,7 +426,8 @@ describe("peer prompt engine", () => {
         senderLabel: "x".repeat(200),
       }),
     );
-    const envelope = buildEnvelope(msgs);
+    // ...and a backlog note with a two-digit count.
+    const envelope = buildEnvelope(msgs, 12);
     const body = msgs.map((m) => m.prompt).join("\n\n");
     const overhead = envelope.length - body.length;
     assert.ok(overhead <= ENVELOPE_OVERHEAD_MAX, `overhead=${overhead}`);
@@ -433,6 +435,38 @@ describe("peer prompt engine", () => {
       envelope.includes("line 0") &&
         envelope.includes(`line ${BATCH_MAX_MESSAGES - 1}`),
     );
+  });
+
+  it("labels every member of a batch, says the later one stands, and counts what waits behind it", () => {
+    const chainId = peerPromptStore.createChain();
+    const msgs = ["do X", "actually do Y"].map((prompt) =>
+      peerPromptStore.enqueue({
+        conversationId: `c-${n++}`,
+        chainId,
+        hop: peerPromptStore.reserveHop(chainId),
+        senderSessionId: "coord",
+        recipientSessionId: "R",
+        prompt,
+        responseRequested: false,
+        senderLabel: "Coordinator",
+      }),
+    );
+    const envelope = buildEnvelope(msgs, 3);
+    assert.ok(
+      envelope.startsWith(
+        "2 peer messages from Coordinator, oldest first; where they disagree, the later one stands:",
+      ),
+      envelope,
+    );
+    assert.ok(envelope.includes("[1/2]\ndo X\n\n[2/2]\nactually do Y"));
+    assert.ok(
+      envelope.endsWith(
+        "3 more peer messages wait in your queue; they arrive when this turn ends.",
+      ),
+    );
+    assert.equal(envelope.includes("session_send_prompt"), false);
+    const single = buildEnvelope([msgs[0]!]);
+    assert.equal(single, "Peer message from Coordinator:\n\ndo X");
   });
 
   it("names the sender session id in the reply cue, only when one is requested", () => {
@@ -4157,7 +4191,7 @@ describe("explicit reply tracking (Task-942)", () => {
 
     const envelope = buildEnvelope([a, b, c]);
     const labelA = `[1/3 · reply key \`${ka}\`]\n${a.prompt}`;
-    const labelB = `[2/3 · no reply asked]\n${b.prompt}`;
+    const labelB = `[2/3]\n${b.prompt}`;
     const labelC = `[3/3 · reply key \`${kc}\`]\n${c.prompt}\n\n`;
     const at = [labelA, labelB, labelC].map((l) => envelope.indexOf(l));
     assert.ok(
@@ -4559,5 +4593,97 @@ describe("the requester withdraws a request (Task-1427)", () => {
     assert.equal(closed.status, "withdrawn");
     assert.equal(closed.withdrawReason, "closed by the user");
     assert.equal(peerPromptStore.dueReminderRequests(verifier, 3).length, 0);
+  });
+});
+
+describe("a busy recipient's backlog (Task-1442)", () => {
+  const rowOf = (result: { details?: unknown }) =>
+    (result.details as { rows: any[] }).rows[0];
+
+  it("shows a sender what waits ahead and its own unread messages, and replaces them on request", async () => {
+    const target = seed("Implementer");
+    const coord = seed("Coordinator");
+    const helper = seed("Helper");
+    const first = rowOf(
+      await sendRow(
+        { targetSessionId: target, prompt: "brief v1" },
+        ctx(coord, "Coordinator"),
+      ),
+    );
+    assert.equal(first.backlog, undefined, "an idle, empty queue reads it now");
+    await sendRow(
+      { targetSessionId: target, prompt: "handoff" },
+      ctx(helper, "Helper"),
+    );
+    const second = rowOf(
+      await sendRow(
+        { targetSessionId: target, prompt: "correction" },
+        ctx(coord, "Coordinator"),
+      ),
+    );
+    assert.equal(second.backlog.ahead, 2);
+    assert.deepEqual(second.backlog.yourUnread, [
+      { messageKey: first.card.messageKey, message: "brief v1" },
+    ]);
+
+    const third = rowOf(
+      await sendRow(
+        { targetSessionId: target, prompt: "brief v2", replacesUnread: true },
+        ctx(coord, "Coordinator"),
+      ),
+    );
+    assert.deepEqual(
+      third.replaced.map((r: { message: string }) => r.message),
+      ["brief v1", "correction"],
+    );
+    assert.ok(third.replaced.every((r: any) => r.beforeDelivery === true));
+    assert.equal(third.backlog.ahead, 1, "the helper's handoff stays");
+    assert.deepEqual(third.backlog.yourUnread, []);
+    assert.deepEqual(
+      peerPromptStore.listUndeliveredForRecipient(target).map((r) => r.prompt),
+      ["handoff", "brief v2"],
+    );
+    const v1 = peerPromptStore
+      .listByParticipant(coord)
+      .find((r) => r.prompt === "brief v1")!;
+    assert.equal(v1.status, "cancelled");
+    assert.match(v1.failureReason ?? "", /^Replaced before delivery/);
+  });
+
+  it("refuses a replacesUnread that is not a boolean, sending nothing", async () => {
+    const target = seed("Implementer");
+    await assert.rejects(
+      sendRow(
+        { targetSessionId: target, prompt: "x", replacesUnread: "yes" },
+        ctx(seed("Coordinator")),
+      ),
+      /replacesUnread must be a boolean/,
+    );
+    assert.deepEqual(peerPromptStore.listUndeliveredForRecipient(target), []);
+  });
+
+  it("delivers one sender's backlog across conversations in one turn, then the other sender's", async () => {
+    const me = seed("Implementer");
+    const coord = seed("Coordinator");
+    const helper = seed("Helper");
+    const driver = driverFor(me);
+    const send = (from: string, title: string, prompt: string) =>
+      sendRow({ targetSessionId: me, prompt }, ctx(from, title));
+    await send(coord, "Coordinator", "do X");
+    await send(helper, "Helper", "A is done");
+    await send(coord, "Coordinator", "no, do Y");
+    await drainRecipient(me);
+    await drainRecipient(me);
+    const texts = driver.promptTexts;
+    assert.equal(texts.length, 2, texts.join("\n---\n"));
+    assert.ok(texts[0]!.startsWith("2 peer messages from Coordinator"));
+    assert.ok(texts[0]!.includes("[1/2]\ndo X\n\n[2/2]\nno, do Y"));
+    assert.match(texts[0]!, /1 more peer message waits in your queue/);
+    assert.equal(texts[1], "Peer message from Helper:\n\nA is done");
+    // The Coordinator's two conversations show the batch once, not twice.
+    const received = peerPromptThreadsFor(me)
+      .threads.flatMap((t) => t.messages)
+      .filter((m) => m.direction === "received");
+    assert.equal(received.length, 2);
   });
 });

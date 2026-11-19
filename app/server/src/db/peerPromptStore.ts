@@ -975,10 +975,14 @@ function claimNext(
 }
 
 /**
- * Claim a FIFO batch for a recipient: the oldest queued row plus any immediately
- * following queued rows (by queue_seq) that share the same sender AND
- * conversation, bounded by `maxCount` and `maxChars` of prompt text. All claimed
- * rows move to `dispatching` under one lease. Never reorders across batches.
+ * Claim a batch for a recipient: the oldest queued row plus every later queued
+ * row (by queue_seq) from the SAME sender, whatever its conversation, bounded
+ * by `maxCount` and `maxChars` of prompt text. Rows from other senders in
+ * between are skipped, not a stop: they head the next batch. One sender's
+ * messages therefore arrive together and in order, so a busy recipient reads
+ * a whole backlog from its coordinator in one turn instead of one turn each
+ * (Task-1442). A row past either bound ends the batch, so a sender's order
+ * is never broken. All claimed rows move to `dispatching` under one lease.
  */
 function claimBatch(
   recipientSessionId: string,
@@ -1004,12 +1008,7 @@ function claimBatch(
         chars += row.prompt.length;
         continue;
       }
-      const head = batch[0]!;
-      if (
-        row.sender_session_id !== head.sender_session_id ||
-        row.conversation_id !== head.conversation_id
-      )
-        break;
+      if (row.sender_session_id !== batch[0]!.sender_session_id) continue;
       if (batch.length >= maxCount) break;
       if (chars + row.prompt.length > maxChars) break;
       batch.push(row);
@@ -1384,6 +1383,56 @@ function cancelPending(
       )
         cancelled.push(map(getRow(row.id)!));
     }
+    db.exec("COMMIT");
+    return cancelled;
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
+
+/**
+ * Cancel what one sender queued for one recipient that the recipient has not
+ * read, except `keepId` — the newer message replacing them. A `held` opening
+ * prompt is never replaced: it is a spawned child's first turn and its slot.
+ * A `dispatching` row is past recalling, as in {@link cancelPending}.
+ */
+function cancelUnreadFromSender(
+  recipientSessionId: string,
+  senderSessionId: string,
+  keepId: string,
+  reason: string,
+  now = Date.now(),
+): PeerPromptRecord[] {
+  const db = getDb();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const rows = db
+      .prepare(
+        `SELECT id FROM peer_prompts
+          WHERE recipient_session_id = ? AND sender_session_id = ? AND id != ?
+            AND status IN ('queued', 'retryable_failed')
+          ORDER BY queue_seq`,
+      )
+      .all(recipientSessionId, senderSessionId, keepId) as { id: string }[];
+    const cancelled: PeerPromptRecord[] = [];
+    for (const row of rows)
+      if (
+        transitionInTxn(
+          db,
+          row.id,
+          ["queued", "retryable_failed"],
+          "cancelled",
+          {
+            failureReason: reason,
+            leaseOwner: null,
+            leaseExpiresAt: null,
+            nextAttemptAt: null,
+          },
+          now,
+        )
+      )
+        cancelled.push(map(getRow(row.id)!));
     db.exec("COMMIT");
     return cancelled;
   } catch (err) {
@@ -2745,6 +2794,7 @@ export const peerPromptStore = {
   markFailed,
   markExpired,
   cancelPending,
+  cancelUnreadFromSender,
   cancelOne,
   allocateQueueSeq,
   promoteHeld,

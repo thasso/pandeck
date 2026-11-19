@@ -16,7 +16,9 @@ import type {
   KnowledgeEntryCard,
   PeerPromptCard,
   PeerPromptInterruption,
+  PeerPromptSendBacklog,
   PeerPromptSettledRequest,
+  PeerPromptUnreadMessage,
   PeerPromptWithdrawnRequest,
   PeerPromptState,
   PeerPromptToolRow,
@@ -271,12 +273,59 @@ function parseWithdrawnRequest(
   };
 }
 
+function parseUnreadMessage(value: unknown): PeerPromptUnreadMessage | null {
+  const raw = asRecord(value);
+  if (
+    !raw ||
+    typeof raw.messageKey !== "string" ||
+    typeof raw.message !== "string"
+  )
+    return null;
+  return { messageKey: raw.messageKey, message: raw.message };
+}
+
+const BACKLOG_RECIPIENT_STATES: ReadonlySet<unknown> = new Set([
+  "running",
+  "idle",
+  "not_loaded",
+]);
+
+function parseSendBacklog(value: unknown): PeerPromptSendBacklog | null {
+  const raw = asRecord(value);
+  if (
+    !raw ||
+    !BACKLOG_RECIPIENT_STATES.has(raw.recipient) ||
+    typeof raw.ahead !== "number" ||
+    !Array.isArray(raw.yourUnread)
+  )
+    return null;
+  return {
+    recipient: raw.recipient as PeerPromptSendBacklog["recipient"],
+    ahead: raw.ahead,
+    yourUnread: raw.yourUnread
+      .map(parseUnreadMessage)
+      .filter((m): m is PeerPromptUnreadMessage => m !== null),
+  };
+}
+
 function parsePeerPromptToolRow(value: unknown): PeerPromptToolRow | null {
   const raw = asRecord(value);
   if (!raw) return null;
   if (raw.kind === "message") {
     const card = parsePeerPromptCard(raw.card);
-    return card ? { kind: "message", card } : null;
+    if (!card) return null;
+    const backlog = parseSendBacklog(raw.backlog);
+    const replaced = Array.isArray(raw.replaced)
+      ? raw.replaced
+          .map(parseWithdrawnRequest)
+          .filter((r): r is PeerPromptWithdrawnRequest => r !== null)
+      : [];
+    return {
+      kind: "message",
+      card,
+      ...(backlog ? { backlog } : {}),
+      ...(replaced.length > 0 ? { replaced } : {}),
+    };
   }
   if (raw.kind === "settle") {
     if (typeof raw.reason !== "string" || !Array.isArray(raw.settled))

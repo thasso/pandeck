@@ -30,6 +30,7 @@ import type {
   PeerPromptThread,
   PeerPromptThreadMessage,
   PeerPromptPeerSummary,
+  PeerPromptSendBacklog,
   PeerPromptSettledRequest,
   PeerPromptThreadsProjection,
   PeerPromptWithdrawnRequest,
@@ -98,6 +99,7 @@ import {
 import {
   resumableState,
   runtimeStateFor,
+  type RuntimeState,
 } from "./tools/sessions/sessionInspection.ts";
 
 export const MAX_PEER_PROMPT_CHARS = 8_000;
@@ -105,10 +107,18 @@ export const MAX_PEER_PROMPT_CHARS = 8_000;
 export const MAX_SEND_ROWS = 10;
 /** The longest reason a settle or withdraw may give; the cards show it. */
 export const MAX_CLOSE_REASON_CHARS = 200;
-export const BATCH_MAX_MESSAGES = 5;
-const BATCH_MAX_CHARS = 16_000;
-/** Non-message overhead budget for the delivered envelope. */
-export const ENVELOPE_OVERHEAD_MAX = 500;
+/**
+ * One delivered turn's bounds. Generous on purpose: a busy recipient handling
+ * one sender's backlog one message per turn reads stale instructions for hours
+ * (Task-1442), and five full-length prompts fit the character bound.
+ */
+export const BATCH_MAX_MESSAGES = 10;
+const BATCH_MAX_CHARS = 40_000;
+/**
+ * Non-message overhead budget for the delivered envelope: a full batch of
+ * labelled requests, the reply cue and the backlog note.
+ */
+export const ENVELOPE_OVERHEAD_MAX = 800;
 const SENDER_TITLE_MAX = 80;
 /** How much of an interrupted prompt an interruption notice quotes back. */
 const NOTICE_PROMPT_EXCERPT_MAX = 120;
@@ -206,6 +216,11 @@ export interface SendPeerPromptInput {
    */
   inReplyTo?: readonly string[];
   /**
+   * This message supersedes everything the sender queued for the target that
+   * it has not read yet: those are cancelled once this one is queued.
+   */
+  replacesUnread?: boolean;
+  /**
    * A directly spawned child's opening prompt that waits for a slot: stored
    * `held` at the queue position its admission allocated, and not drained.
    */
@@ -215,6 +230,10 @@ export interface SendPeerPromptInput {
 export interface SendPeerPromptResult {
   message: PeerPromptRecord;
   card: PeerPromptCard;
+  /** What it waits behind; absent when the target reads it at once. */
+  backlog?: PeerPromptSendBacklog;
+  /** The sender's unread messages `replacesUnread` cancelled. */
+  replaced?: PeerPromptWithdrawnRequest[];
 }
 
 /* ------------------------------- send ------------------------------------ */
@@ -314,10 +333,62 @@ export async function sendPeerPrompt(
     const original = peerPromptStore.getById(id);
     if (original) void broadcastCardUpdateFor(original);
   }
+  // Queued first, then the older ones go: a failed send never leaves the
+  // target with neither. One already being delivered is past recalling.
+  const replaced = input.replacesUnread
+    ? peerPromptStore.cancelUnreadFromSender(
+        target.id,
+        input.senderSessionId,
+        message.id,
+        `Replaced before delivery by a newer message (${peerPromptKey(message.id)}).`,
+      )
+    : [];
+  if (replaced.length > 0) broadcastPeerPromptChanges(replaced);
+  const backlog = input.hold ? undefined : sendBacklog(message, target);
   // Fire-and-forget delivery; the send call never blocks on the recipient turn.
   // A held prompt starts only through its coordinator's start pass.
   if (autoDeliver && !input.hold) wakeRecipient(target.id);
-  return { message, card };
+  return {
+    message,
+    card,
+    ...(backlog ? { backlog } : {}),
+    ...(replaced.length > 0
+      ? {
+          replaced: replaced.map((m) => ({
+            recipientTitle: target.title,
+            peerSessionId: m.recipientSessionId,
+            message: peerPromptExcerpt(m.prompt),
+            beforeDelivery: true as const,
+          })),
+        }
+      : {}),
+  };
+}
+
+/**
+ * What a just-queued message waits behind, or nothing when the target is
+ * idle with nothing ahead of it: it reads the message at once.
+ */
+function sendBacklog(
+  message: PeerPromptRecord,
+  target: PromptableTarget,
+): PeerPromptSendBacklog | undefined {
+  const waiting = peerPromptStore.listUndeliveredForRecipient(target.id);
+  const ahead = waiting.filter((r) => r.queueSeq < message.queueSeq).length;
+  const yourUnread = waiting
+    .filter(
+      (r) =>
+        r.senderSessionId === message.senderSessionId &&
+        r.id !== message.id &&
+        r.status !== "dispatching",
+    )
+    .map((r) => ({
+      messageKey: peerPromptKey(r.id),
+      message: peerPromptExcerpt(r.prompt),
+    }));
+  if (target.runtime !== "running" && ahead === 0 && yourUnread.length === 0)
+    return undefined;
+  return { recipient: target.runtime, ahead, yourUnread };
 }
 
 export interface SettlePeerRequestsInput {
@@ -785,6 +856,8 @@ async function steerPeerPrompt(
 interface PromptableTarget {
   id: string;
   title: string;
+  /** Whether it is in a turn as the send resolves it, for the backlog. */
+  runtime: RuntimeState;
 }
 
 /**
@@ -818,7 +891,7 @@ async function resolvePromptableTarget(
       `Session ${targetSessionId} cannot currently be prompted (${resumable.reason ?? "not resumable"}); it cannot receive a peer prompt.`,
     );
   }
-  return { id: meta.id, title: meta.title };
+  return { id: meta.id, title: meta.title, runtime };
 }
 
 function resolveTaskLabel(taskId?: string): string | undefined {
@@ -1891,8 +1964,11 @@ function deliveryParts(batch: PeerPromptRecord[]): {
 } {
   const head = batch[0]!;
   const primaryRequest = [...batch].reverse().find((m) => m.responseRequested);
+  // A batch may span its sender's conversations. A reply made in this turn
+  // continues the request it answers, or else the newest message's thread.
+  const anchor = primaryRequest ?? batch[batch.length - 1]!;
   return {
-    envelope: buildEnvelope(batch),
+    envelope: buildEnvelope(batch, waitingBehind(head.recipientSessionId)),
     // The recipient card's responseRequested reflects whether ANY batched
     // message wants a reply, not just the head. Its messageKey is the DISTINCT
     // batch key (not the head's own opaque key), so a later aggregate-state
@@ -1906,11 +1982,18 @@ function deliveryParts(batch: PeerPromptRecord[]): {
     },
     context: {
       senderSessionId: head.senderSessionId,
-      conversationId: head.conversationId,
-      chainId: head.chainId,
+      conversationId: anchor.conversationId,
+      chainId: anchor.chainId,
       ...(primaryRequest ? { primaryRequestMessageId: primaryRequest.id } : {}),
     },
   };
+}
+
+/** Unread messages still queued for a recipient, not counting any being sent. */
+function waitingBehind(recipientId: string): number {
+  return peerPromptStore
+    .listUndeliveredForRecipient(recipientId)
+    .filter((r) => r.status !== "dispatching").length;
 }
 
 async function deliverBatch(
@@ -2373,41 +2456,60 @@ function batchMessage(batch: PeerPromptRecord[]): string {
 }
 
 /**
- * The delivered model envelope: a short sender label, the prompt(s), and an
- * optional reply cue. Non-message overhead stays under {@link ENVELOPE_OVERHEAD_MAX}.
+ * The delivered model envelope: a short sender label, the prompt(s), an
+ * optional reply cue, and how many messages still wait behind this batch.
+ * Non-message overhead stays under {@link ENVELOPE_OVERHEAD_MAX}.
  *
  * The cue names the SENDER's session id so the recipient can reply without a
  * `session_lookup` round trip (and without mis-targeting an ambiguous title).
  * `head.senderSessionId` is authoritative for the whole batch: `claimBatch`
- * stops at the first sender or conversation mismatch. It is model-facing only
- * — the transcript renders the sanitized card, never this envelope — and stays
- * inside the conditional cue so fire-and-forget notifications stay minimal.
+ * takes one sender's rows only. It is model-facing only — the transcript
+ * renders the sanitized card, never this envelope — and stays inside the
+ * conditional cue so fire-and-forget notifications stay minimal.
  *
- * Each request carries its reply key ({@link peerRequestKey}) next to its own
- * text: in the cue when it is the batch's only message, otherwise on a label
- * line before each member, so every body sits between its own label and the
- * next one. A batch without requests keeps the plain shape.
+ * A batch of several messages labels each one, oldest first, and says the
+ * later one stands where they disagree: they are one sender's backlog, and a
+ * correction queued behind an instruction must win over it. A request's label
+ * carries its reply key ({@link peerRequestKey}); a lone request's key rides
+ * in the cue.
+ *
+ * `waitingAfter` counts the recipient's unread messages left queued behind this
+ * batch, so it neither mistakes the batch for everything nor answers a point a
+ * waiting message already changed.
  */
-export function buildEnvelope(batch: PeerPromptRecord[]): string {
+export function buildEnvelope(
+  batch: PeerPromptRecord[],
+  waitingAfter = 0,
+): string {
   const head = batch[0]!;
   const title = clip(head.senderLabel ?? "another session", SENDER_TITLE_MAX);
-  const header = `Peer message from ${title}:`;
-  if (!batch.some((m) => m.responseRequested))
-    return `${header}\n\n${batchMessage(batch)}`;
+  const waiting =
+    waitingAfter > 0
+      ? `\n\n${waitingAfter} more peer message${waitingAfter === 1 ? "" : "s"} wait${waitingAfter === 1 ? "s" : ""} in your queue; ${waitingAfter === 1 ? "it arrives" : "they arrive"} when this turn ends.`
+      : "";
+  const asked = batch.some((m) => m.responseRequested);
   const reply = `Reply with session_send_prompt to session \`${head.senderSessionId}\``;
   const idle =
     "then end your turn — further messages arrive while you are idle.";
-  if (batch.length === 1)
-    return `${header}\n\n${head.prompt}\n\n${reply}, inReplyTo \`${peerRequestKey(head)}\` (or settle it if acting answers it), ${idle}`;
+  if (batch.length === 1) {
+    const cue = asked
+      ? `\n\n${reply}, inReplyTo \`${peerRequestKey(head)}\` (or settle it if acting answers it), ${idle}`
+      : "";
+    return `Peer message from ${title}:\n\n${head.prompt}${cue}${waiting}`;
+  }
+  const header = `${batch.length} peer messages from ${title}, oldest first; where they disagree, the later one stands:`;
   const body = batch
     .map((m, i) => {
       const label = m.responseRequested
-        ? `reply key \`${peerRequestKey(m)}\``
-        : "no reply asked";
-      return `[${i + 1}/${batch.length} · ${label}]\n${m.prompt}`;
+        ? ` · reply key \`${peerRequestKey(m)}\``
+        : "";
+      return `[${i + 1}/${batch.length}${label}]\n${m.prompt}`;
     })
     .join("\n\n");
-  return `${header}\n\n${body}\n\n${reply}, inReplyTo naming the keys each reply answers (or settle those acting answers), ${idle}`;
+  const cue = asked
+    ? `\n\n${reply}, inReplyTo naming the keys each reply answers (or settle those acting answers), ${idle}`
+    : "";
+  return `${header}\n\n${body}${cue}${waiting}`;
 }
 
 /* ------------------------------- cards ----------------------------------- */
@@ -2751,6 +2853,12 @@ export function peerPromptThreadsFor(
   for (const r of bounded) {
     const direction: "sent" | "received" =
       r.senderSessionId === sessionId ? "sent" : "received";
+    // One entry per delivered batch, in the thread of its newest member: a
+    // batch may span its sender's conversations, and its card key is one.
+    // Checked first, so a member seen again opens no empty thread.
+    const effectiveHeadId = r.batchHeadId ?? r.id;
+    if (direction === "received" && emittedGroupKeys.has(effectiveHeadId))
+      continue;
     let thread = byConversation.get(r.conversationId);
     if (!thread) {
       thread = {
@@ -2763,10 +2871,7 @@ export function peerPromptThreadsFor(
       order.push(r.conversationId);
     }
     if (direction === "received") {
-      const effectiveHeadId = r.batchHeadId ?? r.id;
-      const groupKey = `${r.conversationId} ${effectiveHeadId}`;
-      if (emittedGroupKeys.has(groupKey)) continue;
-      emittedGroupKeys.add(groupKey);
+      emittedGroupKeys.add(effectiveHeadId);
       const members = peerPromptStore.listByBatchHead(
         sessionId,
         effectiveHeadId,

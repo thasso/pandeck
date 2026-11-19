@@ -415,6 +415,23 @@ the outcome:
   runs and refuses the whole call on one bad field, so the tool validates each
   row itself (`app/server/src/tools/CLAUDE.md`).
 
+  A busy recipient reads messages only between its turns, so a sender sees the
+  backlog it joins ([Task-1442](pa://task/1442)). A message row's result carries
+  `backlog` unless the target is idle with nothing queued ahead: the target's
+  runtime state (`running`, `idle`, `not_loaded`), how many unread messages from
+  any sender wait `ahead`, and `yourUnread` — the sender's own earlier messages
+  there, each with the `messageKey` a withdraw row names. A message row with
+  `replacesUnread: true` supersedes those: once it is queued, every one of the
+  sender's `queued` or `retryable_failed` messages to that target is `cancelled`
+  ("Replaced before delivery by a newer message (k…)"), and the row lists them
+  in `replaced`, which the web shows as a withdraw row under the sent card. A
+  `held` opening prompt is never replaced (it is the child's first turn and its
+  slot), and one already dispatching is past recalling. Queued first, then
+  cancelled, so a refused send never leaves the target with neither. The
+  developer persona tells agents to send complete briefs, to replace unread ones
+  rather than correct them, and not to send acknowledgements, which each cost
+  the recipient a turn.
+
   The same `responseRequested` rows tell the user when a tree needs a poke: each
   session row lists the peers that still owe it a reply — the turn ended without
   the answer and nothing from that peer, nor from a peer it handed the work to

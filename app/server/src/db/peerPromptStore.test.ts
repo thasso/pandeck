@@ -26,7 +26,7 @@ function enqueue(
     sender: string;
     responseRequested: boolean;
     expiresAt: number;
-    /** Share one conversation, so a FIFO batch claims the rows together. */
+    /** Share one conversation (a batch takes a sender's rows from any). */
     conversation: { conversationId: string; chainId: string };
   }> = {},
 ) {
@@ -849,6 +849,54 @@ describe("peerPromptStore", () => {
 
     const members = store.listByBatchHead(recipient, m1.id);
     assert.deepEqual(members.map((m) => m.id).sort(), [m1.id, m2.id].sort());
+  });
+
+  it("claims one sender's whole backlog across conversations, skipping other senders' rows", () => {
+    const recipient = `r-${seq++}`;
+    const a1 = enqueue(recipient, { sender: "coord" });
+    const b1 = enqueue(recipient, { sender: "helper" });
+    const a2 = enqueue(recipient, { sender: "coord" });
+    const b2 = enqueue(recipient, { sender: "helper" });
+    const a3 = enqueue(recipient, { sender: "coord" });
+    assert.deepEqual(
+      store.claimBatch(recipient, "d", 60_000, 10, 10_000).map((m) => m.id),
+      [a1.id, a2.id, a3.id],
+    );
+    assert.deepEqual(
+      store.claimBatch(recipient, "d", 60_000, 10, 10_000).map((m) => m.id),
+      [b1.id, b2.id],
+    );
+    // A bound ends the batch where it is: the sender's order is never broken.
+    const r2 = `r-${seq++}`;
+    const ids = [1, 2, 3].map(() => enqueue(r2, { sender: "coord" }).id);
+    assert.deepEqual(
+      store.claimBatch(r2, "d", 60_000, 2, 10_000).map((m) => m.id),
+      ids.slice(0, 2),
+    );
+  });
+
+  it("cancels a sender's unread messages for a newer one, keeping held, dispatching and other senders' rows", () => {
+    const recipient = `r-${seq++}`;
+    const sending = enqueue(recipient, { sender: "coord" });
+    store.claimBatch(recipient, "d", 60_000, 1, 10_000);
+    const stale = enqueue(recipient, { sender: "coord" });
+    const other = enqueue(recipient, { sender: "helper" });
+    const newer = enqueue(recipient, { sender: "coord" });
+    const cancelled = store.cancelUnreadFromSender(
+      recipient,
+      "coord",
+      newer.id,
+      "replaced",
+    );
+    assert.deepEqual(
+      cancelled.map((m) => m.id),
+      [stale.id],
+    );
+    assert.equal(store.getById(stale.id)?.status, "cancelled");
+    assert.equal(store.getById(stale.id)?.failureReason, "replaced");
+    assert.equal(store.getById(sending.id)?.status, "dispatching");
+    assert.equal(store.getById(other.id)?.status, "queued");
+    assert.equal(store.getById(newer.id)?.status, "queued");
   });
 
   it("reserves a claimed batch before its append only while the claim holds every row", () => {

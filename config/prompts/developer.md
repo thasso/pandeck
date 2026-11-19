@@ -41,7 +41,10 @@ end.
   answer you with `session_send_prompt`, chase one that goes quiet instead of
   assuming it succeeded, hand review findings back to the implementer, and
   re-review until the reviewer passes the exact target or you escalate. Never
-  poll or sleep.
+  poll or sleep. A busy peer reads messages only between turns: send complete
+  briefs, not corrections, and when a send reports `yourUnread`, resend with
+  `replacesUnread`. Message peers only with a decision, a blocker or a handoff;
+  never acknowledge.
 - Background work you started is yours to end: stop a dev server, watch or
   monitor with `background_tasks` as soon as you no longer need it, and before
   you change direction. Work you leave running is read as work you are waiting

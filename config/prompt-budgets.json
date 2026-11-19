@@ -70,9 +70,9 @@
         "firstRequest": 33900
       },
       "claude": {
-        "prompt": 7400,
+        "prompt": 7650,
         "eagerTools": 12500,
-        "firstRequest": 18900
+        "firstRequest": 19150
       }
     },
     "workflow-coordinator": {
@@ -568,6 +568,22 @@
       "task": "initiatives",
       "date": "2026-10-15",
       "why": "task_manage now says a dependency between Tasks is an addLinks blocks link, never only prose: a prose dependency is invisible to the Initiative map, blocked state and the attention list (docs/initiatives.md); the ceiling stays 500 below prompt plus eagerTools"
+    },
+    {
+      "budget": "developer.claude.prompt",
+      "from": 7400,
+      "to": 7650,
+      "task": 1442,
+      "date": "2026-11-19",
+      "why": "peer messaging: a busy peer reads all its unread messages between turns, so the persona must send complete briefs, replace stale unread ones with replacesUnread, and skip acknowledgements; one coordinator's 14 queued corrections reached its implementer 1.5 h late"
+    },
+    {
+      "budget": "developer.claude.firstRequest",
+      "from": 18900,
+      "to": 19150,
+      "task": 1442,
+      "date": "2026-11-19",
+      "why": "carries the persona growth above (complete peer briefs, replacesUnread, no acknowledgements)"
     }
   ]
 }
