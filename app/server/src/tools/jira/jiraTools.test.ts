@@ -127,8 +127,8 @@ const {
   jiraLookupTool,
   jiraGetIssueTool,
   jiraMutateIssueTool,
-  dropNulls,
 } = await import("./jiraTools.ts");
+const { dropNulls } = await import("../../jiraLookup.ts");
 const {
   approvalsForSession,
   reconcileLegacyPartialApprovalCard,

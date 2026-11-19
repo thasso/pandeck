@@ -1,36 +1,16 @@
 import type { JiraApiConfig } from "./jiraClient.ts";
-import { jiraGet } from "./jiraClient.ts";
+import {
+  buildFieldMap,
+  fetchJiraFields,
+  type JiraFieldMap,
+  type JiraFieldMeta,
+} from "./jiraFields.ts";
 import {
   jiraCachePath,
   readJsonCacheFile as readJson,
   writeJsonCacheFile as writeJson,
 } from "./jiraCacheFile.ts";
 const FIELD_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-
-export interface JiraFieldMeta {
-  id: string;
-  key?: string;
-  name: string;
-  custom: boolean;
-  orderable?: boolean;
-  navigable?: boolean;
-  searchable?: boolean;
-  clauseNames?: string[];
-  schema?: {
-    type?: string;
-    items?: string;
-    system?: string;
-    custom?: string;
-    customId?: number;
-    configuration?: unknown;
-  };
-}
-
-export interface JiraFieldMap {
-  fetchedAt: number;
-  byId: Map<string, JiraFieldMeta>;
-  byNameLower: Map<string, JiraFieldMeta[]>;
-}
 
 interface FieldCacheFile {
   fetchedAt: number;
@@ -67,11 +47,8 @@ export async function getJiraFieldMap(
   if (cached && Date.now() - cached.fetchedAt < maxAgeMs)
     return buildFieldMap(cached);
 
-  const fields = await jiraGet<JiraFieldMeta[]>(config, "/rest/api/3/field");
-  const file = {
-    fetchedAt: Date.now(),
-    fields: fields.map(normalizeFieldMeta),
-  };
+  const fields = await fetchJiraFields(config);
+  const file = { fetchedAt: Date.now(), fields };
   writeJson(path, file);
   return buildFieldMap(file);
 }
@@ -100,40 +77,8 @@ export function updateCustomFieldProfile(
   return next;
 }
 
-export function resolveFieldName(
-  fieldMap: JiraFieldMap,
-  nameOrId: string,
-): JiraFieldMeta | null {
-  const trimmed = nameOrId.trim();
-  if (!trimmed) return null;
-  const byId = fieldMap.byId.get(trimmed);
-  if (byId) return byId;
-  const matches = fieldMap.byNameLower.get(trimmed.toLowerCase()) ?? [];
-  return matches.find((field) => field.custom) ?? matches[0] ?? null;
-}
-
 function profileKey(projectKey: string, issueTypeId: string): string {
   return `${projectKey}:${issueTypeId}`;
-}
-
-function normalizeFieldMeta(field: JiraFieldMeta): JiraFieldMeta {
-  return {
-    ...field,
-    id: field.id,
-    name: field.name,
-    custom: Boolean(field.custom || field.id.startsWith("customfield_")),
-  };
-}
-
-function buildFieldMap(file: FieldCacheFile): JiraFieldMap {
-  const byId = new Map<string, JiraFieldMeta>();
-  const byNameLower = new Map<string, JiraFieldMeta[]>();
-  for (const field of file.fields) {
-    byId.set(field.id, field);
-    const name = field.name.toLowerCase();
-    byNameLower.set(name, [...(byNameLower.get(name) ?? []), field]);
-  }
-  return { fetchedAt: file.fetchedAt, byId, byNameLower };
 }
 
 function readProfileCache(jiraHost: string): ProfileCacheFile {
