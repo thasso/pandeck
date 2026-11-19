@@ -19,6 +19,7 @@ import {
   type McpCaller,
   type McpHandlerOptions,
 } from "./mcp.ts";
+import { describeSlackAccessView } from "./slack.ts";
 import { EDGE_TOOLS } from "./tools.ts";
 
 interface AtlassianIntegration {
@@ -41,7 +42,11 @@ export interface EdgeToolSet {
   ): void;
   /** The same host, for gateway client 1.0's `tools.*` (Task-1398). */
   host: ToolHost;
-  integrations: { atlassian: AtlassianIntegration };
+  integrations: {
+    atlassian: AtlassianIntegration;
+    /** The vault's Slack access view, for the page's status (Task-1453). */
+    slack: { describe(credential: string): { teamName?: string } | undefined };
+  };
 }
 
 export function createEdgeTools(
@@ -85,6 +90,7 @@ export function createEdgeTools(
             : undefined;
         },
       },
+      slack: { describe: describeSlackAccessView },
     },
   };
 }

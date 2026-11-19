@@ -36,6 +36,7 @@ import { readEdgeVaultLink } from "./gateway/vaultMethods.ts";
 import {
   UserOperationRefusal,
   type AtlassianStatus,
+  type SlackStatus,
   type UserOperations,
 } from "./gateway/userOperations.ts";
 import type { EdgeTools } from "./gateway/edgeTools.ts";
@@ -241,7 +242,29 @@ function browserAtlassian(
   };
 }
 
-/** The page's Atlassian credential over the edge's user-scoped operations. */
+/**
+ * What the page's status gets of the user's Slack record: connected, the
+ * workspace's name (the route applies the display rule) and a stored
+ * record's problem; never a token.
+ */
+function browserSlack(
+  status: SlackStatus,
+): Awaited<ReturnType<GatewayWebIntegrations["slackStatus"]>> {
+  return status.connected
+    ? {
+        connected: true,
+        ...(status.teamName !== undefined ? { teamName: status.teamName } : {}),
+      }
+    : {
+        connected: false,
+        ...(status.problem !== undefined ? { problem: status.problem } : {}),
+      };
+}
+
+/**
+ * The page's Atlassian credential and Slack record over the edge's
+ * user-scoped operations.
+ */
 function webIntegrations(operations: UserOperations): GatewayWebIntegrations {
   return {
     status: (userId) =>
@@ -257,6 +280,12 @@ function webIntegrations(operations: UserOperations): GatewayWebIntegrations {
       operations
         .connectAtlassian(userId, request)
         .then(browserAtlassian, settingsRefusal),
+    slackStatus: (userId) =>
+      operations.slackStatus(userId).then(browserSlack, settingsRefusal),
+    connectSlack: (userId, request) =>
+      operations.connectSlack(userId, request).then(() => {}, settingsRefusal),
+    clearSlack: (userId) =>
+      operations.clearSlack(userId).catch(settingsRefusal),
   };
 }
 

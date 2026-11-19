@@ -86,5 +86,12 @@ export interface EdgeTools {
         credential: string,
       ): { site: string; email?: string; kind: "token" | "oauth" } | undefined;
     };
+    slack: {
+      /**
+       * The workspace's name of the vault's Slack access view (Task-1453),
+       * undefined when the view does not decode; never a token.
+       */
+      describe(credential: string): { teamName?: string } | undefined;
+    };
   };
 }

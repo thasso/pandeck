@@ -120,6 +120,11 @@ const NO_INTEGRATIONS: GatewayWebIntegrations = {
   set: () => Promise.reject(new IntegrationsRefusal("tools_unavailable")),
   clear: () => Promise.reject(new IntegrationsRefusal("tools_unavailable")),
   connect: () => Promise.reject(new IntegrationsRefusal("tools_unavailable")),
+  slackStatus: () => Promise.resolve({ connected: false }),
+  connectSlack: () =>
+    Promise.reject(new IntegrationsRefusal("tools_unavailable")),
+  clearSlack: () =>
+    Promise.reject(new IntegrationsRefusal("tools_unavailable")),
 };
 const NO_CLIENTS: GatewayWebClients = {
   list: () => [],

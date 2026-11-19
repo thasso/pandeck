@@ -39,6 +39,7 @@ import {
   type ProfileRegistry,
 } from "./profiles.ts";
 import type {
+  Integration,
   IntegrationConnect,
   IntegrationWrite,
   VaultPort,
@@ -53,6 +54,7 @@ export class UserOperationRefusal extends Error {
     readonly code:
       | IntegrationFailure
       | AtlassianConnectFailure
+      | SlackConnectFailure
       | "unknown_client"
       | "limit_reached"
       | "unknown_request",
@@ -97,6 +99,13 @@ type AtlassianConnectFailure =
   | "integration_site_missing"
   | "integration_site_ambiguous"
   | "integration_not_configured";
+
+/**
+ * A Slack connect's refusals that only the page's callback sees (Task-1453):
+ * the vault's `team: "mismatch"`, or a vault without Slack's OAuth client.
+ */
+type SlackConnectFailure =
+  "integration_team_mismatch" | "integration_not_configured";
 
 /** How an Atlassian credential was made, or how a new one is made. */
 type AtlassianKind = "token" | "oauth";
@@ -160,6 +169,18 @@ export type AtlassianStatus =
       email?: string;
       problem?: AtlassianProblem;
     } & AtlassianConnectWith);
+
+/** Why a stored Slack record is not usable now. */
+type SlackProblem =
+  "vault_locked" | "vault_unavailable" | "invalid" | "rejected";
+
+/**
+ * The user's Slack record (Task-1453): connected with the workspace's name
+ * as the vault holds it, or not, with why a stored one cannot be used.
+ */
+export type SlackStatus =
+  | { connected: true; teamName?: string }
+  | { connected: false; problem?: SlackProblem };
 
 interface UserOperationsDeps {
   vault: Pick<
@@ -263,6 +284,21 @@ export interface UserOperations {
     userId: string,
     request: { code: string; redirectUri: string; site?: string },
   ): Promise<AtlassianConnected>;
+  /**
+   * The user's Slack record as the vault reads it (a read may refresh it
+   * there); never a token.
+   */
+  slackStatus(userId: string): Promise<SlackStatus>;
+  /**
+   * Hands an authorization code from the page's Slack callback to the vault,
+   * which exchanges it, checks the workspace against `team` and stores the
+   * user's record; one at a time with the user's Slack clear.
+   */
+  connectSlack(
+    userId: string,
+    request: { code: string; redirectUri: string; team?: string },
+  ): Promise<{ connected: true; teamName?: string }>;
+  clearSlack(userId: string): Promise<void>;
   /** The user's clients that are not revoked. */
   clients(userId: string): UserClient[];
   /**
@@ -347,24 +383,36 @@ export function createUserOperations(deps: UserOperationsDeps): UserOperations {
     if (!tools) throw new UserOperationRefusal("tools_unavailable");
     return tools.atlassian;
   };
+  /** The Slack tools, or the fixed refusal. */
+  const slack = (): EdgeTools["integrations"]["slack"] => {
+    const tools = deps.integrations();
+    if (!tools) throw new UserOperationRefusal("tools_unavailable");
+    return tools.slack;
+  };
   /**
-   * The users with an Atlassian set, clear or connect running. One runs per
-   * user at a time and another meanwhile is refused `integration_busy` at once, so an
-   * earlier set's check can never land its write after a later clear, and no
-   * request waits for another. Reads are never refused.
+   * Per integration, the users with a set, clear or connect of that record
+   * running. One runs per user and integration at a time and another
+   * meanwhile is refused `integration_busy` at once, so an earlier set's
+   * check can never land its write after a later clear, and no request waits
+   * for another. Reads are never refused; another integration's record is
+   * another slot.
    */
-  const atlassianWriting = new Set<string>();
+  const writing: Record<Integration, Set<string>> = {
+    atlassian: new Set(),
+    slack: new Set(),
+  };
   const alone = async <T>(
+    integration: Integration,
     userId: string,
     run: () => Promise<T>,
   ): Promise<T> => {
-    if (atlassianWriting.has(userId))
-      throw new UserOperationRefusal("integration_busy");
-    atlassianWriting.add(userId);
+    const users = writing[integration];
+    if (users.has(userId)) throw new UserOperationRefusal("integration_busy");
+    users.add(userId);
     try {
       return await run();
     } finally {
-      atlassianWriting.delete(userId);
+      users.delete(userId);
     }
   };
   const connectWith: AtlassianKind = deps.atlassianSignIn ? "oauth" : "token";
@@ -381,6 +429,23 @@ export function createUserOperations(deps: UserOperationsDeps): UserOperations {
             ? outcome.site === "missing"
               ? "integration_site_missing"
               : "integration_site_ambiguous"
+            : "notConfigured" in outcome
+              ? "integration_not_configured"
+              : "locked" in outcome
+                ? "vault_locked"
+                : "vault_unavailable",
+    );
+  /** A Slack connect's refusal as its fixed code, every outcome named. */
+  const slackConnectRefusal = (
+    outcome: Exclude<IntegrationConnect<"slack">, { ok: true }>,
+  ): UserOperationRefusal =>
+    new UserOperationRefusal(
+      "rejected" in outcome
+        ? "integration_rejected"
+        : "unreachable" in outcome
+          ? "integration_unreachable"
+          : "team" in outcome
+            ? "integration_team_mismatch"
             : "notConfigured" in outcome
               ? "integration_not_configured"
               : "locked" in outcome
@@ -469,7 +534,7 @@ export function createUserOperations(deps: UserOperationsDeps): UserOperations {
       const tools = atlassian();
       const parsed = tools.parse(input);
       if (!parsed.ok) throw new UserOperationRefusal("integration_invalid");
-      return alone(userId, async (): Promise<AtlassianSet> => {
+      return alone("atlassian", userId, async (): Promise<AtlassianSet> => {
         const checked = await tools.check(
           parsed.credential,
           deps.checkSignal(),
@@ -499,26 +564,75 @@ export function createUserOperations(deps: UserOperationsDeps): UserOperations {
     },
     async clearAtlassian(userId) {
       atlassian();
-      await alone(userId, async () =>
+      await alone("atlassian", userId, async () =>
         wrote(await deps.vault.integrationClear(userId, "atlassian")),
       );
     },
     async connectAtlassian(userId, { code, redirectUri, site }) {
       atlassian();
-      return alone(userId, async (): Promise<AtlassianConnected> => {
-        const outcome = await deps.vault.integrationConnect(
-          userId,
-          "atlassian",
-          { code, redirectUri, ...(site !== undefined ? { site } : {}) },
-        );
-        if (!outcome.ok) throw connectRefusal(outcome);
+      return alone(
+        "atlassian",
+        userId,
+        async (): Promise<AtlassianConnected> => {
+          const outcome = await deps.vault.integrationConnect(
+            userId,
+            "atlassian",
+            { code, redirectUri, ...(site !== undefined ? { site } : {}) },
+          );
+          if (!outcome.ok) throw connectRefusal(outcome);
+          return {
+            connected: true,
+            kind: "oauth",
+            site: outcome.site,
+            connectWith,
+          };
+        },
+      );
+    },
+    async slackStatus(userId) {
+      const tools = slack();
+      const record = await deps.vault.integrationGet(userId, "slack", {});
+      if (!record.ok) {
+        if ("absent" in record) return { connected: false };
+        // The vault's refresh was refused: sign in with Slack again.
+        if ("rejected" in record)
+          return { connected: false, problem: "rejected" };
         return {
-          connected: true,
-          kind: "oauth",
-          site: outcome.site,
-          connectWith,
+          connected: false,
+          problem: "locked" in record ? "vault_locked" : "vault_unavailable",
+        };
+      }
+      const described = tools.describe(record.credential);
+      if (!described) return { connected: false, problem: "invalid" };
+      return {
+        connected: true,
+        ...(described.teamName !== undefined
+          ? { teamName: described.teamName }
+          : {}),
+      };
+    },
+    async connectSlack(userId, { code, redirectUri, team }) {
+      slack();
+      return alone("slack", userId, async () => {
+        const outcome = await deps.vault.integrationConnect(userId, "slack", {
+          code,
+          redirectUri,
+          ...(team !== undefined ? { team } : {}),
+        });
+        if (!outcome.ok) throw slackConnectRefusal(outcome);
+        return {
+          connected: true as const,
+          ...(outcome.teamName !== undefined
+            ? { teamName: outcome.teamName }
+            : {}),
         };
       });
+    },
+    async clearSlack(userId) {
+      slack();
+      await alone("slack", userId, async () =>
+        wrote(await deps.vault.integrationClear(userId, "slack")),
+      );
     },
     clients: (userId) =>
       deps.registry

@@ -86,6 +86,7 @@ const tools: EdgeTools = {
       check: () => Promise.resolve({ ok: true }),
       describe: () => undefined,
     },
+    slack: { describe: () => undefined },
   },
 };
 

@@ -35,6 +35,7 @@ export interface GatewayUiError {
     | "integration_site_missing"
     | "integration_site_ambiguous"
     | "integration_not_configured"
+    | "integration_team_mismatch"
     | "unknown_request"
     | "rate_limited";
 }
@@ -205,6 +206,84 @@ export const GATEWAY_UI_ATLASSIAN_CONNECT_CODES = [
 ] as const;
 export type GatewayUiAtlassianConnectCode =
   (typeof GATEWAY_UI_ATLASSIAN_CONNECT_CODES)[number];
+
+/**
+ * Why a stored Slack record cannot be used now; `rejected` is Slack refusing
+ * the vault's refresh (Task-1453).
+ */
+export const GATEWAY_UI_SLACK_PROBLEMS = [
+  "vault_locked",
+  "vault_unavailable",
+  "invalid",
+  "rejected",
+] as const;
+export type GatewayUiSlackProblem = (typeof GATEWAY_UI_SLACK_PROBLEMS)[number];
+
+/**
+ * `GET /api/integrations/slack`: whether this gateway offers "Sign in with
+ * Slack" (its UI config names `slack.clientId`) and whether the user's Slack
+ * record is stored, with the workspace's name when it passes
+ * `isGatewayUiDisplayText`. Never a token.
+ */
+export interface GatewayUiSlack {
+  offered: boolean;
+  connected: boolean;
+  teamName?: string;
+  problem?: GatewayUiSlackProblem;
+}
+
+/**
+ * `POST /api/integrations/slack/connect`: where the browser goes to sign in
+ * with Slack. The URL carries this start's state, and only it does.
+ */
+export interface GatewayUiSlackConnectStart {
+  authorizeUrl: string;
+}
+
+/** Slack's authorization endpoint, the only place a start sends to. */
+export const SLACK_AUTHORIZE_URL = "https://slack.com/oauth/v2/authorize";
+
+/**
+ * Why "Sign in with Slack" did not connect, as `/?slack=<code>` after
+ * `/auth/slack/callback` (a success goes to `/` with no code). The page shows
+ * only these and ignores any other value.
+ */
+export const GATEWAY_UI_SLACK_CONNECT_CODES = [
+  "rejected",
+  "unreachable",
+  "team_mismatch",
+  "not_configured",
+  "vault_locked",
+  "vault_unavailable",
+  "busy",
+  "tools_unavailable",
+  "signed_out",
+  "expired",
+  "failed",
+  "denied",
+] as const;
+export type GatewayUiSlackConnectCode =
+  (typeof GATEWAY_UI_SLACK_CONNECT_CODES)[number];
+
+const MAX_DISPLAY_TEXT_UNITS = 256;
+/** Unicode category C (Cc, Cf, Cs, Co, Cn) and the line/paragraph separators. */
+const UNDISPLAYABLE = /[\p{C}\p{Zl}\p{Zp}]/u;
+
+/**
+ * A provider's name the page may show and a log never holds (a Slack
+ * workspace's, Task-1453): 1-256 UTF-16 units, not only whitespace, and no
+ * control, format (bidi and zero-width included), surrogate, private-use or
+ * unassigned character, nor a line or paragraph separator.
+ */
+export function isGatewayUiDisplayText(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_DISPLAY_TEXT_UNITS &&
+    value.trim() !== "" &&
+    !UNDISPLAYABLE.test(value)
+  );
+}
 
 /** One of the user's active clients, as `GET /api/clients` lists it. */
 export interface GatewayUiClient {
@@ -509,6 +588,50 @@ export function decodeGatewayUiAtlassianConnectStart(
     return undefined;
   }
   return `${url.origin}${url.pathname}` === ATLASSIAN_AUTHORIZE_URL &&
+    url.username === "" &&
+    url.password === "" &&
+    url.hash === ""
+    ? { authorizeUrl: url.href }
+    : undefined;
+}
+
+/**
+ * A well-formed `GatewayUiSlack`, or undefined: both booleans required, an
+ * unknown problem and a `teamName` failing `isGatewayUiDisplayText` dropped.
+ */
+export function decodeGatewayUiSlack(
+  value: unknown,
+): GatewayUiSlack | undefined {
+  if (!isRecord(value)) return undefined;
+  const { offered, connected, teamName, problem } = value;
+  if (typeof offered !== "boolean" || typeof connected !== "boolean")
+    return undefined;
+  return {
+    offered,
+    connected,
+    ...(isGatewayUiDisplayText(teamName) ? { teamName } : {}),
+    ...((GATEWAY_UI_SLACK_PROBLEMS as readonly unknown[]).includes(problem)
+      ? { problem: problem as GatewayUiSlackProblem }
+      : {}),
+  };
+}
+
+/**
+ * A well-formed `GatewayUiSlackConnectStart`, or undefined: the URL must be
+ * Slack's authorization endpoint, so the page never navigates anywhere else.
+ */
+export function decodeGatewayUiSlackConnectStart(
+  value: unknown,
+): GatewayUiSlackConnectStart | undefined {
+  if (!isRecord(value) || typeof value.authorizeUrl !== "string")
+    return undefined;
+  let url: URL;
+  try {
+    url = new URL(value.authorizeUrl);
+  } catch {
+    return undefined;
+  }
+  return `${url.origin}${url.pathname}` === SLACK_AUTHORIZE_URL &&
     url.username === "" &&
     url.password === "" &&
     url.hash === ""

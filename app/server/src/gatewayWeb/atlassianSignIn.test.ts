@@ -224,6 +224,9 @@ function fakeIntegrations() {
         site: PRESET_SITE,
       };
     },
+    slackStatus: () => Promise.resolve({ connected: false }),
+    connectSlack: () => Promise.reject(new Error("unused")),
+    clearSlack: () => Promise.reject(new Error("unused")),
   };
   return {
     integrations,
