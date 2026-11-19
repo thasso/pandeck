@@ -14,7 +14,9 @@
  * Checks: an HTTPS request's fields, body and `set-cookie`; one observed
  * report; a 101 upgrade with both buffered heads and bidirectional bytes,
  * reported once when it ends; an upstream signed by an untrusted CA refused
- * by verification as the relay's marked 502; a bounded relay close. Any
+ * by verification as the relay's marked 502; an answer in a transfer coding
+ * other than chunked alone, to a request and to an upgrade, as the marked 502
+ * `transfer-coding` (F006); a bounded relay close. Any
  * failed assertion throws and exits non-zero. Usage: `bun <bundle> <dir>`.
  */
 import assert from "node:assert/strict";
@@ -209,6 +211,40 @@ const upstream = https.createServer(
   },
 );
 upstream.on("connection", (socket: net.Socket) => sockets.add(socket));
+/**
+ * The upstream of `CODED_HOST` (step 8): raw TLS, so the coding goes out as
+ * written whatever the runtime's HTTP server would do with such a field. It
+ * answers every request head, an upgrade's with a 400, in `gzip, chunked`.
+ */
+const CODED_HOST = "coded.claude.ai";
+const CODED_BODY = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0x01]);
+const codedLeaf = upstreamCa.leafFor(CODED_HOST);
+const codedUpstream = tls.createServer(
+  { key: codedLeaf.key, cert: codedLeaf.cert },
+  (socket) => {
+    sockets.add(socket);
+    socket.on("error", () => {});
+    let head = Buffer.alloc(0);
+    socket.on("data", (chunk: Buffer) => {
+      if (head.includes("\r\n\r\n")) return;
+      head = Buffer.concat([head, chunk]);
+      if (!head.includes("\r\n\r\n")) return;
+      const status = /^GET \/api\/coded-upgrade /.test(head.toString("latin1"))
+        ? "400 Bad Request"
+        : "200 OK";
+      socket.end(
+        Buffer.concat([
+          Buffer.from(
+            `HTTP/1.1 ${status}\r\nTransfer-Encoding: gzip, chunked\r\n\r\n${CODED_BODY.length.toString(16)}\r\n`,
+          ),
+          CODED_BODY,
+          Buffer.from("\r\n0\r\n\r\n"),
+        ]),
+      );
+    });
+  },
+);
+
 /** Bytes the upstream could not parse as a request (step 7). */
 let upstreamParseErrors = 0;
 const upstreamClientErrors: string[] = [];
@@ -335,6 +371,8 @@ async function main(): Promise<void> {
   closers.push(() => closeServer(receiver));
   const upstreamPort = await listen(upstream);
   closers.push(() => closeServer(upstream));
+  const codedPort = await listen(codedUpstream);
+  closers.push(() => closeServer(codedUpstream));
 
   // The enrolled relay's state, as `relay enroll` leaves it.
   const stateDir = join(dir, "relay");
@@ -382,7 +420,7 @@ async function main(): Promise<void> {
       destinations.push({ ...production });
       return {
         host: "127.0.0.1",
-        port: upstreamPort,
+        port: production.host === CODED_HOST ? codedPort : upstreamPort,
         // The untrusted host's upstream is signed by a CA the relay does not
         // trust: the relay's own interception CA.
         ca:
@@ -846,6 +884,11 @@ async function main(): Promise<void> {
       [pressure.status, pressure.outcome, pressure.reason],
       [413, "observed", undefined],
     );
+    // F007: never more than the client sent of the body.
+    assert.ok(pressure.requestBytes <= 8 * 1024 * 1024);
+    console.log(
+      `backed-up early answer requestBytes: ${pressure.requestBytes}`,
+    );
     pressured.destroy();
     assert.match(
       await exchange(
@@ -905,6 +948,38 @@ async function main(): Promise<void> {
     tokenEarly.destroy();
   }
   assert.equal(destinations.length, 8, "one dial per observed request");
+
+  // 8. An answer in a transfer coding other than chunked alone (F006), to a
+  //    request and as an upgrade's non-101 answer: the marked 502
+  //    `transfer-coding`, none of the coded body, one failed record each.
+  for (const [path, head] of [
+    [
+      "/api/coded",
+      `GET /api/coded HTTP/1.1\r\nHost: ${CODED_HOST}\r\nconnection: close\r\n\r\n`,
+    ],
+    [
+      "/api/coded-upgrade",
+      `GET /api/coded-upgrade HTTP/1.1\r\nHost: ${CODED_HOST}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`,
+    ],
+  ] as const) {
+    const answer = await exchange(
+      await decrypted(relay.port, CODED_HOST, interceptCa.certPem),
+      Buffer.from(head),
+    );
+    assert.match(answer, /^HTTP\/1\.1 502 /, path);
+    assert.ok(answer.includes(GATEWAY_REFUSAL_MARKER), path);
+    assert.ok(!answer.includes("\x1f\x8b"), "none of the coded body");
+    const record = await reported(
+      (r) => r.path === path,
+      `the coded answer to ${path}`,
+    );
+    assert.deepEqual(
+      [record.status, record.outcome, record.reason],
+      [502, "failed", "transfer-coding"],
+    );
+  }
+  assert.equal(destinations.length, 10, "one dial per observed request");
+  console.log("transfer coding: gzip, chunked answered 502 transfer-coding");
   console.log(
     "framing: chunked and nominated Content-Length on plain, token and observed; reserved 403; early answer settles, next request its own",
   );

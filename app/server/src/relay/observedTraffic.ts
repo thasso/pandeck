@@ -14,6 +14,9 @@
  *   both ways and never read; the counters see lengths only. A request body
  *   goes up framed as the inner server parsed it, chunked or by its
  *   `Content-Length`, whatever its method (`withRequestFraming`).
+ * - A response is re-framed only when its transfer coding is chunked alone
+ *   or absent; any other coding, an upgrade's non-`101` answer included, is
+ *   the relay's marked 502 `transfer-coding` (`unforwardableCoding`).
  * - An upgrade request goes up as its head alone, with neither
  *   `Transfer-Encoding` nor `Content-Length`: nothing the client sent after
  *   its head is written upstream before the `101`, so no body can frame a
@@ -140,10 +143,36 @@ function counter(add: (length: number) => void): Transform {
   });
 }
 
+/**
+ * Whether a response's transfer codings are other than chunked alone (F006).
+ * The relay drops `Transfer-Encoding` as hop-by-hop and re-frames the body;
+ * that is faithful only for chunked, which the parser has already removed.
+ * Any other coding (`gzip, chunked`, say) would reach the client still
+ * applied, with nothing naming it. The relay strips the client's `TE`, so a
+ * compliant upstream sends none; one that does is answered `CODED`.
+ */
+function unforwardableCoding(rawHeaders: readonly string[]): boolean {
+  const codings: string[] = [];
+  for (let i = 0; i + 1 < rawHeaders.length; i += 2)
+    if (rawHeaders[i]!.toLowerCase() === "transfer-encoding")
+      for (const item of rawHeaders[i + 1]!.split(",")) {
+        const coding = item.trim().toLowerCase();
+        if (coding) codings.push(coding);
+      }
+  return codings.length > 0 && (codings.length > 1 || codings[0] !== "chunked");
+}
+
 const UNREACHABLE = {
   status: 502,
   errorType: "api_error",
   text: "the relay cannot reach this host.",
+} as const;
+/** An upstream answer whose transfer coding the relay cannot pass on. */
+const CODED = {
+  status: 502,
+  reason: "transfer-coding",
+  errorType: "api_error",
+  text: "the host answered with a transfer coding the relay cannot forward.",
 } as const;
 
 /**
@@ -257,9 +286,14 @@ export function createObservedTraffic(options: {
      * does, can hold it. Under backpressure a paused inner request emits
      * neither its end nor, with its socket unread, any close.
      *
-     * - The upload stops: what was read so far is counted, the rest is
-     *   drained by the inner server's own framing, so its connection stays
-     *   usable and a client that leaves is seen.
+     * - The upload stops: what passed the counter, plus what the inner
+     *   request still buffers, is counted; the rest is drained by the inner
+     *   server's own framing, so its connection stays usable and a client
+     *   that leaves is seen. The counter's own unread buffer is not added
+     *   (F007): under backpressure it still holds the chunk its transform
+     *   already counted, so adding it counted that chunk twice. A chunk the
+     *   counter took but had not transformed yet goes uncounted instead, so
+     *   the count never exceeds the body bytes read.
      * - The upstream request is destroyed, its connection never pooled. Bun's
      *   server ends such a request at its response's finish and calls it
      *   complete with its body short, so a whole upload cannot be told from a
@@ -269,8 +303,8 @@ export function createObservedTraffic(options: {
     const answeredEarly = (): void => {
       uploaded = true;
       req.unpipe(reqCount);
-      // What the client sent and the relay took but did not pass on yet.
-      done.state.requestBytes += reqCount.writableLength + req.readableLength;
+      // Read from the client but not yet handed to the counter.
+      done.state.requestBytes += req.readableLength;
       reqCount.destroy();
       upstream?.destroy();
       req.resume();
@@ -281,15 +315,16 @@ export function createObservedTraffic(options: {
       teardown();
       end();
     };
-    const unreachable = (): void => {
+    const answerLocally = (refusal: typeof UNREACHABLE | typeof CODED) => {
       if (res.headersSent || res.destroyed) {
         res.destroy();
         return;
       }
-      done.state.local = UNREACHABLE.status;
-      const length = answerMarked(res, UNREACHABLE);
+      done.state.local = refusal.status;
+      const length = answerMarked(res, refusal);
       if (life.method !== "HEAD") done.state.responseBytes = length;
     };
+    const unreachable = (): void => answerLocally(UNREACHABLE);
     res.on("finish", () => {
       answered = true;
       if (uploaded) end();
@@ -330,6 +365,16 @@ export function createObservedTraffic(options: {
         answer.destroy();
         return;
       }
+      if (unforwardableCoding(answer.rawHeaders)) {
+        // Neither this answer nor its connection is used again; the upload,
+        // if still running, ends at the local answer's finish.
+        answer.on("error", () => {});
+        answer.destroy();
+        upstream!.destroy();
+        done.fail(CODED.reason);
+        answerLocally(CODED);
+        return;
+      }
       done.state.status = answer.statusCode ?? 502;
       res.writeHead(done.state.status, endToEnd(answer.rawHeaders, false));
       answer.on("error", (err) => {
@@ -349,6 +394,8 @@ export function createObservedTraffic(options: {
       uploaded = true;
       req.unpipe(reqCount);
       req.resume();
+      // A local answer already under way stands.
+      if (done.state.local !== null) return;
       if (done.state.status === null) unreachable();
       else if (!answered) res.destroy();
     });
@@ -392,14 +439,15 @@ export function createObservedTraffic(options: {
       teardown();
       settle(done, life, host, " upgrade");
     });
-    const unreachable = (): void => {
+    const answerLocally = (refusal: typeof UNREACHABLE | typeof CODED) => {
       if (socket.destroyed || socket.writableEnded) {
         socket.destroy();
         return;
       }
-      done.state.local = UNREACHABLE.status;
-      done.state.responseBytes = answerMarked(socket, UNREACHABLE);
+      done.state.local = refusal.status;
+      done.state.responseBytes = answerMarked(socket, refusal);
     };
+    const unreachable = (): void => answerLocally(UNREACHABLE);
     try {
       upstream = https.request({
         ...destination(host),
@@ -457,6 +505,14 @@ export function createObservedTraffic(options: {
         answer.destroy();
         return;
       }
+      if (unforwardableCoding(answer.rawHeaders)) {
+        answer.on("error", () => {});
+        answer.destroy();
+        upstream!.destroy();
+        done.fail(CODED.reason);
+        answerLocally(CODED);
+        return;
+      }
       done.state.status = answer.statusCode ?? 502;
       const fields = endToEnd(answer.rawHeaders, false);
       fields.push("Connection", "close");
@@ -478,6 +534,8 @@ export function createObservedTraffic(options: {
     });
     upstream.on("error", (err) => {
       done.fail(errorCode(err, "UNKNOWN"));
+      // A local answer already under way stands.
+      if (done.state.local !== null) return;
       if (done.state.status === null) unreachable();
       else socket.destroy();
     });

@@ -676,11 +676,16 @@ test("/mcp: each answered or refused request is one record and one line, classed
       ["POST", 400, "refused", "bad-request"],
     ],
   );
+  // The client's own MCP token is `mcp-token` (Task-1437); a value not
+  // shaped like one stays `other`.
+  assert.deepEqual(
+    records.map((r) => r.clientCredential),
+    ["mcp-token", "mcp-token", "mcp-token", "other", "mcp-token"],
+  );
   for (const record of records) {
     assert.equal(record.host, "");
     assert.equal(record.path, "/mcp");
     assert.equal(record.pathKey, "/mcp");
-    assert.equal(record.clientCredential, "other");
     assert.equal(record.account, undefined);
     assert.equal(record.session, undefined);
     assert.deepEqual(record.client, { id: m.clientId, label: "devbox" });

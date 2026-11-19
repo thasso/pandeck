@@ -254,6 +254,7 @@ test("new and unlisted requests are marked, and the filters narrow the list", as
         clientCookie: true,
       }),
       record(5, { outcome: "failed", status: null, reason: "client-closed" }),
+      record(6, { clientCredential: "mcp-token" }),
     ]),
   );
   fetch.mockResolvedValue(page(E1, []));
@@ -271,6 +272,7 @@ test("new and unlisted requests are marked, and the filters narrow the list", as
   expect(row(4).textContent).toContain("forbidden");
   expect(row(4).textContent).toContain("cookie");
   expect(row(5).textContent).toContain("–");
+  expect(row(6).textContent).toContain("mcp-token");
 
   const switches = container.querySelectorAll<HTMLElement>('[role="switch"]');
   expect(switches).toHaveLength(2);

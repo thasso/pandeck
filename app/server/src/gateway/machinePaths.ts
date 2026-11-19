@@ -124,7 +124,8 @@ interface Template {
 
 /**
  * The listed templates per token route, from captured evidence (Claude Code
- * 2.1.327, capture E1 of 2026-11-18; `domain_info` from F1). The eval key is
+ * 2.1.327, capture E1 of 2026-11-18; `domain_info` from F1; the last four
+ * from 2.1.328's live test of 2026-11-19, Task-1437). The eval key is
  * the public feature-flag client key compiled into that release, seen in
  * all three captures; a release that changes it logs as unlisted. Marking
  * data only: in permissive mode an unlisted path is forwarded too.
@@ -164,6 +165,15 @@ const LISTED: Readonly<Record<string, readonly Template[]>> = {
     { method: "POST", path: "/api/claude_code/metrics" },
     { method: "GET", path: "/api/directory/server-urls" },
     { method: "GET", path: "/api/web/domain_info" },
+    { method: "GET", path: "/api/oauth/account/settings" },
+    { method: "GET", path: "/api/claude_code_grove" },
+    // Status only (`is_authenticated`, `auth_source`); a GitHub token goes
+    // the other way, by `POST /v1/code/github/import-token`, never listed.
+    {
+      method: "GET",
+      path: "/api/oauth/organizations/:uuid/sync/github/auth",
+    },
+    { method: "GET", path: "/v1/ultrareview/quota" },
   ],
   "/anthropic-mcp": [{ method: "POST", path: "/v1/mcp/:slug" }],
 };

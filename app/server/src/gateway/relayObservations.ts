@@ -72,6 +72,8 @@ const REASONS = new Set([
   "client-closed",
   "relay-closing",
   "reserved-path",
+  // An observed host's answer in a transfer coding the relay cannot forward.
+  "transfer-coding",
   // The relay's own refusals on intercepted traffic (ADR-0006).
   "connect-port",
   "connect-target",
@@ -216,7 +218,7 @@ function validate(
           (integer(entry.status, 100) && entry.status <= 599)
         ) ||
         !["failed", "refused", "observed"].includes(entry.outcome as string) ||
-        !["none", "placeholder", "lease", "other"].includes(
+        !["none", "placeholder", "lease", "mcp-token", "other"].includes(
           entry.clientCredential as string,
         ) ||
         typeof entry.clientCookie !== "boolean" ||
