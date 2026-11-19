@@ -11,7 +11,8 @@ import {
 import type { Observation, Observations } from "./observations.ts";
 
 export const RELAY_REFUSAL_MARKER = "Pandeck gateway:";
-const HOP_BY_HOP = new Set([
+/** Fixed hop-by-hop fields, never forwarded on any relay ingress. */
+export const HOP_BY_HOP: ReadonlySet<string> = new Set([
   "connection",
   "keep-alive",
   "proxy-connection",
@@ -37,9 +38,13 @@ function forwardable(rawHeaders: readonly string[]): string[] {
   return out;
 }
 
-/** Query-free printable ASCII, bounded after UTF-8 byte escaping. */
+/**
+ * Query- and fragment-free printable ASCII, bounded after UTF-8 byte
+ * escaping: the target is cut at its first `?` or `#` before anything else
+ * (Task-1435), so neither ever reaches a record.
+ */
 export function observationPath(raw: string): string {
-  const path = raw.split("?", 1)[0] ?? "/";
+  const path = raw.split(/[?#]/, 1)[0] ?? "/";
   if (!path.startsWith("/")) return "/";
   let out = "";
   for (const byte of Buffer.from(path)) {
@@ -98,11 +103,19 @@ export function answerUnrecorded(
   answer: Answer,
   refusal: Pick<LocalRefusal, "status" | "errorType" | "text">,
 ): void {
-  answerLocal(
-    answer,
-    refusal.status,
-    refusalBody(refusal.errorType, refusal.text),
-  );
+  answerMarked(answer, refusal);
+}
+/**
+ * A marked local answer with connection close; returns its body's length.
+ * The caller records it, if at all.
+ */
+export function answerMarked(
+  answer: Answer,
+  refusal: Pick<LocalRefusal, "status" | "errorType" | "text">,
+): number {
+  const body = refusalBody(refusal.errorType, refusal.text);
+  answerLocal(answer, refusal.status, body);
+  return Buffer.byteLength(body);
 }
 function httpStatus(status: number): string {
   return status === 403
@@ -111,13 +124,30 @@ function httpStatus(status: number): string {
       ? "Service Unavailable"
       : status === 501
         ? "Not Implemented"
-        : "Bad Request";
+        : status === 502
+          ? "Bad Gateway"
+          : "Bad Request";
 }
-function errorCode(err: unknown): string {
+/** A bounded Node error code, else `fallback`: never an error's text. */
+export function errorCode(err: unknown, fallback = "edge-unreachable"): string {
   const code = (err as { code?: unknown } | undefined)?.code;
   return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code)
     ? code
-    : "edge-unreachable";
+    : fallback;
+}
+
+/** An admitted request the relay ends itself; see `open`. */
+export interface Lifetime {
+  /** The method as recorded. */
+  method: string;
+  durationMs(): number;
+  /** Records the one final observation; later calls do nothing. */
+  end(
+    value: Pick<
+      Observation,
+      "status" | "outcome" | "reason" | "requestBytes" | "responseBytes"
+    >,
+  ): void;
 }
 
 export interface ForwardTarget extends RequestIdentity {
@@ -218,6 +248,47 @@ export function createModelTraffic(options: {
           : Buffer.byteLength(body),
     });
     req.resume();
+  }
+  /**
+   * Admits a request the relay ends itself, an observed host's: while closing
+   * it is the marked 503 `relay-closing` refusal, with a full queue the
+   * counted 503 overflow, and `undefined` is returned for both. Otherwise its
+   * reservation stays held and it stays active (the drain waits for it) until
+   * `end` records it, exactly once, with its final counters. At the drain
+   * deadline `shutdown` is called and must call `end` before it returns.
+   */
+  function open(
+    req: http.IncomingMessage,
+    answer: Answer,
+    target: RequestIdentity,
+    shutdown: () => void,
+  ): Lifetime | undefined {
+    if (closing) {
+      refuse(req, answer, {
+        ...target,
+        status: 503,
+        reason: "relay-closing",
+        errorType: "api_error",
+        text: "the relay is restarting; retry shortly.",
+      });
+      return undefined;
+    }
+    const admission = admit(req, answer, target);
+    if (!admission) return undefined;
+    let ended = false;
+    const entry = (): void => shutdown();
+    active.add(entry);
+    return {
+      method: admission.base.method,
+      durationMs: admission.durationMs,
+      end(value) {
+        if (ended) return;
+        ended = true;
+        admission.record(value);
+        active.delete(entry);
+        if (!active.size) onDrained?.();
+      },
+    };
   }
   function forward(
     req: http.IncomingMessage,
@@ -378,6 +449,7 @@ export function createModelTraffic(options: {
   }
   return {
     forward,
+    open,
     refuse,
     count,
     isClosing() {

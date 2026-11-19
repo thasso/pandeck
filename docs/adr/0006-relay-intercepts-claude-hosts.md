@@ -15,8 +15,9 @@ reach the gateway without a custom base URL.
 ## Decision
 
 The relay (`app/server/src/relay/`) answers CONNECT on its loopback model port
-when it runs with `--intercept-ca-cert <path>`, and decrypts only the token
-hosts. Without the flag it has no CONNECT handler, as before.
+when it runs with `--intercept-ca-cert <path>`, and decrypts every named host on
+443 (the token hosts since Task-1430 PR2b, the rest observed since PR4). Without
+the flag it has no CONNECT handler, as before.
 
 - **Trust is process-scoped.** `claude-gateway` sets `HTTPS_PROXY` (never
   `HTTP_PROXY`) to `http://127.0.0.1:<relay port>` and `NODE_EXTRA_CA_CERTS` to
@@ -37,50 +38,60 @@ hosts. Without the flag it has no CONNECT handler, as before.
   - a named name (a named domain or a subdomain of one) spelled with a trailing
     dot is refused (`connect-target`), on a port other than 443 refused
     (`connect-port`);
-  - `api.anthropic.com:443` and `mcp-proxy.anthropic.com:443` are decrypted;
+  - every other named name on 443 is decrypted: `api.anthropic.com` and
+    `mcp-proxy.anthropic.com` as token hosts, every other one as an observed
+    host;
   - every other valid target with a port in 1-65535 is a blind tunnel.
 - **The upstream rule stands.** The relay maps exactly two hosts to two fixed
   routes in its own code: `api.anthropic.com` → `/anthropic`,
   `mcp-proxy.anthropic.com` → `/anthropic-mcp`. The inner `Host` and the SNI
   choose nothing. At the gateway the prefix still decides the upstream, and the
   lease or the pool the profile.
-- **What a decrypted request changes.** The target becomes the route plus the
-  original origin-form target; every caller `Host` is replaced by one
+- **What a decrypted token-host request changes.** The target becomes the route
+  plus the original origin-form target; every caller `Host` is replaced by one
   `127.0.0.1:<relay port>`, so the edge sees a loopback caller as through the
   base URL, and an `Origin` still reaches the edge, which refuses it; every
   caller `x-pandeck-*` field is dropped. All other fields pass as received,
   repeats and order kept, hop-by-hop fields dropped. Bodies are piped both ways
   and never read. The inner server offers ALPN `http/1.1` only.
+- **Observed hosts go direct, unchanged** (`relay/observedTraffic.ts`). A
+  request to any other named host goes to that CONNECT host on 443, with SNI
+  equal to it and the default CA verification; the inner `Host` and SNI choose
+  nothing. It never uses the edge link's identity, CA or agent, and no gateway
+  credential: at most the client's own placeholder reaches the host. Header
+  fields pass as received without hop-by-hop ones (fixed and `Connection`-named)
+  and caller `x-pandeck-*` fields; no credential or cookie is added or removed;
+  bodies are piped unread; an upgrade is piped both ways after the upstream's
+  `101`. Its slot is reserved at admission and held for the request's whole
+  lifetime, which writes one `observed` (or `failed`) record when it ends. A
+  test-only programmatic seam may replace the address and trust root, never SNI
+  or verification, and no flag or environment variable reaches it.
 - **Local refusals are marked.** Every refusal the relay answers itself here
   (`connect-port`, `connect-target`, `origin-form` for an absolute-form target,
-  `upgrade` for a WebSocket upgrade, and a malformed target) has Anthropic's
-  error shape and carries the gateway's refusal marker, so the server's
-  classifier never reads it as a dead login.
+  `upgrade` for a WebSocket upgrade to a token host, the 502 for an observed
+  host it cannot reach, and a malformed target) has Anthropic's error shape and
+  carries the gateway's refusal marker, so the server's classifier never reads
+  it as a dead login.
 - **Reporting is the precondition.** Interception is never enabled in a release
   without the relay's reporting channel (Task-1430 split plan, C2/C4/C5): every
-  decrypted request gets a relay request id and an edge record, and every
-  relay-local refusal of a named host is recorded. Both ingresses share one
-  forward (admission, rid, reserved-field strip, fallback); the edge's ingest
-  accepts a relay record naming a host under the named domains, and nothing
-  wider. A malformed target or a failed handshake is only counted in the relay's
-  summary line. A relay crash may lose records not yet acknowledged, shown by
-  the next boot's `relay-restarted` note; an overflowing queue leaves an
-  overflow note; the same request may appear twice, under one id, across an edge
-  restart. There is no spill file: a closing relay logs one line with the count
-  it dropped. The log shows gaps and duplicates as identifiable; it is not
+  decrypted request gets a relay request id and a record (the edge's for a token
+  host, the relay's for an observed host), and every relay-local refusal of a
+  named host is recorded. No record holds a query or fragment. Both ingresses
+  share one forward (admission, rid, reserved-field strip, fallback); the edge's
+  ingest accepts a relay record naming a host under the named domains, and
+  nothing wider. A malformed target or a failed handshake is only counted in the
+  relay's summary line. A relay crash may lose records not yet acknowledged,
+  shown by the next boot's `relay-restarted` note; an overflowing queue leaves
+  an overflow note; the same request may appear twice, under one id, across an
+  edge restart. There is no spill file: a closing relay logs one line with the
+  count it dropped. The log shows gaps and duplicates as identifiable; it is not
   exactly-once accounting.
-- **Before the permissive machine path and observed hosts** (Task-1430 PR3 and
-  PR4): Claude Code's account calls on `/anthropic` get the machine path's 403,
-  `/anthropic-mcp` has no gateway route and gets the edge's `unknown-prefix`
-  404, and the other named hosts (`claude.ai`, `downloads.claude.ai`,
-  `www.anthropic.com`, …) are blind tunnels, neither decrypted nor recorded.
-  This state is for testing devboxes; normal use waits for PR3.
 
 ## Consequences
 
 - Node children of `claude-gateway` inherit the proxy and the trust. A child
-  that does not read `NODE_EXTRA_CA_CERTS` fails TLS on the two token hosts and
-  is unaffected elsewhere.
+  that does not read `NODE_EXTRA_CA_CERTS` fails TLS on the named hosts and is
+  unaffected elsewhere.
 - Bun's BoringSSL (Claude Code's runtime) evaluates no iPAddress constraint: it
   refuses every IP name a constraint of that type covers, so an IP leaf of this
   CA still fails there, with a different error than OpenSSL's
@@ -90,11 +101,15 @@ hosts. Without the flag it has no CONNECT handler, as before.
   directory, restart the relay, and hand the new certificate file to the
   wrapper.
 - Any local process may use the token hosts through the relay, as it already may
-  use the base URL (Task-1424). A blind tunnel reaches whatever the relay's
-  account can reach.
+  use the base URL (Task-1424). A blind tunnel, and an observed host's direct
+  connection, reach whatever the relay's account can reach.
+- An observed host sees the devbox's own network address and the client's own
+  cookies and credentials, as without the relay; it learns nothing of the
+  gateway.
 - For the named domains this supersedes the Task-1424 "transport only" amendment
-  (`docs/workers.md` "Standalone harnesses"): there the relay rewrites the
-  target and `Host` and drops reserved fields. Everywhere else it still changes
+  (`docs/workers.md` "Standalone harnesses"): for a token host the relay
+  rewrites the target and `Host` and drops reserved fields; for an observed host
+  it drops reserved and hop-by-hop fields only. Everywhere else it still changes
   only transport.
 
 ## Considered options
@@ -106,5 +121,9 @@ hosts. Without the flag it has no CONNECT handler, as before.
   address, and only named hosts carry account traffic.
 - **Let the gateway choose the upstream from `Host` or SNI**: rejected; a
   request never chooses its upstream.
+- **Send observed hosts through the gateway**: rejected; they need no account
+  token (R6: every token-bearing request goes through the gateway, observed
+  hosts at most with the public placeholder), and the gateway reads no body or
+  cookie of theirs.
 - **A spill file for records still queued at close**: declined by the owner; the
   dropped count is logged instead.

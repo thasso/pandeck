@@ -328,12 +328,11 @@ const T4: [
       "anthropic.com:443",
       "www.claude.com:443",
       "downloads.claude.ai:443",
+      "platform.claude.com:443",
+      "statsig.anthropic.com:443",
+      "a.b.c.claude.ai:443",
     ],
-    (target) => ({
-      kind: "tunnel",
-      host: target.slice(0, -4),
-      port: 443,
-    }),
+    (target) => ({ kind: "observe", host: target.slice(0, -4) }),
   ],
   [
     [
@@ -343,6 +342,7 @@ const T4: [
     ],
     { kind: "refuse", reason: "connect-port", host: "api.anthropic.com" },
   ],
+  [["Claude.AI:443"], { kind: "observe", host: "claude.ai" }],
   [
     ["claude.ai:80"],
     { kind: "refuse", reason: "connect-port", host: "claude.ai" },

@@ -2,19 +2,23 @@
  * CONNECT on the relay's model listener with `--intercept-ca-cert` (Task-1430,
  * ADR-0006). `connectTarget` decides each target:
  *
- * - A token host on 443 is decrypted with a leaf of the relay's interception
- *   CA (ALPN `http/1.1`). Each decrypted request goes through the relay's
- *   shared model traffic (`modelTraffic.ts`: admission, rid, reserved-field
- *   strip, fallback record) to the edge's model port as that host's fixed
- *   route plus the original target. Its header fields pass as received except
- *   hop-by-hop fields, caller `x-pandeck-*` fields and `Host`, which becomes
- *   one loopback `Host`. Bodies are piped both ways and never read.
+ * - Every named host on 443 is decrypted with a leaf of the relay's
+ *   interception CA (ALPN `http/1.1`).
+ * - A token host's decrypted request goes through the relay's shared model
+ *   traffic (`modelTraffic.ts`: admission, rid, reserved-field strip,
+ *   fallback record) to the edge's model port as that host's fixed route plus
+ *   the original target. Its header fields pass as received except hop-by-hop
+ *   fields, caller `x-pandeck-*` fields and `Host`, which becomes one loopback
+ *   `Host`. Bodies are piped both ways and never read.
+ * - Any other named host is observed (`observedTraffic.ts`): forwarded
+ *   directly to that host on 443, upgrades included, and recorded once.
  * - Every other valid target, IP literals included, is a blind tunnel: bytes
  *   piped untouched, not recorded, nothing logged but a failure's error code.
  * - A named host on a port other than 443, or spelled with a trailing dot, is
  *   refused with a marked 403; an absolute-form target inside the tunnel with
- *   a marked 400; an upgrade with a marked 501, without contacting the edge.
- *   Each reserves a reporting slot and is recorded like any refusal.
+ *   a marked 400; an upgrade on a token host with a marked 501, without
+ *   contacting the edge. Each reserves a reporting slot and is recorded like
+ *   any refusal.
  * - A target that is not a valid authority gets a marked 400, a summary count
  *   and a fixed log line; it is never recorded and its text never logged.
  *
@@ -32,6 +36,7 @@ import {
   type LocalRefusal,
   type ModelTraffic,
 } from "./modelTraffic.ts";
+import type { ObservedTraffic } from "./observedTraffic.ts";
 
 /** The relay-local refusals on intercepted traffic, without their identity. */
 type Refusal = Pick<LocalRefusal, "status" | "errorType" | "text">;
@@ -78,6 +83,8 @@ export interface InterceptionOptions {
   /** The relay's own loopback port, for the `Host` the edge sees. */
   relayPort(): number;
   traffic: Pick<ModelTraffic, "forward" | "refuse" | "count" | "isClosing">;
+  /** Direct forwarding for the named hosts that are not token hosts. */
+  observed: ObservedTraffic;
   /** Keeps a socket for the relay's close. */
   track(socket: net.Socket): void;
   log(line: string): void;
@@ -117,9 +124,15 @@ export function attachInterception(
   model: http.Server,
   options: InterceptionOptions,
 ): { close(): Promise<void> } {
-  const { ca, log, track, traffic } = options;
-  /** The token host, and its route, each decrypted socket was opened for. */
-  const hostOf = new WeakMap<net.Socket, { host: string; route: string }>();
+  const { ca, log, track, traffic, observed } = options;
+  /**
+   * The named host each decrypted socket was opened for, and its route when
+   * it is a token host; an observed host has none.
+   */
+  const hostOf = new WeakMap<
+    net.Socket,
+    { host: string; route: string | undefined }
+  >();
 
   const inner = createServer((req, res) => {
     const opened = hostOf.get(req.socket);
@@ -138,6 +151,10 @@ export function attachInterception(
       });
       return;
     }
+    if (route === undefined) {
+      observed.forward(req, res, host);
+      return;
+    }
     // `/relay/…`, admission, rid and the fallback record are the shared
     // forward's; `path` is reported without its query.
     traffic.forward(req, res, {
@@ -150,20 +167,36 @@ export function attachInterception(
       ),
     });
   });
-  inner.on("upgrade", (req: http.IncomingMessage, socket: net.Socket) => {
-    socket.on("error", () => socket.destroy());
-    const host = hostOf.get(req.socket)?.host;
-    if (!host) {
-      socket.destroy();
-      return;
-    }
-    traffic.refuse(req, socket, {
-      host,
-      path: req.url ?? "/",
-      reason: "upgrade",
-      ...REFUSALS.upgrade,
-    });
-  });
+  inner.on(
+    "upgrade",
+    (req: http.IncomingMessage, socket: net.Socket, head: Buffer) => {
+      socket.on("error", () => socket.destroy());
+      const opened = hostOf.get(req.socket);
+      if (!opened) {
+        socket.destroy();
+        return;
+      }
+      const { host, route } = opened;
+      if (route === undefined) {
+        if ((req.url ?? "").startsWith("/"))
+          observed.upgrade(req, socket, head, host);
+        else
+          traffic.refuse(req, socket, {
+            host,
+            path: "/",
+            reason: "origin-form",
+            ...REFUSALS["origin-form"],
+          });
+        return;
+      }
+      traffic.refuse(req, socket, {
+        host,
+        path: req.url ?? "/",
+        reason: "upgrade",
+        ...REFUSALS.upgrade,
+      });
+    },
+  );
   // CONNECT is dispatched here, not to the request callback. It never
   // opens a nested tunnel, even with an origin-form target. Keep the
   // existing reserved-path priority and never record its authority.
@@ -222,7 +255,7 @@ export function attachInterception(
     socket: net.Socket,
     head: Buffer,
     host: string,
-    route: string,
+    route: string | undefined,
   ): void => {
     socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
     // Bytes the client sent after the CONNECT belong to the TLS stream, so
@@ -290,7 +323,14 @@ export function attachInterception(
           errorType: "api_error",
           text: "the relay is restarting; retry shortly.",
         });
-      } else decrypt(req, socket, head, decision.host, decision.route);
+      } else
+        decrypt(
+          req,
+          socket,
+          head,
+          decision.host,
+          decision.kind === "intercept" ? decision.route : undefined,
+        );
     },
   );
 
