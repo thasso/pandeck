@@ -179,6 +179,14 @@ const upstream = https.createServer(
       res.writeHead(413, { "content-length": 5 }).end("early");
       return;
     }
+    if (req.url === "/api/pressure") {
+      // Answers a little later, never reading the upload: it backs up.
+      setTimeout(
+        () => res.writeHead(413, { "content-length": 5 }).end("early"),
+        50,
+      );
+      return;
+    }
     req.on("end", () => {
       upstreamSeen.push({
         url: req.url ?? "",
@@ -805,6 +813,40 @@ async function main(): Promise<void> {
       [413, "observed"],
     );
     console.log(`early answer requestBytes: ${earlyRecord.requestBytes}`);
+
+    // A large upload backed up behind the early answer, its client still
+    // connected and idle: recorded at the answer's finish all the same.
+    const pressured = await decrypted(
+      relay.port,
+      "claude.ai",
+      interceptCa.certPem,
+    );
+    sockets.add(pressured);
+    const pressureAnswered = readUntil(
+      pressured,
+      (received) =>
+        headEnd(received) !== -1 &&
+        received.length >= headEnd(received) + 4 + 5,
+    );
+    pressured.write(
+      `POST /api/pressure HTTP/1.1\r\nHost: claude.ai\r\ncontent-length: ${16 * 1024 * 1024}\r\n\r\n`,
+    );
+    pressured.write(Buffer.alloc(8 * 1024 * 1024, 0x41));
+    assert.match(
+      (await within(pressureAnswered, 5000, "the pressured answer")).toString(
+        "latin1",
+      ),
+      /^HTTP\/1\.1 413 /,
+    );
+    const pressure = await reported(
+      (r) => r.path === "/api/pressure",
+      "the backed-up early-answered request",
+    );
+    assert.deepEqual(
+      [pressure.status, pressure.outcome, pressure.reason],
+      [413, "observed", undefined],
+    );
+    pressured.destroy();
     assert.match(
       await exchange(
         await decrypted(relay.port, "claude.ai", interceptCa.certPem),
@@ -862,7 +904,7 @@ async function main(): Promise<void> {
     plainEarly.destroy();
     tokenEarly.destroy();
   }
-  assert.equal(destinations.length, 7, "one dial per observed request");
+  assert.equal(destinations.length, 8, "one dial per observed request");
   console.log(
     "framing: chunked and nominated Content-Length on plain, token and observed; reserved 403; early answer settles, next request its own",
   );

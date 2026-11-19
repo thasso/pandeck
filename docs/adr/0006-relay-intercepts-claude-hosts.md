@@ -70,11 +70,11 @@ the flag it has no CONNECT handler, as before.
   relay's own on every ingress, so here too it gets the 403 `reserved-path`
   before any upstream contact. Its slot is reserved at admission and held for
   the request's whole lifetime, which writes one `observed` (or `failed`) record
-  when it ends. An answer that finishes before the upload ends that lifetime at
-  the first of the upload's end, the client's close or the upstream's, and that
-  upstream connection never returns to the pool. A test-only programmatic seam
-  may replace the address and trust root, never SNI or verification, and no flag
-  or environment variable reaches it.
+  when it ends. An answer that finishes before the upload ends that lifetime
+  there, counting the body read so far, and that upstream connection never
+  returns to the pool. A test-only programmatic seam may replace the address and
+  trust root, never SNI or verification, and no flag or environment variable
+  reaches it.
 - **Local refusals are marked.** Every refusal the relay answers itself here
   (`connect-port`, `connect-target`, `origin-form` for an absolute-form target,
   `reserved-path` for `/relay/…` on any decrypted host, `upgrade` for a

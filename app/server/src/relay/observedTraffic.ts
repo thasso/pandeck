@@ -247,34 +247,33 @@ export function createObservedTraffic(options: {
     // answer delivered and the upload finished, or either given up.
     let answered = false;
     let uploaded = false;
-    let upstreamClosed = false;
-    /** The answer finished while the upload was still open (F004, F005). */
-    let early = false;
     const end = (): void => settle(done, life, host, "");
     const both = (): void => {
       if (answered && uploaded) end();
     };
-    const socketClosed = (): void =>
-      finishEarly(req.complete ? undefined : "client-closed");
     /**
-     * Settles an early-answered request at the first of: the upload complete,
-     * the client gone, the upstream request closed or failed. Its upstream
-     * connection is destroyed, never pooled: Bun's server ends a request at
-     * its response's finish and calls it complete with its body short, so
-     * the relay cannot tell a whole upload from a cut one, and a pooled
-     * connection would read the rest as the next request.
+     * An answer that finished with the upload still open settles the lifetime
+     * there and then (F004, F005): nothing the client does next, or never
+     * does, can hold it. Under backpressure a paused inner request emits
+     * neither its end nor, with its socket unread, any close.
+     *
+     * - The upload stops: what was read so far is counted, the rest is
+     *   drained by the inner server's own framing, so its connection stays
+     *   usable and a client that leaves is seen.
+     * - The upstream request is destroyed, its connection never pooled. Bun's
+     *   server ends such a request at its response's finish and calls it
+     *   complete with its body short, so a whole upload cannot be told from a
+     *   cut one, and a pooled connection would read the rest as the next
+     *   request.
      */
-    const finishEarly = (reason?: string): void => {
-      if (!early || uploaded) return;
+    const answeredEarly = (): void => {
       uploaded = true;
-      if (reason) done.fail(reason);
       req.unpipe(reqCount);
       // What the client sent and the relay took but did not pass on yet.
       done.state.requestBytes += reqCount.writableLength + req.readableLength;
       reqCount.destroy();
-      req.socket?.off("close", socketClosed);
-      req.resume();
       upstream?.destroy();
+      req.resume();
       end();
     };
     const failed = (reason: string): void => {
@@ -293,20 +292,8 @@ export function createObservedTraffic(options: {
     };
     res.on("finish", () => {
       answered = true;
-      if (uploaded) {
-        end();
-        return;
-      }
-      early = true;
-      // Node detaches a finished response's request from its parser: a
-      // client gone mid-upload then shows only as its socket's close.
-      if (upstreamClosed || req.complete) finishEarly();
-      else if (!req.socket || req.socket.destroyed) socketClosed();
-      else req.socket.once("close", socketClosed);
-    });
-    req.on("end", () => finishEarly());
-    req.on("close", () => {
-      if (!req.complete) finishEarly("client-closed");
+      if (uploaded) end();
+      else answeredEarly();
     });
     res.on("close", () => {
       if (!res.writableFinished) failed("client-closed");
@@ -334,16 +321,8 @@ export function createObservedTraffic(options: {
       return;
     }
     upstream.on("finish", () => {
-      if (early) {
-        finishEarly();
-        return;
-      }
       uploaded = true;
       both();
-    });
-    upstream.on("close", () => {
-      upstreamClosed = true;
-      finishEarly();
     });
     upstream.on("response", (answer) => {
       upstreamRes = answer;
@@ -367,10 +346,6 @@ export function createObservedTraffic(options: {
     upstream.on("error", (err) => {
       // Nothing more goes up; the answer, if any, decides what is left.
       done.fail(errorCode(err, "UNKNOWN"));
-      if (early) {
-        finishEarly();
-        return;
-      }
       uploaded = true;
       req.unpipe(reqCount);
       req.resume();

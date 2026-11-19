@@ -2309,20 +2309,23 @@ to that host ("Interception" below).
     `client-closed`, `relay-closing` or a Node error code if it ended early;
     otherwise `failed` with the local 502 or null and that reason (`UNKNOWN` for
     an error without a code). An answer that finishes before the upload ends the
-    lifetime at the first of: the upload's end, the client or its connection
-    gone (`client-closed`), the upstream request closed or failed. That upstream
-    connection is then destroyed, never pooled, on Node and Bun alike: Bun's
-    server ends such a request at its answer and calls it complete with its body
-    short, so the relay cannot tell a whole upload from a cut one, and under Bun
-    `requestBytes` counts only what arrived before the answer. `connect-port`,
-    `connect-target`, `origin-form`, `reserved-path` and `upgrade` reserve a
-    slot and are recorded (a refused CONNECT as method `CONNECT`, path `/`, its
-    credential class read from the CONNECT's own fields, `Proxy-Authorization`
-    included). Every class answers the 503 `overflow` without upstream or edge
-    contact when the queue is full. A malformed target and a failed TLS
-    handshake are only counted in the relay summary; blind tunnels are neither
-    recorded nor counted. Decrypted connections join the relay's close: they
-    drain with the plain listener's work and are then cut.
+    lifetime right there, on Node and Bun alike, whatever the client does next:
+    a backed-up upload is paused and may never show its end or its client's
+    close. The record is `observed` with the upstream status, and `requestBytes`
+    counts what was read by then. The upload stops; the inner server discards
+    the rest of that body by its own framing, so the client's next request on
+    that connection is read as a request. The upstream connection is destroyed,
+    never pooled: Bun's server ends such a request at its answer and calls it
+    complete with its body short, so a whole upload cannot be told from a cut
+    one. `connect-port`, `connect-target`, `origin-form`, `reserved-path` and
+    `upgrade` reserve a slot and are recorded (a refused CONNECT as method
+    `CONNECT`, path `/`, its credential class read from the CONNECT's own
+    fields, `Proxy-Authorization` included). Every class answers the 503
+    `overflow` without upstream or edge contact when the queue is full. A
+    malformed target and a failed TLS handshake are only counted in the relay
+    summary; blind tunnels are neither recorded nor counted. Decrypted
+    connections join the relay's close: they drain with the plain listener's
+    work and are then cut.
   - **Setup.** `HTTPS_PROXY=http://127.0.0.1:<port>` (never `HTTP_PROXY`),
     `NODE_EXTRA_CA_CERTS=<path>`, `ANTHROPIC_BASE_URL` unset, and none of the
     three domains in `NO_PROXY`; the IDB `claude-gateway` wrapper owns this.

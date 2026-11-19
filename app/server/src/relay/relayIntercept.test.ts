@@ -704,6 +704,15 @@ async function fakeUpstream(): Promise<FakeUpstream> {
         res.end("early");
         return;
       }
+      if (req.url === "/pressure") {
+        // Answers a little later, never reading the upload: the relay's
+        // upload to it backs up.
+        setTimeout(() => {
+          res.writeHead(413, { "content-length": 5 });
+          res.end("early");
+        }, 50);
+        return;
+      }
       if (req.url === "/early-close") {
         // Answers before reading the upload, then closes its connection.
         res.writeHead(413, { "content-length": 5, connection: "close" });
@@ -1304,7 +1313,7 @@ test("PR4: close with an open upgraded stream and a held request ends both at th
   assert.ok(!r.logs.some((line) => line.includes("not delivered")));
 });
 
-test("PR4: an early upstream answer reaches the client at once; the record waits for the upload to finish and counts all of it", async () => {
+test("PR4: an early upstream answer reaches the client at once and settles its record there, counting the bytes read by then; the rest of the upload changes nothing", async () => {
   const r = await observedRig();
   const secure = await secureTo(r.relay.port, "claude.ai");
   const answered = readUntil(secure, (received) => {
@@ -1317,15 +1326,15 @@ test("PR4: an early upstream answer reaches the client at once; the record waits
   const answer = parseAnswer(await answered);
   assert.equal(answer.status, 413);
   assert.equal(answer.body.toString(), "early");
-  await new Promise((resolve) => setTimeout(resolve, 150));
-  assert.deepEqual(relayRecords(r.edge), [], "upload still open");
-  secure.write("abcdefghij");
+  // The upload is still open: the record does not wait for it (F004).
   const record = await reportedRecord(r.edge);
   assert.equal(record.status, 413);
   assert.equal(record.outcome, "observed");
   assert.equal(record.reason, undefined);
-  assert.equal(record.requestBytes, 20);
+  assert.equal(record.requestBytes, 10);
   assert.equal(record.responseBytes, 5);
+  secure.write("abcdefghij");
+  await new Promise((resolve) => setTimeout(resolve, 100));
   secure.destroy();
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.equal(relayRecords(r.edge).length, 1);
@@ -1748,7 +1757,7 @@ test("F004 (A): an early answer whose upstream then closes settles at once, its 
   assert.equal(record.status, 413);
   assert.equal(record.outcome, "observed");
   assert.equal(record.reason, undefined);
-  assert.ok(record.requestBytes >= 10 && record.requestBytes <= 20);
+  assert.equal(record.requestBytes, 10);
   assert.equal(record.responseBytes, 5);
   await settledSlot();
   const next = await decrypted(
@@ -1766,7 +1775,7 @@ test("F004 (A): an early answer whose upstream then closes settles at once, its 
   );
 });
 
-test("F004 (B): an early answer, then the client gone mid-upload, records client-closed at once and frees its slot and drain entry", async () => {
+test("F004 (B): an early answer, then the client gone mid-upload: recorded at the answer's finish, its slot and drain entry free", async () => {
   const r = await observedRig({ capacity: 2 });
   const secure = await secureTo(r.relay.port, "claude.ai");
   await earlyAnswer(
@@ -1788,7 +1797,7 @@ test("F004 (B): an early answer, then the client gone mid-upload, records client
       record.requestBytes,
       record.responseBytes,
     ],
-    [413, "observed", "client-closed", 3, 5],
+    [413, "observed", undefined, 3, 5],
   );
   await settledSlot();
   const next = await decrypted(
@@ -1824,7 +1833,7 @@ test("F005: an early-answered upstream connection never returns to the pool; the
   );
   assert.deepEqual(
     [early.status, early.reason, early.requestBytes],
-    [413, undefined, 20],
+    [413, undefined, 10],
   );
   const next = await decrypted(
     r.relay.port,
@@ -1888,4 +1897,46 @@ test("F005 sibling: after an early edge answer, the plain and token forward give
   assert.equal(r.edge.foreignIngest, 0);
   viaPlain.destroy();
   viaToken.destroy();
+});
+
+test("F004 (backpressure): an early answer during a large, backed-up upload is recorded at once though its client neither finishes nor leaves; its slot is free for the next request", async () => {
+  const r = await observedRig({ capacity: 2 });
+  const secure = await secureTo(r.relay.port, "claude.ai");
+  const answered = readUntil(secure, (received) => {
+    const end = received.indexOf("\r\n\r\n");
+    return end !== -1 && received.length >= end + 4 + 5;
+  });
+  const declared = 16 * 1024 * 1024;
+  secure.write(
+    `POST /pressure HTTP/1.1\r\nHost: claude.ai\r\ncontent-length: ${declared}\r\n\r\n`,
+  );
+  secure.write(Buffer.alloc(8 * 1024 * 1024, 0x41));
+  const answer = parseAnswer(await answered);
+  assert.equal(answer.status, 413);
+  // The client stays connected with its upload half sent and idle.
+  const record = await within(
+    reportedRecord(r.edge, (record) => record.path === "/pressure"),
+    2000,
+    "record for the backed-up upload",
+  );
+  assert.deepEqual(
+    [record.status, record.outcome, record.reason, record.responseBytes],
+    [413, "observed", undefined, 5],
+  );
+  assert.ok(record.requestBytes > 0 && record.requestBytes < declared);
+  await settledSlot();
+  const next = await decrypted(
+    r.relay.port,
+    "claude.ai",
+    "GET /next HTTP/1.1\r\nHost: claude.ai\r\nconnection: close\r\n\r\n",
+  );
+  assert.equal(next.status, 200, next.head);
+  await reportedRecord(r.edge, (record) => record.path === "/next");
+  secure.destroy();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(
+    relayRecords(r.edge).length,
+    2,
+    "the client's leaving adds none",
+  );
 });
