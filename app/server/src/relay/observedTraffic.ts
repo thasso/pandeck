@@ -8,13 +8,16 @@
  *   or agent, and no gateway credential.
  * - Header fields pass as received, repeats and order kept, except the fixed
  *   hop-by-hop fields, every field `Connection` names and caller
- *   `x-pandeck-*` fields. No credential or cookie is added or removed; a
- *   response `set-cookie` reaches the client. Bodies are piped both ways and
- *   never read; the counters see lengths only. A chunked request is sent
- *   chunked whatever its method (`withRequestFraming`).
- * - An upgrade request goes up as its head alone, with no
- *   `Transfer-Encoding`: nothing the client sent after its head is written
- *   upstream before the `101`, so no body can frame a second request.
+ *   `x-pandeck-*` fields. A nomination never removes `Host`,
+ *   `Content-Length` or `Transfer-Encoding`. No credential or cookie is added
+ *   or removed; a response `set-cookie` reaches the client. Bodies are piped
+ *   both ways and never read; the counters see lengths only. A request body
+ *   goes up framed as the inner server parsed it, chunked or by its
+ *   `Content-Length`, whatever its method (`withRequestFraming`).
+ * - An upgrade request goes up as its head alone, with neither
+ *   `Transfer-Encoding` nor `Content-Length`: nothing the client sent after
+ *   its head is written upstream before the `101`, so no body can frame a
+ *   second request.
  * - An upgrade keeps its `Upgrade` fields and one `Connection: Upgrade`.
  *   After the upstream's `101`, both buffered heads go first, then bytes are
  *   piped both ways; any other answer is an ordinary response.
@@ -63,13 +66,22 @@ export type ObservedUpstreamSeam = (production: Readonly<ObservedUpstream>) => {
   ca: string | string[];
 };
 
-/** Lower-case names every `Connection` field nominates. */
+/** Never a `Connection` field's to remove: the message's framing and Host. */
+const NOT_NOMINABLE: ReadonlySet<string> = new Set([
+  "host",
+  "content-length",
+  "transfer-encoding",
+]);
+
+/** Lower-case names every `Connection` field nominates, bar `NOT_NOMINABLE`. */
 function nominated(rawHeaders: readonly string[]): Set<string> {
   const names = new Set<string>();
   for (let i = 0; i + 1 < rawHeaders.length; i += 2)
     if (rawHeaders[i]!.toLowerCase() === "connection")
-      for (const token of rawHeaders[i + 1]!.split(","))
-        if (token.trim()) names.add(token.trim().toLowerCase());
+      for (const token of rawHeaders[i + 1]!.split(",")) {
+        const name = token.trim().toLowerCase();
+        if (name && !NOT_NOMINABLE.has(name)) names.add(name);
+      }
   return names;
 }
 
@@ -97,7 +109,13 @@ function requestFields(
   host: string,
   upgrade: boolean,
 ): string[] {
-  const out = endToEnd(stripReservedHeaders(rawHeaders), upgrade);
+  const kept = endToEnd(stripReservedHeaders(rawHeaders), upgrade);
+  // An upgrade goes up as its head alone: no length for a body never sent.
+  const out = upgrade
+    ? kept.filter(
+        (_, i) => kept[i - (i % 2)]!.toLowerCase() !== "content-length",
+      )
+    : kept;
   // What Node would have set: only an HTTP/1.0 request can come without one.
   if (!out.some((name, i) => i % 2 === 0 && name.toLowerCase() === "host"))
     out.push("Host", host);

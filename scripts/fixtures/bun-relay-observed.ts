@@ -559,6 +559,26 @@ async function main(): Promise<void> {
   for (const sentinel of ["QUERY-SENTINEL", "SENTINEL", "fake-upstream"])
     assert.ok(!surfaces.includes(sentinel), `${sentinel} leaked`);
 
+  /** Writes one closing request and reads until the relay closes. */
+  const exchange = async (
+    socket: net.Socket,
+    request: Buffer,
+  ): Promise<string> => {
+    sockets.add(socket);
+    const chunks: Buffer[] = [];
+    socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+    const closed = once(socket, "close");
+    socket.write(request);
+    await within(closed, 5000, "a framed exchange");
+    return Buffer.concat(chunks).toString("latin1");
+  };
+  const plainSocket = async (): Promise<net.Socket> => {
+    const socket = net.connect(relay.port, "127.0.0.1");
+    socket.on("error", () => {});
+    await once(socket, "connect");
+    return socket;
+  };
+
   // 4. A chunked DELETE body is sent chunked on every ingress (F001/F002):
   //    unframed, these bytes would be a second, reserved request.
   {
@@ -576,23 +596,8 @@ async function main(): Promise<void> {
         smuggled,
         Buffer.from("\r\n0\r\n\r\n"),
       ]);
-    const exchange = async (
-      socket: net.Socket,
-      request: Buffer,
-    ): Promise<string> => {
-      sockets.add(socket);
-      const chunks: Buffer[] = [];
-      socket.on("data", (chunk: Buffer) => chunks.push(chunk));
-      const closed = once(socket, "close");
-      socket.write(request);
-      await within(closed, 5000, "a framed exchange");
-      return Buffer.concat(chunks).toString("latin1");
-    };
-    const plainSocket = net.connect(relay.port, "127.0.0.1");
-    plainSocket.on("error", () => {});
-    await once(plainSocket, "connect");
     assert.match(
-      await exchange(plainSocket, chunked("/v1/framed", "127.0.0.1")),
+      await exchange(await plainSocket(), chunked("/v1/framed", "127.0.0.1")),
       /^HTTP\/1\.1 500 /,
     );
     assert.match(
@@ -667,7 +672,75 @@ async function main(): Promise<void> {
     0,
   );
   assert.equal(destinations.length, 4, "the reserved path dialled nothing");
-  console.log("framing: chunked on plain, token and observed; reserved 403");
+
+  // 6. A Connection field nominating Content-Length never unframes a GET
+  //    (F001, fix batch 2): the body, itself a request, goes up as the body.
+  {
+    const further = Buffer.from(
+      "POST /relay/observations HTTP/1.1\r\nHost: 127.0.0.1\r\ncontent-length: 2\r\n\r\n{}",
+    );
+    const nominating = (path: string, host: string): Buffer =>
+      Buffer.concat([
+        Buffer.from(
+          `GET ${path} HTTP/1.1\r\nHost: ${host}\r\nConnection: content-length, close\r\nContent-Length: ${further.length}\r\n\r\n`,
+        ),
+        further,
+      ]);
+    assert.match(
+      await exchange(await plainSocket(), nominating("/v1/sized", "127.0.0.1")),
+      /^HTTP\/1\.1 500 /,
+    );
+    assert.match(
+      await exchange(
+        await decrypted(relay.port, "api.anthropic.com", interceptCa.certPem),
+        nominating("/v1/sized", "api.anthropic.com"),
+      ),
+      /^HTTP\/1\.1 500 /,
+    );
+    assert.match(
+      await exchange(
+        await decrypted(relay.port, "claude.ai", interceptCa.certPem),
+        nominating("/api/sized", "claude.ai"),
+      ),
+      /^HTTP\/1\.1 200 /,
+    );
+    assert.deepEqual(
+      edgeSeen.filter((seen) => seen.url.endsWith("/v1/sized")),
+      [
+        { url: "/v1/sized", te: [], bodySha256: sha(further) },
+        { url: "/anthropic/v1/sized", te: [], bodySha256: sha(further) },
+      ],
+    );
+    assert.deepEqual(
+      upstreamSeen
+        .filter((seen) => seen.url === "/api/sized")
+        .map((seen) => [
+          fieldValues(seen.rawHeaders, "content-length"),
+          fieldValues(seen.rawHeaders, "transfer-encoding"),
+          seen.bodySha256,
+        ]),
+      [[[String(further.length)], [], sha(further)]],
+    );
+    await reported(
+      (r) => r.path === "/api/sized" && r.requestBytes === further.length,
+      "the sized observed request",
+    );
+    assert.equal(
+      records().filter((r) => r.path === "/api/sized").length,
+      1,
+      "one record for the sized request",
+    );
+  }
+  assert.equal(foreignIngest, 0, "no body reached the ingest as a request");
+  assert.equal(
+    upstreamSeen.filter((seen) => seen.url.startsWith("/relay/")).length,
+    0,
+    "no body reached the upstream as a request",
+  );
+  assert.equal(destinations.length, 5, "one dial per observed request");
+  console.log(
+    "framing: chunked and nominated Content-Length on plain, token and observed; reserved 403",
+  );
 
   const started = Date.now();
   await within(relay.close(), 5000, "the relay's close");

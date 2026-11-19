@@ -52,24 +52,27 @@ the flag it has no CONNECT handler, as before.
   `127.0.0.1:<relay port>`, so the edge sees a loopback caller as through the
   base URL, and an `Origin` still reaches the edge, which refuses it; every
   caller `x-pandeck-*` field is dropped. All other fields pass as received,
-  repeats and order kept, hop-by-hop fields dropped; a chunked body is sent
-  chunked again whatever the method. Bodies are piped both ways and never read.
-  The inner server offers ALPN `http/1.1` only.
+  repeats and order kept, hop-by-hop fields dropped; a body goes up framed as
+  the relay parsed it, chunked again whatever the method or with its
+  `Content-Length`. Bodies are piped both ways and never read. The inner server
+  offers ALPN `http/1.1` only.
 - **Observed hosts go direct, unchanged** (`relay/observedTraffic.ts`). A
   request to any other named host goes to that CONNECT host on 443, with SNI
   equal to it and the default CA verification; the inner `Host` and SNI choose
   nothing. It never uses the edge link's identity, CA or agent, and no gateway
   credential: at most the client's own placeholder reaches the host. Header
-  fields pass as received without hop-by-hop ones (fixed and `Connection`-named)
-  and caller `x-pandeck-*` fields; no credential or cookie is added or removed;
-  bodies are piped unread, a chunked one sent chunked whatever the method; an
-  upgrade goes up as its head alone and is piped both ways after the upstream's
-  `101`. `/relay/…` is the relay's own on every ingress, so here too it gets the
-  403 `reserved-path` before any upstream contact. Its slot is reserved at
-  admission and held for the request's whole lifetime, which writes one
-  `observed` (or `failed`) record when it ends. A test-only programmatic seam
-  may replace the address and trust root, never SNI or verification, and no flag
-  or environment variable reaches it.
+  fields pass as received without hop-by-hop ones (fixed and `Connection`-named,
+  never `Host`, `Content-Length` or `Transfer-Encoding`) and caller
+  `x-pandeck-*` fields; no credential or cookie is added or removed; bodies are
+  piped unread, framed as the relay parsed them (chunked whatever the method, or
+  with their `Content-Length`); an upgrade goes up as its head alone, with
+  neither, and is piped both ways after the upstream's `101`. `/relay/…` is the
+  relay's own on every ingress, so here too it gets the 403 `reserved-path`
+  before any upstream contact. Its slot is reserved at admission and held for
+  the request's whole lifetime, which writes one `observed` (or `failed`) record
+  when it ends. A test-only programmatic seam may replace the address and trust
+  root, never SNI or verification, and no flag or environment variable reaches
+  it.
 - **Local refusals are marked.** Every refusal the relay answers itself here
   (`connect-port`, `connect-target`, `origin-form` for an absolute-form target,
   `reserved-path` for `/relay/…` on any decrypted host, `upgrade` for a

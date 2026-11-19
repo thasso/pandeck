@@ -2085,14 +2085,18 @@ placeholder as its key. Any process on the machine can do this; Thasso accepted
 that. The relay's client certificate is the capability, and revoking the machine
 ends access at once. The relay forwards request and response header fields with
 repeats and verifies the edge by its enrolled address whatever the `Host`
-(above). It drops hop-by-hop fields, but a chunked request body is sent chunked
-again whatever its method (the client's own `Transfer-Encoding` fields go up
-with it), so a body can never be read as a further request. Request fields
-starting with `x-pandeck-` are reserved: every caller value is removed,
-regardless of case or repeats, and one `x-pandeck-relay-id` is added. Bodies
-still stream unchanged; no credential is added or removed. For the two Claude
-token hosts it intercepts, ADR-0006 changes the target and `Host`; every other
-named host it decrypts goes directly to that host ("Interception" below).
+(above). It drops hop-by-hop fields but never a request's framing: the body goes
+up delimited where the relay's own parser delimited it, chunked again whatever
+its method when the client sent `Transfer-Encoding` (the client's own fields go
+up with it), otherwise with the client's `Content-Length`. A `Connection` field
+cannot nominate `Host`, `Content-Length` or `Transfer-Encoding` away. The next
+hop therefore ends each request where the relay did and never reads a body the
+relay forwarded as a further request. Request fields starting with `x-pandeck-`
+are reserved: every caller value is removed, regardless of case or repeats, and
+one `x-pandeck-relay-id` is added. Bodies still stream unchanged; no credential
+is added or removed. For the two Claude token hosts it intercepts, ADR-0006
+changes the target and `Host`; every other named host it decrypts goes directly
+to that host ("Interception" below).
 
 - **Placeholder.** One literal, JWT-shaped because pi and Codex accept only
   that, pinned in `gatewayMachinePool.test.ts`:
@@ -2275,16 +2279,18 @@ named host it decrypts goes directly to that host ("Interception" below).
     destination. Nothing of the edge link is used: no client certificate, key,
     edge CA, agent or gateway credential; the observed hosts have their own
     keep-alive pool. Header fields pass as received, repeats and order kept,
-    without the fixed hop-by-hop fields, every field a `Connection` field names,
-    and caller `x-pandeck-*` fields; `Host` is kept. No credential or cookie is
-    added or removed, the target keeps its query, and a response `set-cookie`
-    reaches the client. Bodies are piped both ways and never read. An upgrade
-    keeps its `Upgrade` fields and one `Connection: Upgrade`. After the
-    upstream's `101`, the relay writes the `101`, then each side's buffered
-    bytes to the other, then pipes both ways; any other answer is an ordinary
-    response followed by a close. A chunked request body is sent chunked
-    whatever the method; an upgrade request goes up as its head alone, so
-    nothing the client sends after it reaches the upstream before the `101`.
+    without the fixed hop-by-hop fields, every field a `Connection` field names
+    other than `Host`, `Content-Length` and `Transfer-Encoding`, and caller
+    `x-pandeck-*` fields; `Host` is kept. No credential or cookie is added or
+    removed, the target keeps its query, and a response `set-cookie` reaches the
+    client. Bodies are piped both ways and never read. An upgrade keeps its
+    `Upgrade` fields and one `Connection: Upgrade`. After the upstream's `101`,
+    the relay writes the `101`, then each side's buffered bytes to the other,
+    then pipes both ways; any other answer is an ordinary response followed by a
+    close. A request body goes up framed as the relay parsed it: chunked again
+    whatever the method, or with its `Content-Length`. An upgrade request goes
+    up as its head alone, with neither `Content-Length` nor `Transfer-Encoding`,
+    so nothing the client sends after it reaches the upstream before the `101`.
     `/relay/…`, an upgrade's included, gets 403 `reserved-path` before any
     upstream contact, as on every ingress; closing and a full queue answer their
     503 first. An upstream that cannot be reached or fails verification gets the

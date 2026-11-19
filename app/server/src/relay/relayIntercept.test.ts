@@ -1549,3 +1549,132 @@ test("F003: with every reporting slot held, an observed /relay/ target is the co
   assert.ok("note" in overflow && overflow.note === "overflow");
   assert.equal(overflow.count, 1);
 });
+
+/** A request the next hop would parse as a further one if sent unframed. */
+const FURTHER = Buffer.from(
+  "GET /smuggled-unrecorded HTTP/1.1\r\nHost: claude.ai\r\n\r\n",
+);
+
+/** A request whose `Connection` field nominates its framing and `Host`. */
+function nominatingRequest(method: string, path: string, host: string): Buffer {
+  return Buffer.concat([
+    Buffer.from(
+      `${method} ${path} HTTP/1.1\r\nHost: ${host}\r\nConnection: content-length, host, transfer-encoding, close\r\nContent-Length: ${FURTHER.length}\r\n\r\n`,
+    ),
+    FURTHER,
+  ]);
+}
+
+test("F001 (m2): a Connection field never removes an observed request's Content-Length or Host; GET and POST go up framed, one request and one record each", async () => {
+  const r = await observedRig();
+  for (const method of ["GET", "POST"]) {
+    const answer = await decrypted(
+      r.relay.port,
+      "claude.ai",
+      nominatingRequest(method, "/api/thing", "inner.claude.ai"),
+    );
+    assert.equal(answer.status, 200, answer.head);
+  }
+  await reportedRecord(r.edge, (record) => record.method === "POST");
+  assert.deepEqual(
+    r.upstream.requests.map((seen) => [
+      seen.method,
+      seen.url,
+      seen.body.equals(FURTHER),
+      fieldValues(seen.rawHeaders, "content-length"),
+      fieldValues(seen.rawHeaders, "host"),
+    ]),
+    [
+      [
+        "GET",
+        "/api/thing",
+        true,
+        [String(FURTHER.length)],
+        ["inner.claude.ai"],
+      ],
+      [
+        "POST",
+        "/api/thing",
+        true,
+        [String(FURTHER.length)],
+        ["inner.claude.ai"],
+      ],
+    ],
+  );
+  assert.deepEqual(
+    relayRecords(r.edge).map((record) => [
+      record.method,
+      record.path,
+      record.status,
+      record.requestBytes,
+    ]),
+    [
+      ["GET", "/api/thing", 200, FURTHER.length],
+      ["POST", "/api/thing", 200, FURTHER.length],
+    ],
+  );
+});
+
+test("F001 (m2) sibling: the plain and token forward keep a Connection-nominated Content-Length; one edge request each with the same body", async () => {
+  const r = await observedRig();
+  for (const method of ["GET", "DELETE"]) {
+    const viaPlain = await plain(
+      r.relay.port,
+      nominatingRequest(method, "/v1/thing", "127.0.0.1"),
+    );
+    assert.equal(viaPlain.status, 200, viaPlain.head);
+    const viaToken = await decrypted(
+      r.relay.port,
+      "api.anthropic.com",
+      nominatingRequest(method, "/v1/thing", "api.anthropic.com"),
+    );
+    assert.equal(viaToken.status, 200, viaToken.head);
+  }
+  assert.deepEqual(
+    r.edge.requests.map((seen) => [
+      seen.method,
+      seen.url,
+      seen.bodySha256 === sha256(FURTHER),
+      fieldValues(seen.rawHeaders, "content-length"),
+    ]),
+    [
+      ["GET", "/v1/thing", true, [String(FURTHER.length)]],
+      ["GET", "/anthropic/v1/thing", true, [String(FURTHER.length)]],
+      ["DELETE", "/v1/thing", true, [String(FURTHER.length)]],
+      ["DELETE", "/anthropic/v1/thing", true, [String(FURTHER.length)]],
+    ],
+  );
+  assert.equal(r.edge.foreignIngest, 0);
+});
+
+test("F001 (m2) audit: an observed upgrade head goes up without a Content-Length or Transfer-Encoding, nominated or not; its body is never a request", async () => {
+  const r = await observedRig();
+  for (const connection of ["Upgrade", "Upgrade, content-length"]) {
+    const secure = await secureTo(r.relay.port, "claude.ai");
+    const opened = readUntil(secure, (received) => {
+      const end = received.indexOf("\r\n\r\n");
+      return end !== -1 && received.length >= end + 4 + SERVER_HEAD.length;
+    });
+    secure.write(
+      Buffer.concat([
+        Buffer.from(
+          `GET /ws HTTP/1.1\r\nHost: claude.ai\r\nUpgrade: websocket\r\nConnection: ${connection}\r\nContent-Length: ${FURTHER.length}\r\n\r\n`,
+        ),
+        FURTHER,
+      ]),
+    );
+    assert.match((await opened).toString("latin1"), /^HTTP\/1\.1 101 /);
+    secure.destroy();
+  }
+  await r.edge.reported(
+    () =>
+      relayRecords(r.edge).filter((record) => record.status === 101).length ===
+      2,
+  );
+  assert.equal(r.upstream.upgrades.length, 2);
+  for (const upgrade of r.upstream.upgrades) {
+    assert.deepEqual(fieldValues(upgrade.rawHeaders, "content-length"), []);
+    assert.deepEqual(fieldValues(upgrade.rawHeaders, "transfer-encoding"), []);
+  }
+  assert.deepEqual(r.upstream.requests, [], "no request beside the upgrades");
+});

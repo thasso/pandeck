@@ -38,31 +38,48 @@ function forwardable(rawHeaders: readonly string[]): string[] {
   return out;
 }
 
+/** Every `name` field of `rawHeaders`, as name/value pairs in order. */
+function fieldsNamed(rawHeaders: readonly string[], name: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i + 1 < rawHeaders.length; i += 2)
+    if (rawHeaders[i]!.toLowerCase() === name)
+      out.push(rawHeaders[i]!, rawHeaders[i + 1]!);
+  return out;
+}
+
 /**
- * Puts a request's own body framing back on the fields it is forwarded
- * with. `Transfer-Encoding` is hop-by-hop and dropped with the rest, but
- * without it Node and Bun write a piped body unframed for the methods they
- * do not chunk by default (GET, DELETE, OPTIONS, …), and the next hop would
- * parse that body as further requests. Both parsers admit a request with
- * `Transfer-Encoding` only when its last coding is `chunked`, so the
- * received fields, sent again unchanged, make the client chunk-encode the
- * decoded body whatever the method; a `Content-Length` cannot frame it too.
+ * Puts a request's own body framing, as the inner server parsed it, on the
+ * fields it is forwarded with, whatever filtering removed. Without it Node
+ * and Bun write a piped body unframed for the methods they do not chunk by
+ * default (GET, DELETE, OPTIONS, …), and the next hop would parse that body
+ * as further requests (F001/F002).
+ *
+ * - `Transfer-Encoding` is hop-by-hop and dropped with the rest. Both parsers
+ *   admit it on a request only with `chunked` last and never beside a
+ *   `Content-Length`, so the received fields, sent again unchanged, make the
+ *   client chunk-encode the decoded body whatever the method.
+ * - Otherwise the received `Content-Length` frames the body: kept where it
+ *   still is, put back where a filter (a `Connection` nomination) took it.
  */
 export function withRequestFraming(
   received: readonly string[],
   fields: readonly string[],
 ): string[] {
-  const codings: string[] = [];
-  for (let i = 0; i + 1 < received.length; i += 2)
-    if (received[i]!.toLowerCase() === "transfer-encoding")
-      codings.push(received[i]!, received[i + 1]!);
-  if (!codings.length) return [...fields];
-  const out: string[] = [];
-  for (let i = 0; i + 1 < fields.length; i += 2)
-    if (fields[i]!.toLowerCase() !== "content-length")
-      out.push(fields[i]!, fields[i + 1]!);
-  out.push(...codings);
-  return out;
+  const codings = fieldsNamed(received, "transfer-encoding");
+  if (codings.length) {
+    const out: string[] = [];
+    for (let i = 0; i + 1 < fields.length; i += 2) {
+      const name = fields[i]!.toLowerCase();
+      if (name !== "content-length" && name !== "transfer-encoding")
+        out.push(fields[i]!, fields[i + 1]!);
+    }
+    out.push(...codings);
+    return out;
+  }
+  const length = fieldsNamed(received, "content-length");
+  if (!length.length || fieldsNamed(fields, "content-length").length)
+    return [...fields];
+  return [...fields, ...length];
 }
 
 /**
