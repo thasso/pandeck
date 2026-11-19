@@ -430,6 +430,30 @@ for the Nix source path and build directory. CI builds the package and its
 closure check on every change (`docs/ci-cd.md`), and a deployment of that commit
 builds the same derivation.
 
+The relay's observed hosts (`docs/workers.md` "Observed hosts") have a focused
+packaged-runtime probe outside the install check, because it needs a local
+trusted upstream in place of a real provider host. Run it with the pinned Bun:
+
+```sh
+BUN=$(nix build --no-link --print-out-paths .#personal-assistant.bun)/bin/bun
+"$BUN" scripts/bun-relay-observed-check.mjs <scratch dir>
+```
+
+`scripts/bun-relay-observed-check.mjs` bundles
+`scripts/fixtures/bun-relay-observed.ts` with `bundle` and
+`serverBundlePlugins()`, the esbuild call that builds `relay.js`, rejects a
+bundle that still imports anything but `node:` or `bun:` builtins, and runs it
+under the same Bun. The fixture starts the production relay with an interception
+CA, a local mTLS edge receiver and a local upstream reached only through the
+relay's test seam, which must receive each host's production destination (port
+443, SNI equal to the host, default verification). Under Bun's TLS it checks
+request and response fidelity including repeated `set-cookie`, a 101 upgrade
+with both heads and bytes both ways and no record until it closes, an untrusted
+upstream's marked 502 with a failed record, no request at the edge's model port,
+and a bounded close. It writes only under the scratch directory and fails unless
+the fixture prints its success line within 30 s. It is not part of
+`nix flake check` and does not replace the install check.
+
 The package must not use `bun build --compile` or Bun's ordinary bundler. As
 observed on Bun 1.3.13, and not re-measured on 1.4.2 since the package uses
 neither, the standalone compiler encrypts its embedded module table with a
