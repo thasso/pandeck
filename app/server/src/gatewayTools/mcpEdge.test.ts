@@ -811,6 +811,34 @@ test("an OAuth record connected in a vault process reaches Jira with Bearer thro
   assert.equal(result.jiraHost, FAKE_SITE);
   assert.equal(result.issue.issueUrl, `https://${FAKE_SITE}/browse/OPS-1`);
 
+  // A search Jira rejects with the call's own access token among its
+  // reasons answers the fixed text, never the token (Task-1439 D4-yes, F6).
+  outbound = [];
+  let echoed = "";
+  onIssue = (url) => {
+    if (!url.pathname.endsWith("/rest/api/3/search/jql"))
+      return Promise.resolve(new Response("[]"));
+    echoed = outbound.at(-1)!.auth!.replace(/^Bearer /, "");
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({ errorMessages: [`The value '${echoed}' is odd.`] }),
+        { status: 400 },
+      ),
+    );
+  };
+  const refusedSearch = await client.callTool({
+    name: "jira_search_issues",
+    arguments: { jql: "project = OPS", maxResults: 5 },
+  });
+  assert.equal(refusedSearch.isError, true);
+  assert.equal(
+    textOf(refusedSearch),
+    "Jira refused the search (HTTP 400); check the JQL, and resolve project, user and field names with jira_lookup.",
+  );
+  assert.match(echoed, /^fake-atl-access-\d+$/);
+  assert.ok(!JSON.stringify(refusedSearch).includes(echoed));
+  onIssue = issueAnswer;
+
   // Every get refreshes (the token expires within the margin); a refused
   // refresh is the fixed reconnect text, with no Jira request, and the
   // status problem `rejected`.
@@ -838,6 +866,7 @@ test("an OAuth record connected in a vault process reaches Jira with Bearer thro
     ...e.lines,
     ...vaultLines,
     JSON.stringify(answer),
+    JSON.stringify(refusedSearch),
     JSON.stringify(rejected),
     JSON.stringify(status),
   ].join("\n");

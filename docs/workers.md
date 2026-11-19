@@ -2679,14 +2679,15 @@ plus `jira_search_issues` and `jira_lookup` (Task-1439).
   or a fixed failure (`unknown_tool`, `invalid_params`, `tool_error`,
   `result_too_large`, `timeout`, `cancelled`, `failed`). Only edge-owned
   `ToolError` text reaches a caller; any other error's message is dropped
-  unlogged. `gateway/` holds no tool code or package: it takes the tools as
-  `EdgeTools` (`gateway/edgeTools.ts`, types only) through `startGateway`'s
-  `tools`, and the vault process never loads them. Without them `/mcp` is an
-  unknown path and the integration methods answer `tools_unavailable`; the
-  packaged entry wires none yet (D1). The closed schema covers strings
-  (`maxLength`, `pattern`, `enum`), booleans, integers with a range, finite
-  numbers and arrays of strings (with an item `enum`); a refusal names the
-  property, never a value.
+  unlogged. The single exception is Jira's own reasons for a rejected
+  `jira_search_issues` (below, ADR-0005). `gateway/` holds no tool code or
+  package: it takes the tools as `EdgeTools` (`gateway/edgeTools.ts`, types
+  only) through `startGateway`'s `tools`, and the vault process never loads
+  them. Without them `/mcp` is an unknown path and the integration methods
+  answer `tools_unavailable`; the packaged entry wires none yet (D1). The closed
+  schema covers strings (`maxLength`, `pattern`, `enum`), booleans, integers
+  with a range, finite numbers and arrays of strings (with an item `enum`); a
+  refusal names the property, never a value.
 - **Jira search and lookup** (Task-1439). `jira_search_issues` and `jira_lookup`
   run the same read path as the local tools (`jiraSearch.ts`, `jiraLookup.ts`,
   `jiraSprintLookup.ts`, `jiraFields.ts`, `jiraRead.ts` beside `tools/jira/`,
@@ -2697,13 +2698,22 @@ plus `jira_search_issues` and `jira_lookup` (Task-1439).
   difference from local (D5): a result over the host's 60,000 characters answers
   `result_too_large`, where the local tool answers it whole. Input refusals are
   fixed texts that hold no input value (for example "No Jira board shows that
-  project."). Jira's answers map by status only: 401 or 403 is the credential
-  remedy for the credential's kind, any other status "Jira answered HTTP
-  `<status>`.", and a 400 to a search "Jira refused the search (HTTP 400); check
-  the JQL, and resolve project, user and field names with jira_lookup." Jira's
-  body never reaches the caller. Over OAuth, `jira_lookup kind=sprints` needs
-  Jira Software scopes the gateway does not ask for yet, so Jira refuses it
-  until they are added (Task-1439 D3).
+  project."). Jira's answers map by status: 401 or 403 is the credential remedy
+  for the credential's kind, any other status "Jira answered HTTP `<status>`."
+  The one exception (D4, ADR-0005) is a 400 to the search request itself
+  (`POST /rest/api/3/search/jql`; not the field list, not `jira_lookup`): it
+  answers "Jira refused the search (HTTP 400): " and Jira's own reasons, the
+  string items of `errorMessages` then the string values of `errors`, joined by
+  "; ". Those reasons may quote the user's JQL, field names or a URL Jira chose
+  to mention. Before anything else, the whole raw reasons are checked: if any
+  holds the call's API token, its Basic value (padded or not), the OAuth access
+  token, or `authorization`, `bearer ` or `basic ` in any case, all are dropped.
+  Without reasons the answer is "Jira refused the search (HTTP 400); check the
+  JQL, and resolve project, user and field names with jira_lookup." Control
+  characters become spaces and the text is capped at 500 characters. No other
+  part of Jira's body reaches the caller. Over OAuth, `jira_lookup kind=sprints`
+  needs Jira Software scopes the gateway does not ask for yet, so Jira refuses
+  it until they are added (Task-1439 D3).
 - **`/mcp`** on the model port, reached by a harness through the box's relay at
   `http://127.0.0.1:<relay port>/mcp`: stateless Streamable HTTP with JSON
   responses, one fresh SDK server and transport per POST. The gate needs the

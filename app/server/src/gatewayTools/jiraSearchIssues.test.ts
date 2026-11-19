@@ -2,8 +2,9 @@
  * `jira_search_issues` on the edge (Task-1439) through the tool host, with a
  * stubbed `fetch`: the local tool's exact text from the same fixtures, both
  * credential kinds, no cache, its limits, the call's signal on every request,
- * the deadline and a caller's abort between pages, and fixed failure texts
- * that never carry the token, Jira's body or the JQL. Every value is fake.
+ * the deadline and a caller's abort between pages, and failure texts that
+ * never carry credential material. Only a rejected search (HTTP 400) shows
+ * Jira's own reasons, vetted and capped (D4-yes). Every value is fake.
  */
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
@@ -46,6 +47,7 @@ const SECRETS =
   /FAKE-TOKEN-SENTINEL|fake-atl-access-direct|Basic |Bearer |bWVAeC50ZXN0/;
 const D4_NO =
   "Jira refused the search (HTTP 400); check the JQL, and resolve project, user and field names with jira_lookup.";
+const REASONS = "Jira refused the search (HTTP 400): ";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -304,28 +306,142 @@ test("HTTP failures answer fixed texts; the token, Basic value and body never co
   }
 });
 
-test("a rejected search (HTTP 400) answers the fixed text, not Jira's reasons (D4-no)", async () => {
+/** A search whose search request Jira answers 400 with `body`. */
+async function rejectedSearch(
+  body: unknown,
+  caller: ToolCaller = tokenCaller(),
+): Promise<{ answer: unknown; message: string; lines: string[] }> {
   stubJiraFetch((request) =>
     request.method === "POST"
-      ? json(
-          {
-            errorMessages: [`SENTINEL-A ${FAKE.token}`],
-            errors: { project: `SENTINEL-B ${BASIC}` },
-          },
-          400,
-        )
+      ? new Response(typeof body === "string" ? body : JSON.stringify(body), {
+          status: 400,
+        })
       : undefined,
   );
   const { host: tools, lines } = host();
   const answer = await tools.call(
     "jira_search_issues",
     { jql: "project = SECRETJQL", maxResults: 5 },
+    caller,
+  );
+  assert.ok(!answer.ok && answer.code === "tool_error", JSON.stringify(answer));
+  return { answer, message: answer.message, lines };
+}
+
+test("a rejected search (HTTP 400) answers Jira's reasons, in order (D4-yes)", async () => {
+  const { message } = await rejectedSearch({
+    errorMessages: ["SENTINEL-A"],
+    errors: { project: "SENTINEL-B" },
+  });
+  assert.equal(message, `${REASONS}SENTINEL-A; SENTINEL-B`);
+  const extra = await rejectedSearch({
+    errorMessages: ["x"],
+    other: "SENTINEL-C",
+  });
+  assert.equal(extra.message, `${REASONS}x`);
+});
+
+test("only string reasons in their containers pass; without any, the fixed text", async () => {
+  const cases: [unknown, string][] = [
+    [{ errorMessages: ["ok", 5, null, { a: "b" }] }, `${REASONS}ok`],
+    [{ errorMessages: "SENTINEL-A", errors: ["SENTINEL-B"] }, D4_NO],
+    [{ errorMessages: [], errors: {} }, D4_NO],
+    [{ errorMessages: ["  "] }, D4_NO],
+    [{}, D4_NO],
+    ["<html>SENTINEL-A</html>", D4_NO],
+    ["", D4_NO],
+  ];
+  for (const [body, expected] of cases)
+    assert.equal(
+      (await rejectedSearch(body)).message,
+      expected,
+      JSON.stringify(body),
+    );
+});
+
+test("control characters become spaces and the text is capped at 500 characters", async () => {
+  const controls = await rejectedSearch({
+    errorMessages: ["a\u0001b\u0085c\nd\u007fe"],
+  });
+  assert.equal(controls.message, `${REASONS}a b c d e`);
+  const long = await rejectedSearch({ errorMessages: ["y".repeat(2000)] });
+  assert.equal(long.message.length, 500);
+  assert.ok(long.message.startsWith(`${REASONS}yyy`));
+  assert.ok(long.message.endsWith("y…"));
+});
+
+test("a reason holding credential material or an auth marker falls back to the fixed text (F6)", async () => {
+  const unpadded = BASIC_VALUE.replace(/=+$/, "");
+  assert.notEqual(unpadded, BASIC_VALUE);
+  const cut = "x".repeat(480);
+  const cases: [string, unknown, ToolCaller][] = [
+    ["token", { errorMessages: [`bad ${FAKE.token}`] }, tokenCaller()],
+    ["Basic value", { errors: { jql: `v ${BASIC_VALUE}` } }, tokenCaller()],
+    ["unpadded Basic value", { errors: { jql: unpadded } }, tokenCaller()],
+    [
+      "Authorization header",
+      { errors: { jql: `Authorization: Basic ${BASIC_VALUE}` } },
+      tokenCaller(),
+    ],
+    [
+      "token across the cut",
+      { errorMessages: [cut + FAKE.token] },
+      tokenCaller(),
+    ],
+    ["access token", { errorMessages: [`bad ${FAKE_ACCESS}`] }, oauthCaller()],
+    [
+      "Bearer value",
+      { errorMessages: [`Bearer ${FAKE_ACCESS}`] },
+      oauthCaller(),
+    ],
+    [
+      "access token across the cut",
+      { errorMessages: [cut + FAKE_ACCESS] },
+      oauthCaller(),
+    ],
+    [
+      "a later reason",
+      { errorMessages: ["fine"], errors: { jql: FAKE_ACCESS } },
+      oauthCaller(),
+    ],
+    [
+      "authorization alone",
+      { errorMessages: ["No AUTHORIZATION here"] },
+      tokenCaller(),
+    ],
+    [
+      "bearer marker alone",
+      { errorMessages: ["a bearer of news"] },
+      tokenCaller(),
+    ],
+    ["basic marker alone", { errorMessages: ["basic search"] }, oauthCaller()],
+  ];
+  for (const [label, body, caller] of cases) {
+    const { answer, message, lines } = await rejectedSearch(body, caller);
+    assert.equal(message, D4_NO, label);
+    assert.doesNotMatch(JSON.stringify(answer), SECRETS, label);
+    assert.doesNotMatch(JSON.stringify(answer), /SECRETJQL/, label);
+    for (const line of lines) assert.doesNotMatch(line, SECRETS, label);
+  }
+});
+
+test("a 400 on the field list is not a rejected search: no reasons pass", async () => {
+  stubJiraFetch((request) =>
+    request.path === "/rest/api/3/field"
+      ? json({ errorMessages: ["SENTINEL-A"] }, 400)
+      : undefined,
+  );
+  const { host: tools } = host();
+  const answer = await tools.call(
+    "jira_search_issues",
+    { jql: JQL_FIELDS, maxResults: 1, fields: ["summary"] },
     tokenCaller(),
   );
-  assert.deepEqual(answer, { ok: false, code: "tool_error", message: D4_NO });
-  assert.doesNotMatch(JSON.stringify(answer), /SENTINEL|SECRETJQL/);
-  assert.doesNotMatch(JSON.stringify(answer), SECRETS);
-  for (const line of lines) assert.doesNotMatch(line, SECRETS);
+  assert.deepEqual(answer, {
+    ok: false,
+    code: "tool_error",
+    message: "Jira answered HTTP 400.",
+  });
 });
 
 test("a failure that is not Jira's answer is the host's fixed text", async () => {

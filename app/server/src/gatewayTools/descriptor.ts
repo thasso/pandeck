@@ -6,6 +6,11 @@
  * Only `ToolError` text reaches a caller, and it must be fixed text this
  * module tree owns: never a credential, an upstream body, a request string or
  * any other error's message. `ToolError` exists only inside `gatewayTools/`.
+ * The single exception (Task-1439 D4, ADR-0005): Jira's own `errorMessages`
+ * and `errors` reasons for a `jira_search_issues` HTTP 400
+ * (`jiraSearchIssues.ts`). They are never shown with credential material,
+ * and are sanitized and capped. They may quote the user's JQL, field names or
+ * a URL Jira chose to mention.
  */
 
 /** An API token the user set for their site. */

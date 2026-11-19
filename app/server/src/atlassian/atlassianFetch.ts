@@ -50,15 +50,46 @@ export interface AtlassianCallOptions {
 /**
  * A non-2xx answer. The message is the one callers always saw; `status` lets
  * a caller that must not repeat upstream text (the gateway's tools) decide by
- * code alone.
+ * code alone. `reasons` are the string entries of Atlassian's error body
+ * (`errorMessages` items, then `errors` values, field names dropped), raw and
+ * whole: a caller that shows any must vet them itself (Task-1439 D4).
  */
 export class AtlassianHttpError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly reasons?: readonly string[],
   ) {
     super(message);
   }
+}
+
+/**
+ * The reasons in an Atlassian error body, or none when it is not a JSON
+ * object or holds no string reason. Malformed containers and non-string
+ * entries are skipped.
+ */
+function upstreamReasons(text: string): readonly string[] | undefined {
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (!isPlainObject(body)) return undefined;
+  const reasons: string[] = [];
+  const { errorMessages, errors } = body;
+  if (Array.isArray(errorMessages))
+    for (const entry of errorMessages)
+      if (typeof entry === "string") reasons.push(entry);
+  if (isPlainObject(errors))
+    for (const value of Object.values(errors))
+      if (typeof value === "string") reasons.push(value);
+  return reasons.length > 0 ? reasons : undefined;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export type AtlassianQuery = Record<
@@ -125,6 +156,7 @@ export async function atlassianFetch<T>(
     throw new AtlassianHttpError(
       `${product} API returned HTTP ${res.status} for ${method} ${url.pathname}: ${text.slice(0, 400)}`,
       res.status,
+      upstreamReasons(text),
     );
   return text ? (JSON.parse(text) as T) : ({} as T);
 }

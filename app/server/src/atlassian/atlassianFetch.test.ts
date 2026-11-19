@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { FAKE_ACCESS } from "../test/atlassianFake.ts";
-import { atlassianDownload, atlassianFetch } from "./atlassianFetch.ts";
+import {
+  AtlassianHttpError,
+  atlassianDownload,
+  atlassianFetch,
+} from "./atlassianFetch.ts";
 
 const CONFIG = {
   host: "example.atlassian.net",
@@ -45,6 +49,68 @@ describe("atlassianFetch", () => {
     expect(init?.headers).toMatchObject({
       "Content-Type": "application/json",
     });
+  });
+});
+
+describe("AtlassianHttpError reasons (Task-1439 D4)", () => {
+  async function failure(body: string, status = 400) {
+    stubFetch(() => new Response(body, { status }));
+    try {
+      await atlassianFetch(
+        CONFIG,
+        "Jira",
+        "POST",
+        "/rest/api/3/search/jql",
+        {},
+      );
+    } catch (err) {
+      expect(err).toBeInstanceOf(AtlassianHttpError);
+      return err as AtlassianHttpError;
+    }
+    throw new Error("expected a failure");
+  }
+
+  test("errorMessages strings, then errors string values, field names dropped", async () => {
+    const body = JSON.stringify({
+      errorMessages: ["first", "second"],
+      errors: { jql: "third", project: "fourth" },
+      other: "never",
+    });
+    const err = await failure(body);
+    expect(err.reasons).toEqual(["first", "second", "third", "fourth"]);
+    expect(err.status).toBe(400);
+    expect(err.message).toBe(
+      `Jira API returned HTTP 400 for POST /rest/api/3/search/jql: ${body}`,
+    );
+  });
+
+  test("malformed containers and non-string entries are skipped", async () => {
+    expect(
+      (
+        await failure(
+          JSON.stringify({
+            errorMessages: ["ok", 5, null, { a: "b" }],
+            errors: { n: 1, o: { p: "q" }, s: "fine" },
+          }),
+        )
+      ).reasons,
+    ).toEqual(["ok", "fine"]);
+    expect(
+      (await failure(JSON.stringify({ errorMessages: "x", errors: ["y"] })))
+        .reasons,
+    ).toBeUndefined();
+  });
+
+  test("a body that is not a JSON object, or holds no reason, gives none", async () => {
+    for (const body of ["<html>x</html>", "", '["x"]', '"x"', "{}"])
+      expect((await failure(body, 500)).reasons, body).toBeUndefined();
+  });
+
+  test("the reasons come from the whole body, past the message's 400 characters", async () => {
+    const long = "z".repeat(1000);
+    const err = await failure(JSON.stringify({ errorMessages: [long] }));
+    expect(err.reasons).toEqual([long]);
+    expect(err.message.length).toBeLessThan(600);
   });
 });
 

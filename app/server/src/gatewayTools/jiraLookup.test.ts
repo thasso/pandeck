@@ -387,6 +387,20 @@ test("arguments the schema refuses never reach Jira", async () => {
   assert.equal(seen.length, 0);
 });
 
+test("a lookup Jira rejects (HTTP 400) shows none of Jira's reasons, clean ones included", async () => {
+  stubJiraFetch(() =>
+    json(
+      { errorMessages: ["SENTINEL-A"], errors: { project: "SENTINEL-B" } },
+      400,
+    ),
+  );
+  assert.deepEqual(await lookup({ kind: "projects", query: "op" }), {
+    ok: false,
+    code: "tool_error",
+    message: "Jira answered HTTP 400.",
+  });
+});
+
 test("HTTP failures answer fixed texts; a 404 or 400 is not an issue's text", async () => {
   setRetrySleepForTests(() => Promise.resolve());
   const cases: [number, ToolCaller, string][] = [
