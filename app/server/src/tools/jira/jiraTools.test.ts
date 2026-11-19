@@ -14,11 +14,11 @@ vi.mock("../../jiraSettings.ts", async (importActual) => ({
 
 vi.mock("../../jiraFieldCache.ts", async (importActual) => ({
   ...(await importActual<typeof import("../../jiraFieldCache.ts")>()),
-  getJiraFieldMap: async () => ({
+  getJiraFieldMap: vi.fn(async () => ({
     byId: new Map(),
     byNameLower: new Map(),
     fetchedAt: 1_000,
-  }),
+  })),
 }));
 
 vi.mock("../../jiraIssueLinkTypeCache.ts", async (importActual) => ({
@@ -105,6 +105,22 @@ vi.mock("../../jiraClient.ts", async (importActual) => ({
   jiraDelete: vi.fn(async () => ({})),
 }));
 
+import {
+  BIG_ISSUES,
+  JQL_BIG,
+  JQL_FIELDS,
+  JQL_PAGED,
+  JQL_RENDER,
+  PAGED_SEARCH_BODIES,
+  fieldsSearchPayload,
+  fixtureFieldMap,
+  jiraReadAnswer,
+  pagedSearchPayload,
+  projectsLookupPayload,
+  renderSearchPayload,
+  usersLookupPayload,
+} from "../../test/jiraReadFixtures.ts";
+
 // Importing jiraTools also registers the "jiraIssue" approval executor.
 const {
   assistantJiraTools,
@@ -121,6 +137,10 @@ const {
 } = await import("../../pendingApprovals.ts");
 const { jiraGet, jiraPost, jiraPut, jiraDelete } =
   await import("../../jiraClient.ts");
+const { getJiraFieldMap } = await import("../../jiraFieldCache.ts");
+const defaultGetJiraFieldMap = vi
+  .mocked(getJiraFieldMap)
+  .getMockImplementation()!;
 const defaultJiraGet = vi.mocked(jiraGet).getMockImplementation()!;
 const defaultJiraPost = vi.mocked(jiraPost).getMockImplementation()!;
 const defaultJiraPut = vi.mocked(jiraPut).getMockImplementation()!;
@@ -1712,5 +1732,141 @@ describe("jira_mutate_issue sprint", () => {
     expect(item.warning).toMatch(/kept the sprint's end unchanged/);
     expect(item.sprint?.result?.name).toBe("STAR Sprint 25b");
     expect(card.resultSummary).toContain("1 warning(s)");
+  });
+});
+
+/**
+ * Characterization of the local search and lookup payloads (Task-1439),
+ * written before the read path moved to shared modules: the edge's tools
+ * answer the same text from the same fixtures (`test/jiraReadFixtures.ts`).
+ */
+describe("jira_search_issues and jira_lookup payloads", () => {
+  const HOST = "example.atlassian.net";
+  const searchTool = assistantJiraTools.find(
+    (tool) => tool.name === "jira_search_issues",
+  )!;
+  const posts: unknown[] = [];
+
+  function answerFromFixtures() {
+    posts.length = 0;
+    vi.mocked(getJiraFieldMap).mockImplementation(
+      async () => fixtureFieldMap(1_000) as never,
+    );
+    vi.mocked(jiraGet).mockImplementation(async (_config, path, query) => {
+      const answer = jiraReadAnswer("GET", path, query ?? {}, undefined);
+      if (answer === undefined) throw new Error(`unexpected GET ${path}`);
+      return answer as never;
+    });
+    vi.mocked(jiraPost).mockImplementation(async (_config, path, body) => {
+      posts.push(body);
+      const answer = jiraReadAnswer("POST", path, {}, body);
+      if (answer === undefined) throw new Error(`unexpected POST ${path}`);
+      return answer as never;
+    });
+  }
+
+  function textOf(result: Awaited<ReturnType<typeof runLookup>>): string {
+    return result.content?.[0]?.type === "text" ? result.content[0].text : "";
+  }
+
+  function runSearch(params: Record<string, unknown>) {
+    return searchTool.execute(params as never, {} as never);
+  }
+
+  afterEach(() => {
+    restoreJiraMocks();
+    vi.mocked(getJiraFieldMap).mockImplementation(defaultGetJiraFieldMap);
+  });
+
+  test("a compact search pages past startAt and reports where to go on", async () => {
+    answerFromFixtures();
+    const result = await runSearch({
+      jql: JQL_PAGED,
+      maxResults: 3,
+      startAt: 2,
+    });
+    const expected = pagedSearchPayload(HOST);
+    expect(textOf(result)).toBe(JSON.stringify(expected));
+    expect(result.details).toEqual(expected);
+    expect(posts).toEqual(
+      PAGED_SEARCH_BODIES.map((body) => ({
+        nextPageToken: undefined,
+        ...body,
+      })),
+    );
+  });
+
+  test("a rendered search returns columns, render fields and descriptions", async () => {
+    answerFromFixtures();
+    const result = await runSearch({
+      jql: JQL_RENDER,
+      maxResults: 1,
+      render: true,
+      renderFields: ["key", "summary", "Story Points"],
+    });
+    expect(textOf(result)).toBe(JSON.stringify(renderSearchPayload(HOST)));
+  });
+
+  test("named fields resolve through the field map; unknown names are reported", async () => {
+    answerFromFixtures();
+    const result = await runSearch({
+      jql: JQL_FIELDS,
+      maxResults: 1,
+      fields: ["summary", "Story Points", "Sprint", "No Such Field"],
+    });
+    expect(textOf(result)).toBe(JSON.stringify(fieldsSearchPayload(HOST)));
+  });
+
+  test("a thousand compact rows come back whole, past 60,000 characters", async () => {
+    answerFromFixtures();
+    const result = await runSearch({ jql: JQL_BIG, maxResults: 1000 });
+    const text = textOf(result);
+    expect(text.length).toBeGreaterThan(60_000);
+    const payload = JSON.parse(text) as {
+      returned: number;
+      exhausted: boolean;
+    };
+    expect(payload.returned).toBe(BIG_ISSUES);
+    expect(payload.exhausted).toBe(true);
+  });
+
+  test("kind=projects lists the projects Jira returned", async () => {
+    answerFromFixtures();
+    const result = await runLookup({
+      kind: "projects",
+      query: "op",
+      maxResults: 2,
+    });
+    expect(textOf(result)).toBe(JSON.stringify(projectsLookupPayload(HOST)));
+  });
+
+  test("kind=users lists the users Jira returned", async () => {
+    answerFromFixtures();
+    const result = await runLookup({
+      kind: "users",
+      query: "ada",
+      maxResults: 2,
+    });
+    expect(textOf(result)).toBe(JSON.stringify(usersLookupPayload(HOST)));
+  });
+
+  test("input refusals keep their texts", async () => {
+    answerFromFixtures();
+    await expect(
+      runLookup({ kind: "users", assignableOnly: true }),
+    ).rejects.toThrow(/^projectKey is required when assignableOnly=true\.$/);
+    await expect(runLookup({ kind: "sprints", boardId: -1 })).rejects.toThrow(
+      /^kind=sprints boardId must be a positive integer\.$/,
+    );
+    await expect(runLookup({ kind: "sprints" })).rejects.toThrow(
+      /^kind=sprints requires boardId or projectKey\.$/,
+    );
+    await expect(runSearch({ jql: "  ", maxResults: 1 })).rejects.toThrow(
+      /^jql must not be empty\.$/,
+    );
+    await expect(
+      runSearch({ jql: "x".repeat(5001), maxResults: 1 }),
+    ).rejects.toThrow(/^jql is too long\.$/);
+    expect(posts).toEqual([]);
   });
 });
