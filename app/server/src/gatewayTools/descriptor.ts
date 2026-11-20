@@ -12,6 +12,7 @@
  * and are sanitized and capped. They may quote the user's JQL, field names or
  * a URL Jira chose to mention.
  */
+import type { SlackAccessView } from "./slack.ts";
 
 /** An API token the user set for their site. */
 export interface AtlassianTokenCredential {
@@ -78,26 +79,49 @@ export interface ObjectSchema {
   additionalProperties: false;
 }
 
-interface ToolContext {
+interface ToolContext<C> {
   /** The calling user's credential, read from the vault for this call. */
-  credential(): Promise<AtlassianCredential>;
+  credential(): Promise<C>;
   /** Aborts at the host's deadline or when the caller goes away. */
   signal: AbortSignal;
 }
 
-export interface ToolDescriptor {
+interface ToolDescriptorBase {
   name: string;
   description: string;
   inputSchema: ObjectSchema;
   effect: "read" | "write";
   /** The approval key a later gateway-side policy decides by (G5). */
   actionKey: string;
-  integration: "atlassian";
   /** The JSON result's limit; 60,000 characters unless given. */
   maxResultChars?: number;
-  /** Answers a JSON-serializable result; params passed the schema. */
-  execute(params: Record<string, unknown>, ctx: ToolContext): Promise<unknown>;
 }
+
+/** A tool run with the user's Atlassian credential. */
+export type AtlassianToolDescriptor = ToolDescriptorBase & {
+  integration: "atlassian";
+  /** Answers a JSON-serializable result; params passed the schema. */
+  execute(
+    params: Record<string, unknown>,
+    ctx: ToolContext<AtlassianCredential>,
+  ): Promise<unknown>;
+};
+
+/** A tool run with the user's Slack access view (Task-1454). */
+export type SlackToolDescriptor = ToolDescriptorBase & {
+  integration: "slack";
+  /** Answers a JSON-serializable result; params passed the schema. */
+  execute(
+    params: Record<string, unknown>,
+    ctx: ToolContext<SlackAccessView>,
+  ): Promise<unknown>;
+};
+
+/**
+ * One edge tool. `integration` selects the credential its `execute` gets, so
+ * the host's dispatch is typed per integration without casts.
+ */
+export type ToolDescriptor = AtlassianToolDescriptor | SlackToolDescriptor;
 
 /** A failure whose fixed, edge-owned text the caller sees. */
 export class ToolError extends Error {}

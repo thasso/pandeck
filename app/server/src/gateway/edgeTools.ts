@@ -20,7 +20,7 @@ interface McpCaller {
   clientId: string;
   /** Asks the vault on every call and keeps nothing; never rejects. */
   credential(
-    integration: "atlassian",
+    integration: "atlassian" | "slack",
     signal: AbortSignal,
   ): Promise<CredentialOutcome>;
 }

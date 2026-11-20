@@ -677,7 +677,7 @@ export async function startClientListener(
   const vaultCredential =
     (client: GatewayClient) =>
     (
-      integration: "atlassian",
+      integration: "atlassian" | "slack",
       signal: AbortSignal,
     ): Promise<CredentialOutcome> =>
       deps.vault
