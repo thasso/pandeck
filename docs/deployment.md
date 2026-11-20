@@ -234,6 +234,16 @@ stylesheet and points its separately bundled sync-XHR worker at that root. JSDOM
 launches that worker with `process.execPath`, which is the packaged Bun runtime
 in this package; Pandeck's current JSDOM use does not issue synchronous XHR.
 
+pi-coding-agent reads its name and version from the `package.json` it finds by
+walking up from its own file. In the package that walk starts beside `server.js`
+and finds Pandeck's, so pi reported Pandeck's version, sent it to pi.dev in its
+User-Agent, and pi.dev, which serves model catalogs by client version, answered
+404: production offered only pi's built-in models ([Task-1466](pa://task/1466)).
+The shared bundle plugins (every entry, so `server.js`, `codex-renew.js` and
+`codex-login.js` alike) replace that read in pi's `dist/config.js` with pi's own
+`package.json` imported at build time, and fail the build if the loader changes.
+pi's install-change detection stays off: no file on disk is pi's `package.json`.
+
 The package's install check boots from an unrelated temporary cwd and data
 directory, with a fresh temporary `HOME`, so the server's one-time home
 transcript import never reads the real home and its first boot records an empty
@@ -360,22 +370,26 @@ the bundle does not have, so `piSdk/models.ts` registers the statically imported
 flows (`@earendil-works/pi-ai/bun-oauth`); the probe derives `openai-codex` auth
 from a ChatGPT credential the check seeds in its data directory, which fails the
 way production did — every subscription model — if that registration is lost.
-The check itself exercises each adapter behavior above directly. It also
-compiles and runs a Photon probe so the WASM path is covered inside a compiled
-Bun executable. The probe lays out a small Initiative map through the packaged
-layout worker, which covers elkjs under Bun (below). In broker mode it starts
-the server's credential gateway link as `ASSISTANT_GATEWAY=1` does: its control
-endpoint must refuse a worker-protocol dialer, a granted engine lease must reach
-a loopback fake ChatGPT upstream with the seeded credential, `leases.json` must
-be 0600 in a 0700 directory without the token, and a gateway restarted without
-control must still forward that lease and refuse a revoked one. It then runs the
-one-time home transcript import (`docs/credential-distribution.md`) on injected
-scratch directories, over one unit with an `<id>/` tree, starting from a
-manifest whose last record is torn: the run must end `done` with the tail cut,
-installed files whose size and sha256 match the manifest, no staging left, and
-its space preflight reported as `statfs` or the fallback; a second run must
-answer `already-done`, its startup gate must let that boot through, and an
-unreadable import state must make the gate refuse with its operator line.
+The check runs the probe beside a copy of the package's `package.json`, as
+`server.js` runs. The probe forces a catalog refresh against a stubbed `fetch`,
+and every pi.dev request must carry `pi/<version>` with the version from pi's
+own `package.json`; without the bundle patch it carries Pandeck's. The check
+itself exercises each adapter behavior above directly. It also compiles and runs
+a Photon probe so the WASM path is covered inside a compiled Bun executable. The
+probe lays out a small Initiative map through the packaged layout worker, which
+covers elkjs under Bun (below). In broker mode it starts the server's credential
+gateway link as `ASSISTANT_GATEWAY=1` does: its control endpoint must refuse a
+worker-protocol dialer, a granted engine lease must reach a loopback fake
+ChatGPT upstream with the seeded credential, `leases.json` must be 0600 in a
+0700 directory without the token, and a gateway restarted without control must
+still forward that lease and refuse a revoked one. It then runs the one-time
+home transcript import (`docs/credential-distribution.md`) on injected scratch
+directories, over one unit with an `<id>/` tree, starting from a manifest whose
+last record is torn: the run must end `done` with the tail cut, installed files
+whose size and sha256 match the manifest, no staging left, and its space
+preflight reported as `statfs` or the fallback; a second run must answer
+`already-done`, its startup gate must let that boot through, and an unreadable
+import state must make the gate refuse with its operator line.
 `checkProcessState` then reads its own child's start time under Bun and sees
 that child running, then exited once it is killed, which login holds rely on. It
 then starts the packaged `pandeck-gateway` on a temporary `DATA_DIR`

@@ -4444,6 +4444,41 @@ async function checkPiOAuthFlows() {
 }
 
 /**
+ * pi.dev serves model catalogs by the client version in pi's User-Agent and
+ * answers 404 to a version it does not know. pi reads that version from the
+ * package.json above its own file; bundled, that walk found Pandeck's, which
+ * sits beside `server.js` and, in the install check, beside this probe. The
+ * bundle inlines pi's own (`inline-pi-package-json`), so the catalog request a
+ * forced refresh sends must name pi's version, which the check passes in.
+ */
+async function checkPiCatalogUserAgent() {
+  const expected = process.env.PA_PROBE_PI_VERSION;
+  assert(expected, "The check did not pass pi's version.");
+  const runtime = await modelRuntimeForProfile();
+  const agents = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(
+      input instanceof globalThis.Request ? input.url : input,
+    );
+    if (url.host === "pi.dev")
+      agents.push(new globalThis.Headers(init?.headers).get("user-agent"));
+    return new globalThis.Response("", { status: 404 });
+  };
+  try {
+    await runtime.refresh({ force: true });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert(agents.length > 0, "pi's forced refresh asked pi.dev for no catalog.");
+  for (const agent of agents)
+    assert(
+      agent?.startsWith(`pi/${expected} `),
+      `pi asked pi.dev for its catalog as ${JSON.stringify(agent)}, not pi/${expected}: pi.dev refuses that version.`,
+    );
+}
+
+/**
  * elkjs's worker script takes its web-worker path wherever `self` exists, and
  * Bun defines it, so `new ELK()` threw under Bun. The bundled layout worker
  * hides `self` in its own thread; this lays out a small map through it, with
@@ -5012,6 +5047,7 @@ await checkWatcher();
 if (mode === "broker") {
   checkSqlite();
   checkSyncSpawnEnvironment();
+  await checkPiCatalogUserAgent();
   await checkPiOAuthFlows();
   await checkInitiativeLayout();
   await checkGatewayLink();
