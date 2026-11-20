@@ -2667,8 +2667,10 @@ writes no answer, no second record and contacts no upstream.
 #### Tools on the edge
 
 The edge runs integration tools for its clients' users (Task-1397, M22): a tool
-host and a standalone MCP endpoint, and three Jira read tools: `jira_get_issue`,
-plus `jira_search_issues` and `jira_lookup` (Task-1439).
+host and a standalone MCP endpoint, three Jira read tools: `jira_get_issue`,
+plus `jira_search_issues` and `jira_lookup` (Task-1439), and four Slack read
+tools: `slack_search`, `slack_conversation_read`, `slack_thread_read` and
+`slack_unread` (Task-1454).
 
 - **Host** (`gatewayTools/`, loaded only by the edge's composition
   `gatewayEdge.ts`, which both edge entries run): one module per tool
@@ -2714,6 +2716,32 @@ plus `jira_search_issues` and `jira_lookup` (Task-1439).
   part of Jira's body reaches the caller. Over OAuth, `jira_lookup kind=sprints`
   needs Jira Software scopes the gateway does not ask for yet, so Jira refuses
   it until they are added (Task-1439 D3).
+- **Slack reads** (Task-1454). The four tools run the same read path as the
+  local ones (`slackRead.ts` with `slackMetadataCache.ts` beside `tools/slack/`,
+  which wraps them) with the same schema and description objects, action key
+  `slack:read`, and the Slack access view the vault answers for the calling user
+  (Task-1452). The token goes only to `https://slack.com/api/<method>` as
+  `Authorization: Bearer`, redirects refused. Dates and times use the user's
+  Slack profile zone (`users.info`), UTC when the profile has none; listings
+  default to 20 results. Metadata (users, conversations, user groups) is cached
+  in process memory per `teamId:userId` from the vault's view, never from input:
+  an entry answers for 5 minutes, and a bundle is dropped on the first cache
+  access after it expires or when a 33rd Slack user evicts the least recently
+  used one (at most 10,000 users each). Never on disk, never logged.
+  `slack_unread` reuses the caller's conversation list for 60 s (local: never),
+  so an unread call within a minute of a list fetch may show read markers that
+  have since moved. Slack counts rate limits per app, method and workspace, so
+  every gateway user shares the gateway app's budget (`conversations.list` is
+  Tier 2); a second user's `slack_unread` within a minute can be refused.
+  Failures are fixed texts holding no input, Slack code or body: input refusals
+  use the local wording without the value, ambiguity names no candidate, a
+  rejected token (`invalid_auth`, `token_revoked`, …) is the reconnect text,
+  `missing_scope`, a missing conversation or thread each have their own text, a
+  rate limit names the method and, from a valid `retry-after`, the seconds
+  ("Slack is rate-limiting conversations.list; retry after 30 seconds."),
+  otherwise "Slack refused `<method>`.", "Slack answered HTTP `<status>`." or
+  "Slack's answer could not be read." As for Jira (D5), a result over 60,000
+  characters answers `result_too_large`.
 - **`/mcp`** on the model port, reached by a harness through the box's relay at
   `http://127.0.0.1:<relay port>/mcp`: stateless Streamable HTTP with JSON
   responses, one fresh SDK server and transport per POST. The gate needs the

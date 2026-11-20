@@ -13,6 +13,20 @@ import {
 import { createEdgeTools } from "./index.ts";
 import { jiraLookup } from "./jiraLookup.ts";
 import { jiraSearchIssues } from "./jiraSearchIssues.ts";
+import {
+  SLACK_CONVERSATION_READ_DESCRIPTION,
+  SLACK_SEARCH_DESCRIPTION,
+  SLACK_THREAD_READ_DESCRIPTION,
+  SLACK_UNREAD_DESCRIPTION,
+  slackConversationReadParamsSchema,
+  slackSearchParamsSchema,
+  slackThreadReadParamsSchema,
+  slackUnreadParamsSchema,
+} from "../slackRead.ts";
+import { slackConversationRead } from "./slackConversationRead.ts";
+import { slackSearch } from "./slackSearch.ts";
+import { slackThreadRead } from "./slackThreadRead.ts";
+import { slackUnread } from "./slackUnread.ts";
 import { EDGE_TOOLS } from "./tools.ts";
 
 test("every edge tool's descriptor is within the client's bounds", () => {
@@ -30,7 +44,7 @@ test("every edge tool's descriptor is within the client's bounds", () => {
     assert.equal(tool.inputSchema.type, "object");
     assert.ok(JSON.stringify(tool.inputSchema).length <= 4_096, tool.name);
     // The prefix names the product Pandeck maps the tool to.
-    assert.match(tool.actionKey, /^(jira):[a-z_]{1,32}$/, tool.name);
+    assert.match(tool.actionKey, /^(jira|slack):[a-z_]{1,32}$/, tool.name);
   }
 });
 
@@ -38,7 +52,15 @@ test("the edge's tools offer the host's listing", () => {
   const listed = createEdgeTools({ log: () => {} }).host.list();
   assert.deepEqual(
     listed.map((tool) => tool.name),
-    ["jira_get_issue", "jira_search_issues", "jira_lookup"],
+    [
+      "jira_get_issue",
+      "jira_search_issues",
+      "jira_lookup",
+      "slack_search",
+      "slack_conversation_read",
+      "slack_thread_read",
+      "slack_unread",
+    ],
   );
   assert.deepEqual(
     listed.map((tool) => tool.name),
@@ -57,4 +79,28 @@ test("search and lookup share the local tools' schema and description objects", 
   assert.ok(jiraSearchIssues.description === JIRA_SEARCH_ISSUES_DESCRIPTION);
   assert.ok(jiraLookup.inputSchema === lookupParamsSchema);
   assert.ok(jiraLookup.description === JIRA_LOOKUP_DESCRIPTION);
+});
+
+test("the Slack tools share the local tools' schema and description objects", () => {
+  const pairs = [
+    [slackSearch, slackSearchParamsSchema, SLACK_SEARCH_DESCRIPTION],
+    [
+      slackConversationRead,
+      slackConversationReadParamsSchema,
+      SLACK_CONVERSATION_READ_DESCRIPTION,
+    ],
+    [
+      slackThreadRead,
+      slackThreadReadParamsSchema,
+      SLACK_THREAD_READ_DESCRIPTION,
+    ],
+    [slackUnread, slackUnreadParamsSchema, SLACK_UNREAD_DESCRIPTION],
+  ] as const;
+  for (const [tool, schema, description] of pairs) {
+    assert.ok(tool.inputSchema === schema, tool.name);
+    assert.ok(tool.description === description, tool.name);
+    assert.equal(tool.effect, "read");
+    assert.equal(tool.actionKey, "slack:read");
+    assert.equal(tool.integration, "slack");
+  }
 });

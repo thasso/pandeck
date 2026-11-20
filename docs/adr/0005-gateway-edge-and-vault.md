@@ -134,6 +134,9 @@ on the edge"):
 - An Atlassian OAuth access token goes only to
   `https://api.atlassian.com/ex/<product>/ <cloudId>` with a site-relative path,
   checked before the request; the site makes only browse URLs.
+- A Slack user access token goes only to `https://slack.com/api/<method>` for
+  the edge's read methods (Task-1454), as `Authorization: Bearer`, redirects
+  refused.
 - The gateway hands tools typed credential outcomes and never builds a tool
   error; only fixed, edge-owned tool texts reach a caller. The single exception
   (Task-1439 D4, amended 2026-11-19): Jira's own `errorMessages` and `errors`
