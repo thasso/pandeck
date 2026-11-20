@@ -56,6 +56,16 @@ pub fn log_file(app: &AppHandle) -> Option<PathBuf> {
     app.path().app_log_dir().ok().map(|dir| dir.join("server.log"))
 }
 
+/// The running server's URL. None while one is starting or none runs.
+pub fn running_url() -> Option<String> {
+    let mut running = RUNNING.try_lock().ok()?;
+    let current = running.as_mut()?;
+    match current.child.try_wait() {
+        Ok(None) => Some(current.url.clone()),
+        _ => None,
+    }
+}
+
 /// Why the last start failed, for the recovery page.
 pub fn last_error() -> Option<String> {
     LAST_ERROR.lock().ok().and_then(|error| error.clone())

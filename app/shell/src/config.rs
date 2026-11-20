@@ -232,6 +232,12 @@ pub fn local_mode(app: &AppHandle) -> bool {
     is_local(app, &load(app))
 }
 
+/// The stored remote choice, whatever the current mode.
+#[cfg(desktop)]
+pub fn remote_server_url(app: &AppHandle) -> Option<String> {
+    load(app).server_url
+}
+
 #[cfg(desktop)]
 pub fn local_port(app: &AppHandle) -> Option<u16> {
     load(app).local_port

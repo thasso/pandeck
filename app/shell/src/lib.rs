@@ -493,6 +493,14 @@ fn set_server_url(
     forwards: State<'_, port_forward::PortForwardManager>,
     url: String,
 ) -> Result<String, String> {
+    // Choosing the bundled server's own address is not a switch to remote:
+    // that would stop the very server it names.
+    #[cfg(desktop)]
+    if let Some(local) = local_server::running_url() {
+        if server_url::normalize_server(&url).as_deref() == Ok(local.as_str()) {
+            return Ok(local);
+        }
+    }
     let normalized = config::set_server_url(&app, &url)?;
     forwards.stop_all();
     // A remote choice retires the bundled server; off the main thread, since
@@ -515,6 +523,8 @@ struct LocalServerInfo {
     error: Option<String>,
     /// Where its output goes.
     log: Option<String>,
+    /// The last remote server chosen, to offer instead of the local address.
+    remote_url: Option<String>,
 }
 
 #[cfg(desktop)]
@@ -525,6 +535,7 @@ fn local_server_info(app: AppHandle) -> LocalServerInfo {
         selected: config::local_mode(&app),
         error: local_server::last_error(),
         log: local_server::log_file(&app).map(|path| path.display().to_string()),
+        remote_url: config::remote_server_url(&app),
     }
 }
 

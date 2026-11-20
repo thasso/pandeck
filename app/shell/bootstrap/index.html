@@ -232,7 +232,9 @@
             el("run-local").hidden = !local?.available;
             const url = await invoke("get_server_url");
             if (location.hash === "#choose") {
-              fail(url, "");
+              // Offer the remote server to switch to, not the local one
+              // already in use.
+              fail(local?.selected ? (local.remoteUrl ?? "") : url, "");
               el("title").textContent = "Choose a server";
             } else if (local?.selected && local.error) fail(url, local.error);
             else connect(url);
