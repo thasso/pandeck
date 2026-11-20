@@ -23,6 +23,8 @@ vi.mock("./config.ts", async (importActual) => {
 });
 
 const { DATA_DIR } = await import("./config.ts");
+const { installRemoteIntegrationPort } =
+  await import("./remoteIntegrations.ts");
 const {
   createSlackOAuthStartUrl,
   getSlackPublicApiConfig,
@@ -64,10 +66,74 @@ test("browser settings expose only end-user connection flags", () => {
   assert.deepEqual(Object.keys(getSlackSettings()).sort(), [
     "botTokenConfigured",
     "connected",
+    "credentialStore",
     "enabled",
     "oauthClientConfigured",
     "userTokenConfigured",
   ]);
+});
+
+test("without a credential gateway Slack's credentials are local", () => {
+  assert.equal(getSlackSettings().credentialStore, "local");
+});
+
+/** Client mode for `run`: a remote integration port no test calls. */
+async function inClientMode(run: () => Promise<void>): Promise<void> {
+  const unused = () => Promise.reject(new Error("unused"));
+  const uninstall = installRemoteIntegrationPort({
+    set: unused,
+    clear: unused,
+    status: unused,
+  });
+  try {
+    await run();
+  } finally {
+    uninstall();
+  }
+}
+
+test("client mode: the connection test calls no Slack, even with old local tokens", async () => {
+  updateSlackSettings({
+    enabled: true,
+    userToken: "xoxp-stale",
+    botToken: "xoxb-stale",
+  });
+  const fetchSpy = vi.fn(async () => new Response("{}"));
+  globalThis.fetch = fetchSpy as unknown as typeof fetch;
+  await inClientMode(async () => {
+    assert.equal(getSlackSettings().credentialStore, "gateway");
+    const on = await testSlackSettings();
+    assert.equal(on.ok, true);
+    assert.equal(
+      on.message,
+      "Slack tools are on. They run on your credential gateway; this machine does not check the Slack connection.",
+    );
+
+    updateSlackSettings({ enabled: false });
+    const off = await testSlackSettings();
+    assert.equal(off.ok, false);
+    assert.equal(off.message, "Slack is disabled.");
+  });
+  assert.equal(fetchSpy.mock.calls.length, 0);
+});
+
+test("outside client mode the connection test still checks the stored tokens", async () => {
+  updateSlackSettings({
+    enabled: true,
+    userToken: "xoxp-stale",
+    botToken: "xoxb-stale",
+  });
+  const fetchSpy = vi.fn(
+    async (_url: string | URL | Request) =>
+      new Response(JSON.stringify({ ok: false })),
+  );
+  globalThis.fetch = fetchSpy as unknown as typeof fetch;
+  await testSlackSettings();
+  assert.ok(
+    fetchSpy.mock.calls.some(
+      ([url]) => String(url) === "https://slack.com/api/auth.test",
+    ),
+  );
 });
 
 test("Slack API projections select the personal or bot OAuth token", () => {

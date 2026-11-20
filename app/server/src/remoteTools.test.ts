@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { afterEach, test, vi } from "vitest";
 import { GatewayUnavailableError } from "./gatewayLink.ts";
 import { subscribeIntegrationToolChanges } from "./integrationToolChanges.ts";
+import { updateJiraSettings } from "./jiraSettings.ts";
 import {
   acceptRemoteTools,
   applyListing,
@@ -14,9 +15,21 @@ import {
   knownRemoteTools,
   markDisconnected,
   remoteToolDispatchable,
+  remoteToolGate,
   remoteToolsConnected,
   remoteToolsReady,
 } from "./remoteTools.ts";
+import {
+  SLACK_CONVERSATION_READ_DESCRIPTION,
+  SLACK_SEARCH_DESCRIPTION,
+  SLACK_THREAD_READ_DESCRIPTION,
+  SLACK_UNREAD_DESCRIPTION,
+  slackConversationReadParamsSchema,
+  slackSearchParamsSchema,
+  slackThreadReadParamsSchema,
+  slackUnreadParamsSchema,
+} from "./slackRead.ts";
+import { updateSlackSettings } from "./slackSettings.ts";
 
 /** `jira_get_issue` as the edge lists it (`gatewayTools/jiraGetIssue.ts`). */
 const JIRA_GET_ISSUE = {
@@ -57,6 +70,28 @@ const JIRA_GET_ISSUE = {
   actionKey: "jira:read",
 };
 
+/** The edge's four Slack reads as it lists them (`gatewayTools/slack*.ts`). */
+const SLACK_READS = [
+  ["slack_search", SLACK_SEARCH_DESCRIPTION, slackSearchParamsSchema],
+  [
+    "slack_conversation_read",
+    SLACK_CONVERSATION_READ_DESCRIPTION,
+    slackConversationReadParamsSchema,
+  ],
+  [
+    "slack_thread_read",
+    SLACK_THREAD_READ_DESCRIPTION,
+    slackThreadReadParamsSchema,
+  ],
+  ["slack_unread", SLACK_UNREAD_DESCRIPTION, slackUnreadParamsSchema],
+].map(([name, description, inputSchema]) => ({
+  name,
+  description,
+  inputSchema,
+  effect: "read",
+  actionKey: "slack:read",
+}));
+
 const tool = (overrides: Record<string, unknown>) => ({
   ...JIRA_GET_ISSUE,
   ...overrides,
@@ -80,6 +115,48 @@ test("the real jira_get_issue descriptor is accepted as listed", () => {
   ]);
 });
 
+test("the edge's four real Slack descriptors are accepted as listed", () => {
+  // Their descriptions and schemas are within the client's bounds as shipped.
+  assert.deepEqual(
+    acceptRemoteTools(SLACK_READS),
+    SLACK_READS.map((read) => ({ ...read, product: "slack" })),
+  );
+});
+
+test("each product's tools follow its own Settings toggle", async () => {
+  install();
+  applyListing(acceptRemoteTools([JIRA_GET_ISSUE, ...SLACK_READS]));
+  assert.deepEqual(
+    knownRemoteTools("slack").map((t) => t.name),
+    [
+      "slack_search",
+      "slack_conversation_read",
+      "slack_thread_read",
+      "slack_unread",
+    ],
+  );
+  assert.deepEqual(
+    knownRemoteTools("jira").map((t) => t.name),
+    ["jira_get_issue"],
+  );
+
+  updateSlackSettings({ enabled: true });
+  await updateJiraSettings({ enabled: false });
+  assert.equal(remoteToolDispatchable("slack_search"), true);
+  assert.equal(remoteToolDispatchable("jira_get_issue"), false);
+  assert.equal(remoteToolGate("slack"), true);
+  assert.equal(remoteToolGate("jira"), false);
+
+  updateSlackSettings({ enabled: false });
+  await updateJiraSettings({ enabled: true });
+  assert.equal(remoteToolDispatchable("slack_search"), false);
+  assert.equal(remoteToolDispatchable("jira_get_issue"), true);
+  assert.equal(remoteToolGate("slack"), false);
+  assert.equal(remoteToolGate("jira"), true);
+
+  await updateJiraSettings({ enabled: false });
+});
+
 test("only bounded read tools of a mapped product are accepted", () => {
   const rejected = [
     tool({ name: "jira_write", effect: "write" }),
@@ -92,9 +169,11 @@ test("only bounded read tools of a mapped product are accepted", () => {
     }),
     tool({ name: "jira_array", inputSchema: { type: "array" } }),
     tool({ name: "jira_list", inputSchema: [] }),
+    // Unmapped products stay out, however the prefix is spelled.
     tool({ name: "confluence_page", actionKey: "confluence:read" }),
-    // The edge lists Slack's reads (Task-1454); client mode maps none yet.
-    tool({ name: "slack_search", actionKey: "slack:read" }),
+    tool({ name: "inherited_read", actionKey: "constructor:read" }),
+    tool({ name: "slack_upper", actionKey: "Slack:read" }),
+    tool({ name: "slack_write", actionKey: "slack:read", effect: "write" }),
     tool({ name: "jira_no_key", actionKey: undefined }),
     "jira_get_issue",
     null,

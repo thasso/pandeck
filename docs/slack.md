@@ -50,6 +50,21 @@ bot credentials. Integration enable changes push MCP `tools/list_changed`, so
 live pi and Claude sessions reconcile their active tool lists without
 restarting.
 
+In gateway client mode (Task-1455, `docs/workers.md` "Client mode") the agents'
+Slack tools are the gateway's: the catalog's `gateway-slack` group, gated by
+`gatewaySlack` (the gateway is connected and Slack is `enabled`), replaces the
+local group. The gateway offers `slack_search`, `slack_conversation_read`,
+`slack_thread_read` and `slack_unread`, run with the Slack account the user
+connected with "Sign in with Slack" on the gateway's page; `slack_file_read` is
+absent until Task-1441. Settings → Slack then shows a client-mode panel: the
+"Use Slack" toggle without a local sign-in or connection badge, and a line
+saying the connection shows on the gateway's page. Its connection test calls no
+Slack API: it answers "Slack is disabled." while off and, while on, that the
+tools run on the gateway and this machine does not check the connection. Old
+local Slack tokens stay stored and unread by the agent tools. Socket Mode, the
+message-shortcut intake and the Slack Assistant conversation still use the local
+app configuration and tokens, unchanged.
+
 ## OAuth and Socket Mode setup
 
 Configure the Slack app with:

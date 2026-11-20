@@ -79,7 +79,7 @@ import { assistantGoogleGmailTools } from "./google/googleGmailTools.ts";
 import { assistantGoogleMeetTools } from "./google/googleMeetTools.ts";
 import { assistantConfluenceTools } from "./confluence/confluenceTools.ts";
 import { assistantJiraTools } from "./jira/jiraTools.ts";
-import { remoteJiraTools } from "./gateway/remoteToolGroup.ts";
+import { remoteToolsFor } from "./gateway/remoteToolGroup.ts";
 import { remoteToolPort } from "../remoteTools.ts";
 import { assistantAttachmentTools } from "./knowledge/attachmentTools.ts";
 import { assistantDocumentTools } from "./knowledge/documentTools.ts";
@@ -611,7 +611,7 @@ function commonToolGroups(agentType: AgentType): UnclassifiedToolGroup[] {
           loading: "deferred",
           family: "integration",
           gate: "gatewayJira",
-          tools: remoteJiraTools(),
+          tools: remoteToolsFor("jira"),
           remote: true,
         }
       : {
@@ -687,16 +687,31 @@ function commonToolGroups(agentType: AgentType): UnclassifiedToolGroup[] {
       gate: "google",
       tools: assistantGoogleMeetTools,
     },
-    {
-      id: "slack",
-      label: "Slack",
-      description:
-        "Slack: search messages, read conversations/threads/files, and aggregate unreads.",
-      loading: "deferred",
-      family: "integration",
-      gate: "slack",
-      tools: assistantSlackTools,
-    },
+    // Client mode: Slack runs on the gateway, which lists its tools.
+    remoteToolPort()
+      ? {
+          id: "gateway-slack",
+          label: "Slack (gateway)",
+          description:
+            "Slack messages read through the user's credential gateway with the user's own Slack account.",
+          searchHint:
+            "slack message channel conversation thread unread dm gateway",
+          loading: "deferred",
+          family: "integration",
+          gate: "gatewaySlack",
+          tools: remoteToolsFor("slack"),
+          remote: true,
+        }
+      : {
+          id: "slack",
+          label: "Slack",
+          description:
+            "Slack: search messages, read conversations/threads/files, and aggregate unreads.",
+          loading: "deferred",
+          family: "integration",
+          gate: "slack",
+          tools: assistantSlackTools,
+        },
     {
       id: "github-repositories",
       label: "GitHub repositories",

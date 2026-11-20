@@ -135,6 +135,7 @@ export const settingsFixture: AppSettings = {
     userTokenConfigured: true,
     botTokenConfigured: true,
     connected: true,
+    credentialStore: "local",
   },
   brave: { enabled: true, apiKeyConfigured: true },
   context7: { enabled: true, apiKeyConfigured: true },

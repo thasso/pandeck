@@ -12,6 +12,7 @@ import {
   SLACK_STATIC_CONFIG,
 } from "./config.ts";
 import { createPrivateJsonFile } from "./privateJsonFile.ts";
+import { remoteIntegrationPort } from "./remoteIntegrations.ts";
 import { userTimeZone } from "./userProfile.ts";
 
 const SLACK_SETTINGS_PATH = join(DATA_DIR, "settings", "slack.json");
@@ -115,6 +116,8 @@ function publicSettings(settings: Required<typeof DEFAULTS>): SlackSettings {
     userTokenConfigured: Boolean(settings.userToken),
     botTokenConfigured: Boolean(settings.botToken),
     connected: Boolean(settings.userToken && settings.botToken),
+    // Client mode (Task-1455): the agents' Slack tools run on the gateway.
+    credentialStore: remoteIntegrationPort() ? "gateway" : "local",
   };
 }
 
@@ -367,6 +370,15 @@ export async function testSlackSettings(): Promise<SlackConnectionStatus> {
   const checkedAt = Date.now();
   if (!settings.enabled)
     return { ok: false, checkedAt, message: "Slack is disabled." };
+  // Client mode: the gateway holds the Slack connection, so nothing here
+  // calls Slack, and old local tokens stay unread.
+  if (remoteIntegrationPort())
+    return {
+      ok: true,
+      checkedAt,
+      message:
+        "Slack tools are on. They run on your credential gateway; this machine does not check the Slack connection.",
+    };
 
   const user = settings.userToken
     ? await testToken(settings.userToken).catch(() => ({ ok: false }))

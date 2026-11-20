@@ -312,6 +312,7 @@ const defaultSettings: AppSettings = {
     userTokenConfigured: false,
     botTokenConfigured: false,
     connected: false,
+    credentialStore: "local",
   },
   brave: {
     enabled: false,

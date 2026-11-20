@@ -40,6 +40,7 @@ const clientMode = () => {
 test("outside client mode an open does not wait", async () => {
   const started = await start();
   assert.equal(started.integrationGates.gatewayJira, false);
+  assert.equal(started.integrationGates.gatewaySlack, false);
 });
 
 test("an open before the first listing waits for it, and then sees its tools", async () => {

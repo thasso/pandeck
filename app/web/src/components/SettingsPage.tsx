@@ -3380,14 +3380,16 @@ function SlackSection({
   const [oauthStartedAt, setOauthStartedAt] = useState<number | null>(null);
   const oauthWindow = useRef<Window | null>(null);
   const connected = slack.connected;
+  const gateway = slack.credentialStore === "gateway";
 
   useEffect(() => setEnabled(slack.enabled), [slack.enabled]);
   const checkedOnOpen = useRef(false);
   useEffect(() => {
-    if (checkedOnOpen.current || !connected) return;
+    // Client mode: the gateway holds Slack; old local tokens are not checked.
+    if (checkedOnOpen.current || gateway || !connected) return;
     checkedOnOpen.current = true;
     onTestSlack();
-  }, [connected, onTestSlack]);
+  }, [connected, gateway, onTestSlack]);
   useEffect(() => {
     if (oauthStartedAt === null) return;
     const checkNow = () => {
@@ -3441,6 +3443,28 @@ function SlackSection({
     (!status || (oauthStartedAt !== null && status.checkedAt < oauthStartedAt));
   const healthy = connected && status?.ok === true && !checking;
   const warning = connected && status?.ok === false && !checking;
+
+  if (gateway)
+    return (
+      <div className="mx-auto max-w-xl px-6 py-8">
+        <SlackSettingsHeader
+          title="Slack"
+          subtitle="Slack is connected through your gateway's page: use Sign in with Slack there. Nothing is entered on this machine."
+        />
+        <SettingsCard className="mt-6">
+          <PreferenceToggle
+            label="Use Slack"
+            description="Allow the Assistant to use the Slack account you connected on your gateway."
+            checked={enabled}
+            ariaLabel="Enable Slack"
+            onChange={toggleEnabled}
+          />
+          <div className="text-sm text-muted-foreground">
+            Whether Slack is connected shows on your gateway's page.
+          </div>
+        </SettingsCard>
+      </div>
+    );
 
   return (
     <div className="mx-auto max-w-xl px-6 py-8">

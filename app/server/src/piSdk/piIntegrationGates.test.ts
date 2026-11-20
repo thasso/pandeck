@@ -427,7 +427,7 @@ test("a normal Settings save of the raw browser MCP switch reaches a live develo
   }
 });
 
-test("client mode: the gateway's Jira tool is in a pi universe, gated by connection, and refused before dispatch once disconnected", async () => {
+test("client mode: the gateway's Jira and Slack tools are in a pi universe, gated by connection and their toggles, and refused before dispatch once disconnected", async () => {
   const calls: string[] = [];
   const uninstall = remoteTools.installRemoteToolPort({
     call: (name) => {
@@ -435,8 +435,16 @@ test("client mode: the gateway's Jira tool is in a pi universe, gated by connect
       return Promise.resolve({ ok: true, text: '{"key":"OPS-1"}' });
     },
   });
+  const slackSearch = {
+    name: "slack_search",
+    description: "Search Slack messages.",
+    inputSchema: { type: "object", properties: {} },
+    effect: "read",
+    actionKey: "slack:read",
+  };
   try {
     await updateJiraSettings({ enabled: true });
+    await saveSettings({ slack: { enabled: true } });
     remoteTools.applyListing(
       remoteTools.acceptRemoteTools([
         {
@@ -446,6 +454,7 @@ test("client mode: the gateway's Jira tool is in a pi universe, gated by connect
           effect: "read",
           actionKey: "jira:read",
         },
+        slackSearch,
       ]),
     );
     const live = await piStore.acquireNew("assistant", await chosen(), "off", {
@@ -465,12 +474,24 @@ test("client mode: the gateway's Jira tool is in a pi universe, gated by connect
     await call();
     assert.deepEqual(calls, ["jira_get_issue"]);
 
+    // Slack's tool follows Settings → Slack in the same live session.
+    assert.equal(usable(engine, "slack_search"), true);
+    await load(engine, "slack_search");
+    assert.equal(active(engine, "slack_search"), true);
+    await saveSettings({ slack: { enabled: false } });
+    await vi.waitFor(() => assert.equal(usable(engine, "slack_search"), false));
+    assert.equal(active(engine, "slack_search"), false);
+    assert.equal(usable(engine, "jira_get_issue"), true);
+    await saveSettings({ slack: { enabled: true } });
+    await vi.waitFor(() => assert.equal(active(engine, "slack_search"), true));
+
     // The relay drops: the gate goes off, and a retained call never dispatches.
     remoteTools.markDisconnected();
     await vi.waitFor(() =>
       assert.equal(usable(engine, "jira_get_issue"), false),
     );
     assert.equal(active(engine, "jira_get_issue"), false);
+    assert.equal(active(engine, "slack_search"), false);
     await call();
     assert.deepEqual(calls, ["jira_get_issue"]);
 
@@ -491,5 +512,6 @@ test("client mode: the gateway's Jira tool is in a pi universe, gated by connect
     );
   } finally {
     uninstall();
+    await saveSettings({ slack: { enabled: false } });
   }
 });
