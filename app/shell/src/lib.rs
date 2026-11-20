@@ -503,10 +503,13 @@ fn set_server_url(
     }
     let normalized = config::set_server_url(&app, &url)?;
     forwards.stop_all();
-    // A remote choice retires the bundled server; off the main thread, since
-    // it may take a few seconds to stop.
+    // A remote choice retires the bundled server, starting or ready. It is
+    // taken now, so no later start can be hit by this stop; waiting for it to
+    // exit happens off the main thread.
     #[cfg(desktop)]
-    std::thread::spawn(local_server::stop);
+    if let Some(running) = local_server::take() {
+        std::thread::spawn(move || local_server::terminate(running));
+    }
     Ok(normalized)
 }
 
@@ -568,7 +571,10 @@ fn start_local_then_open(app: AppHandle) {
             }
             Err(err) => {
                 log_line(&format!("local server failed: {err}"));
-                open_bootstrap_window(&handle, false);
+                // A start abandoned for a remote choice needs no recovery page.
+                if config::local_mode(&handle) {
+                    open_bootstrap_window(&handle, false);
+                }
             }
         });
     });

@@ -38,12 +38,21 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(15);
 /// What a Finder launch is missing when the login shell cannot be asked.
 const FALLBACK_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
-struct Running {
+/// A server the shell has spawned. It is in [`RUNNING`] from the moment it
+/// exists, so a stop never misses one that is still starting.
+pub struct Running {
     child: Child,
     url: String,
+    /// Answered `/api/health`; only then is its URL handed to a window.
+    ready: bool,
 }
 
+/// The current server. Held only briefly, never across a wait.
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
+/// Serializes starting a server with waiting for an old one to exit, so a
+/// restart never races the previous server's data-directory lock and a late
+/// stop can only ever reach the server it took.
+static TRANSITION: Mutex<()> = Mutex::new(());
 static LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
 
 /// The packaged server, if this build carries one.
@@ -56,14 +65,11 @@ pub fn log_file(app: &AppHandle) -> Option<PathBuf> {
     app.path().app_log_dir().ok().map(|dir| dir.join("server.log"))
 }
 
-/// The running server's URL. None while one is starting or none runs.
+/// The ready server's URL. None while one is starting or none runs.
 pub fn running_url() -> Option<String> {
-    let mut running = RUNNING.try_lock().ok()?;
-    let current = running.as_mut()?;
-    match current.child.try_wait() {
-        Ok(None) => Some(current.url.clone()),
-        _ => None,
-    }
+    let mut running = RUNNING.lock().ok()?;
+    let current = running.as_mut().filter(|current| current.ready)?;
+    matches!(current.child.try_wait(), Ok(None)).then(|| current.url.clone())
 }
 
 /// Why the last start failed, for the recovery page.
@@ -74,26 +80,58 @@ pub fn last_error() -> Option<String> {
 /// Start the server unless it is already up, and wait until it answers.
 /// Blocking: call it off the main thread.
 pub fn ensure_running(app: &AppHandle) -> Result<String, String> {
-    let mut running = RUNNING.lock().map_err(|err| err.to_string())?;
-    if let Some(current) = running.as_mut() {
-        if current.child.try_wait().ok().flatten().is_none() {
-            return Ok(current.url.clone());
-        }
-        *running = None;
+    let _transition = TRANSITION.lock().map_err(|err| err.to_string())?;
+    if let Some(url) = running_url() {
+        return Ok(url);
     }
+    // Whatever is left has exited; a starting one cannot exist while we hold
+    // the transition.
+    drop(take());
     let result = start(app);
     if let Ok(mut error) = LAST_ERROR.lock() {
         *error = result.as_ref().err().cloned();
     }
-    let started = result?;
-    let url = started.url.clone();
-    watch_for_exit(app.clone(), started.child.id());
-    *running = Some(started);
-    Ok(url)
+    result
+}
+
+/// Detach the current server, ready or starting, so nothing else can reach
+/// it. Pass the result to [`terminate`].
+pub fn take() -> Option<Running> {
+    RUNNING.lock().ok()?.take()
+}
+
+/// SIGTERM a taken server and wait for it, killing it past [`STOP_TIMEOUT`].
+/// Blocking. Holds the transition, so the next start waits for this exit.
+pub fn terminate(mut running: Running) {
+    // A start still waiting on this server notices it was taken within one
+    // poll and gives the transition up.
+    let _transition = TRANSITION.lock();
+    // SIGTERM is the server's ordinary stop. `kill` rather than a libc
+    // binding keeps the shell free of a direct dependency for one signal.
+    let _ = Command::new("/bin/kill")
+        .args(["-TERM", &running.child.id().to_string()])
+        .status();
+    let deadline = Instant::now() + STOP_TIMEOUT;
+    while Instant::now() < deadline {
+        if running.child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    log_line("local server did not stop in time; killing it");
+    let _ = running.child.kill();
+    let _ = running.child.wait();
+}
+
+/// Quit: stop whatever runs, starting or ready. Blocking.
+pub fn stop() {
+    if let Some(running) = take() {
+        terminate(running);
+    }
 }
 
 /// Notice the server exiting without having been asked to, and open the
-/// recovery page with the reason. A deliberate [`stop`] takes the server out of
+/// recovery page with the reason. A deliberate stop takes the server out of
 /// [`RUNNING`] first, which ends this watch silently.
 fn watch_for_exit(app: AppHandle, pid: u32) {
     std::thread::spawn(move || loop {
@@ -119,31 +157,58 @@ fn watch_for_exit(app: AppHandle, pid: u32) {
     });
 }
 
-/// Stop the server and wait for it, killing it past [`STOP_TIMEOUT`].
-/// Blocking, and a no-op when nothing runs. A server still starting holds the
-/// lock and is left alone: it stops itself once the shell has exited.
-pub fn stop() {
-    let Some(mut running) = RUNNING.try_lock().ok().and_then(|mut running| running.take()) else {
-        return;
-    };
-    // SIGTERM is the server's ordinary stop. `kill` rather than a libc
-    // binding keeps the shell free of a direct dependency for one signal.
-    let _ = Command::new("/bin/kill")
-        .args(["-TERM", &running.child.id().to_string()])
-        .status();
-    let deadline = Instant::now() + STOP_TIMEOUT;
-    while Instant::now() < deadline {
-        if running.child.try_wait().ok().flatten().is_some() {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    log_line("local server did not stop in time; killing it");
-    let _ = running.child.kill();
-    let _ = running.child.wait();
+/// What one readiness poll found about the server `pid`.
+enum Poll {
+    Starting,
+    Exited(String),
+    /// Taken by a stop, or replaced.
+    Gone,
 }
 
-fn start(app: &AppHandle) -> Result<Running, String> {
+fn poll(pid: u32) -> Result<Poll, String> {
+    let mut running = RUNNING.lock().map_err(|err| err.to_string())?;
+    let Some(current) = running.as_mut().filter(|current| current.child.id() == pid) else {
+        return Ok(Poll::Gone);
+    };
+    match current.child.try_wait().map_err(|err| err.to_string())? {
+        Some(status) => {
+            *running = None;
+            Ok(Poll::Exited(status.to_string()))
+        }
+        None => Ok(Poll::Starting),
+    }
+}
+
+/// Mark `pid` ready, unless it was taken meanwhile.
+fn mark_ready(pid: u32) -> bool {
+    let Ok(mut running) = RUNNING.lock() else { return false };
+    match running.as_mut().filter(|current| current.child.id() == pid) {
+        Some(current) => {
+            current.ready = true;
+            true
+        }
+        None => false,
+    }
+}
+
+/// Stop `pid` if it is still the current server.
+fn stop_pid(pid: u32) {
+    let taken = RUNNING.lock().ok().and_then(|mut running| {
+        running
+            .as_ref()
+            .is_some_and(|current| current.child.id() == pid)
+            .then(|| running.take())
+            .flatten()
+    });
+    if let Some(running) = taken {
+        // Called with the transition held; `terminate` would wait on itself.
+        let mut child = running.child;
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+fn start(app: &AppHandle) -> Result<String, String> {
     let runtime = runtime_dir(app).ok_or("This build does not include a local server.")?;
     let data_dir = app
         .path()
@@ -157,12 +222,14 @@ fn start(app: &AppHandle) -> Result<Running, String> {
     let port = choose_port(config::local_port(app));
     let url = config::use_local_port(app, port)?;
 
-    let mut child = Command::new(runtime.join("personal-assistant-server"))
+    let child = Command::new(runtime.join("personal-assistant-server"))
         .arg(runtime.join("server.js"))
         .current_dir(&data_dir)
         .env("NODE_ENV", "production")
         .env("ASSISTANT_RUNTIME_DIR", &runtime)
-        .env("ASSISTANT_DESKTOP_SHELL", "1")
+        // The server watches this pid, not its parent: if the shell dies
+        // before that watch begins, the server has already been reparented.
+        .env("ASSISTANT_DESKTOP_SHELL", std::process::id().to_string())
         .env("ASSISTANT_HOST", "127.0.0.1")
         .env("ASSISTANT_PORT", port.to_string())
         .env("ASSISTANT_SHUTDOWN_GRACE_MS", SHUTDOWN_GRACE.as_millis().to_string())
@@ -173,22 +240,42 @@ fn start(app: &AppHandle) -> Result<Running, String> {
         .stderr(log)
         .spawn()
         .map_err(|err| format!("Could not start the local server: {err}"))?;
-    log_line(&format!("local server pid {} on {url}", child.id()));
+    let pid = child.id();
+    log_line(&format!("local server pid {pid} on {url}"));
+    *RUNNING.lock().map_err(|err| err.to_string())? = Some(Running {
+        child,
+        url: url.clone(),
+        ready: false,
+    });
 
     let deadline = Instant::now() + READY_TIMEOUT;
     loop {
-        if let Some(status) = child.try_wait().map_err(|err| err.to_string())? {
-            return Err(format!(
-                "The local server exited ({status}). Its log is {}.",
-                log_path.display()
-            ));
+        match poll(pid)? {
+            Poll::Gone => return Err("The local server was stopped while starting.".into()),
+            Poll::Exited(status) => {
+                return Err(format!(
+                    "The local server exited ({status}). Its log is {}.",
+                    log_path.display()
+                ))
+            }
+            Poll::Starting => {}
+        }
+        // Remote was chosen while this one started: it is not wanted. Checked
+        // every poll, because a switch that took RUNNING just before this
+        // child was registered could not have stopped it.
+        if !config::local_mode(app) {
+            stop_pid(pid);
+            return Err("Switched to a remote server while the local one started.".into());
         }
         if healthy(port) {
-            return Ok(Running { child, url });
+            if !mark_ready(pid) {
+                return Err("The local server was stopped while starting.".into());
+            }
+            watch_for_exit(app.clone(), pid);
+            return Ok(url);
         }
         if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
+            stop_pid(pid);
             return Err(format!(
                 "The local server did not become ready. Its log is {}.",
                 log_path.display()
@@ -277,6 +364,28 @@ mod tests {
         let chosen = choose_port(Some(taken_port));
         assert_ne!(chosen, taken_port);
         assert_ne!(chosen, 0);
+    }
+
+    /// A stop must reach a server that has not answered yet, and the start
+    /// waiting on it must then see it as gone rather than publish it.
+    #[test]
+    fn a_stop_takes_a_server_that_is_still_starting() {
+        let child = Command::new("sleep").arg("30").spawn().unwrap();
+        let pid = child.id();
+        *RUNNING.lock().unwrap() = Some(Running {
+            child,
+            url: "http://127.0.0.1:1".into(),
+            ready: false,
+        });
+        assert!(matches!(poll(pid).unwrap(), Poll::Starting));
+        assert_eq!(running_url(), None);
+
+        let taken = take().expect("a starting server is taken");
+        assert!(matches!(poll(pid).unwrap(), Poll::Gone));
+        assert!(!mark_ready(pid));
+        let mut child = taken.child;
+        child.kill().unwrap();
+        child.wait().unwrap();
     }
 
     /// A one-request server answering `response`.

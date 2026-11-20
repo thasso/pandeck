@@ -165,17 +165,31 @@ fn load(app: &AppHandle) -> ShellConfig {
         .unwrap_or_default()
 }
 
-/// Write the whole config back. Every setter goes load → change → store rather
-/// than writing its own field alone: three unrelated things share this file now,
-/// and a setter that serialized only what it knew about would silently drop the
-/// other two.
-fn store(app: &AppHandle, config: &ShellConfig) -> Result<(), String> {
-    let path = config_path(app)?;
+/// Held across every load → change → store, so two writers on different
+/// threads (geometry, a server choice, the local port) cannot each write back
+/// a copy that lacks the other's change.
+static CONFIG_WRITE: Mutex<()> = Mutex::new(());
+
+/// Change the stored config. Every setter goes through here rather than
+/// writing its own field alone: unrelated things share this file, and a setter
+/// that serialized only what it knew about would silently drop the others.
+fn update(app: &AppHandle, change: impl FnOnce(&mut ShellConfig)) -> Result<(), String> {
+    let _write = CONFIG_WRITE.lock().map_err(|err| err.to_string())?;
+    let mut config = load(app);
+    change(&mut config);
+    let body = serde_json::to_string_pretty(&config).map_err(|err| err.to_string())?;
+    write_atomic(&config_path(app)?, &body)
+}
+
+/// Replace `path` whole, so a reader without the write lock sees the old file
+/// or the new one, never a truncated one it would take for defaults.
+fn write_atomic(path: &std::path::Path, body: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
-    let body = serde_json::to_string_pretty(config).map_err(|err| err.to_string())?;
-    fs::write(&path, body).map_err(|err| err.to_string())
+    let temporary = path.with_extension("json.tmp");
+    fs::write(&temporary, body).map_err(|err| err.to_string())?;
+    fs::rename(&temporary, path).map_err(|err| err.to_string())
 }
 
 /// The user's persisted choice wins over the build-time default. Invalid stored
@@ -202,13 +216,13 @@ pub fn server_url(app: &AppHandle) -> String {
 pub fn set_server_url(app: &AppHandle, url: &str) -> Result<String, String> {
     let normalized = normalize_server(url)?;
     trust_server(app, &normalized)?;
-    let mut config = load(app);
-    config.server_url = Some(normalized.clone());
-    #[cfg(desktop)]
-    {
-        config.mode = Some("remote".into());
-    }
-    store(app, &config)?;
+    update(app, |config| {
+        config.server_url = Some(normalized.clone());
+        #[cfg(desktop)]
+        {
+            config.mode = Some("remote".into());
+        }
+    })?;
     Ok(normalized)
 }
 
@@ -249,10 +263,10 @@ pub fn local_port(app: &AppHandle) -> Option<u16> {
 pub fn use_local_port(app: &AppHandle, port: u16) -> Result<String, String> {
     let url = local_url(port);
     trust_server(app, &url)?;
-    let mut config = load(app);
-    config.mode = Some("local".into());
-    config.local_port = Some(port);
-    store(app, &config)?;
+    update(app, |config| {
+        config.mode = Some("local".into());
+        config.local_port = Some(port);
+    })?;
     Ok(url)
 }
 
@@ -271,12 +285,10 @@ pub fn set_theme(app: &AppHandle, theme: &str) {
     if theme != "dark" && theme != "light" {
         return;
     }
-    let mut config = load(app);
-    if config.theme.as_deref() == Some(theme) {
+    if load(app).theme.as_deref() == Some(theme) {
         return;
     }
-    config.theme = Some(theme.to_string());
-    if let Err(err) = store(app, &config) {
+    if let Err(err) = update(app, |config| config.theme = Some(theme.to_string())) {
         trace!("set_theme {theme} failed: {err}");
     }
 }
@@ -316,9 +328,7 @@ pub fn remember_geometry(app: &AppHandle, geometry: WindowGeometry) {
             .ok()
             .and_then(|mut pending| pending.take());
         let Some(latest) = latest else { return };
-        let mut config = load(&app);
-        config.window = Some(latest);
-        if let Err(err) = store(&app, &config) {
+        if let Err(err) = update(&app, |config| config.window = Some(latest)) {
             trace!("remember_geometry failed: {err}");
         }
     });
@@ -343,6 +353,17 @@ pub fn is_allowed(url: &Url) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn atomic_write_replaces_the_file_and_leaves_no_temporary() {
+        let dir = std::env::temp_dir().join(format!("pa-shell-config-{}", std::process::id()));
+        let path = dir.join("shell.json");
+        write_atomic(&path, "{\"theme\":\"dark\"}").unwrap();
+        write_atomic(&path, "{\"theme\":\"light\"}").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{\"theme\":\"light\"}");
+        assert!(!path.with_extension("json.tmp").exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
     use tauri::utils::acl::capability::Capability;
 
     #[test]

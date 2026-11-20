@@ -52,22 +52,39 @@ jobs:
 
       # The server as the shell starts it, with the stock macOS host tools:
       # it must answer on loopback, refuse another Host name, and stop once
-      # its parent is gone. The subshell stands in for the shell and is
-      # SIGKILLed, as a crash would leave it.
+      # the shell is gone. A `bash -c` stands in for the shell, passes its own
+      # pid like the shell does, and is SIGKILLed as a crash would leave it:
+      # once while the server runs, once before it has even booted.
       - name: Smoke the server package
         working-directory: app/shell/local-runtime
         run: |
-          data=$(mktemp -d)
-          (
-            NODE_ENV=production ASSISTANT_RUNTIME_DIR="$PWD" \
-              ASSISTANT_DESKTOP_SHELL=1 ASSISTANT_HOST=127.0.0.1 \
-              ASSISTANT_PORT=47123 DATA_DIR="$data" \
-              ./personal-assistant-server server.js \
-              > "$data/server.log" 2>&1 &
-            echo $! > "$data/pid"
-            wait
-          ) &
-          parent=$!
+          export NODE_ENV=production ASSISTANT_RUNTIME_DIR="$PWD" \
+            ASSISTANT_HOST=127.0.0.1 ASSISTANT_PORT=47123
+          DATA_DIR=$(mktemp -d)
+          export DATA_DIR
+          launch="$RUNNER_TEMP/launch-as-shell.sh"
+          cat > "$launch" << 'EOF'
+          ASSISTANT_DESKTOP_SHELL=$$ ./personal-assistant-server server.js \
+            >> "$DATA_DIR/server.log" 2>&1 &
+          echo $! > "$DATA_DIR/pid"
+          wait
+          EOF
+          # Start a stand-in shell and wait until it has spawned the server.
+          start_shell() {
+            rm -f "$DATA_DIR/pid"
+            bash "$launch" &
+            parent=$!
+            until [ -s "$DATA_DIR/pid" ]; do sleep 0.05; done
+          }
+          stopped() {
+            for _ in $(seq 30); do
+              kill -0 "$1" 2> /dev/null || return 0
+              sleep 1
+            done
+            return 1
+          }
+
+          start_shell
           for _ in $(seq 120); do
             curl -fsS http://127.0.0.1:47123/api/health && break
             sleep 1
@@ -76,14 +93,14 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' \
             -H 'Host: rebound.example:47123' \
             http://127.0.0.1:47123/api/health)" = 421
-          server=$(cat "$data/pid")
           kill -KILL "$parent"
-          for _ in $(seq 30); do
-            kill -0 "$server" 2> /dev/null || break
-            sleep 1
-          done
-          cat "$data/server.log"
-          ! kill -0 "$server" 2> /dev/null
+          stopped "$(cat "$DATA_DIR/pid")"
+
+          start_shell
+          kill -KILL "$parent"
+          stopped "$(cat "$DATA_DIR/pid")"
+          cat "$DATA_DIR/server.log"
+          test "$(grep -c 'desktop shell is gone' "$DATA_DIR/server.log")" = 2
 
       - name: Install the Tauri CLI
         run: cargo install tauri-cli --version 2.11.5 --locked

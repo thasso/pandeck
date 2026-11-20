@@ -54,7 +54,7 @@ export const INSTANCE_OWNED_ENV_VARS = [
   "ASSISTANT_CWD",
   // Marks THIS server as the desktop shell's child (`desktopShell.ts`). An
   // agent's own dev server must not inherit the loopback-only Host rule or
-  // stop when its parent exits.
+  // stop when the shell exits.
   "ASSISTANT_DESKTOP_SHELL",
   "ASSISTANT_HOST",
   "ASSISTANT_PORT",

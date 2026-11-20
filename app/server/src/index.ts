@@ -45,8 +45,9 @@ import { authTokenStartupMessage, resolveAuthToken } from "./authToken.ts";
 import { scrubInstanceEnvironment } from "./instanceEnv.ts";
 import {
   DESKTOP_SHELL,
+  DESKTOP_SHELL_PID,
   isLoopbackHostHeader,
-  stopWhenParentExits,
+  stopWhenShellExits,
 } from "./desktopShell.ts";
 import { startSpawnBroker } from "./spawnBroker.ts";
 import { ignoreCollectedFileHandle } from "./collectedFileHandle.ts";
@@ -1868,8 +1869,8 @@ function requestGracefulShutdown(signal: NodeJS.Signals): void {
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, () => requestGracefulShutdown(sig));
 }
-if (DESKTOP_SHELL)
-  stopWhenParentExits(process.ppid, () => {
+if (DESKTOP_SHELL_PID !== undefined)
+  stopWhenShellExits(DESKTOP_SHELL_PID, () => {
     console.log("[assistant] desktop shell is gone; shutting down.");
     requestGracefulShutdown("SIGTERM");
   });

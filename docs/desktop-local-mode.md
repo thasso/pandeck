@@ -31,20 +31,27 @@ unit provides on Linux and adds no protocol of its own:
 - **Start.** It runs
   `pandeck-runtime/personal-assistant-server pandeck-runtime/server.js` with
   `NODE_ENV=production`, `ASSISTANT_RUNTIME_DIR`, `ASSISTANT_HOST=127.0.0.1`,
-  `ASSISTANT_PORT`, `DATA_DIR` and `ASSISTANT_DESKTOP_SHELL=1`. `PATH` comes
-  from the user's login shell (`$SHELL -l`), because a Finder launch only
-  inherits the system directories.
+  `ASSISTANT_PORT`, `DATA_DIR` and `ASSISTANT_DESKTOP_SHELL` set to the shell's
+  own pid. `PATH` comes from the user's login shell (`$SHELL -l`), because a
+  Finder launch only inherits the system directories.
 - **Ready.** It polls `GET /api/health` until it gets a 200, for up to two
   minutes, and fails early if the child exits. Only then does the first window
   open. No window shows while the server starts.
-- **Stop.** On quit it sends SIGTERM and waits up to 15 seconds, then kills it.
-  `ASSISTANT_SHUTDOWN_GRACE_MS=10000` makes the server's drain fit inside that.
-  Running turns are cut short. The server drain for a deploy takes up to an
-  hour, which is too long for closing a laptop.
-- **Shell crash.** The server checks every second that its parent pid still
-  exists and starts the same graceful shutdown when it does not. Watching stdin
-  for end-of-file was tried first; under Bun on macOS CI the server never saw
-  it.
+- **Stop.** The child is registered the moment it is spawned, so a stop reaches
+  a server that is still starting. A stop detaches it at once, then sends
+  SIGTERM and waits up to 15 seconds before killing it. Starting a server and
+  waiting for an old one to exit are serialized, so a restart never races the
+  old server's data-directory lock and a late stop cannot reach a newer server.
+  A server still starting when remote is chosen is stopped at the next poll.
+  Quitting stops it the same way. `ASSISTANT_SHUTDOWN_GRACE_MS=10000` makes the
+  server's drain fit inside that. Running turns are cut short. The server drain
+  for a deploy takes up to an hour, which is too long for closing a laptop.
+- **Shell crash.** The server checks every second that the shell's pid still
+  exists and starts the same graceful shutdown when it does not. It watches the
+  pid it was given, not `process.ppid`: a shell that dies before that watch
+  begins has already reparented the server, which would then watch init.
+  Watching stdin for end-of-file was tried first; under Bun on macOS CI the
+  server never saw it.
 - **Failure.** When the server cannot start, the shell opens the bootstrap page
   with the reason and the log path instead of an app window. When a running
   server exits without being stopped, the shell opens that page too, with **Run
@@ -57,6 +64,11 @@ bundle, so replacing the app keeps it. The server's output goes to
 as `server.log.1`. The server's existing boot lock refuses a second server on
 the same data directory.
 
+Every change to `shell.json` (mode, port, server, theme, window geometry) goes
+through one lock held across its read, change and write, and replaces the file
+atomically, so concurrent writers cannot drop each other's change and a reader
+never sees a half-written file.
+
 The port is chosen once and stored in `shell.json` as `localPort`. The page's
 `localStorage` belongs to its origin, so a new port on every launch would lose
 its preferences. When the stored port is taken, the shell picks a free one and
@@ -64,14 +76,14 @@ stores that instead.
 
 ## Server side
 
-`app/server/src/desktopShell.ts` applies only under `ASSISTANT_DESKTOP_SHELL=1`,
-which `instanceEnv.ts` removes before any agent starts:
+`app/server/src/desktopShell.ts` applies only when `ASSISTANT_DESKTOP_SHELL`
+holds a pid above 1. `instanceEnv.ts` removes it before any agent starts:
 
 - Every HTTP request and WebSocket upgrade must name a loopback host
   (`localhost`, `127.0.0.1`, `[::1]`), or it gets a 421. With no reverse proxy
   in front, a site that rebinds its own name to 127.0.0.1 would otherwise pass
   the same-host origin check and read the token injected into `index.html`.
-- When its parent process is gone, it starts the normal graceful shutdown.
+- When the shell's pid is gone, it starts the normal graceful shutdown.
 - Callback URLs default to `http`, since no TLS proxy is in front.
 
 Token authentication, origin checks and the boot lock are unchanged.
@@ -126,11 +138,12 @@ macOS 15 arm64 runner. It is too slow for every change, so it runs only:
   the tagged version.
 
 It first smoke-tests the packaged server the way the shell starts it: health on
-loopback, a 421 for a foreign Host, and shutdown once its SIGKILLed parent is
-gone. Then it runs the shell's unit tests and uploads the disk image as a
-workflow artifact, `pandeck-[preview-]macos-arm64-<tag or commit>`. Nothing is
-attached to a GitHub Release yet. The image is ad-hoc signed and not notarized.
-After copying the app out of it, remove the quarantine attribute
+loopback, a 421 for a foreign Host, and shutdown after its stand-in shell is
+SIGKILLed, both once it runs and before it has booted. Then it runs the shell's
+unit tests and uploads the disk image as a workflow artifact,
+`pandeck-[preview-]macos-arm64-<tag or commit>`. Nothing is attached to a GitHub
+Release yet. The image is ad-hoc signed and not notarized. After copying the app
+out of it, remove the quarantine attribute
 (`xattr -dr com.apple.quarantine "Pandeck Preview.app"`) to open it.
 
 ## Not yet
