@@ -260,6 +260,83 @@ jobs:
             exit 1
           fi
 
+  # The macOS app with its bundled local server (docs/desktop-local-mode.md).
+  # An artifact for testing, not a release: ad-hoc signed and not notarized,
+  # so it is not part of the required gate yet.
+  desktop-macos:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Set up the workspace
+        uses: ./.github/actions/setup-workspace
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: Build the server package
+        env:
+          ASSISTANT_BUILD_COMMIT: ${{ github.sha }}
+        run: pnpm run desktop:runtime
+
+      # The server as the shell starts it, with the stock macOS host tools:
+      # it must answer on loopback, refuse another Host name, and stop when
+      # its stdin closes.
+      - name: Smoke the server package
+        working-directory: app/shell/local-runtime
+        run: |
+          data=$(mktemp -d)
+          mkfifo "$data/lifeline"
+          NODE_ENV=production ASSISTANT_RUNTIME_DIR="$PWD" \
+            ASSISTANT_DESKTOP_SHELL=1 ASSISTANT_HOST=127.0.0.1 \
+            ASSISTANT_PORT=47123 DATA_DIR="$data" \
+            ./personal-assistant-server server.js < "$data/lifeline" \
+            > "$data/server.log" 2>&1 &
+          server=$!
+          exec 3> "$data/lifeline"
+          for _ in $(seq 120); do
+            curl -fsS http://127.0.0.1:47123/api/health && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:47123/api/health
+          test "$(curl -s -o /dev/null -w '%{http_code}' \
+            -H 'Host: rebound.example:47123' \
+            http://127.0.0.1:47123/api/health)" = 421
+          exec 3>&-
+          for _ in $(seq 30); do
+            kill -0 "$server" 2> /dev/null || break
+            sleep 1
+          done
+          cat "$data/server.log"
+          ! kill -0 "$server" 2> /dev/null
+
+      - name: Install the Tauri CLI
+        run: cargo install tauri-cli --version 2.11.5 --locked
+
+      - name: Shell unit tests
+        working-directory: app/shell
+        run: cargo test --locked
+
+      - name: Build the app
+        working-directory: app/shell
+        run: >-
+          cargo tauri build --bundles app,dmg --config tauri.bundled-server.json
+          --config tauri.preview.json
+
+      - name: Upload the disk image
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pandeck-preview-macos-arm64
+          path: app/shell/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 14
+
   # The one check branch protection requires. A job skipped because a
   # dependency failed reports `skipped`, which GitHub counts as passing for a
   # required check, so this gate demands `success` from every job instead. It

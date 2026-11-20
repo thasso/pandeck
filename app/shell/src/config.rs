@@ -121,6 +121,14 @@ impl WindowGeometry {
 #[serde(rename_all = "camelCase")]
 pub struct ShellConfig {
     pub server_url: Option<String>,
+    /// `"local"` runs the bundled server (`local_server.rs`); `"remote"` uses
+    /// `server_url`. Unset means local when the build carries a server.
+    #[cfg(desktop)]
+    pub mode: Option<String>,
+    /// The bundled server's port, kept so its origin (and the page's storage)
+    /// is the same every launch.
+    #[cfg(desktop)]
+    pub local_port: Option<u16>,
     /// `"dark"` or `"light"`, as last reported by a page through `window_ready`.
     pub theme: Option<String>,
     #[cfg(desktop)]
@@ -173,7 +181,14 @@ fn store(app: &AppHandle, config: &ShellConfig) -> Result<(), String> {
 /// The user's persisted choice wins over the build-time default. Invalid stored
 /// values are ignored; choosing another host never requires rebuilding.
 pub fn server_url(app: &AppHandle) -> String {
-    load(app)
+    let config = load(app);
+    #[cfg(desktop)]
+    if is_local(app, &config) {
+        if let Some(port) = config.local_port {
+            return local_url(port);
+        }
+    }
+    config
         .server_url
         .as_deref()
         .and_then(|url| normalize_server(url).ok())
@@ -189,8 +204,50 @@ pub fn set_server_url(app: &AppHandle, url: &str) -> Result<String, String> {
     trust_server(app, &normalized)?;
     let mut config = load(app);
     config.server_url = Some(normalized.clone());
+    #[cfg(desktop)]
+    {
+        config.mode = Some("remote".into());
+    }
     store(app, &config)?;
     Ok(normalized)
+}
+
+#[cfg(desktop)]
+fn local_url(port: u16) -> String {
+    format!("http://127.0.0.1:{port}")
+}
+
+#[cfg(desktop)]
+fn is_local(app: &AppHandle, config: &ShellConfig) -> bool {
+    match config.mode.as_deref() {
+        Some("local") => true,
+        Some(_) => false,
+        None => crate::local_server::runtime_dir(app).is_some(),
+    }
+}
+
+/// Whether windows should open on the bundled server.
+#[cfg(desktop)]
+pub fn local_mode(app: &AppHandle) -> bool {
+    is_local(app, &load(app))
+}
+
+#[cfg(desktop)]
+pub fn local_port(app: &AppHandle) -> Option<u16> {
+    load(app).local_port
+}
+
+/// Trust the bundled server's origin and make it the shell's choice. Called
+/// with the port the server is about to bind, before any window loads it.
+#[cfg(desktop)]
+pub fn use_local_port(app: &AppHandle, port: u16) -> Result<String, String> {
+    let url = local_url(port);
+    trust_server(app, &url)?;
+    let mut config = load(app);
+    config.mode = Some("local".into());
+    config.local_port = Some(port);
+    store(app, &config)?;
+    Ok(url)
 }
 
 /// The theme the next window should be painted before its page can say.

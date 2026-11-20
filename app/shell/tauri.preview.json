@@ -1,0 +1,11 @@
+{
+  "productName": "Pandeck Preview",
+  "identifier": "com.example.pandeck-preview",
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": []
+      }
+    }
+  }
+}

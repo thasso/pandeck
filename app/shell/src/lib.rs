@@ -28,6 +28,8 @@ mod config;
 #[cfg(target_os = "ios")]
 mod ios;
 #[cfg(desktop)]
+mod local_server;
+#[cfg(desktop)]
 mod menu;
 mod notify;
 mod openurl;
@@ -493,7 +495,72 @@ fn set_server_url(
 ) -> Result<String, String> {
     let normalized = config::set_server_url(&app, &url)?;
     forwards.stop_all();
+    // A remote choice retires the bundled server; off the main thread, since
+    // it may take a few seconds to stop.
+    #[cfg(desktop)]
+    std::thread::spawn(local_server::stop);
     Ok(normalized)
+}
+
+/// What the bootstrap page needs to offer local mode and explain its failure.
+#[cfg(desktop)]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalServerInfo {
+    /// This build carries the packaged server.
+    available: bool,
+    /// The shell is set to run it.
+    selected: bool,
+    /// Why the last start failed.
+    error: Option<String>,
+    /// Where its output goes.
+    log: Option<String>,
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn local_server_info(app: AppHandle) -> LocalServerInfo {
+    LocalServerInfo {
+        available: local_server::runtime_dir(&app).is_some(),
+        selected: config::local_mode(&app),
+        error: local_server::last_error(),
+        log: local_server::log_file(&app).map(|path| path.display().to_string()),
+    }
+}
+
+/// Bootstrap-only: switch to the bundled server, starting it if needed, and
+/// answer its URL once it is ready to load.
+#[cfg(desktop)]
+#[tauri::command]
+async fn use_local_server(
+    app: AppHandle,
+    forwards: State<'_, port_forward::PortForwardManager>,
+) -> Result<String, String> {
+    forwards.stop_all();
+    tauri::async_runtime::spawn_blocking(move || local_server::ensure_running(&app))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+/// Start the bundled server off the main thread, then open the first window on
+/// it, or on the bootstrap page with the reason when it cannot start.
+#[cfg(desktop)]
+fn start_local_then_open(app: AppHandle) {
+    std::thread::spawn(move || {
+        let started = local_server::ensure_running(&app);
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || match started {
+            Ok(_) => {
+                if let Err(err) = build_app_window(&handle, "main", None) {
+                    log_line(&format!("main window failed: {err}"));
+                }
+            }
+            Err(err) => {
+                log_line(&format!("local server failed: {err}"));
+                open_bootstrap_window(&handle, false);
+            }
+        });
+    });
 }
 
 #[tauri::command]
@@ -998,10 +1065,13 @@ pub(crate) fn next_window_label() -> String {
 /// It is also the only window granted the server-repointing commands, which is
 /// `capabilities/default.json`'s doing rather than this function's.
 #[cfg(desktop)]
-pub(crate) fn open_bootstrap_window(app: &AppHandle) -> Option<WebviewWindow> {
+pub(crate) fn open_bootstrap_window(app: &AppHandle, choose: bool) -> Option<WebviewWindow> {
     let label = next_window_label();
     trace!("new bootstrap window {label}");
-    match build_window(app, &label, WebviewUrl::App("index.html".into()), true) {
+    // `#choose` shows the server form instead of reconnecting to the current
+    // server, which is what asking for it from the menu means.
+    let page = if choose { "index.html#choose" } else { "index.html" };
+    match build_window(app, &label, WebviewUrl::App(page.into()), true) {
         Ok(window) => {
             let _ = window.set_focus();
             Some(window)
@@ -1129,6 +1199,10 @@ pub fn run() {
             open_served_file,
             get_server_url,
             set_server_url,
+            #[cfg(desktop)]
+            local_server_info,
+            #[cfg(desktop)]
+            use_local_server,
             start_port_forward,
             list_port_forwards,
             stop_port_forward,
@@ -1169,6 +1243,11 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             usernotify::setup(app.handle(), || {});
             config::initialize_trust(app.handle())?;
+            #[cfg(desktop)]
+            if config::local_mode(app.handle()) {
+                start_local_then_open(app.handle().clone());
+                return Ok(());
+            }
             build_app_window(app.handle(), "main", None)?;
             Ok(())
         })
@@ -1177,6 +1256,10 @@ pub fn run() {
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
                 app.state::<port_forward::PortForwardManager>().stop_all();
+            }
+            #[cfg(desktop)]
+            if matches!(event, tauri::RunEvent::Exit) {
+                local_server::stop();
             }
         });
 }

@@ -263,6 +263,8 @@ fn main() {
                 "open_served_file",
                 "get_server_url",
                 "set_server_url",
+                "local_server_info",
+                "use_local_server",
                 "start_port_forward",
                 "list_port_forwards",
                 "stop_port_forward",

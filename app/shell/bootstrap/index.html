@@ -110,6 +110,10 @@
         font: inherit;
         cursor: pointer;
       }
+      #run-local {
+        width: 100%;
+        margin-bottom: 0.75rem;
+      }
       button.primary {
         background: var(--accent);
         border-color: var(--accent);
@@ -132,7 +136,7 @@
       </div>
 
       <div id="failed" hidden>
-        <h1>Can't reach the assistant</h1>
+        <h1 id="title">Can't reach the assistant</h1>
         <p class="error" id="reason"></p>
         <form id="server-form">
           <input
@@ -146,6 +150,9 @@
           />
           <button type="submit" class="primary">Connect</button>
         </form>
+        <button id="run-local" type="button" hidden>
+          Run Pandeck on this Mac
+        </button>
         <p id="hint">
           If the server cannot be reached, check your network or VPN.
         </p>
@@ -158,6 +165,7 @@
 
       /** Show the failure state with a reason, seeding the field for a retry. */
       function fail(url, reason) {
+        el("title").textContent = "Can't reach the assistant";
         el("connecting").hidden = true;
         el("failed").hidden = false;
         el("reason").textContent = reason;
@@ -190,6 +198,20 @@
         }
       }
 
+      /** Switch to the bundled server; the shell answers once it is ready. */
+      async function runLocal() {
+        el("connecting").hidden = false;
+        el("failed").hidden = true;
+        el("connecting-text").textContent = "Starting the local server…";
+        try {
+          location.replace(await invoke("use_local_server"));
+        } catch (err) {
+          fail("", String(err));
+        }
+      }
+
+      el("run-local").addEventListener("click", runLocal);
+
       el("server-form").addEventListener("submit", async (event) => {
         event.preventDefault();
         const candidate = el("server-url").value.trim();
@@ -203,7 +225,18 @@
       if (!invoke) {
         fail("", "This page only runs inside the assistant shell.");
       } else {
-        invoke("get_server_url").then(connect);
+        // Absent on shells without local mode (iOS), where this just fails.
+        invoke("local_server_info")
+          .catch(() => undefined)
+          .then(async (local) => {
+            el("run-local").hidden = !local?.available;
+            const url = await invoke("get_server_url");
+            if (location.hash === "#choose") {
+              fail(url, "");
+              el("title").textContent = "Choose a server";
+            } else if (local?.selected && local.error) fail(url, local.error);
+            else connect(url);
+          });
       }
     </script>
   </body>

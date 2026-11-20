@@ -267,7 +267,9 @@ export function verifyRequiredHostTools(opts?: { fatal?: boolean }): void {
   // Explicit rather than reading IS_PROD inside the branch: NODE_ENV is
   // inherited by agent sessions from the production service, so a test that
   // depended on it would pass in a developer shell and fail under an agent.
-  const fatal = opts?.fatal ?? IS_PROD;
+  // The table's probes are GNU-shaped. Until it has a macOS row, the desktop
+  // app's local server warns instead (docs/desktop-local-mode.md).
+  const fatal = opts?.fatal ?? (IS_PROD && process.platform === "linux");
   const report = hostToolFailureReport();
   if (!report) return;
   if (!fatal) {

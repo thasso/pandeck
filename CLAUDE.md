@@ -12,7 +12,7 @@ the owning document with its product, API, or storage contract.
 - `app/shared/` owns the wire model, `app/server/` the runtime and integrations,
   `app/web/` the browser client.
 - `app/shell/` (the Rust/Tauri wrapper) is deliberately outside the pnpm
-  workspace, Nix package and CI; build it locally.
+  workspace and Nix package; CI's `desktop-macos` builds it.
 - A protocol or model change lands across shared, server, and web in the same
   change.
 - A domain migrated to state-change events (`docs/state-sync.md`; tasks is the
