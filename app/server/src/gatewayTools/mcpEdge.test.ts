@@ -265,6 +265,7 @@ async function clientLink(relay: RunningRelay) {
         integration: "atlassian",
         ...json,
       }),
+    tool: (json: object) => call(CLIENT_METHODS.toolsCall, json),
   };
 }
 
@@ -1123,6 +1124,115 @@ test("Slack records connected in a vault process reach slack.com/api as each use
     "Slack is not connected for this user; connect it on the gateway's page.",
   );
   assert.equal(calls.length, before);
+
+  // The same reads over the client link's `tools.call`: the user is the
+  // registry's, never the payload's, so forged identity fields select
+  // nothing. Fresh caches, so every list and profile read shows its token.
+  clearSlackMetadataCaches();
+  const linkOf = async (userId: string) =>
+    clientLink((await e.relay(userId)).relay);
+  const [linkA, linkB] = [await linkOf("A"), await linkOf("B")];
+  const forged = { userId: "A", teamId: FAKE_TEAM_ID, user: FAKE_USER_ID };
+  const sinceLink = calls.length;
+  const viaLink = await linkB.tool({
+    name: "slack_conversation_read",
+    args: { conversation: "beta-room" },
+    ...forged,
+  });
+  assert.equal(viaLink.ok, true, JSON.stringify(viaLink));
+  const linkPayload = JSON.parse(String(viaLink.text)) as {
+    conversation: { id: string };
+  };
+  assert.equal(linkPayload.conversation.id, "C0B1");
+  const linkCalls = calls.slice(sinceLink);
+  assert.deepEqual(
+    linkCalls.map((seen) => seen.url.pathname),
+    [
+      "/api/users.info",
+      "/api/conversations.list",
+      "/api/conversations.history",
+    ],
+  );
+  for (const seen of linkCalls) assert.equal(seen.token, B_ACCESS);
+  assert.equal(linkCalls[0]!.form.get("user"), B_USER);
+  // A's name is still not B's, whatever the payload claims.
+  const forgedRoom = await linkB.tool({
+    name: "slack_conversation_read",
+    args: { conversation: "alpha-room" },
+    ...forged,
+  });
+  assert.deepEqual(forgedRoom, {
+    ok: false,
+    code: "tool_error",
+    message:
+      "No accessible Slack conversation matches; use a channel or DM id, an accessible channel name, or an unambiguous person name.",
+  });
+  // B's list served B's second call; A's first call lists with A's token.
+  assert.deepEqual([lists(A_ACCESS), lists(B_ACCESS)], [1, 2]);
+  const linkFirstA = await linkA.tool({
+    name: "slack_conversation_read",
+    args: { conversation: "alpha-room" },
+  });
+  assert.equal(linkFirstA.ok, true, JSON.stringify(linkFirstA));
+  assert.deepEqual([lists(A_ACCESS), lists(B_ACCESS)], [2, 2]);
+
+  // A malformed payload is refused before the host, with no Slack request
+  // and none of its content in the refusal.
+  const beforeMalformed = calls.length;
+  for (const json of [
+    { name: "slack_search", args: SENTINEL },
+    { name: "slack_search", args: [SENTINEL] },
+    { name: `slack_search ${SENTINEL}` },
+  ]) {
+    const refusal = await linkA.tool(json).then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+    assert.ok(refusal instanceof WorkerRequestError, JSON.stringify(json));
+    assert.equal(refusal.code, "invalid_params");
+    assert.ok(!refusal.message.includes(SENTINEL));
+  }
+  // A wrong argument type is the host's refusal, also before any request.
+  assert.deepEqual(
+    await linkA.tool({ name: "slack_search", args: { query: 5 } }),
+    {
+      ok: false,
+      code: "invalid_params",
+      message: "Invalid arguments: query must be a string.",
+    },
+  );
+  assert.equal(calls.length, beforeMalformed);
+
+  // Slack's failure is the fixed text in the tool's answer, which holds
+  // neither Slack's text nor a token.
+  failSearch = () =>
+    new Response(
+      JSON.stringify({ ok: false, error: SENTINEL, echoed: A_ACCESS }),
+    );
+  const linkRefused = await linkA.tool({
+    name: "slack_search",
+    args: { query: SENTINEL },
+  });
+  assert.deepEqual(linkRefused, {
+    ok: false,
+    code: "tool_error",
+    message: "Slack refused search.messages.",
+  });
+  failSearch = () =>
+    new Response(JSON.stringify({ ok: false, error: "invalid_auth" }));
+  assert.deepEqual(
+    await linkA.tool({ name: "slack_search", args: { query: "x" } }),
+    {
+      ok: false,
+      code: "tool_error",
+      message:
+        "Slack rejected the credential; reconnect Slack on the gateway's page.",
+    },
+  );
+  const linkSeen = JSON.stringify([viaLink, forgedRoom, linkRefused]);
+  for (const secret of [SENTINEL, A_ACCESS, B_ACCESS])
+    assert.ok(!linkSeen.includes(secret), secret);
+  failSearch = undefined;
 
   // Slack's error text, body and the token itself never reach an answer, a
   // log or the edge's files.

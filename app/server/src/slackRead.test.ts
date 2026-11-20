@@ -328,6 +328,10 @@ describe("Slack read core: requests and Slack failures", () => {
       ["abc", undefined, "abc"],
       ["0", undefined, "0"],
       ["99999", undefined, "99999"],
+      // The accepted range is 1-3600 whole seconds.
+      ["3600", 3600, "3600"],
+      ["3601", undefined, "3601"],
+      ["1e2", undefined, "1e2"],
       [null, undefined, "unknown"],
     ];
     for (const [header, retryAfterS, shown] of cases) {

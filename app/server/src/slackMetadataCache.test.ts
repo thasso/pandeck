@@ -90,6 +90,30 @@ describe("Slack metadata cache", () => {
     assert.equal(cache.users("k"), undefined);
   });
 
+  test("freshness is per value: a newer value keeps the caller, not the older ones", () => {
+    const { clock, cache } = smallCache();
+    cache.setConversations("k", [{ id: "C1" }]);
+    cache.setGroups("k", [{ id: "S1" }]);
+    cache.setUser("k", "U1", { id: "U1" });
+    cache.setUsers("k", users("U2"));
+    clock.now = 600;
+    cache.setUser("k", "U3", { id: "U3" });
+
+    // At 1000 the values fetched at 0 miss; U3 (600) keeps the caller.
+    clock.now = 1000;
+    assert.equal(cache.conversations("k", 1000), undefined);
+    assert.equal(cache.groups("k"), undefined);
+    assert.equal(cache.user("k", "U1"), undefined);
+    assert.equal(cache.user("k", "U2"), undefined);
+    assert.equal(cache.users("k"), undefined);
+    assert.deepEqual(cache.user("k", "U3"), { id: "U3" });
+
+    clock.now = 1599;
+    assert.deepEqual(cache.user("k", "U3"), { id: "U3" });
+    clock.now = 1600;
+    assert.equal(cache.user("k", "U3"), undefined);
+  });
+
   test("the conversation list also honours the caller's maximum age", () => {
     const { clock, cache } = smallCache();
     cache.setConversations("k", [{ id: "C1" }]);
