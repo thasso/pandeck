@@ -190,12 +190,25 @@ Four layers, each depending only on the ones below it:
      (`NewSession.model`): on an account (`piModelForAccount`), from the shared
      registry (`piModel`), or for a configured slot with its helper fallback
      (`piModelForSlot`), and re-reads pi's registry (`refreshPiModels`); the
-     caller still says what a missing one means. The Claude-only curated options
-     sit in `harnesses/curatedModels.ts`, which loads no engine SDK, so row
-     projections and the Claude adapter stay cheap: an option by id, the alias a
-     model id runs as (`claudeModelAlias`) and the curated ids. The usage port
-     (`harnesses/usage.ts`) reads subscription usage per account kind and
-     redeems OpenAI reset credits. It also resolves run-usage attribution,
+     caller still says what a missing one means. `refreshPiModels` is the user's
+     Refresh and forces every OpenAI account's catalog fetch. Creating a runtime
+     fetches no catalog (pi ≥1.6), so the server refreshes the same runtimes
+     without forcing once at startup and then hourly, and pi's four-hour
+     freshness window decides when pi.dev is asked (`startModelCatalogRefresh`
+     in `harnesses/boot.ts`); when that changes the pickers' models,
+     `subscribePiPickerModelsChanged` tells `hub.ts`, which pushes `models` to
+     every connection. Every refresh of a runtime, the post-login one included,
+     goes through one coordination point (`refreshRuntime` in
+     `piSdk/models.ts`): pi aborts a runtime's refresh when another starts on
+     it, and the aborted one resolves like a success. An unforced refresh joins
+     whatever runs or is queued, so it never supersedes a forced one; a forced
+     request joins a forced run, or waits for an unforced one to end and then
+     runs, so the user's Refresh always gets its fetch. The Claude-only curated
+     options sit in `harnesses/curatedModels.ts`, which loads no engine SDK, so
+     row projections and the Claude adapter stay cheap: an option by id, the
+     alias a model id runs as (`claudeModelAlias`) and the curated ids. The
+     usage port (`harnesses/usage.ts`) reads subscription usage per account kind
+     and redeems OpenAI reset credits. It also resolves run-usage attribution,
      including the protected default used to reopen a legacy unbound session.
    - `harnesses/boot.ts` is what the server's composition root (`index.ts`)
      starts in the engines: pi's tool binaries, its model provider sync, each

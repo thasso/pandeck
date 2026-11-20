@@ -121,6 +121,36 @@ export function serverBundlePlugins() {
       },
     },
     {
+      // pi reads its package.json at load by walking up from its own file.
+      // Bundled, that walk starts beside server.js and finds Pandeck's, so pi
+      // took Pandeck's name and version, sent `pi/<Pandeck version>` to
+      // pi.dev, and got 404 for the model catalog. Inline pi's own instead,
+      // and leave `startupPackageJsonPath` unset: nothing on disk is pi's.
+      name: "inline-pi-package-json",
+      setup(build) {
+        build.onLoad(
+          { filter: /@earendil-works\/pi-coding-agent\/dist\/config\.js$/ },
+          ({ path }) => {
+            const source = readFileSync(path, "utf8");
+            const needle =
+              "    const packageJsonPath = getPackageJsonPath();\n" +
+              '    pkg = JSON.parse(stripBom(readFileSync(packageJsonPath, "utf-8")));\n' +
+              "    startupPackageJsonPath = packageJsonPath;\n";
+            if (!source.includes(needle))
+              throw new Error(
+                "pi config loader changed; update the bundle patch.",
+              );
+            return {
+              contents:
+                'import __paPiPackageJson from "../package.json" with { type: "json" };\n' +
+                source.replace(needle, "    pkg = __paPiPackageJson;\n"),
+              loader: "js",
+            };
+          },
+        );
+      },
+    },
+    {
       name: "inline-csstree-data",
       setup(build) {
         build.onLoad({ filter: /css-tree\/lib\/data-patch\.js$/ }, () => ({

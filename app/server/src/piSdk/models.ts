@@ -63,9 +63,10 @@ import {
  * `ModelRuntime` (pi ≥0.80.8) is the canonical async model/auth facade; the
  * synchronous `ModelRegistry` view over it serves the in-process reads
  * (`find`, `getAvailable`, `isUsingOAuth`, provider registration). `create()`
- * performs the initial availability refresh (throttled catalog fetch persisted
- * in models-store.json), so the snapshot-backed sync reads are populated before
- * this module finishes loading.
+ * performs the initial availability refresh from what models-store.json holds,
+ * so the snapshot-backed sync reads are populated before this module finishes
+ * loading. It fetches no catalog (pi ≥1.6 leaves `allowModelNetwork` off): the
+ * startup background refresh and later ones do ({@link startModelCatalogRefresh}).
  *
  * Every per-account read goes through the account model gate below: an
  * account answers only models it serves (`accountServesModel`), whatever its
@@ -445,26 +446,63 @@ function refreshErrors(
   );
 }
 
-export async function refreshModels(): Promise<{
-  models: ModelOption[];
-  error?: string;
-}> {
-  // Canonical refresh (pi ≥0.80.8): reloads models.json + credentials and
-  // recomputes availability — replaces authStorage.reload() + sync refresh().
-  //
-  // `force` because this is only ever the user's explicit Refresh: without it
-  // pi keeps its own four-hour freshness window (REMOTE_CATALOG_REFRESH_
-  // INTERVAL_MS) and a second click inside that window never reaches the
-  // network, so a model published an hour ago stays invisible with no sign
-  // that nothing was fetched.
-  //
-  // Every OpenAI credential profile refreshes too: each has its OWN isolated
-  // runtime and models-store.json, and only its own login had ever fetched
-  // one, leaving a second account's picker weeks behind the default's. Their
-  // failures do not fail the button — the default runtime's projection is what
-  // this returns — but they are collected so the caller can name them.
+type RuntimeRefresh = ReturnType<ModelRuntime["refresh"]>;
+interface RuntimeRefreshState {
+  running?: { forced: boolean; done: RuntimeRefresh } | undefined;
+  /** A forced refresh waiting for an unforced one to end. */
+  queuedForced?: RuntimeRefresh | undefined;
+}
+const runtimeRefreshes = new WeakMap<ModelRuntime, RuntimeRefreshState>();
+
+/**
+ * The one way Pandeck refreshes a runtime. pi aborts a runtime's refresh when
+ * another starts on it, and the aborted one resolves like a success; an
+ * unforced refresh inside pi's four-hour window then skips the network. So a
+ * background tick that started during the user's Refresh made a forced fetch
+ * that never happened look done. Here an unforced request joins whatever runs
+ * or is queued; a forced one joins a forced run or a queued one, and otherwise
+ * waits for the unforced run to end and then runs.
+ */
+function refreshRuntime(runtime: ModelRuntime, force: boolean): RuntimeRefresh {
+  let state = runtimeRefreshes.get(runtime);
+  if (!state) {
+    state = {};
+    runtimeRefreshes.set(runtime, state);
+  }
+  const current = state;
+  if (current.queuedForced) return current.queuedForced;
+  const begin = (forced: boolean): RuntimeRefresh => {
+    const run = {
+      forced,
+      done: runtime.refresh({ force: forced }).finally(() => {
+        if (current.running === run) current.running = undefined;
+      }),
+    };
+    current.running = run;
+    return run.done;
+  };
+  const running = current.running;
+  if (!running) return begin(force);
+  if (running.forced || !force) return running.done;
+  const startQueued = () => {
+    current.queuedForced = undefined;
+    return begin(true);
+  };
+  const queued = running.done.then(startQueued, startQueued);
+  current.queuedForced = queued;
+  return queued;
+}
+
+/**
+ * Refresh the default runtime and every OpenAI account's, each of which has
+ * its OWN isolated runtime and models-store.json: only its own login had ever
+ * fetched one, leaving a second account's picker weeks behind the default's.
+ * Canonical refresh (pi ≥0.80.8): reloads models.json + credentials and
+ * recomputes availability. Never rejects; returns every failure, labelled.
+ */
+async function refreshOpenAiRuntimes(force: boolean): Promise<string[]> {
   const collected = await Promise.all([
-    modelRuntime.refresh({ force: true }).then(refreshErrors),
+    refreshRuntime(modelRuntime, force).then(refreshErrors),
     ...listCredentialProfiles()
       .filter(
         (profile) =>
@@ -478,23 +516,93 @@ export async function refreshModels(): Promise<{
           // unreadable agent directory), NOT a catalog fetch: those resolve in
           // `errors` and `refreshErrors` names them.
           return refreshErrors(
-            await runtime.refresh({ force: true }),
+            await refreshRuntime(runtime, force),
             profile.name,
           );
         } catch (err) {
           return [`${profile.name}: ${errorText(err)}`];
         }
       }),
-  ]);
+  ]).catch((err: unknown) => [[errorText(err)]]);
   const runtimeError = modelRuntime.getError();
-  const errors = [
-    ...(runtimeError ? [String(runtimeError)] : []),
-    ...collected.flat(),
-  ];
+  return [...(runtimeError ? [String(runtimeError)] : []), ...collected.flat()];
+}
+
+export async function refreshModels(): Promise<{
+  models: ModelOption[];
+  error?: string;
+}> {
+  // `force` because this is only ever the user's explicit Refresh: without it
+  // pi keeps its own four-hour freshness window (REMOTE_CATALOG_REFRESH_
+  // INTERVAL_MS) and a second click inside that window never reaches the
+  // network, so a model published an hour ago stays invisible with no sign
+  // that nothing was fetched.
+  //
+  // Another account's failures do not fail the button — the default runtime's
+  // projection is what this returns — but they are named.
+  const errors = await refreshOpenAiRuntimes(true);
   return {
     models: listModels(),
     ...(errors.length > 0 ? { error: errors.join("; ") } : {}),
   };
+}
+
+const pickerModelsListeners = new Set<() => void>();
+
+/** Hear when a background refresh changed what {@link listModels} offers. */
+export function subscribePickerModelsChanged(listener: () => void): () => void {
+  pickerModelsListeners.add(listener);
+  return () => pickerModelsListeners.delete(listener);
+}
+
+let backgroundRefresh: Promise<void> | undefined;
+
+/**
+ * The background catalog refresh: the same runtimes as {@link refreshModels},
+ * NOT forced, so pi's own four-hour freshness window decides when the network
+ * is hit. Without it only the user's Refresh fetched a catalog, so a server
+ * never saw a new model on its own. Each runtime's refresh goes through
+ * {@link refreshRuntime}, so it never supersedes a forced one. Logs failures
+ * and never rejects; a call while one runs joins it.
+ */
+export function refreshModelCatalogsInBackground(): Promise<void> {
+  backgroundRefresh ??= (async () => {
+    try {
+      const before = JSON.stringify(listModels());
+      const errors = await refreshOpenAiRuntimes(false);
+      if (errors.length > 0)
+        console.warn("[models] background catalog refresh:", errors.join("; "));
+      if (JSON.stringify(listModels()) === before) return;
+      for (const listener of pickerModelsListeners) {
+        try {
+          listener();
+        } catch (err) {
+          console.warn("[models] models-changed listener:", errorText(err));
+        }
+      }
+    } catch (err) {
+      console.warn("[models] background catalog refresh:", errorText(err));
+    } finally {
+      backgroundRefresh = undefined;
+    }
+  })();
+  return backgroundRefresh;
+}
+
+const MODEL_CATALOG_REFRESH_INTERVAL_MS = 60 * 60_000;
+
+/**
+ * Run {@link refreshModelCatalogsInBackground} now, so a freshly started server
+ * checks pi.dev without waiting, and then hourly, well inside pi's four-hour
+ * window, so a catalog is at most about five hours old. The first run awaits
+ * each account's runtime, joining the warm-up's creation. Unref'd: it never
+ * keeps the process alive.
+ */
+export function startModelCatalogRefresh(): void {
+  void refreshModelCatalogsInBackground();
+  setInterval(() => {
+    void refreshModelCatalogsInBackground();
+  }, MODEL_CATALOG_REFRESH_INTERVAL_MS).unref();
 }
 
 const OPENAI_PROFILE_LOGIN_TIMEOUT_MS = 10 * 60_000;
@@ -651,7 +759,7 @@ export function startOpenAiProfileLogin(
       .then(async () => {
         if (deleted) return;
         const runtime = await modelRuntimeForProfile(profileId);
-        if (!deleted) await runtime.refresh({ force: true });
+        if (!deleted) await refreshRuntime(runtime, true);
       })
       .catch(() => {})
       .finally(() => {
