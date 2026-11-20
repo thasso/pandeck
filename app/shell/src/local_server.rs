@@ -4,8 +4,8 @@
 //! The server is the same Bun package production runs. The shell only supplies
 //! what a systemd unit would: the environment, a data directory, a log file and
 //! a stop. It adds no protocol of its own. Readiness is the server's existing
-//! `/api/health`. The child's stdin is a pipe the shell never writes to, so a
-//! shell that dies for any reason closes it and the server stops itself
+//! `/api/health`, and stopping is SIGTERM. A shell that dies without stopping
+//! it is noticed by the server, which watches its parent's pid
 //! (`app/server/src/desktopShell.ts`).
 //!
 //! Data lives in the app data dir, outside the bundle, so replacing the app
@@ -17,7 +17,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -40,8 +40,6 @@ const FALLBACK_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr
 
 struct Running {
     child: Child,
-    /// Held, never written: dropping it is the server's signal to stop.
-    lifeline: Option<ChildStdin>,
     url: String,
 }
 
@@ -85,12 +83,16 @@ pub fn ensure_running(app: &AppHandle) -> Result<String, String> {
 
 /// Stop the server and wait for it, killing it past [`STOP_TIMEOUT`].
 /// Blocking, and a no-op when nothing runs. A server still starting holds the
-/// lock and is left alone: the shell's exit closes its stdin, which stops it.
+/// lock and is left alone: it stops itself once the shell has exited.
 pub fn stop() {
     let Some(mut running) = RUNNING.try_lock().ok().and_then(|mut running| running.take()) else {
         return;
     };
-    drop(running.lifeline.take());
+    // SIGTERM is the server's ordinary stop. `kill` rather than a libc
+    // binding keeps the shell free of a direct dependency for one signal.
+    let _ = Command::new("/bin/kill")
+        .args(["-TERM", &running.child.id().to_string()])
+        .status();
     let deadline = Instant::now() + STOP_TIMEOUT;
     while Instant::now() < deadline {
         if running.child.try_wait().ok().flatten().is_some() {
@@ -128,12 +130,11 @@ fn start(app: &AppHandle) -> Result<Running, String> {
         .env("ASSISTANT_SHUTDOWN_GRACE_MS", SHUTDOWN_GRACE.as_millis().to_string())
         .env("DATA_DIR", &data_dir)
         .env("PATH", login_path())
-        .stdin(Stdio::piped())
+        .stdin(Stdio::null())
         .stdout(log.try_clone().map_err(|err| err.to_string())?)
         .stderr(log)
         .spawn()
         .map_err(|err| format!("Could not start the local server: {err}"))?;
-    let lifeline = child.stdin.take();
     log_line(&format!("local server pid {} on {url}", child.id()));
 
     let deadline = Instant::now() + READY_TIMEOUT;
@@ -145,7 +146,7 @@ fn start(app: &AppHandle) -> Result<Running, String> {
             ));
         }
         if healthy(port) {
-            return Ok(Running { child, lifeline, url });
+            return Ok(Running { child, url });
         }
         if Instant::now() >= deadline {
             let _ = child.kill();

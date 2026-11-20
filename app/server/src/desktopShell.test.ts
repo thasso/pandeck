@@ -1,6 +1,5 @@
-import { PassThrough } from "node:stream";
-import { describe, expect, it, vi } from "vitest";
-import { isLoopbackHostHeader, stopWhenShellExits } from "./desktopShell.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { isLoopbackHostHeader, stopWhenParentExits } from "./desktopShell.ts";
 
 describe("isLoopbackHostHeader", () => {
   it("accepts loopback names with or without a port", () => {
@@ -26,20 +25,29 @@ describe("isLoopbackHostHeader", () => {
   });
 });
 
-describe("stopWhenShellExits", () => {
-  it("stops exactly once when the shell's pipe ends", () => {
-    const stdin = new PassThrough();
+describe("stopWhenParentExits", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("stops exactly once after the parent is gone", () => {
+    vi.useFakeTimers();
+    let alive = true;
     const stop = vi.fn();
-    stopWhenShellExits(stdin, stop);
-    stdin.write("ignored");
+    stopWhenParentExits(4242, stop, { exists: () => alive });
+    vi.advanceTimersByTime(5000);
     expect(stop).not.toHaveBeenCalled();
-    stdin.end();
-    stdin.destroy();
-    return new Promise<void>((resolve) =>
-      setImmediate(() => {
-        expect(stop).toHaveBeenCalledTimes(1);
-        resolve();
-      }),
-    );
+    alive = false;
+    vi.advanceTimersByTime(1000);
+    vi.advanceTimersByTime(5000);
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats this process's own parent as alive", () => {
+    vi.useFakeTimers();
+    const stop = vi.fn();
+    stopWhenParentExits(process.ppid, stop);
+    vi.advanceTimersByTime(3000);
+    expect(stop).not.toHaveBeenCalled();
   });
 });

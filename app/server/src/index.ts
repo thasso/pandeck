@@ -46,7 +46,7 @@ import { scrubInstanceEnvironment } from "./instanceEnv.ts";
 import {
   DESKTOP_SHELL,
   isLoopbackHostHeader,
-  stopWhenShellExits,
+  stopWhenParentExits,
 } from "./desktopShell.ts";
 import { startSpawnBroker } from "./spawnBroker.ts";
 import { ignoreCollectedFileHandle } from "./collectedFileHandle.ts";
@@ -1869,7 +1869,7 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, () => requestGracefulShutdown(sig));
 }
 if (DESKTOP_SHELL)
-  stopWhenShellExits(process.stdin, () => {
+  stopWhenParentExits(process.ppid, () => {
     console.log("[assistant] desktop shell is gone; shutting down.");
     requestGracefulShutdown("SIGTERM");
   });

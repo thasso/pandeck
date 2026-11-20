@@ -37,13 +37,14 @@ unit provides on Linux and adds no protocol of its own:
 - **Ready.** It polls `GET /api/health` until it gets a 200, for up to two
   minutes, and fails early if the child exits. Only then does the first window
   open. No window shows while the server starts.
-- **Stop.** On quit it closes the child's stdin and waits up to 15 seconds, then
-  kills it. `ASSISTANT_SHUTDOWN_GRACE_MS=10000` makes the server's drain fit
-  inside that. Running turns are cut short. The server drain for a deploy takes
-  up to an hour, which is too long for closing a laptop.
-- **Shell crash.** The shell holds the write end of the child's stdin and never
-  writes to it. When the shell dies for any reason, the pipe reaches end-of-file
-  and the server stops itself the same way.
+- **Stop.** On quit it sends SIGTERM and waits up to 15 seconds, then kills it.
+  `ASSISTANT_SHUTDOWN_GRACE_MS=10000` makes the server's drain fit inside that.
+  Running turns are cut short. The server drain for a deploy takes up to an
+  hour, which is too long for closing a laptop.
+- **Shell crash.** The server checks every second that its parent pid still
+  exists and starts the same graceful shutdown when it does not. Watching stdin
+  for end-of-file was tried first; under Bun on macOS CI the server never saw
+  it.
 - **Failure.** When the server cannot start, the shell opens the bootstrap page
   with the reason and the log path instead of an app window.
 
@@ -67,7 +68,7 @@ which `instanceEnv.ts` removes before any agent starts:
   (`localhost`, `127.0.0.1`, `[::1]`), or it gets a 421. With no reverse proxy
   in front, a site that rebinds its own name to 127.0.0.1 would otherwise pass
   the same-host origin check and read the token injected into `index.html`.
-- End-of-file on stdin starts the normal graceful shutdown.
+- When its parent process is gone, it starts the normal graceful shutdown.
 - Callback URLs default to `http`, since no TLS proxy is in front.
 
 Token authentication, origin checks and the boot lock are unchanged.
@@ -116,10 +117,11 @@ Pandeck app. Leave it out to build the app under its normal identity.
 CI's `desktop-macos` job does the same on a macOS 15 arm64 runner and uploads
 the disk image as `pandeck-preview-macos-arm64`. It first smoke-tests the
 packaged server the way the shell starts it: health on loopback, a 421 for a
-foreign Host, and shutdown when stdin closes. The image is ad-hoc signed and not
-notarized. After copying the app out of the image, remove the quarantine
-attribute (`xattr -dr com.apple.quarantine "Pandeck Preview.app"`) to open it.
-The job is not part of the required `ci` gate.
+foreign Host, and shutdown once its SIGKILLed parent is gone. The image is
+ad-hoc signed and not notarized. After copying the app out of the image, remove
+the quarantine attribute
+(`xattr -dr com.apple.quarantine "Pandeck Preview.app"`) to open it. The job is
+not part of the required `ci` gate.
 
 ## Not yet
 
