@@ -257,17 +257,21 @@ pub fn local_port(app: &AppHandle) -> Option<u16> {
     load(app).local_port
 }
 
-/// Trust the bundled server's origin and make it the shell's choice. Called
-/// with the port the server is about to bind, before any window loads it.
+/// Trust the bundled server's origin and remember its port. Called with the
+/// port the server is about to bind, before any window loads it. It leaves
+/// the mode alone: that is [`choose_local`]'s or `set_server_url`'s.
 #[cfg(desktop)]
-pub fn use_local_port(app: &AppHandle, port: u16) -> Result<String, String> {
+pub fn set_local_port(app: &AppHandle, port: u16) -> Result<String, String> {
     let url = local_url(port);
     trust_server(app, &url)?;
-    update(app, |config| {
-        config.mode = Some("local".into());
-        config.local_port = Some(port);
-    })?;
+    update(app, |config| config.local_port = Some(port))?;
     Ok(url)
+}
+
+/// The user chose the bundled server.
+#[cfg(desktop)]
+pub fn choose_local(app: &AppHandle) -> Result<(), String> {
+    update(app, |config| config.mode = Some("local".into()))
 }
 
 /// The theme the next window should be painted before its page can say.

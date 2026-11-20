@@ -18,7 +18,7 @@ use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Manager};
@@ -49,10 +49,13 @@ pub struct Running {
 
 /// The current server. Held only briefly, never across a wait.
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
-/// Serializes starting a server with waiting for an old one to exit, so a
-/// restart never races the previous server's data-directory lock and a late
-/// stop can only ever reach the server it took.
+/// Serializes starts, so only one server is ever being started.
 static TRANSITION: Mutex<()> = Mutex::new(());
+/// Servers taken out of [`RUNNING`] that have not exited yet. Counted inside
+/// the same [`RUNNING`] lock that takes them, so no start can see the slot
+/// empty while a stopped server still holds the data-directory lock and port.
+static STOPPING: Mutex<usize> = Mutex::new(0);
+static STOPPED: Condvar = Condvar::new();
 static LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
 
 /// The packaged server, if this build carries one.
@@ -81,12 +84,9 @@ pub fn last_error() -> Option<String> {
 /// Blocking: call it off the main thread.
 pub fn ensure_running(app: &AppHandle) -> Result<String, String> {
     let _transition = TRANSITION.lock().map_err(|err| err.to_string())?;
-    if let Some(url) = running_url() {
+    if let Some(url) = settle()? {
         return Ok(url);
     }
-    // Whatever is left has exited; a starting one cannot exist while we hold
-    // the transition.
-    drop(take());
     let result = start(app);
     if let Ok(mut error) = LAST_ERROR.lock() {
         *error = result.as_ref().err().cloned();
@@ -94,33 +94,71 @@ pub fn ensure_running(app: &AppHandle) -> Result<String, String> {
     result
 }
 
+/// Wait until no taken server is still exiting, then answer the ready
+/// server's URL, or None when a new one may start. Clears an exited one.
+/// With [`TRANSITION`] held nothing can be starting, and once [`RUNNING`] is
+/// empty with nothing stopping, nothing can be taken before the start.
+fn settle() -> Result<Option<String>, String> {
+    loop {
+        {
+            let mut running = RUNNING.lock().map_err(|err| err.to_string())?;
+            let stopping = *STOPPING.lock().map_err(|err| err.to_string())?;
+            if stopping == 0 {
+                if let Some(current) = running.as_mut() {
+                    if current.ready && matches!(current.child.try_wait(), Ok(None)) {
+                        return Ok(Some(current.url.clone()));
+                    }
+                    *running = None;
+                }
+                return Ok(None);
+            }
+        }
+        let stopping = STOPPING.lock().map_err(|err| err.to_string())?;
+        drop(
+            STOPPED
+                .wait_while(stopping, |count| *count > 0)
+                .map_err(|err| err.to_string())?,
+        );
+    }
+}
+
 /// Detach the current server, ready or starting, so nothing else can reach
-/// it. Pass the result to [`terminate`].
+/// it, and count it as stopping until [`terminate`] has seen it exit.
 pub fn take() -> Option<Running> {
-    RUNNING.lock().ok()?.take()
+    let mut running = RUNNING.lock().ok()?;
+    let taken = running.take()?;
+    if let Ok(mut stopping) = STOPPING.lock() {
+        *stopping += 1;
+    }
+    Some(taken)
 }
 
 /// SIGTERM a taken server and wait for it, killing it past [`STOP_TIMEOUT`].
-/// Blocking. Holds the transition, so the next start waits for this exit.
+/// Blocking. A start waits in [`settle`] until this returns.
 pub fn terminate(mut running: Running) {
-    // A start still waiting on this server notices it was taken within one
-    // poll and gives the transition up.
-    let _transition = TRANSITION.lock();
     // SIGTERM is the server's ordinary stop. `kill` rather than a libc
     // binding keeps the shell free of a direct dependency for one signal.
-    let _ = Command::new("/bin/kill")
+    let _ = Command::new("kill")
         .args(["-TERM", &running.child.id().to_string()])
         .status();
     let deadline = Instant::now() + STOP_TIMEOUT;
+    let mut exited = false;
     while Instant::now() < deadline {
         if running.child.try_wait().ok().flatten().is_some() {
-            return;
+            exited = true;
+            break;
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    log_line("local server did not stop in time; killing it");
-    let _ = running.child.kill();
-    let _ = running.child.wait();
+    if !exited {
+        log_line("local server did not stop in time; killing it");
+        let _ = running.child.kill();
+        let _ = running.child.wait();
+    }
+    if let Ok(mut stopping) = STOPPING.lock() {
+        *stopping = stopping.saturating_sub(1);
+    }
+    STOPPED.notify_all();
 }
 
 /// Quit: stop whatever runs, starting or ready. Blocking.
@@ -220,7 +258,9 @@ fn start(app: &AppHandle) -> Result<String, String> {
     let log = open_log(&log_path)?;
 
     let port = choose_port(config::local_port(app));
-    let url = config::use_local_port(app, port)?;
+    // Only the port: the mode is the user's choice, written where they make
+    // it. Writing local here could undo a remote choice made since.
+    let url = config::set_local_port(app, port)?;
 
     let child = Command::new(runtime.join("personal-assistant-server"))
         .arg(runtime.join("server.js"))
@@ -366,26 +406,55 @@ mod tests {
         assert_ne!(chosen, 0);
     }
 
-    /// A stop must reach a server that has not answered yet, and the start
-    /// waiting on it must then see it as gone rather than publish it.
-    #[test]
-    fn a_stop_takes_a_server_that_is_still_starting() {
+    /// The lifecycle tests share this module's statics.
+    static SERIAL: Mutex<()> = Mutex::new(());
+
+    fn register_sleeper(ready: bool) -> u32 {
         let child = Command::new("sleep").arg("30").spawn().unwrap();
         let pid = child.id();
         *RUNNING.lock().unwrap() = Some(Running {
             child,
             url: "http://127.0.0.1:1".into(),
-            ready: false,
+            ready,
         });
+        pid
+    }
+
+    /// A stop must reach a server that has not answered yet, and the start
+    /// waiting on it must then see it as gone rather than publish it.
+    #[test]
+    fn a_stop_takes_a_server_that_is_still_starting() {
+        let _serial = SERIAL.lock().unwrap_or_else(|err| err.into_inner());
+        let pid = register_sleeper(false);
         assert!(matches!(poll(pid).unwrap(), Poll::Starting));
         assert_eq!(running_url(), None);
 
         let taken = take().expect("a starting server is taken");
         assert!(matches!(poll(pid).unwrap(), Poll::Gone));
         assert!(!mark_ready(pid));
-        let mut child = taken.child;
-        child.kill().unwrap();
-        child.wait().unwrap();
+        terminate(taken);
+        assert_eq!(*STOPPING.lock().unwrap(), 0);
+    }
+
+    /// A restart must not begin while a server taken by a stop still runs,
+    /// however late the stopper gets to it: the old one holds the data
+    /// directory's lock and the remembered port.
+    #[test]
+    fn a_start_waits_for_a_taken_server_to_exit() {
+        let _serial = SERIAL.lock().unwrap_or_else(|err| err.into_inner());
+        register_sleeper(true);
+        assert_eq!(settle().unwrap().as_deref(), Some("http://127.0.0.1:1"));
+
+        let taken = take().expect("the ready server is taken");
+        let (sent, settled) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || sent.send(settle()).unwrap());
+        assert!(
+            settled.recv_timeout(Duration::from_millis(300)).is_err(),
+            "a start went ahead while the taken server still ran"
+        );
+        terminate(taken);
+        assert_eq!(settled.recv().unwrap().unwrap(), None);
+        waiter.join().unwrap();
     }
 
     /// A one-request server answering `response`.

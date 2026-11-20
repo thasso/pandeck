@@ -551,6 +551,9 @@ async fn use_local_server(
     forwards: State<'_, port_forward::PortForwardManager>,
 ) -> Result<String, String> {
     forwards.stop_all();
+    // The choice is recorded first, so a remote choice made after it wins
+    // and stops this start at its next poll.
+    config::choose_local(&app)?;
     tauri::async_runtime::spawn_blocking(move || local_server::ensure_running(&app))
         .await
         .map_err(|err| err.to_string())?

@@ -38,14 +38,16 @@ unit provides on Linux and adds no protocol of its own:
   minutes, and fails early if the child exits. Only then does the first window
   open. No window shows while the server starts.
 - **Stop.** The child is registered the moment it is spawned, so a stop reaches
-  a server that is still starting. A stop detaches it at once, then sends
-  SIGTERM and waits up to 15 seconds before killing it. Starting a server and
-  waiting for an old one to exit are serialized, so a restart never races the
-  old server's data-directory lock and a late stop cannot reach a newer server.
-  A server still starting when remote is chosen is stopped at the next poll.
-  Quitting stops it the same way. `ASSISTANT_SHUTDOWN_GRACE_MS=10000` makes the
-  server's drain fit inside that. Running turns are cut short. The server drain
-  for a deploy takes up to an hour, which is too long for closing a laptop.
+  a server that is still starting. A stop detaches it at once and counts it as
+  stopping, then sends SIGTERM and waits up to 15 seconds before killing it. A
+  start first waits until nothing counted is still exiting, so a restart never
+  races the old server's data-directory lock or port, and a late stop cannot
+  reach a newer server. Starting never writes the mode: only the user's choice
+  does, so a remote choice made during a start stands, and the start stops its
+  server at the next poll. Quitting stops it the same way.
+  `ASSISTANT_SHUTDOWN_GRACE_MS=10000` makes the server's drain fit inside that.
+  Running turns are cut short. The server drain for a deploy takes up to an
+  hour, which is too long for closing a laptop.
 - **Shell crash.** The server checks every second that the shell's pid still
   exists and starts the same graceful shutdown when it does not. It watches the
   pid it was given, not `process.ppid`: a shell that dies before that watch
@@ -105,8 +107,8 @@ before.
   than reconnecting to the current server. **Connect** there probes a URL and
   switches to remote mode (`set_server_url`), stopping the local server.
 - **Run Pandeck on this Mac** appears when the build carries a server.
-  `use_local_server` starts the server, or reuses a running one, and answers its
-  URL once it is ready.
+  `use_local_server` records local mode, starts the server or reuses a running
+  one, and answers its URL once it is ready.
 - `local_server_info` tells the page whether local mode is available and
   selected, and why the last start failed.
 
