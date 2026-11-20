@@ -8,8 +8,13 @@ import {
   decodeGatewayUiEnrollmentRequest,
   decodeGatewayUiMcpToken,
   decodeGatewayUiMe,
+  decodeGatewayUiSlack,
+  decodeGatewayUiSlackConnectStart,
   GATEWAY_UI_ATLASSIAN_CONNECT_CODES,
   GATEWAY_UI_SIGNIN_CODES,
+  GATEWAY_UI_SLACK_CONNECT_CODES,
+  isGatewayUiDisplayText,
+  SLACK_AUTHORIZE_URL,
 } from "./gatewayUi.ts";
 
 describe("gateway UI wire model", () => {
@@ -272,5 +277,125 @@ describe("gateway UI wire model", () => {
         decodeGatewayUiEnrollmentRequest(value),
         JSON.stringify(value),
       ).toBeUndefined();
+  });
+
+  test("a display text is 1-256 UTF-16 units, not only whitespace, with no control, format or separator character", () => {
+    for (const value of ["castLabs", "Équipe ☃ 東京", "x".repeat(256), "😀"])
+      expect(isGatewayUiDisplayText(value), value).toBe(true);
+    for (const value of [
+      "",
+      "   ",
+      "\t\n",
+      "x".repeat(257),
+      "a\u0000b",
+      "a\u0007b",
+      "a\u001b[2Jb",
+      "a\u007fb",
+      "a\u0085b",
+      "a\u00adb",
+      "a\u200bb",
+      "a\u200eb",
+      "a\u202eb",
+      "a\u2066b",
+      "a\u2028b",
+      "a\u2029b",
+      "a\ufeffb",
+      "a\ud800b",
+      "a\ue000b",
+      undefined,
+      null,
+      7,
+    ])
+      expect(isGatewayUiDisplayText(value), JSON.stringify(value)).toBe(false);
+  });
+
+  test("a Slack status needs both booleans; an unknown problem and an undisplayable team name drop", () => {
+    expect(
+      decodeGatewayUiSlack({
+        offered: true,
+        connected: true,
+        teamName: "Fake Workspace",
+        extra: "x",
+      }),
+    ).toEqual({ offered: true, connected: true, teamName: "Fake Workspace" });
+    expect(decodeGatewayUiSlack({ offered: false, connected: false })).toEqual({
+      offered: false,
+      connected: false,
+    });
+    for (const problem of [
+      "vault_locked",
+      "vault_unavailable",
+      "invalid",
+      "rejected",
+    ])
+      expect(
+        decodeGatewayUiSlack({ offered: true, connected: false, problem }),
+      ).toEqual({ offered: true, connected: false, problem });
+    expect(
+      decodeGatewayUiSlack({
+        offered: true,
+        connected: true,
+        teamName: "Fake\u001b[2JWork\u202espace",
+        problem: "exploded",
+      }),
+    ).toEqual({ offered: true, connected: true });
+    expect(
+      decodeGatewayUiSlack({ offered: true, connected: true, teamName: 7 }),
+    ).toEqual({ offered: true, connected: true });
+    for (const value of [
+      null,
+      [],
+      { connected: true },
+      { offered: true },
+      { offered: "true", connected: false },
+      { offered: true, connected: 1 },
+    ])
+      expect(
+        decodeGatewayUiSlack(value),
+        JSON.stringify(value),
+      ).toBeUndefined();
+  });
+
+  test("a Slack connect start decodes only with Slack's authorization endpoint", () => {
+    expect(SLACK_AUTHORIZE_URL).toBe("https://slack.com/oauth/v2/authorize");
+    const ok =
+      "https://slack.com/oauth/v2/authorize?client_id=FAKE_ID&user_scope=search%3Aread&state=FAKE_STATE";
+    expect(decodeGatewayUiSlackConnectStart({ authorizeUrl: ok })).toEqual({
+      authorizeUrl: ok,
+    });
+    for (const authorizeUrl of [
+      "http://slack.com/oauth/v2/authorize?x=1",
+      "https://slack.com.evil.example/oauth/v2/authorize?x=1",
+      "https://u:p@slack.com/oauth/v2/authorize?x=1",
+      "https://slack.com/oauth/v2/authorize#x",
+      "https://slack.com/oauth/v2/authorize/x?x=1",
+      "https://slack.com:8443/oauth/v2/authorize?x=1",
+      "https://auth.atlassian.com/authorize?x=1",
+      "javascript:alert(1)",
+      "",
+      7,
+    ])
+      expect(
+        decodeGatewayUiSlackConnectStart({ authorizeUrl }),
+        String(authorizeUrl),
+      ).toBeUndefined();
+    expect(decodeGatewayUiSlackConnectStart(null)).toBeUndefined();
+  });
+
+  test("the Slack connect codes are fixed", () => {
+    expect([...GATEWAY_UI_SLACK_CONNECT_CODES]).toEqual([
+      "rejected",
+      "unreachable",
+      "team_mismatch",
+      "not_configured",
+      "vault_locked",
+      "vault_unavailable",
+      "busy",
+      "tools_unavailable",
+      "signed_out",
+      "expired",
+      "failed",
+      "denied",
+    ]);
   });
 });

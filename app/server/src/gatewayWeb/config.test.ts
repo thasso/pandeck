@@ -180,17 +180,36 @@ test("the Atlassian OAuth client: clientId and clientSecret each load alone or t
   }
 });
 
+/** Task-1420 R6: what the Slack tools read as the user, in that order. */
+const R6_SLACK_SCOPES = [
+  "search:read",
+  "channels:history",
+  "groups:history",
+  "im:history",
+  "mpim:history",
+  "channels:read",
+  "groups:read",
+  "im:read",
+  "mpim:read",
+  "files:read",
+  "users:read",
+  "users:read.email",
+  "usergroups:read",
+];
+
 test("the Slack OAuth client: clientId and clientSecret each load alone or together; empty ones refuse without echoing", () => {
   const { clientId, clientSecret } = FAKE_SLACK_CLIENT;
+  const userScopes = R6_SLACK_SCOPES;
   const load = (slack: unknown) =>
     loadGatewayWebConfig(fixture((c) => (c.slack = slack)).file).slack;
   assert.equal(loadGatewayWebConfig(fixture().file).slack, undefined);
-  assert.deepEqual(load({}), {});
-  assert.deepEqual(load({ clientId }), { clientId });
-  assert.deepEqual(load({ clientSecret }), { clientSecret });
+  assert.deepEqual(load({}), { userScopes });
+  assert.deepEqual(load({ clientId }), { clientId, userScopes });
+  assert.deepEqual(load({ clientSecret }), { clientSecret, userScopes });
   assert.deepEqual(load({ clientId, clientSecret }), {
     clientId,
     clientSecret,
+    userScopes,
   });
   // Atlassian's preset is untouched beside it.
   const both = loadGatewayWebConfig(
@@ -199,7 +218,7 @@ test("the Slack OAuth client: clientId and clientSecret each load alone or toget
       c.atlassian = { clientId: FAKE_CLIENT.clientId };
     }).file,
   );
-  assert.deepEqual(both.slack, { clientId });
+  assert.deepEqual(both.slack, { clientId, userScopes });
   assert.equal(both.atlassian?.clientId, FAKE_CLIENT.clientId);
   for (const [slack, field] of [
     [{ clientId: "", clientSecret }, /slack\.clientId/],
@@ -212,6 +231,73 @@ test("the Slack OAuth client: clientId and clientSecret each load alone or toget
     const message = refusal(fixture((c) => (c.slack = slack)).file);
     assert.match(message, field);
     assert.doesNotMatch(message, new RegExp(`${clientId}|${clientSecret}`));
+  }
+});
+
+test("slack.userScopes: absent gives the 13 R6 scopes; a valid list drops duplicates; a bad one refuses naming the field only", () => {
+  const { clientId } = FAKE_SLACK_CLIENT;
+  const load = (slack: unknown) =>
+    loadGatewayWebConfig(fixture((c) => (c.slack = slack)).file).slack;
+  assert.deepEqual(load({ clientId })?.userScopes, R6_SLACK_SCOPES);
+  assert.equal(R6_SLACK_SCOPES.length, 13);
+  assert.deepEqual(
+    load({
+      clientId,
+      userScopes: [
+        "search:read",
+        "files:read",
+        "search:read",
+        "users:read.email",
+      ],
+    })?.userScopes,
+    ["search:read", "files:read", "users:read.email"],
+  );
+  // Without clientId the section parses; nothing is offered (server.ts).
+  assert.deepEqual(load({ userScopes: ["files:read"] }), {
+    userScopes: ["files:read"],
+  });
+  const tooMany = Array.from({ length: 65 }, (_, i) => `scope${i}:read`);
+  for (const userScopes of [
+    [],
+    tooMany,
+    ["chat:write,files:read"],
+    ["search read"],
+    ["Search:read"],
+    ["files:read", 7],
+    "files:read",
+    { scope: "files:read" },
+  ]) {
+    const message = refusal(
+      fixture((c) => (c.slack = { clientId, userScopes })).file,
+    );
+    assert.match(message, /slack\.userScopes/);
+    for (const value of [
+      "chat:write",
+      "search read",
+      "Search:read",
+      "scope64:read",
+      clientId,
+    ])
+      assert.ok(!message.includes(value), message);
+  }
+});
+
+test("slack.teamId: a Slack team id is kept; anything else refuses naming the field only", () => {
+  const { clientId } = FAKE_SLACK_CLIENT;
+  const load = (slack: unknown) =>
+    loadGatewayWebConfig(fixture((c) => (c.slack = slack)).file).slack;
+  assert.equal(load({ clientId, teamId: "T0123ABC" })?.teamId, "T0123ABC");
+  assert.deepEqual(load({ teamId: "T0123ABC" }), {
+    teamId: "T0123ABC",
+    userScopes: R6_SLACK_SCOPES,
+  });
+  for (const teamId of ["t0123", "X0123", "T", `T${"A".repeat(31)}`, 42]) {
+    const message = refusal(
+      fixture((c) => (c.slack = { clientId, teamId })).file,
+    );
+    assert.match(message, /slack\.teamId/);
+    assert.ok(!message.includes(String(teamId)) || teamId === "T", message);
+    assert.ok(!message.includes(clientId), message);
   }
 });
 

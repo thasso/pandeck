@@ -17,6 +17,8 @@ import {
   decodeGatewayUiLoginStart,
   decodeGatewayUiMcpToken,
   decodeGatewayUiRequests,
+  decodeGatewayUiSlack,
+  decodeGatewayUiSlackConnectStart,
   GATEWAY_UI_CSRF_HEADER,
   type GatewayUiAccount,
   type GatewayUiAtlassian,
@@ -30,6 +32,7 @@ import {
   type GatewayUiLoginStartRequest,
   type GatewayUiMcpToken,
   type GatewayUiRequests,
+  type GatewayUiSlack,
 } from "@assistant/shared/gatewayUi";
 
 export class GatewayApiError extends Error {
@@ -157,6 +160,30 @@ export async function startAtlassianConnect(): Promise<string> {
   const response = await post("/api/integrations/atlassian/connect", {});
   return decoded(decodeGatewayUiAtlassianConnectStart(await response.json()))
     .authorizeUrl;
+}
+
+/** The user's Slack connection, and whether this gateway offers it. */
+export async function fetchSlack(
+  _key: string,
+  signal: AbortSignal,
+): Promise<GatewayUiSlack> {
+  return decoded(
+    decodeGatewayUiSlack(await get("/api/integrations/slack", signal)),
+  );
+}
+
+/**
+ * Starts "Sign in with Slack": the URL the browser goes to next, accepted only
+ * on Slack's authorize endpoint.
+ */
+export async function startSlackConnect(): Promise<string> {
+  const response = await post("/api/integrations/slack/connect", {});
+  return decoded(decodeGatewayUiSlackConnectStart(await response.json()))
+    .authorizeUrl;
+}
+
+export async function clearSlack(): Promise<void> {
+  await post("/api/integrations/slack/clear", {});
 }
 
 export async function fetchClients(

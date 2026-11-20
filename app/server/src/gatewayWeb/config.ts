@@ -74,14 +74,25 @@ export interface AtlassianPreset {
   scopes: string[];
 }
 
-interface SlackPreset {
+export interface SlackPreset {
   /**
    * The Slack OAuth client (Task-1452), each checked alone like Atlassian's:
    * whether the pair is needed depends on the vault's topology
-   * (`gatewayEdge.ts`). Neither reaches the page.
+   * (`gatewayEdge.ts`). Neither reaches the page. `clientId` turns "Sign in
+   * with Slack" on (Task-1453).
    */
   clientId?: string;
   clientSecret?: string;
+  /**
+   * The deployment's workspace: the authorize URL's `team` hint and the
+   * vault connect's `team`, which the vault enforces.
+   */
+  teamId?: string;
+  /**
+   * The user scopes "Sign in with Slack" asks for: the configured list or
+   * `DEFAULT_SLACK_USER_SCOPES`. Never a bot scope.
+   */
+  userScopes: string[];
 }
 
 /** Asked for when the file names no `atlassian.scopes`. */
@@ -98,6 +109,49 @@ const DEFAULT_ATLASSIAN_SCOPES: readonly string[] = [
 
 const SCOPE = /^[\x21-\x7e]{1,128}$/;
 const MAX_SCOPES = 64;
+
+/**
+ * Asked for when the file names no `slack.userScopes`: what Pandeck's Slack
+ * tools read as the user (Task-1420), and nothing to post or write.
+ */
+const DEFAULT_SLACK_USER_SCOPES: readonly string[] = [
+  "search:read",
+  "channels:history",
+  "groups:history",
+  "im:history",
+  "mpim:history",
+  "channels:read",
+  "groups:read",
+  "im:read",
+  "mpim:read",
+  "files:read",
+  "users:read",
+  "users:read.email",
+  "usergroups:read",
+];
+
+/** A Slack scope name: no comma or space, so the comma join is unambiguous. */
+const SLACK_SCOPE = /^[a-z][a-z0-9_.:-]{0,127}$/;
+/** A Slack team (workspace) id, as the vault checks it. */
+const SLACK_TEAM_ID = /^T[A-Z0-9]{2,30}$/;
+
+/**
+ * `slack.userScopes`: 1-64 lowercase scope names, duplicates dropped. The
+ * refusal names the field only, never an entry.
+ */
+function slackUserScopes(value: unknown): string[] {
+  if (value === undefined) return [...DEFAULT_SLACK_USER_SCOPES];
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > MAX_SCOPES ||
+    value.some((v) => typeof v !== "string" || !SLACK_SCOPE.test(v))
+  )
+    refuse(
+      `slack.userScopes must be a list of 1-${MAX_SCOPES} Slack scope names, each lowercase without commas or spaces`,
+    );
+  return [...new Set(value as string[])];
+}
 
 /**
  * `atlassian.scopes`: up to 64 printable-ASCII strings without spaces, case
@@ -237,7 +291,16 @@ function slackPreset(value: unknown): SlackPreset | undefined {
     ...(raw.clientSecret !== undefined
       ? { clientSecret: text(raw.clientSecret, "slack.clientSecret") }
       : {}),
+    ...(raw.teamId !== undefined ? { teamId: slackTeamId(raw.teamId) } : {}),
+    userScopes: slackUserScopes(raw.userScopes),
   };
+}
+
+/** `slack.teamId`: `T` and 2-30 uppercase letters or digits. */
+function slackTeamId(value: unknown): string {
+  if (typeof value !== "string" || !SLACK_TEAM_ID.test(value))
+    refuse("slack.teamId must be a Slack team id (T followed by 2-30 A-Z0-9)");
+  return value;
 }
 
 /**

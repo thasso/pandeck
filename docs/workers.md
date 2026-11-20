@@ -2781,15 +2781,17 @@ plus `jira_search_issues` and `jira_lookup` (Task-1439).
   exchanges, picks the site and stores the record.
 - **Slack OAuth records** (Task-1452, Task-1420 PR1). The vault holds a user's
   Slack user token with token rotation the same way, beside an Atlassian record
-  of the same user (records are per user and integration). Connect
-  (`gateway/vaultSlack.ts`): `POST https://slack.com/api/oauth.v2.access` with
-  the client, code and redirect URI as form fields; only the answer's
-  `authed_user` counts (`token_type: "user"`, header-safe access and refresh
-  tokens of at most 8 192 characters, `expires_in` a positive integer of at most
-  a year, a `U…`/`W…` user id) with the top-level `team` id (`T…`); a top-level
-  (bot) token is never read. No refresh token means rotation is off on the app:
-  `rejected`, with the fixed log line "Slack granted no refresh token". With the
-  deployment's `team` preset another workspace answers `team: "mismatch"`. Then
+  of the same user (records are per user and integration). "Sign in with Slack"
+  on the gateway's page starts every connect (Task-1453, "The gateway's sign-in
+  and UI"). Connect (`gateway/vaultSlack.ts`):
+  `POST https://slack.com/api/oauth.v2.access` with the client, code and
+  redirect URI as form fields; only the answer's `authed_user` counts
+  (`token_type: "user"`, header-safe access and refresh tokens of at most 8 192
+  characters, `expires_in` a positive integer of at most a year, a `U…`/`W…`
+  user id) with the top-level `team` id (`T…`); a top-level (bot) token is never
+  read. No refresh token means rotation is off on the app: `rejected`, with the
+  fixed log line "Slack granted no refresh token". With the deployment's `team`
+  preset another workspace answers `team: "mismatch"`. Then
   `POST https://slack.com/api/auth.test` with the new token as Bearer must name
   the same team and user and an `https://<workspace>.slack.com/` (or
   `.enterprise.slack.com`) URL, whose host is kept. The record is
@@ -2870,12 +2872,13 @@ plus `jira_search_issues` and `jira_lookup` (Task-1439).
   codes and texts: `integration_invalid`, `integration_rejected`,
   `integration_unreachable`, `vault_locked`, `vault_unavailable`,
   `tools_unavailable`, `integration_busy`, `integration_sign_in_required`. One
-  set, clear or connect runs per user at a time, from any client or the gateway
-  page (`userOperations.ts`); another meanwhile is refused `integration_busy`
-  ("Another change to this credential is still running. Try again.") at once and
-  changes nothing, so an earlier set can never land after a later clear. A
-  status is never refused. Pandeck's Settings shows its own text for each code
-  (`remoteIntegrations.ts`), `integration_busy` included.
+  set, clear or connect runs per user and integration at a time, from any client
+  or the gateway page (`userOperations.ts`); another of that integration
+  meanwhile is refused `integration_busy` ("Another change to this credential is
+  still running. Try again.") at once and changes nothing, so an earlier set can
+  never land after a later clear. A status is never refused. Pandeck's Settings
+  shows its own text for each code (`remoteIntegrations.ts`), `integration_busy`
+  included.
 - **Tool calls** (`gateway-client/1.0`, additive, Task-1398), the client's
   second adapter over the same host: `tools.list {}` answers `{tools}`, each
   `{name, description, inputSchema, effect, actionKey}`;
@@ -2918,16 +2921,18 @@ changes. The mutual-TLS ports, the enrollment port and the vault are untouched.
 The page is `app/web/gateway.html`, its own React entry, built by
 `vite.gateway.config.ts` into `app/web/dist-gateway/` (`pnpm run build` builds
 both bundles); under a top bar with the signed-in email and Sign out it shows
-the user's Claude and ChatGPT accounts, Jira credential and clients, and reaches
-only its own origin with its session cookie.
-`pnpm --filter @assistant/web dev:gateway` serves the page on port 5180 over a
-dev-only fake `/api` and `/auth` (`app/web/gatewayDevApi.ts`, in-memory sample
-data, never in a build; the default shows a deployment that signs in with
-Atlassian: the plugin also serves its own `src/gateway/navigate.ts`, so "Sign in
-with Atlassian" goes to the dev `/auth/atlassian/callback` instead of Atlassian
-and finishes a fake sign-in without leaving localhost, and
-`GATEWAY_DEV_GENERIC=1` shows the generic gateway with the token form and no
-preset).
+the user's Claude and ChatGPT accounts, Jira credential, Slack connection (where
+the config offers "Sign in with Slack") and clients, and reaches only its own
+origin with its session cookie. `pnpm --filter @assistant/web dev:gateway`
+serves the page on port 5180 over a dev-only fake `/api` and `/auth`
+(`app/web/gatewayDevApi.ts`, in-memory sample data, never in a build; the
+default shows a deployment that signs in with Atlassian: the plugin also serves
+its own `src/gateway/navigate.ts`, so "Sign in with Atlassian" goes to the dev
+`/auth/atlassian/callback` instead of Atlassian and finishes a fake sign-in
+without leaving localhost, "Sign in with Slack" likewise goes to the dev
+`/auth/slack/callback`, `GATEWAY_DEV_GENERIC=1` shows the generic gateway with
+the token form and no preset, and `GATEWAY_DEV_NO_SLACK=1` a gateway that does
+not offer Slack).
 
 - **Config.** One JSON file, refused unless mode 0600 (no group or other bits),
   so the client secret stays out of argv. Every refusal is a fixed message
@@ -2977,6 +2982,23 @@ preset).
   adds `offline_access`, so the vault gets a refresh token. The Atlassian app
   needs the callback `<publicOrigin>/auth/atlassian/callback` and every scope
   asked for. An optional
+  `"slack": {"clientId": "<Slack app's client id>", "teamId": "T…", "userScopes": […]}`
+  (Task-1453) turns on "Sign in with Slack" with `clientId` ("Slack sign-in"
+  below); without it nothing Slack shows, whatever else the section holds. The
+  client secret stays with the vault ("OAuth client config" under Credentials).
+  `teamId`, optional, is the deployment's workspace (`T` and 2-30 uppercase
+  letters or digits, as `auth.test` names it): it goes to Slack as the authorize
+  URL's `team` hint and to the vault's connect as `team`, where a grant for
+  another workspace is refused. `userScopes` overrides the user scopes asked
+  for: 1-64 names, each lowercase `[a-z][a-z0-9_.:-]` of at most 128 characters
+  (so the comma join is unambiguous), duplicates dropped, refused with a fixed
+  text naming only the field. Without it the gateway asks for `search:read`,
+  `channels:history`, `groups:history`, `im:history`, `mpim:history`,
+  `channels:read`, `groups:read`, `im:read`, `mpim:read`, `files:read`,
+  `users:read`, `users:read.email` and `usergroups:read`, in that order, as user
+  scopes only (never a bot `scope`). The Slack app needs token rotation on, the
+  redirect URL `<publicOrigin>/auth/slack/callback` and every user scope asked
+  for. An optional
   `"coder": {"googleClientId": "<Coder's Google client id>", "automaticApproval": true}`
   (Task-1410 PR2) turns on zero-click enrollment ("Zero-click enrollment" under
   Client mode): `googleClientId` is the OAuth client Coder signs its users in
@@ -3105,11 +3127,13 @@ preset).
     `integrations.set` does, →
     `{connected: true, kind: "token", connectWith: "token", site, email, displayName?, preset?}`;
     `POST /api/integrations/atlassian/clear` → 204. While a set, clear or
-    sign-in callback's connect of the user runs (from this page, another tab or
-    a client), another is refused `409 integration_busy` (a callback:
-    `?atlassian=busy`) and changes nothing; the page itself never sends one
-    while its own is pending. The token is write-only: no answer carries it.
-    Refusals: `400 integration_invalid`, `422 integration_rejected`,
+    sign-in callback's connect of the user's Atlassian credential runs (from
+    this page, another tab or a client), another of them is refused
+    `409 integration_busy` (a callback: `?atlassian=busy`) and changes nothing;
+    the page itself never sends one while its own is pending. Each integration
+    has its own slot: a running Slack connect never makes an Atlassian change
+    busy, nor the other way round. The token is write-only: no answer carries
+    it. Refusals: `400 integration_invalid`, `422 integration_rejected`,
     `502 integration_unreachable`,
     `503 vault_locked|vault_unavailable|tools_unavailable`,
     `409 integration_busy`, and where `connectWith` is `oauth`
@@ -3152,6 +3176,40 @@ preset).
     sign-in card. Success is silent. Pending sign-ins are in memory, so an edge
     restart between start and callback answers `failed` or `expired`, and the
     user starts again.
+  - **Slack sign-in** (Task-1453), the same flow with its own pending table,
+    cookie and codes, so an Atlassian state never completes a Slack callback or
+    the other way round. `GET /api/integrations/slack` →
+    `{offered, connected, teamName?, problem?}`: `offered` is whether the config
+    names `slack.clientId` (if not, the answer is
+    `{offered: false, connected: false}` without a vault or tools call, and
+    every other Slack route is `404`); `problem` one of `vault_locked`,
+    `vault_unavailable`, `invalid` (the vault's access view did not decode),
+    `rejected` (Slack refused the vault's refresh). `teamName` is the
+    workspace's name as the vault holds it, answered only when it passes
+    `isGatewayUiDisplayText` (1-256 UTF-16 units, not only whitespace, no
+    control, format, surrogate, private-use or unassigned character, no line or
+    paragraph separator), which the page's decoder applies again; never a token.
+    Reading the status may refresh the token in the vault.
+    `POST /api/integrations/slack/clear` → 204 (log line
+    `ui integration slack: cleared user=<id>`), refused as the Atlassian clear.
+    `POST /api/integrations/slack/connect {}` → `{authorizeUrl}`, Slack's
+    `https://slack.com/oauth/v2/authorize` with `client_id`, `user_scope` (the
+    scopes comma-joined), `redirect_uri=<publicOrigin>/auth/slack/callback`, a
+    fresh `state` and, with `slack.teamId`, `team`; the cookie is
+    `__Host-pgw_slack`, the table, bounds and state rule as Atlassian's.
+    `GET /auth/slack/callback` checks as Atlassian's does, then hands the code,
+    the same redirect URI and the configured `teamId` as `team` to the vault's
+    connect (`UserOperations.connectSlack`). It answers `303 /` on success, else
+    `303 /?slack=<code>` with `code` one of `rejected`, `unreachable`,
+    `team_mismatch` (the grant is for another workspace than `slack.teamId`),
+    `not_configured`, `vault_locked`, `vault_unavailable`, `busy`,
+    `tools_unavailable`, `signed_out`, `expired`, `failed`, `denied`. Log lines
+    are `ui slack connect: started|ok user=<id>`, `refused, busy user=<id>` and
+    `failed (<code>|state)[ user=<id>]`; no workspace name, Slack text, code or
+    state. The page reads `?slack=` once, independently of `?atlassian=`, and
+    shows it in the Slack section (signed out, only `signed_out`, on the sign-in
+    card); a connected record reads "Connected to <workspace>" or "Connected to
+    your Slack workspace", and Disconnect asks first.
   - `GET /api/clients` → `{clients: [{id, label, createdAt, mcpToken}]}`, the
     user's clients that are not revoked, `mcpToken` a boolean.
     `POST /api/clients/code {label}` → `{code, validForSeconds: 900}`;
@@ -3222,12 +3280,16 @@ preset).
   `ui clients: client <id> revoked user=<id>`,
   `ui clients: client <id> mcp token minted|revoked user=<id>` and
   `ui integration atlassian: set|cleared user=<id>`,
+  `ui integration slack: cleared user=<id>`,
   `ui enrollments: request approved|denied user=<id>`,
   `ui enrollments: refused, budget spent|miss cap reached user=<id>` and
-  `ui enrollments: miss cap reached`, beside the login manager's own
+  `ui enrollments: miss cap reached`, and the sign-ins'
+  `ui atlassian|slack connect: …` lines above, beside the login manager's own
   `login <id> (account <id>): <state>`; never an email, code, state, nonce,
-  verifier, token, cookie, secret, query, pasted code, login URL or output.
-  Provider error text is never echoed.
+  verifier, token, cookie, secret, query, pasted code, login URL, workspace name
+  or output. Provider error text is never echoed. A reverse proxy in front of
+  the page should not log query strings under `/auth/`: the callbacks carry
+  one-use authorization codes and states there.
 - **Packaged entry (Task-1401).** Both edge entries start the UI through
   `gatewayEdge.ts`, with a `GatewayWebUsers` adapter over the running gateway's
   own `ClientRegistry` and `GatewayWebAccounts`, `GatewayWebIntegrations` and

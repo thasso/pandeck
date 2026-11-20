@@ -209,6 +209,9 @@ function fakeSettings() {
       record("connect", userId, request);
       return { connected: true, kind: "oauth", connectWith: "oauth" };
     },
+    slackStatus: async () => ({ connected: false }),
+    connectSlack: async () => {},
+    clearSlack: async () => {},
   };
   const clients: GatewayWebClients = {
     list: (userId) => {
@@ -695,6 +698,7 @@ function fakeTools(check: () => Promise<IntegrationCheck>): EdgeTools {
           return site && email ? { site, email, kind: "token" } : undefined;
         },
       },
+      slack: { describe: () => undefined },
     },
   };
 }

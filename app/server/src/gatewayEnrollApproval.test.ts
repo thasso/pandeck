@@ -151,6 +151,7 @@ const TOOLS: EdgeTools = {
       check: () => Promise.resolve({ ok: false, problem: "rejected" }),
       describe: () => undefined,
     },
+    slack: { describe: () => undefined },
   },
 };
 

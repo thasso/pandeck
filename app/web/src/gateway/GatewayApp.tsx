@@ -4,20 +4,24 @@ import {
   GATEWAY_UI_ATLASSIAN_CONNECT_CODES,
   GATEWAY_UI_CSRF_HEADER,
   GATEWAY_UI_SIGNIN_CODES,
+  GATEWAY_UI_SLACK_CONNECT_CODES,
   type GatewayUiAtlassianConnectCode,
   type GatewayUiAtlassianSetRequest,
   type GatewayUiMe,
   type GatewayUiSigninCode,
+  type GatewayUiSlackConnectCode,
 } from "@assistant/shared/gatewayUi";
 import { useFetchState } from "../hooks/useFetchState.ts";
 import {
   clearAtlassian,
+  clearSlack,
   createEnrollmentCode,
   decideEnrollment,
   fetchAccounts,
   fetchAtlassian,
   fetchClients,
   fetchRequests,
+  fetchSlack,
   lookupEnrollment,
   mintMcpToken,
   removeAccount,
@@ -25,6 +29,7 @@ import {
   revokeMcpToken,
   setAtlassian,
   startAtlassianConnect,
+  startSlackConnect,
 } from "./gatewayApi.ts";
 import {
   GatewayEnrollApproval,
@@ -76,6 +81,32 @@ function atlassianCode(
     : undefined;
 }
 
+/**
+ * The Slack callback's `?slack=` code (Task-1453), kept as `atlassianCode`
+ * keeps its own: only a fixed code, any other value dropped unread.
+ */
+function slackCode(search: string): GatewayUiSlackConnectCode | undefined {
+  const code = new URLSearchParams(search).get("slack");
+  return code !== null &&
+    (GATEWAY_UI_SLACK_CONNECT_CODES as readonly string[]).includes(code)
+    ? (code as GatewayUiSlackConnectCode)
+    : undefined;
+}
+
+/** Takes the query parameter `key` out of the address, keeping the rest. */
+function dropQueryKey(key: string): void {
+  const { pathname, search, hash } = window.location;
+  const query = new URLSearchParams(search);
+  if (!query.has(key)) return;
+  query.delete(key);
+  const rest = query.toString();
+  window.history.replaceState(
+    window.history.state,
+    "",
+    pathname + (rest ? `?${rest}` : "") + hash,
+  );
+}
+
 export function GatewayApp({
   reload = () => window.location.reload(),
 }: {
@@ -92,20 +123,13 @@ export function GatewayApp({
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
-  // The callback's code is read once and leaves the address; the kept code
-  // outlives the `/api/me` load that decides where it shows.
+  // Each callback's code is read once and leaves the address on its own; the
+  // kept code outlives the `/api/me` load that decides where it shows.
   const [connectCode] = useState(() => atlassianCode(window.location.search));
+  const [slackConnectCode] = useState(() => slackCode(window.location.search));
   useEffect(() => {
-    const { pathname, search, hash } = window.location;
-    const query = new URLSearchParams(search);
-    if (!query.has("atlassian")) return;
-    query.delete("atlassian");
-    const rest = query.toString();
-    window.history.replaceState(
-      window.history.state,
-      "",
-      pathname + (rest ? `?${rest}` : "") + hash,
-    );
+    dropQueryKey("atlassian");
+    dropQueryKey("slack");
   }, []);
   const { state } = useFetchState("me", fetchMe);
   const [signingOut, setSigningOut] = useState(false);
@@ -119,6 +143,10 @@ export function GatewayApp({
   const { state: atlassian, reload: reloadAtlassian } = useFetchState(
     signedIn ? "atlassian" : null,
     fetchAtlassian,
+  );
+  const { state: slack, reload: reloadSlack } = useFetchState(
+    signedIn ? "slack" : null,
+    fetchSlack,
   );
   const { state: clients, reload: reloadClients } = useFetchState(
     signedIn ? "clients" : null,
@@ -137,6 +165,10 @@ export function GatewayApp({
     await clearAtlassian();
     reloadAtlassian();
   }, [reloadAtlassian]);
+  const removeSlack = useCallback(async () => {
+    await clearSlack();
+    reloadSlack();
+  }, [reloadSlack]);
   /** A client mutation, then the list again, whether or not it was done. */
   const thenReload = useCallback(
     <T,>(run: Promise<T>): Promise<T> => run.finally(reloadClients),
@@ -190,6 +222,9 @@ export function GatewayApp({
               ...(connectCode === "signed_out"
                 ? { atlassianSignedOut: true }
                 : {}),
+              ...(slackConnectCode === "signed_out"
+                ? { slackSignedOut: true }
+                : {}),
               ...(enrollCode ? { enrollmentWaiting: true } : {}),
             }
         : { kind: "loading" };
@@ -207,6 +242,12 @@ export function GatewayApp({
           clear: removeAtlassian,
           connect: startAtlassianConnect,
           callback: connectCode,
+        }}
+        slack={{
+          status: slack,
+          clear: removeSlack,
+          connect: startSlackConnect,
+          callback: slackConnectCode,
         }}
         clients={clientsProps}
         requests={{ fetchRequests }}

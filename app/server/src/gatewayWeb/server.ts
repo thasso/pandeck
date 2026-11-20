@@ -5,24 +5,27 @@
  * (`/api/accounts*`, `/api/logins*`, over the injected `GatewayWebAccounts`),
  * the Atlassian credential (`/api/integrations/*`, `GatewayWebIntegrations`;
  * with an Atlassian OAuth client, "Sign in with Atlassian": a POST start
- * answering the authorize URL and `/auth/atlassian/callback`, Task-1411),
+ * answering the authorize URL and `/auth/atlassian/callback`, Task-1411), the
+ * Slack record (with `slack.clientId`, "Sign in with Slack" the same way,
+ * `/auth/slack/callback`, its status and clear; Task-1453),
  * clients and MCP tokens (`/api/clients*`, `GatewayWebClients`), the user's
  * clients' requests (`GET /api/requests`, `GatewayWebRequests`), machines'
  * enrollment requests (`/api/enrollments/*`, Task-1410: looked up and decided
  * by user code under a per-user and global budget, `enrollmentBudget.ts`) and
  * the gateway page's built files. An enrollment code or MCP token is only in
- * the answer that creates it; the Atlassian token is in no answer.
+ * the answer that creates it; no integration token is in any answer.
  *
  * A session is the actor of the logins it starts: it alone reads, feeds and
  * cancels them, and when it ends (sign-out, expiry, eviction) they are
  * cancelled. Expired sessions are swept on every request and every 60 s.
  *
  * The user comes only from the session, the session only from a validated
- * callback, the Atlassian callback included. Mutations need `Origin` equal to
- * the public origin and the `x-gateway-ui: 1` header. Refusals and log lines
- * are fixed: no email, code, state, nonce, verifier, token, cookie, secret or
- * query reaches either, nor a redirect the gateway sends back to itself. An
- * Atlassian state appears only in the `authorizeUrl` of its start's answer.
+ * callback, the integration callbacks included. Mutations need `Origin` equal
+ * to the public origin and the `x-gateway-ui: 1` header. Refusals and log
+ * lines are fixed: no email, code, state, nonce, verifier, token, cookie,
+ * secret, provider text, workspace name or query reaches either, nor a
+ * redirect the gateway sends back to itself. An integration connect's state
+ * appears only in the `authorizeUrl` of its start's answer.
  */
 import { randomBytes } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
@@ -46,6 +49,9 @@ import {
   type GatewayUiMe,
   type GatewayUiRequests,
   type GatewayUiSigninCode,
+  type GatewayUiSlack,
+  type GatewayUiSlackConnectCode,
+  isGatewayUiDisplayText,
 } from "@assistant/shared/gatewayUi";
 import { contentTypeFor } from "../webStatic.ts";
 import {
@@ -75,6 +81,7 @@ import {
   atlassianAuthorizeUrl,
   decodeAtlassianSet,
   IntegrationsRefusal,
+  slackAuthorizeUrl,
   type GatewayWebIntegrations,
   type IntegrationsRefusalCode,
 } from "./integrations.ts";
@@ -99,8 +106,12 @@ const SIGNIN_COOKIE = "__Host-pgw_signin";
 const ATLASSIAN_COOKIE = "__Host-pgw_atlassian";
 const ATLASSIAN_CONNECT_PATH = "/api/integrations/atlassian/connect";
 const ATLASSIAN_CALLBACK_PATH = "/auth/atlassian/callback";
-/** Atlassian's authorization codes are far shorter; printable ASCII only. */
-const ATLASSIAN_CODE = /^[\x21-\x7e]{1,2048}$/;
+/** Binds a "Sign in with Slack" start to its browser (Task-1453). */
+const SLACK_COOKIE = "__Host-pgw_slack";
+const SLACK_CONNECT_PATH = "/api/integrations/slack/connect";
+const SLACK_CALLBACK_PATH = "/auth/slack/callback";
+/** Providers' authorization codes are far shorter; printable ASCII only. */
+const AUTHORIZATION_CODE = /^[\x21-\x7e]{1,2048}$/;
 const MAX_CONNECTIONS = 64;
 const MAX_BODY_BYTES = 1_024;
 /** Claude's pasted code: up to 8,192 characters, JSON-quoted. */
@@ -136,10 +147,11 @@ const INTEGRATION_STATUS: Record<IntegrationsRefusalCode, number> = {
   integration_site_missing: 422,
   integration_site_ambiguous: 422,
   integration_not_configured: 503,
+  integration_team_mismatch: 422,
 };
 
 /** A connect refusal as the callback's `?atlassian=` code. */
-const CONNECT_CODE: Partial<
+const ATLASSIAN_CONNECT_CODE: Partial<
   Record<IntegrationsRefusalCode, GatewayUiAtlassianConnectCode>
 > = {
   integration_rejected: "rejected",
@@ -152,6 +164,40 @@ const CONNECT_CODE: Partial<
   integration_busy: "busy",
   tools_unavailable: "tools_unavailable",
 };
+
+/** A connect refusal as the callback's `?slack=` code. */
+const SLACK_CONNECT_CODE: Partial<
+  Record<IntegrationsRefusalCode, GatewayUiSlackConnectCode>
+> = {
+  integration_rejected: "rejected",
+  integration_unreachable: "unreachable",
+  integration_team_mismatch: "team_mismatch",
+  integration_not_configured: "not_configured",
+  vault_locked: "vault_locked",
+  vault_unavailable: "vault_unavailable",
+  integration_busy: "busy",
+  tools_unavailable: "tools_unavailable",
+};
+
+/** The callback codes every provider's sign-in answers itself. */
+type SignInCode = "signed_out" | "expired" | "failed" | "denied";
+
+/**
+ * One provider's "Sign in with …" (Task-1411, Task-1453): its pending cookie,
+ * callback path and `?<queryKey>=` codes, the authorize URL for a state, and
+ * the connect the callback's code goes to. Each gets its own pending table.
+ */
+interface OAuthSignIn<Code extends string> {
+  /** As log lines name it: `ui <name> connect: …`. */
+  name: "atlassian" | "slack";
+  cookie: string;
+  callbackPath: string;
+  queryKey: "atlassian" | "slack";
+  /** A connect refusal as a callback code; anything else is `failed`. */
+  codes: Partial<Record<IntegrationsRefusalCode, Code>>;
+  authorizeUrl(state: string, redirectUri: string): string;
+  connect(userId: string, code: string, redirectUri: string): Promise<unknown>;
+}
 
 const SECURITY_HEADERS = {
   "content-security-policy":
@@ -269,10 +315,6 @@ export async function startGatewayWeb(
   const files = staticFiles(config.distDir);
   const enrollmentBudget = new EnrollmentBudget(now);
   const pending = new PendingRedirects<AuthorizationRequest>(now);
-  /** "Sign in with Atlassian" starts, each bound to the user who started it. */
-  const pendingConnects = new PendingRedirects<{ userId: string }>(now);
-  const atlassianClientId = config.atlassian?.clientId;
-  const atlassianRedirectUri = `${config.publicOrigin}${ATLASSIAN_CALLBACK_PATH}`;
   // A session that leaves the table, however, ends its logins.
   const sessions = new Sessions(now, (actorId) => {
     try {
@@ -312,7 +354,8 @@ export async function startGatewayWeb(
       | GatewayUiEnrollmentCode
       | GatewayUiEnrollmentRequest
       | GatewayUiMcpToken
-      | GatewayUiRequests,
+      | GatewayUiRequests
+      | GatewayUiSlack,
     headers: Record<string, string> = {},
   ): void =>
     send(
@@ -410,107 +453,157 @@ export async function startGatewayWeb(
   };
 
   /**
-   * Back to the page after Atlassian's redirect: `/` on success, else a
-   * fixed `?atlassian=` code; the pending cookie cleared either way.
+   * One provider's sign-in, with its own pending table, so a state is only
+   * ever taken by the callback of the provider that issued it.
    */
-  const toAtlassian = (
-    res: ServerResponse,
-    code?: GatewayUiAtlassianConnectCode,
-  ): void =>
-    send(res, 303, {
-      location: code === undefined ? "/" : `/?atlassian=${code}`,
-      "cache-control": "no-store",
-      "set-cookie": cookie(ATLASSIAN_COOKIE, "", 0),
-    });
-
-  /**
-   * `POST /api/integrations/atlassian/connect`, behind the session and the
-   * mutation gate: a fresh state bound to this browser's new pending cookie
-   * and to the session's user, answered only inside the authorize URL.
-   */
-  const atlassianConnectStart = (
-    userId: string,
-    clientId: string,
-    res: ServerResponse,
-  ): void => {
-    const state = randomBytes(32).toString("base64url");
-    const cookieId = pendingConnects.add(state, { userId });
-    if (cookieId === undefined) {
-      log(`ui atlassian connect: refused, busy user=${userId}`);
-      return json(res, 503, { error: "unavailable" });
-    }
-    log(`ui atlassian connect: started user=${userId}`);
-    json(
-      res,
-      200,
-      {
-        authorizeUrl: atlassianAuthorizeUrl({
-          clientId,
-          scopes: config.atlassian?.scopes ?? [],
-          redirectUri: atlassianRedirectUri,
-          state,
-        }),
-      },
-      {
-        "set-cookie": cookie(ATLASSIAN_COOKIE, cookieId, PENDING_TTL_MS / 1000),
-      },
-    );
-  };
-
-  /**
-   * `GET /auth/atlassian/callback`: the state is taken (one use) before
-   * anything else, then the session, the pending cookie and the user are
-   * checked; only then does the code go to the vault, under the longer
-   * connect bound. Atlassian's `error` text is never read past its code.
-   */
-  const atlassianCallback = async (
-    req: IncomingMessage,
-    url: URL,
-    res: ServerResponse,
-  ): Promise<void> => {
-    const taken = pendingConnects.take(
-      url.searchParams.get("state"),
-      cookieOf(req, ATLASSIAN_COOKIE),
-    );
-    const session = sessions.lookup(cookieOf(req, SESSION_COOKIE));
-    const failed = (
-      code: GatewayUiAtlassianConnectCode,
-      reason: string = code,
-    ) => {
-      log(
-        `ui atlassian connect: failed (${reason})${session ? ` user=${session.userId}` : ""}`,
-      );
-      toAtlassian(res, code);
-    };
-    if (!session) return failed("signed_out");
-    if (taken.kind === "expired") return failed("expired");
-    if (taken.kind === "failed" || taken.value.userId !== session.userId)
-      return failed("failed", "state");
-    const error = url.searchParams.get("error");
-    if (error !== null)
-      return failed(error === "access_denied" ? "denied" : "failed");
-    const code = url.searchParams.get("code");
-    if (code === null || !ATLASSIAN_CODE.test(code)) return failed("failed");
-    const site = config.atlassian?.site;
-    req.socket.setTimeout(connectIdleMs);
-    try {
-      await integrations.connect(session.userId, {
-        code,
-        redirectUri: atlassianRedirectUri,
-        ...(site !== undefined ? { site } : {}),
+  const oauthSignIn = <Code extends string>(provider: OAuthSignIn<Code>) => {
+    /** Starts, each bound to the user who started it. */
+    const pendingConnects = new PendingRedirects<{ userId: string }>(now);
+    const redirectUri = `${config.publicOrigin}${provider.callbackPath}`;
+    /**
+     * Back to the page after the provider's redirect: `/` on success, else a
+     * fixed `?<queryKey>=` code; the pending cookie cleared either way.
+     */
+    const toPageFor = (res: ServerResponse, code?: Code | SignInCode): void =>
+      send(res, 303, {
+        location: code === undefined ? "/" : `/?${provider.queryKey}=${code}`,
+        "cache-control": "no-store",
+        "set-cookie": cookie(provider.cookie, "", 0),
       });
-    } catch (err) {
-      return failed(
-        (err instanceof IntegrationsRefusal
-          ? CONNECT_CODE[err.code]
-          : undefined) ?? "failed",
-      );
-    } finally {
-      req.socket.setTimeout(idleMs);
-    }
-    log(`ui atlassian connect: ok user=${session.userId}`);
-    toAtlassian(res);
+    return {
+      /**
+       * `POST <connect path>`, behind the session and the mutation gate: a
+       * fresh state bound to this browser's new pending cookie and to the
+       * session's user, answered only inside the authorize URL.
+       */
+      start: (userId: string, res: ServerResponse): void => {
+        const state = randomBytes(32).toString("base64url");
+        const cookieId = pendingConnects.add(state, { userId });
+        if (cookieId === undefined) {
+          log(`ui ${provider.name} connect: refused, busy user=${userId}`);
+          return json(res, 503, { error: "unavailable" });
+        }
+        log(`ui ${provider.name} connect: started user=${userId}`);
+        json(
+          res,
+          200,
+          { authorizeUrl: provider.authorizeUrl(state, redirectUri) },
+          {
+            "set-cookie": cookie(
+              provider.cookie,
+              cookieId,
+              PENDING_TTL_MS / 1000,
+            ),
+          },
+        );
+      },
+      /**
+       * `GET <callback path>`: the state is taken (one use) before anything
+       * else, then the session, the pending cookie and the user are checked;
+       * only then does the code go to the vault, under the longer connect
+       * bound. The provider's `error` text is never read past its code.
+       */
+      callback: async (
+        req: IncomingMessage,
+        url: URL,
+        res: ServerResponse,
+      ): Promise<void> => {
+        const taken = pendingConnects.take(
+          url.searchParams.get("state"),
+          cookieOf(req, provider.cookie),
+        );
+        const session = sessions.lookup(cookieOf(req, SESSION_COOKIE));
+        const failed = (code: Code | SignInCode, reason: string = code) => {
+          log(
+            `ui ${provider.name} connect: failed (${reason})${session ? ` user=${session.userId}` : ""}`,
+          );
+          toPageFor(res, code);
+        };
+        if (!session) return failed("signed_out");
+        if (taken.kind === "expired") return failed("expired");
+        if (taken.kind === "failed" || taken.value.userId !== session.userId)
+          return failed("failed", "state");
+        const error = url.searchParams.get("error");
+        if (error !== null)
+          return failed(error === "access_denied" ? "denied" : "failed");
+        const code = url.searchParams.get("code");
+        if (code === null || !AUTHORIZATION_CODE.test(code))
+          return failed("failed");
+        req.socket.setTimeout(connectIdleMs);
+        try {
+          await provider.connect(session.userId, code, redirectUri);
+        } catch (err) {
+          return failed(
+            (err instanceof IntegrationsRefusal
+              ? provider.codes[err.code]
+              : undefined) ?? "failed",
+          );
+        } finally {
+          req.socket.setTimeout(idleMs);
+        }
+        log(`ui ${provider.name} connect: ok user=${session.userId}`);
+        toPageFor(res);
+      },
+    };
   };
+
+  const atlassianClientId = config.atlassian?.clientId;
+  /** "Sign in with Atlassian" (Task-1411): with an Atlassian OAuth client. */
+  const atlassianSignIn =
+    atlassianClientId === undefined
+      ? undefined
+      : oauthSignIn({
+          name: "atlassian",
+          cookie: ATLASSIAN_COOKIE,
+          callbackPath: ATLASSIAN_CALLBACK_PATH,
+          queryKey: "atlassian",
+          codes: ATLASSIAN_CONNECT_CODE,
+          authorizeUrl: (state, redirectUri) =>
+            atlassianAuthorizeUrl({
+              clientId: atlassianClientId,
+              scopes: config.atlassian?.scopes ?? [],
+              redirectUri,
+              state,
+            }),
+          connect: (userId, code, redirectUri) => {
+            const site = config.atlassian?.site;
+            return integrations.connect(userId, {
+              code,
+              redirectUri,
+              ...(site !== undefined ? { site } : {}),
+            });
+          },
+        });
+  const slack = config.slack;
+  const slackClientId = slack?.clientId;
+  /**
+   * "Sign in with Slack" (Task-1453): with `slack.clientId`. The `team` hint
+   * and the connect's `team` come only from the deployment's config.
+   */
+  const slackSignIn =
+    slack === undefined || slackClientId === undefined
+      ? undefined
+      : oauthSignIn({
+          name: "slack",
+          cookie: SLACK_COOKIE,
+          callbackPath: SLACK_CALLBACK_PATH,
+          queryKey: "slack",
+          codes: SLACK_CONNECT_CODE,
+          authorizeUrl: (state, redirectUri) =>
+            slackAuthorizeUrl({
+              clientId: slackClientId,
+              userScopes: slack.userScopes,
+              redirectUri,
+              state,
+              team: slack.teamId,
+            }),
+          connect: (userId, code, redirectUri) =>
+            integrations.connectSlack(userId, {
+              code,
+              redirectUri,
+              ...(slack.teamId !== undefined ? { team: slack.teamId } : {}),
+            }),
+        });
 
   const me = (req: IncomingMessage, res: ServerResponse): void => {
     const userId = sessions.lookup(cookieOf(req, SESSION_COOKIE))?.userId;
@@ -648,9 +741,14 @@ export async function startGatewayWeb(
     try {
       if (path.startsWith("/api/integrations/")) {
         if (path === ATLASSIAN_CONNECT_PATH) {
-          if (method !== "POST" || atlassianClientId === undefined)
+          if (method !== "POST" || atlassianSignIn === undefined)
             return text(res, 404, "not found");
-          return atlassianConnectStart(userId, atlassianClientId, res);
+          return atlassianSignIn.start(userId, res);
+        }
+        if (path === SLACK_CONNECT_PATH) {
+          if (method !== "POST" || slackSignIn === undefined)
+            return text(res, 404, "not found");
+          return slackSignIn.start(userId, res);
         }
         // Atlassian and the vault may take longer than the idle bound: the
         // socket has the longer one while the adapter runs, and the baseline
@@ -663,6 +761,34 @@ export async function startGatewayWeb(
             req.socket.setTimeout(idleMs);
           }
         };
+        if (path === "/api/integrations/slack" && method === "GET") {
+          // Answered without a vault or tools call where Slack is not offered.
+          if (slackSignIn === undefined)
+            return json(res, 200, { offered: false, connected: false });
+          const status = await held(() => integrations.slackStatus(userId));
+          // F004: a workspace name the page could not show safely is dropped.
+          return json(res, 200, {
+            offered: true,
+            connected: status.connected,
+            ...(isGatewayUiDisplayText(status.teamName)
+              ? { teamName: status.teamName }
+              : {}),
+            ...(status.problem !== undefined
+              ? { problem: status.problem }
+              : {}),
+          });
+        }
+        if (path === "/api/integrations/slack/clear" && method === "POST") {
+          if (slackSignIn === undefined) return text(res, 404, "not found");
+          await held(() => integrations.clearSlack(userId));
+          log(`ui integration slack: cleared user=${userId}`);
+          return noContent(res);
+        }
+        if (
+          path === "/api/integrations/slack" ||
+          path.startsWith("/api/integrations/slack/")
+        )
+          return text(res, 404, "not found");
         // The deployment's fixed site and sign-in email win over the request.
         const preset = atlassianPreset(userId);
         const withPreset = (answer: GatewayUiAtlassian): GatewayUiAtlassian =>
@@ -823,8 +949,12 @@ export async function startGatewayWeb(
     if (method === "GET" && path === "/auth/callback")
       return callback(req, url, res);
     if (method === "GET" && path === ATLASSIAN_CALLBACK_PATH) {
-      if (atlassianClientId === undefined) return text(res, 404, "not found");
-      return atlassianCallback(req, url, res);
+      if (atlassianSignIn === undefined) return text(res, 404, "not found");
+      return atlassianSignIn.callback(req, url, res);
+    }
+    if (method === "GET" && path === SLACK_CALLBACK_PATH) {
+      if (slackSignIn === undefined) return text(res, 404, "not found");
+      return slackSignIn.callback(req, url, res);
     }
     if (method === "GET" && path === "/api/me") return me(req, res);
     if (

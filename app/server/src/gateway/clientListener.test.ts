@@ -905,6 +905,7 @@ function fakeTools(
           }
         },
       },
+      slack: { describe: () => undefined },
     },
   };
 }

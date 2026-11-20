@@ -349,6 +349,7 @@ test("a write while the gateway runs another for the user: integration_busy reac
           return site && email ? { site, email, kind: "token" } : undefined;
         },
       },
+      slack: { describe: () => undefined },
     },
   };
   const gateway = await startGateway({
