@@ -117,18 +117,26 @@ bundle identifier, and therefore its own settings, data and WebKit storage. It
 also registers no `pa://` scheme, so it cannot take links from an installed
 Pandeck app. Leave it out to build the app under its normal identity.
 
-CI's `desktop-macos` job does the same on a macOS 15 arm64 runner and uploads
-the disk image as `pandeck-preview-macos-arm64`. It first smoke-tests the
-packaged server the way the shell starts it: health on loopback, a 421 for a
-foreign Host, and shutdown once its SIGKILLed parent is gone. The image is
-ad-hoc signed and not notarized. After copying the app out of the image, remove
-the quarantine attribute
-(`xattr -dr com.apple.quarantine "Pandeck Preview.app"`) to open it. The job is
-not part of the required `ci` gate.
+The `Desktop` workflow (`.github/workflows/desktop.yml`) does the same on a
+macOS 15 arm64 runner. It is too slow for every change, so it runs only:
+
+- **On demand** (Actions → Desktop → Run workflow, on any branch). It builds
+  "Pandeck Preview" unless the `preview` input is cleared.
+- **For a release tag** (`v*`). It builds the app under its normal identity, at
+  the tagged version.
+
+It first smoke-tests the packaged server the way the shell starts it: health on
+loopback, a 421 for a foreign Host, and shutdown once its SIGKILLed parent is
+gone. Then it runs the shell's unit tests and uploads the disk image as a
+workflow artifact, `pandeck-[preview-]macos-arm64-<tag or commit>`. Nothing is
+attached to a GitHub Release yet. The image is ad-hoc signed and not notarized.
+After copying the app out of it, remove the quarantine attribute
+(`xattr -dr com.apple.quarantine "Pandeck Preview.app"`) to open it.
 
 ## Not yet
 
-- Developer ID signing, notarization and a release workflow.
+- Developer ID signing, notarization, and attaching the image to a GitHub
+  Release.
 - An Intel build.
 - Cleaning up agent processes that a killed server leaves behind. A normal quit
   and a shell crash both go through the server's own shutdown.

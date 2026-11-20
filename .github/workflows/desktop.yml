@@ -1,0 +1,113 @@
+name: Desktop
+
+# The macOS app with its bundled local server (docs/desktop-local-mode.md).
+# Too slow to run on every change, so it builds only when asked for and for a
+# release tag. The disk image is ad-hoc signed and not notarized.
+on:
+  workflow_dispatch:
+    inputs:
+      preview:
+        description:
+          Build as "Pandeck Preview" with its own identity, so it can run beside
+          an installed Pandeck app.
+        type: boolean
+        default: true
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos-arm64:
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      # A tag builds the real app; a manual run follows its input.
+      PREVIEW: ${{ github.event_name == 'workflow_dispatch' && inputs.preview }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          # The shell's About panel reads the release tag from git.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up the workspace
+        uses: ./.github/actions/setup-workspace
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: Build the server package
+        env:
+          ASSISTANT_BUILD_COMMIT: ${{ github.sha }}
+        run: pnpm run desktop:runtime
+
+      # The server as the shell starts it, with the stock macOS host tools:
+      # it must answer on loopback, refuse another Host name, and stop once
+      # its parent is gone. The subshell stands in for the shell and is
+      # SIGKILLed, as a crash would leave it.
+      - name: Smoke the server package
+        working-directory: app/shell/local-runtime
+        run: |
+          data=$(mktemp -d)
+          (
+            NODE_ENV=production ASSISTANT_RUNTIME_DIR="$PWD" \
+              ASSISTANT_DESKTOP_SHELL=1 ASSISTANT_HOST=127.0.0.1 \
+              ASSISTANT_PORT=47123 DATA_DIR="$data" \
+              ./personal-assistant-server server.js \
+              > "$data/server.log" 2>&1 &
+            echo $! > "$data/pid"
+            wait
+          ) &
+          parent=$!
+          for _ in $(seq 120); do
+            curl -fsS http://127.0.0.1:47123/api/health && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:47123/api/health
+          test "$(curl -s -o /dev/null -w '%{http_code}' \
+            -H 'Host: rebound.example:47123' \
+            http://127.0.0.1:47123/api/health)" = 421
+          server=$(cat "$data/pid")
+          kill -KILL "$parent"
+          for _ in $(seq 30); do
+            kill -0 "$server" 2> /dev/null || break
+            sleep 1
+          done
+          cat "$data/server.log"
+          ! kill -0 "$server" 2> /dev/null
+
+      - name: Install the Tauri CLI
+        run: cargo install tauri-cli --version 2.11.5 --locked
+
+      - name: Shell unit tests
+        working-directory: app/shell
+        run: cargo test --locked
+
+      - name: Build the app
+        working-directory: app/shell
+        run: |
+          configs=(--config tauri.bundled-server.json)
+          if [ "$PREVIEW" = true ]; then
+            configs+=(--config tauri.preview.json)
+          fi
+          cargo tauri build --bundles app,dmg "${configs[@]}"
+
+      - name: Upload the disk image
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name:
+            pandeck-${{ env.PREVIEW == 'true' && 'preview-' || ''
+            }}macos-arm64-${{ github.ref_type == 'tag' && github.ref_name ||
+            github.sha }}
+          path: app/shell/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 30
