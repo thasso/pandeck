@@ -10,6 +10,8 @@
     "allow-window-loaded",
     "allow-get-server-url",
     "allow-set-server-url",
-    "allow-probe-server"
+    "allow-probe-server",
+    "allow-local-server-info",
+    "allow-use-local-server"
   ]
 }

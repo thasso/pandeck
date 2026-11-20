@@ -1,0 +1,7 @@
+{
+  "bundle": {
+    "resources": {
+      "local-runtime/": "pandeck-runtime/"
+    }
+  }
+}

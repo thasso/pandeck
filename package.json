@@ -7,6 +7,7 @@
   "description": "Pandeck: a self-hosted web UI and server for supervising AI agent sessions",
   "packageManager": "pnpm@11.9.0",
   "scripts": {
+    "desktop:runtime": "pnpm run build && bun scripts/build-bun-server-bundle.mjs app/shell/local-runtime",
     "dev": "concurrently -n server,web -c cyan,magenta --restart-tries -1 --restart-after 1000 \"pnpm dev:server\" \"pnpm dev:web\"",
     "dev:server": "pnpm --filter @assistant/server dev",
     "dev:web": "pnpm --filter @assistant/web dev",
@@ -35,7 +36,7 @@
     "test:package-config-secrets": "node --test scripts/check-package-config-secrets.test.mjs",
     "test:release": "node --test scripts/release-utils.test.mjs",
     "test:server": "pnpm --filter @assistant/server test",
-    "test:suites": "pnpm run test:release && pnpm run test:package-config-secrets && node --test scripts/run-engine-contract.test.mjs && pnpm --filter '@assistant/*' --parallel --no-bail test",
+    "test:suites": "pnpm run test:release && pnpm run test:package-config-secrets && node --test scripts/run-engine-contract.test.mjs && node --test scripts/bun-package-platform.test.mjs && pnpm --filter '@assistant/*' --parallel --no-bail test",
     "test:web": "pnpm --filter @assistant/web test",
     "stt:model": "node scripts/install-stt-model.mjs",
     "tts:model": "node scripts/install-tts-model.mjs",

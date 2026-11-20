@@ -43,6 +43,12 @@ import {
 } from "./config.ts";
 import { authTokenStartupMessage, resolveAuthToken } from "./authToken.ts";
 import { scrubInstanceEnvironment } from "./instanceEnv.ts";
+import {
+  DESKTOP_SHELL,
+  DESKTOP_SHELL_PID,
+  isLoopbackHostHeader,
+  stopWhenShellExits,
+} from "./desktopShell.ts";
 import { startSpawnBroker } from "./spawnBroker.ts";
 import { ignoreCollectedFileHandle } from "./collectedFileHandle.ts";
 import { startInProcessWorker } from "./workers/inProcessWorker.ts";
@@ -517,7 +523,8 @@ function requestPublicBaseUrl(req: IncomingMessage): string | undefined {
   if (!host) return PUBLIC_BASE_URL || undefined;
   const proto =
     headerValue(req.headers["x-forwarded-proto"]) ??
-    (IS_PROD ? "https" : "http");
+    // Production sits behind a TLS proxy; the desktop shell's child does not.
+    (IS_PROD && !DESKTOP_SHELL ? "https" : "http");
   try {
     const url = new URL(`${proto}://${host}`);
     return url.toString().replace(/\/$/, "");
@@ -614,6 +621,11 @@ async function handleRequest(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
+  if (DESKTOP_SHELL && !isLoopbackHostHeader(req.headers.host)) {
+    res.writeHead(421, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "Misdirected Request" }));
+    return;
+  }
   const requestUrl = new URL(
     req.url ?? "/",
     `http://${req.headers.host ?? `localhost:${PORT}`}`,
@@ -1635,6 +1647,10 @@ function abortUpgrade(
 }
 
 server.on("upgrade", (req, socket, head) => {
+  if (DESKTOP_SHELL && !isLoopbackHostHeader(req.headers.host)) {
+    abortUpgrade(socket, 421, "Misdirected Request");
+    return;
+  }
   let url: URL;
   try {
     url = new URL(
@@ -1853,6 +1869,11 @@ function requestGracefulShutdown(signal: NodeJS.Signals): void {
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, () => requestGracefulShutdown(sig));
 }
+if (DESKTOP_SHELL_PID !== undefined)
+  stopWhenShellExits(DESKTOP_SHELL_PID, () => {
+    console.log("[assistant] desktop shell is gone; shutting down.");
+    requestGracefulShutdown("SIGTERM");
+  });
 
 // Defense-in-depth: an agent subprocess (e.g. the Claude Agent SDK's spawned
 // CLI) can die mid-turn, and the SDK writes the prompt to its now-broken stdin,

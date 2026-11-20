@@ -52,6 +52,10 @@ export const INSTANCE_OWNED_ENV_VARS = [
   // production's Atlassian site, Slack workspace and OAuth clients.
   "ASSISTANT_CONFIG",
   "ASSISTANT_CWD",
+  // Marks THIS server as the desktop shell's child (`desktopShell.ts`). An
+  // agent's own dev server must not inherit the loopback-only Host rule or
+  // stop when the shell exits.
+  "ASSISTANT_DESKTOP_SHELL",
   "ASSISTANT_HOST",
   "ASSISTANT_PORT",
   "ASSISTANT_PUBLIC_BASE_URL",

@@ -168,7 +168,7 @@ pub fn handle(app: &AppHandle, event: MenuEvent) {
         // no longer forces that page in front of the user — so pointing the shell
         // somewhere else has to be something they can ask for.
         SERVER => {
-            crate::open_bootstrap_window(app);
+            crate::open_bootstrap_window(app, true);
         }
         RELOAD => {
             if let Some(window) = crate::menu_target(app) {

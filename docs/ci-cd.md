@@ -262,9 +262,10 @@ never claims the tag it may or may not be sitting on — the sha is the identity
 
 Nothing else is added to the release itself: the browser bundle and the server
 are stamped by the Nix build a deployment runs anyway. The DESKTOP app is the
-one part a release does not produce — `app/shell/` is outside CI, so an
-installed .app keeps saying whatever it was built from until it is rebuilt. To
-ship the new version there, after the release is published:
+one part a release does not install — the `Desktop` workflow builds its disk
+image for a release tag (`desktop-local-mode.md`), but an installed .app keeps
+saying whatever it was built from until it is rebuilt. To ship the new version
+there, after the release is published:
 
 ```bash
 git fetch --tags                        # the tag decides `-dev`, and it is read LOCALLY

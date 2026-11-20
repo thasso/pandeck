@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-local-server-info"
+description = "Enables the local_server_info command without any pre-configured scope."
+commands.allow = ["local_server_info"]
+
+[[permission]]
+identifier = "deny-local-server-info"
+description = "Denies the local_server_info command without any pre-configured scope."
+commands.deny = ["local_server_info"]

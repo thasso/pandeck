@@ -200,7 +200,7 @@ fn recover(app: &AppHandle, label: &str) {
     trace!("window {label} could not be sent back to the bootstrap page");
     #[cfg(desktop)]
     {
-        if crate::open_bootstrap_window(app).is_some() {
+        if crate::open_bootstrap_window(app, false).is_some() {
             let _ = window.close();
         }
     }

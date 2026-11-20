@@ -243,6 +243,10 @@ only binding rules; everything else lives here.
   heap snapshots), the NixOS service's lifecycle and PATH/environment, the
   one-server-per-DATA_DIR lock, its host dependencies, and the PR-preview
   instances.
+- `desktop-local-mode.md` — the macOS app running Pandeck itself: the bundled
+  Darwin Bun package, how the shell starts, readies and stops its server child,
+  the loopback-only Host rule, choosing local or remote, building it, and what
+  is not done yet.
 - `ci-cd.md` — the GitHub Actions workflow: its jobs and the `ci` gate, test
   sharding, the gate order and measured parallelism, the cache rules, SemVer and
   changelog preparation, publishing a release tag, and what a build reports
