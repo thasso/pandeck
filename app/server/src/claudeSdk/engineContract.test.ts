@@ -1079,7 +1079,7 @@ describe.runIf(ENABLED)("the Claude login CLI offline (AC13)", () => {
     const version = JSON.parse(
       readFileSync(resolve(cli, "..", "package.json"), "utf8"),
     ) as { version: string };
-    assert.equal(version.version, "0.3.316");
+    assert.equal(version.version, "0.3.329");
 
     // 4. Recording stubs: `false` (the flow's BROWSER), `xdg-open`, and a
     // third that only a config key could name. Each exits nonzero, as `false`.

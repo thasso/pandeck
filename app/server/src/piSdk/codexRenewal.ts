@@ -145,7 +145,11 @@ export class AtomicAuthFileStore implements CredentialStore {
     return Promise.reject(new Error("Renewal never deletes a credential."));
   }
 
-  /** pi's acquisition: no retries inside, its own backoff to a 30 s deadline. */
+  /**
+   * pi's acquisition: no retries inside, its own backoff to a 30 s deadline.
+   * Like pi (since 1.6.0, #11655) it locks the RESOLVED file, so a symlinked
+   * auth.json and its target share one lock.
+   */
   private async acquire(
     signal: AbortSignal | undefined,
     onCompromised: (err: Error) => void,
@@ -156,7 +160,6 @@ export class AtomicAuthFileStore implements CredentialStore {
       signal?.throwIfAborted();
       try {
         const release = await lock(this.authPath, {
-          realpath: false,
           retries: 0,
           stale: LOCK_STALE_MS,
           onCompromised,
