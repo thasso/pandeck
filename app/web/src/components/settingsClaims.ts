@@ -146,6 +146,8 @@ export const RENDERED_SETTING_PATHS: readonly string[] = [
   "slack.enabled",
   "slack.connection",
   "slack.oauthClientConfigured",
+  // Client mode renders the gateway panel instead of the local sign-in.
+  "slack.credentialStore",
   // jira
   "jira.enabled",
   "jira.atlassianEmail",

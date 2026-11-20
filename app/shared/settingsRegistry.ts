@@ -675,6 +675,12 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
     "OAuth client configured",
     "Set in the deployment environment.",
   ),
+  readonly(
+    "slack.credentialStore",
+    "slack",
+    "Credential store",
+    "This server, or the credential gateway in client mode.",
+  ),
   setting("jira.enabled", "jira", "Jira", BOOLEAN),
   setting("jira.atlassianEmail", "jira", "Atlassian email", STRING),
   secret(

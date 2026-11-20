@@ -2022,42 +2022,50 @@ path above.
   runtime/transcript directories: Pandeck's one-time Default transcript import
   and startup gate still apply before the client link starts
   (`docs/credential-distribution.md`).
-- **Gateway tools** (Task-1398, `remoteTools.ts`,
+- **Gateway tools** (Task-1398, Slack Task-1455, `remoteTools.ts`,
   `tools/gateway/remoteToolGroup.ts`). On every connect the link calls
   `tools.list` after `accounts.list` and the first reconcile, and publishes the
   connection and resolves `ready` only after it applied that listing, never for
   a closing link or a dial that ended meanwhile. An edge without tools
   (`tools_unavailable` or an unknown method) counts as an empty listing. Pandeck
   accepts at most 64 entries, each a read tool (`effect: "read"`) whose
-  `actionKey` prefix names a mapped product (`jira` only), within the bounds the
-  edge's `gatewayTools/tools.test.ts` checks (name, 1,024-character description,
-  4,096-character object schema); a name listed twice is dropped. Every name
-  accepted in a boot stays in the catalog for that boot; the catalog's deferred
-  `gateway-jira` group replaces the local `jira` group and is gated by
-  `gatewayJira` (connected and Settings → Jira enabled), so a connect, a lost
-  connection and the Jira toggle reach live sessions as `tools/list_changed` and
-  pi's gate command. Its tools are `sideEffects: "none"`, so Plan keeps them,
-  and a remote name equal to another tool of the persona is left out. Before
-  every call the tool checks the connection, the toggle and that the latest
-  listing still offers it, with no gateway call otherwise; then `tools.call`
-  goes out on the link's connection, bounded at 40 s by a cancel (the request
-  stays until the edge answers or the connection ends; that late answer is
-  dropped). Only the edge's `tool_error` and `invalid_params` texts reach the
-  agent; every other failure is Pandeck's fixed text. A pi open (new, existing,
-  fork or staged replacement) waits up to 10 s for the boot's first listing and
-  is otherwise refused with the gateway-unavailable text, so its up-front tool
-  registration holds the gateway's tools.
+  `actionKey` prefix names a mapped product, within the bounds the edge's
+  `gatewayTools/tools.test.ts` checks (name, 1,024-character description,
+  4,096-character object schema); a name listed twice is dropped. One table in
+  `remoteTools.ts` maps the products, `jira` and `slack`, each to its Settings
+  toggle (`jira.enabled`, `slack.enabled`); any other prefix is dropped. Every
+  name accepted in a boot stays in the catalog for that boot. Each product has a
+  deferred catalog group that replaces its local group: `gateway-jira` replaces
+  `jira` and is gated by `gatewayJira` (connected and Settings → Jira enabled);
+  `gateway-slack` replaces `slack` and is gated by `gatewaySlack` (connected and
+  Settings → Slack enabled). A connect, a lost connection and a product's toggle
+  reach live sessions as `tools/list_changed` and pi's gate command. The tools
+  are `sideEffects: "none"`, so Plan keeps them, and a remote name equal to
+  another tool of the persona is left out. Before every call the tool checks the
+  connection, its product's toggle and that the latest listing still offers it,
+  with no gateway call otherwise; then `tools.call` goes out on the link's
+  connection, bounded at 40 s by a cancel (the request stays until the edge
+  answers or the connection ends; that late answer is dropped). Only the edge's
+  `tool_error` and `invalid_params` texts reach the agent; every other failure
+  is Pandeck's fixed text. A pi open (new, existing, fork or staged replacement)
+  waits up to 10 s for the boot's first listing and is otherwise refused with
+  the gateway-unavailable text, so its up-front tool registration holds the
+  gateway's tools.
 - **Known limitations of gateway tools.** A tool newly deployed on the gateway
   reaches a live pi session only at its next open, because pi registers its tool
   universe at open; Claude sessions get it once the next connection's listing is
   applied, without reopening (D8). This includes tools added after an empty
   first listing. The follow-up, named and not built: "pi late registration or
   reopen on listing change". A changed schema of a known name reaches pi at its
-  next open too; the edge checks arguments either way. Only Jira is mapped: a
-  gateway tool of another product needs a Pandeck change (mapping and gate)
-  before it appears. Pandeck's local Jira search, lookup and mutate tools are
-  not offered in client mode, and Confluence's local tools still list and fail
-  there (Task-1399).
+  next open too; the edge checks arguments either way. Only Jira and Slack are
+  mapped: a gateway tool of another product needs a Pandeck change (table row,
+  disabled text, gate and catalog group) before it appears. `slack_file_read` is
+  not offered in client mode until the edge runs it (Task-1441). Settings →
+  Slack shows no gateway Slack connection status (Task-1464); a Slack tool
+  called without a Slack connection on the gateway answers the edge's fixed
+  text, which says to connect it on the gateway's page. Pandeck's local Jira
+  search, lookup and mutate tools are not offered in client mode, and
+  Confluence's local tools still list and fail there (Task-1399).
 - **Local live test.**
   `pnpm --filter @assistant/server gateway:dev --state-dir <dir>`
   (`gatewayDevMain.ts`) runs the edge's composition (`gatewayEdge.ts`) with the

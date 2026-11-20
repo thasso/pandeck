@@ -11,6 +11,7 @@ import {
   toolGroupsFor,
 } from "./catalog.ts";
 import { updateJiraSettings } from "../jiraSettings.ts";
+import { updateSlackSettings } from "../slackSettings.ts";
 import {
   acceptRemoteTools,
   applyListing,
@@ -746,5 +747,105 @@ describe("client mode: the gateway's Jira tools (Task-1398)", () => {
     markDisconnected();
     assert.ok(!active("assistant").has("jira_get_issue"));
     assert.ok(!active("assistant").has("jira_other"));
+  });
+});
+
+describe("client mode: the gateway's Slack tools (Task-1455)", () => {
+  const SLACK_READS = [
+    "slack_search",
+    "slack_conversation_read",
+    "slack_thread_read",
+    "slack_unread",
+  ];
+  const listed = (name: string) => ({
+    name,
+    description: `${name} on the gateway.`,
+    inputSchema: { type: "object", properties: {} },
+    effect: "read",
+    actionKey: name.startsWith("slack_") ? "slack:read" : "jira:read",
+  });
+  let uninstall: () => void = () => {};
+  afterEach(() => {
+    uninstall();
+    updateSlackSettings({ enabled: false });
+  });
+
+  const clientMode = (names: string[]) => {
+    uninstall = installRemoteToolPort({
+      call: () => Promise.reject(new Error("unused")),
+    });
+    applyListing(acceptRemoteTools(names.map(listed)));
+  };
+  const active = (agentType: AgentType) => {
+    const tools = agentToolsFor(agentType);
+    return integrationGatedActiveToolNames(
+      agentType,
+      tools,
+      new Set(tools.map((tool) => tool.name)),
+    );
+  };
+
+  test("the gateway group replaces the local Slack group, without slack_file_read", () => {
+    const local = new Map(
+      PERSONAS.map((p) => [p, agentToolsFor(p).map((t) => t.name)]),
+    );
+    clientMode(SLACK_READS);
+    for (const persona of PERSONAS) {
+      const groups = toolGroupsFor(persona);
+      assert.equal(
+        groups.find((g) => g.id === "slack"),
+        undefined,
+        persona,
+      );
+      const group = groups.find((g) => g.id === "gateway-slack");
+      assert.ok(group, persona);
+      assert.equal(group.loading, "deferred");
+      assert.equal(group.family, "integration");
+      assert.equal(group.gate, "gatewaySlack");
+      assert.deepEqual(
+        group.tools.map((t) => [t.name, t.sideEffects]),
+        SLACK_READS.map((name) => [name, "none"]),
+      );
+      const names = agentToolsFor(persona).map((t) => t.name);
+      for (const name of SLACK_READS)
+        assert.equal(names.filter((n) => n === name).length, 1, name);
+      assert.ok(!names.includes("slack_file_read"), persona);
+      // Plan keeps the read tools.
+      assert.ok(
+        modeGatedActiveToolNames(
+          "plan",
+          agentToolsFor(persona),
+          new Set(names),
+        ).has("slack_search"),
+      );
+    }
+    uninstall();
+    // Outside client mode the catalog is as before.
+    for (const persona of PERSONAS)
+      assert.deepEqual(
+        agentToolsFor(persona).map((t) => t.name),
+        local.get(persona),
+      );
+  });
+
+  test("connection and the Slack toggle gate the group; the Jira toggle does not", async () => {
+    clientMode([...SLACK_READS, "jira_get_issue"]);
+    await updateJiraSettings({ enabled: true });
+    updateSlackSettings({ enabled: false });
+    assert.ok(!active("assistant").has("slack_search"));
+    assert.ok(active("assistant").has("jira_get_issue"));
+
+    updateSlackSettings({ enabled: true });
+    await updateJiraSettings({ enabled: false });
+    for (const name of SLACK_READS) assert.ok(active("assistant").has(name));
+    assert.ok(!active("assistant").has("jira_get_issue"));
+
+    updateSlackSettings({ enabled: false });
+    assert.ok(!active("assistant").has("slack_search"));
+
+    updateSlackSettings({ enabled: true });
+    assert.ok(active("assistant").has("slack_search"));
+    markDisconnected();
+    assert.ok(!active("assistant").has("slack_search"));
   });
 });

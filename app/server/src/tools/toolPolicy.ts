@@ -30,6 +30,8 @@ export interface IntegrationToolGates {
   tempo: boolean;
   google: boolean;
   slack: boolean;
+  /** Client mode: the gateway is connected and Slack is turned on. */
+  gatewaySlack: boolean;
   github: boolean;
   /** Self-hosted Forgejo instance (enabled + a base URL configured). */
   forgejo: boolean;
@@ -49,6 +51,7 @@ export function currentIntegrationToolGates(): IntegrationToolGates {
     tempo: getTempoSettings().enabled,
     google: getGoogleSettings().enabled,
     slack: slack.enabled,
+    gatewaySlack: remoteToolGate("slack"),
     github: getGithubSettings().enabled,
     forgejo: isForgejoConfigured(),
     browserRawMcp: getBrowserToolSettings().rawMcpEnabled,

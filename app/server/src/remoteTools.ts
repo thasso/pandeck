@@ -6,19 +6,36 @@
  *
  * The link lists on every connect, before it publishes the connection, and
  * hands the listing to {@link applyListing}. Only read tools of a mapped
- * product (`jira`, by the `actionKey` prefix) are accepted, until approvals
- * wrap writes (G5). A name accepted once stays known for the boot, so a pi
- * engine's universe, registered at open, never outgrows the server's
- * binding; a dispatch checks the CURRENT listing, connection and product
- * toggle before any call. A pi open waits for the boot's first listing.
+ * product are accepted, until approvals wrap writes (G5): the `actionKey`
+ * prefix names the product, and {@link PRODUCTS} maps `jira` and `slack` to
+ * the Settings toggle that turns their tools on. A name accepted once stays
+ * known for the boot, so a pi engine's universe, registered at open, never
+ * outgrows the server's binding; a dispatch checks the CURRENT listing,
+ * connection and product toggle before any call. A pi open waits for the
+ * boot's first listing.
  *
  * Types are structural: nothing here imports `gateway/`.
  */
 import { GatewayUnavailableError } from "./gatewayLink.ts";
 import { notifyIntegrationToolsChanged } from "./integrationToolChanges.ts";
 import { getJiraSettings } from "./jiraSettings.ts";
+import { getSlackRuntimeSettings } from "./slackSettings.ts";
 
-type RemoteProduct = "jira";
+/**
+ * The mapped products and their Settings toggle: a listed tool is accepted
+ * only when its `actionKey` prefix is a key here. UI text and catalog group
+ * metadata live with the remote group and the catalog, not here.
+ */
+const PRODUCTS = {
+  jira: () => getJiraSettings().enabled,
+  slack: () => getSlackRuntimeSettings().enabled,
+} as const;
+
+export type RemoteProduct = keyof typeof PRODUCTS;
+
+function isRemoteProduct(value: string | undefined): value is RemoteProduct {
+  return value !== undefined && Object.hasOwn(PRODUCTS, value);
+}
 
 export interface RemoteToolDescriptor {
   name: string;
@@ -65,8 +82,8 @@ const MAX_TOOLS = 64;
 const NAME_RE = /^[a-z][a-z0-9_]{0,63}$/;
 const MAX_DESCRIPTION = 1_024;
 const MAX_SCHEMA = 4_096;
-/** The product is the `actionKey`'s prefix; only Jira is mapped. */
-const ACTION_KEY_RE = /^(jira):[a-z_]{1,32}$/;
+/** The product is the `actionKey`'s prefix; {@link PRODUCTS} says which map. */
+const ACTION_KEY_RE = /^([a-z]+):[a-z_]{1,32}$/;
 
 let port: RemoteToolPort | undefined;
 const known = new Map<string, RemoteToolDescriptor>();
@@ -120,7 +137,7 @@ function accepted(value: unknown): RemoteToolDescriptor | undefined {
     schema.type !== "object" ||
     JSON.stringify(schema).length > MAX_SCHEMA ||
     effect !== "read" ||
-    product !== "jira"
+    !isRemoteProduct(product)
   )
     return undefined;
   return {
@@ -199,13 +216,14 @@ export function knownRemoteTools(
   return [...known.values()].filter((tool) => tool.product === product);
 }
 
-function productEnabled(product: RemoteProduct): boolean {
-  return product === "jira" && getJiraSettings().enabled;
+/** Whether `product`'s tools are turned on in Settings. */
+export function remoteProductEnabled(product: RemoteProduct): boolean {
+  return PRODUCTS[product]();
 }
 
 /** A remote group's gate: connected and its product turned on in Settings. */
 export function remoteToolGate(product: RemoteProduct): boolean {
-  return connected && productEnabled(product);
+  return connected && remoteProductEnabled(product);
 }
 
 /** Whether `name` may be called now: connected, listed now, product on. */
@@ -215,7 +233,7 @@ export function remoteToolDispatchable(name: string): boolean {
     tool !== undefined &&
     connected &&
     current.has(name) &&
-    productEnabled(tool.product)
+    remoteProductEnabled(tool.product)
   );
 }
 

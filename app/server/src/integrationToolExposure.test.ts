@@ -39,6 +39,7 @@ const ALL_OFF = {
   tempo: false,
   google: false,
   slack: false,
+  gatewaySlack: false,
   github: false,
   forgejo: false,
   browserRawMcp: false,

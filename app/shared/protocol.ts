@@ -1350,6 +1350,11 @@ export interface SlackSettings {
   botTokenConfigured: boolean;
   /** The workspace is connected: OAuth stores the user and bot tokens together. */
   connected: boolean;
+  /**
+   * Where Slack's agent tools get the user's Slack connection: this server,
+   * or the credential gateway in client mode.
+   */
+  credentialStore: "local" | "gateway";
 }
 
 /** Patch sent by the settings UI. Secret fields are write-only and never echoed back. */

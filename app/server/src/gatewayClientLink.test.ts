@@ -29,6 +29,7 @@ const remoteTools = await import("./remoteTools.ts");
 const { subscribeIntegrationToolChanges } =
   await import("./integrationToolChanges.ts");
 const { updateJiraSettings } = await import("./jiraSettings.ts");
+const { updateSlackSettings } = await import("./slackSettings.ts");
 const { WorkerConnection, WorkerMethodError } =
   await import("./workerProtocol/connection.ts");
 const { socketEndpoint } =
@@ -444,6 +445,8 @@ test("the link lists the edge's tools before it is ready, and calls them through
   });
   open.push(link);
   await updateJiraSettings({ enabled: true });
+  updateSlackSettings({ enabled: true });
+  open.push({ close: () => updateSlackSettings({ enabled: false }) });
   assert.equal(await link.ready, true);
   // Listed before `ready`: the real descriptor, gate on.
   const [listed] = remoteTools.knownRemoteTools("jira");
@@ -466,6 +469,31 @@ test("the link lists the edge's tools before it is ready, and calls them through
       code: "tool_error",
       message:
         "Jira is not connected for this user; connect it in Pandeck's Settings.",
+    },
+  );
+
+  // The edge's four Slack reads (Task-1455), in its listing order.
+  assert.deepEqual(
+    remoteTools.knownRemoteTools("slack").map((tool) => tool.name),
+    [
+      "slack_search",
+      "slack_conversation_read",
+      "slack_thread_read",
+      "slack_unread",
+    ],
+  );
+  assert.equal(remoteTools.remoteToolGate("slack"), true);
+  assert.deepEqual(
+    await port.call(
+      "slack_search",
+      { query: "x" },
+      new AbortController().signal,
+    ),
+    {
+      ok: false,
+      code: "tool_error",
+      message:
+        "Slack is not connected for this user; connect it on the gateway's page.",
     },
   );
 

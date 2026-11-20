@@ -1,13 +1,14 @@
 /**
- * The gateway Jira tools (Task-1398): a call reaches the port only while the
- * gateway is connected, Jira is on and the latest listing still offers the
- * tool as a read tool; answers and refusals become fixed text, except the
+ * The gateway tools (Task-1398, Slack Task-1455): a call reaches the port
+ * only while the gateway is connected, the tool's product is on and the
+ * latest listing still offers the tool as a read tool; answers and refusals become fixed text, except the
  * gateway's own `tool_error` and `invalid_params` texts.
  */
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "vitest";
 import { updateJiraSettings } from "../../jiraSettings.ts";
 import type { ToolCallContext } from "../../mcp/tool.ts";
+import { updateSlackSettings } from "../../slackSettings.ts";
 import {
   RemoteToolRefusal,
   acceptRemoteTools,
@@ -16,7 +17,7 @@ import {
   markDisconnected,
   type RemoteToolAnswer,
 } from "../../remoteTools.ts";
-import { remoteJiraTools } from "./remoteToolGroup.ts";
+import { remoteToolsFor } from "./remoteToolGroup.ts";
 
 const listed = (overrides: Record<string, unknown> = {}) => ({
   name: "jira_get_issue",
@@ -56,7 +57,7 @@ const ctx = (signal?: AbortSignal) =>
 
 function capture() {
   applyListing(acceptRemoteTools([listed()]));
-  const tool = remoteJiraTools().find((t) => t.name === "jira_get_issue");
+  const tool = remoteToolsFor("jira").find((t) => t.name === "jira_get_issue");
   assert.ok(tool);
   return tool;
 }
@@ -153,7 +154,7 @@ test("a retained tool is refused before any port call once removed, turned write
   applyListing(acceptRemoteTools([listed({ effect: "write" })]));
   await refused("The gateway no longer offers jira_get_issue.");
   // The tool stays in the group for the boot.
-  assert.ok(remoteJiraTools().some((t) => t.name === "jira_get_issue"));
+  assert.ok(remoteToolsFor("jira").some((t) => t.name === "jira_get_issue"));
 
   applyListing(acceptRemoteTools([listed()]));
   markDisconnected();
@@ -170,9 +171,49 @@ test("a retained tool is refused before any port call once removed, turned write
 
 test("a tool is rebuilt only when its descriptor changes", () => {
   const first = capture();
-  assert.equal(remoteJiraTools()[0], first);
+  assert.equal(remoteToolsFor("jira")[0], first);
   applyListing(acceptRemoteTools([listed({ description: "Newer." })]));
-  const second = remoteJiraTools()[0]!;
+  const second = remoteToolsFor("jira")[0]!;
   assert.notEqual(second, first);
   assert.equal(second.description, "Newer.");
+});
+
+test("a Slack tool follows the Slack toggle, not Jira's, and passes the edge's text", async () => {
+  const slackSearch = listed({
+    name: "slack_search",
+    description: "Search Slack messages.",
+    actionKey: "slack:read",
+  });
+  applyListing(acceptRemoteTools([listed(), slackSearch]));
+  assert.deepEqual(
+    remoteToolsFor("slack").map((t) => [t.name, t.sideEffects]),
+    [["slack_search", "none"]],
+  );
+  const tool = remoteToolsFor("slack")[0]!;
+
+  // Slack off, Jira on: refused before any port call.
+  updateSlackSettings({ enabled: false });
+  await assert.rejects(tool.execute({ query: "x" }, ctx()), {
+    message: "Slack tools are disabled. Enable them in Settings → Slack.",
+  });
+  assert.equal(calls.length, 0);
+
+  // Slack on, Jira off: reaches the port with its name and arguments.
+  updateSlackSettings({ enabled: true });
+  await updateJiraSettings({ enabled: false });
+  const signal = new AbortController().signal;
+  await tool.execute({ query: "x" }, ctx(signal));
+  assert.deepEqual(calls, [
+    { name: "slack_search", args: { query: "x" }, signal },
+  ]);
+
+  // The edge's absent-credential text (`gatewayTools/toolCredential.ts`).
+  const notConnected =
+    "Slack is not connected for this user; connect it on the gateway's page.";
+  answer = () =>
+    Promise.resolve({ ok: false, code: "tool_error", message: notConnected });
+  await assert.rejects(tool.execute({ query: "x" }, ctx()), {
+    message: notConnected,
+  });
+  updateSlackSettings({ enabled: false });
 });
