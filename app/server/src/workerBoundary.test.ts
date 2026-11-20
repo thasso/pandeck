@@ -654,12 +654,13 @@ test("the gateway's edge reaches the vault only through its port", () => {
 });
 
 /**
- * The edge's tools (Task-1397, Task-1439): beyond `node:`, themselves and the
- * MCP SDK, only the shared Jira client, read modules and their helpers, a
- * closed set; never a tool under `tools/`, settings, a cache file, approvals
- * or `@assistant/shared`. They import nothing from `gateway/`, which reaches
- * them only through `EdgeTools`, and only the edge's entry loads them, so the
- * vault process never does.
+ * The edge's tools (Task-1397, Task-1439, Task-1454): beyond `node:`,
+ * themselves and the MCP SDK, only the shared Jira client, the shared Jira
+ * and Slack read modules and their helpers, a closed set; never a tool under
+ * `tools/`, settings, a cache file, approvals or `@assistant/shared` beyond
+ * the import-free `zonedTime` leaf. They import nothing from `gateway/`,
+ * which reaches them only through `EdgeTools`, and only the edge's entry
+ * loads them, so the vault process never does.
  */
 const GATEWAY_TOOLS_ALLOWED = new Set([
   "atlassian/adfToMarkdown.ts",
@@ -671,7 +672,13 @@ const GATEWAY_TOOLS_ALLOWED = new Set([
   "jiraRead.ts",
   "jiraSearch.ts",
   "jiraSprintLookup.ts",
+  "slackMetadataCache.ts",
+  "slackRead.ts",
+  "slackUrls.ts",
+  "@assistant/shared/zonedTime",
 ]);
+/** Allowed specifiers outside this package: scanned on their own below. */
+const GATEWAY_TOOLS_SHARED = new Set(["@assistant/shared/zonedTime"]);
 
 test("only the edge's entry loads its tools, and they reach no server state", () => {
   assert.deepEqual(
@@ -694,6 +701,7 @@ test("only the edge's entry loads its tools, and they reach no server state", ()
         `${module} imports ${target}`,
       );
   for (const module of GATEWAY_TOOLS_ALLOWED) {
+    if (GATEWAY_TOOLS_SHARED.has(module)) continue;
     const scan = scans.get(module);
     assert.ok(scan, `the scan found ${module}`);
     for (const target of scan.imports)
@@ -702,6 +710,12 @@ test("only the edge's entry loads its tools, and they reach no server state", ()
         `${module}, which the edge's tools may import, imports ${target}`,
       );
   }
+  const zonedTime = scanModule(resolve(SRC_ROOT, "../../shared/zonedTime.ts"));
+  assert.deepEqual(
+    [...zonedTime.imports],
+    [],
+    "the shared leaf imports nothing",
+  );
 });
 
 /**

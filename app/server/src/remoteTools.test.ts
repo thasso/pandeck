@@ -93,6 +93,8 @@ test("only bounded read tools of a mapped product are accepted", () => {
     tool({ name: "jira_array", inputSchema: { type: "array" } }),
     tool({ name: "jira_list", inputSchema: [] }),
     tool({ name: "confluence_page", actionKey: "confluence:read" }),
+    // The edge lists Slack's reads (Task-1454); client mode maps none yet.
+    tool({ name: "slack_search", actionKey: "slack:read" }),
     tool({ name: "jira_no_key", actionKey: undefined }),
     "jira_get_issue",
     null,

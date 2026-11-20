@@ -6,7 +6,11 @@
 import assert from "node:assert/strict";
 import { afterEach, test, vi } from "vitest";
 import { encodeAtlassianCredential } from "./atlassian.ts";
-import { ToolError, type ToolDescriptor } from "./descriptor.ts";
+import {
+  ToolError,
+  type AtlassianToolDescriptor,
+  type SlackToolDescriptor,
+} from "./descriptor.ts";
 import type { CredentialOutcome } from "./toolCredential.ts";
 import { createToolHost, type ToolCaller } from "./host.ts";
 import { EDGE_TOOLS } from "./tools.ts";
@@ -20,9 +24,9 @@ afterEach(() => {
 });
 
 function tool(
-  execute: ToolDescriptor["execute"],
-  extra: Partial<ToolDescriptor> = {},
-): ToolDescriptor {
+  execute: AtlassianToolDescriptor["execute"],
+  extra: Partial<AtlassianToolDescriptor> = {},
+): AtlassianToolDescriptor {
   return {
     name: "probe",
     description: "A test tool.",
@@ -56,7 +60,7 @@ function caller(
   };
 }
 
-test("the registry lists Jira's read tools with their schemas, effect and action key", () => {
+test("the registry lists Jira's and Slack's read tools with their schemas, effect and action key", () => {
   const host = createToolHost(EDGE_TOOLS, { log: () => {} });
   assert.deepEqual(
     host.list().map((t) => [t.name, t.effect, t.actionKey]),
@@ -64,6 +68,10 @@ test("the registry lists Jira's read tools with their schemas, effect and action
       ["jira_get_issue", "read", "jira:read"],
       ["jira_search_issues", "read", "jira:read"],
       ["jira_lookup", "read", "jira:read"],
+      ["slack_search", "read", "slack:read"],
+      ["slack_conversation_read", "read", "slack:read"],
+      ["slack_thread_read", "read", "slack:read"],
+      ["slack_unread", "read", "slack:read"],
     ],
   );
   const [listed] = host.list();
@@ -294,5 +302,123 @@ test("credential outcomes become fixed tool errors; an undecodable credential is
       ),
       { ok: false, code: "tool_error", message },
     );
+  assert.doesNotMatch(lines.join("\n"), new RegExp(SENTINEL));
+});
+
+const SLACK_VIEW = {
+  kind: "slack-oauth",
+  teamId: "THOST01",
+  workspaceHost: "acme.slack.com",
+  userId: "UHOST01",
+  scope: "search:read",
+  accessToken: "fake-access",
+  expiresAt: 4_102_444_800_000,
+};
+
+/** A Slack probe: answers the team of the view it was handed. */
+function slackTool(): SlackToolDescriptor {
+  return {
+    name: "slack_probe",
+    description: "A test tool.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+    effect: "read",
+    actionKey: "probe:read",
+    integration: "slack",
+    execute: async (_params, ctx) => ({
+      teamId: (await ctx.credential()).teamId,
+    }),
+  };
+}
+
+test("a Slack tool asks the vault for Slack and gets the decoded view", async () => {
+  const asked: string[] = [];
+  const atlassian = tool(async (_params, ctx) => ctx.credential());
+  const host = createToolHost([slackTool(), atlassian], {
+    log: () => {},
+  });
+  const answer = await host.call(
+    "slack_probe",
+    {},
+    {
+      clientId: "client-1",
+      credential: (integration) => {
+        asked.push(integration);
+        return Promise.resolve({
+          ok: true,
+          credential: JSON.stringify(SLACK_VIEW),
+        });
+      },
+    },
+  );
+  assert.deepEqual(answer, { ok: true, text: '{"teamId":"THOST01"}' });
+  await host.call(
+    "probe",
+    { issue: "OPS-1" },
+    {
+      clientId: "client-1",
+      credential: (integration) => {
+        asked.push(integration);
+        return Promise.resolve({ ok: false, absent: true });
+      },
+    },
+  );
+  assert.deepEqual(asked, ["slack", "atlassian"]);
+});
+
+test("Slack credential outcomes become Slack's fixed texts; a view of the other kind is invalid", async () => {
+  const fetch = vi.fn(async () => new Response("{}"));
+  vi.stubGlobal("fetch", fetch);
+  const lines: string[] = [];
+  const host = createToolHost(EDGE_TOOLS, { log: (line) => lines.push(line) });
+  const invalid =
+    "The stored Slack credential is invalid; reconnect Slack on the gateway's page.";
+  const cases: [CredentialOutcome, string][] = [
+    [
+      { ok: false, absent: true },
+      "Slack is not connected for this user; connect it on the gateway's page.",
+    ],
+    [
+      { ok: false, rejected: true },
+      "Slack rejected the credential; reconnect Slack on the gateway's page.",
+    ],
+    [{ ok: false, locked: true }, "The vault is locked."],
+    [{ ok: false, unavailable: true }, "The vault did not answer; try again."],
+    [
+      { ok: true, credential: `{"kind":"slack-oauth","teamId":"${SENTINEL}"}` },
+      invalid,
+    ],
+    // An Atlassian credential handed to a Slack tool.
+    [{ ok: true, credential: encodeAtlassianCredential(FAKE) }, invalid],
+  ];
+  for (const [outcome, message] of cases)
+    assert.deepEqual(
+      await host.call(
+        "slack_search",
+        { query: "x" },
+        caller(() => Promise.resolve(outcome)),
+      ),
+      { ok: false, code: "tool_error", message },
+    );
+  // A Slack view handed to a Jira tool.
+  assert.deepEqual(
+    await host.call(
+      "jira_get_issue",
+      { issue: "OPS-73" },
+      caller(() =>
+        Promise.resolve({ ok: true, credential: JSON.stringify(SLACK_VIEW) }),
+      ),
+    ),
+    {
+      ok: false,
+      code: "tool_error",
+      message:
+        "The stored Jira credential is invalid; reconnect Jira in Pandeck's Settings.",
+    },
+  );
+  assert.equal(fetch.mock.calls.length, 0, "no upstream request");
   assert.doesNotMatch(lines.join("\n"), new RegExp(SENTINEL));
 });

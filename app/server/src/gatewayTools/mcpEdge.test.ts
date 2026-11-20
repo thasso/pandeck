@@ -60,6 +60,19 @@ import {
   jsonResponder,
   startAtlassianFake,
 } from "../test/atlassianFake.ts";
+import {
+  AUTH_TEST_OK,
+  FAKE_SLACK_CLIENT,
+  FAKE_SLACK_CODE,
+  FAKE_SLACK_REDIRECT,
+  FAKE_SLACK_SCOPE,
+  FAKE_TEAM_ID,
+  FAKE_TEAM_NAME,
+  FAKE_USER_ID,
+  slackJson,
+  startSlackFake,
+} from "../test/slackFake.ts";
+import { clearSlackMetadataCaches } from "../slackRead.ts";
 import { createEdgeTools } from "./index.ts";
 
 const realFetch = globalThis.fetch;
@@ -252,6 +265,7 @@ async function clientLink(relay: RunningRelay) {
         integration: "atlassian",
         ...json,
       }),
+    tool: (json: object) => call(CLIENT_METHODS.toolsCall, json),
   };
 }
 
@@ -352,10 +366,11 @@ async function twoUsers(deadlineMs?: number) {
   return { e, a1, a2, b1, tokens, linkA, linkB };
 }
 
-test("the relay lists Jira's read tools as read-only, with their schemas whole, and runs jira_lookup", async () => {
+test("the relay lists Jira's and Slack's read tools as read-only, with their schemas whole, and runs jira_lookup", async () => {
   const { a1, tokens } = await twoUsers();
   const client = await mcpClient(a1.url, tokens.a1);
   const { tools } = await client.listTools();
+  assert.equal(tools.length, 7);
   for (const tool of tools)
     assert.equal(tool.annotations?.readOnlyHint, true, tool.name);
   const lookup = tools.find((tool) => tool.name === "jira_lookup")!;
@@ -408,7 +423,15 @@ test("an SDK client lists and calls jira_get_issue through the relay, with its o
   const listed = await clientA.listTools();
   assert.deepEqual(
     listed.tools.map((tool) => tool.name),
-    ["jira_get_issue", "jira_search_issues", "jira_lookup"],
+    [
+      "jira_get_issue",
+      "jira_search_issues",
+      "jira_lookup",
+      "slack_search",
+      "slack_conversation_read",
+      "slack_thread_read",
+      "slack_unread",
+    ],
   );
   assert.deepEqual(listed.tools[0]!.inputSchema.required, ["issue"]);
   const a = await clientA.callTool({
@@ -872,4 +895,376 @@ test("an OAuth record connected in a vault process reaches Jira with Bearer thro
   ].join("\n");
   assert.doesNotMatch(seen, /fake-atl-refresh|fake-atl-access/);
   assert.ok(!seen.includes(FAKE_CLIENT.clientSecret));
+});
+
+test("Slack records connected in a vault process reach slack.com/api as each user, with their own lists and profile zones", async () => {
+  clearSlackMetadataCaches();
+  const slack = await startSlackFake();
+  open.push({ close: () => slack.close() });
+  const vaultId = selfSignedIdentity("pandeck-gateway-vault", "server", [
+    "localhost",
+    "127.0.0.1",
+  ]);
+  const edgeId = selfSignedIdentity("pandeck-gateway-edge", "client");
+  const vaultLines: string[] = [];
+  const vaultDir = mkdtempSync(join(relayRoot, "vault-"));
+  const vault = await startVaultServer({
+    stateDir: vaultDir,
+    port: 0,
+    tls: {
+      keyPem: vaultId.keyPem,
+      certPem: vaultId.certPem,
+      peerCertPem: edgeId.certPem,
+    },
+    controlSocket: join(vaultDir, "control.sock"),
+    log: (line) => vaultLines.push(line),
+    integrationClients: { slack: FAKE_SLACK_CLIENT },
+    slackEndpoint: slack.endpoint,
+  });
+  open.push(vault);
+  const link = {
+    host: "127.0.0.1",
+    port: vault.port,
+    tls: {
+      keyPem: edgeId.keyPem,
+      certPem: edgeId.certPem,
+      peerCertPem: vaultId.certPem,
+    },
+  };
+
+  // A with the fake's defaults; B a second Slack user of the same team.
+  const B_USER = "UFAKE0002";
+  const B_ACCESS = "fake-slack-access-b";
+  const connector = createRemoteVault(link, {
+    profiles: () => [],
+    liveLeases: () => [],
+    report: () => {},
+    log: () => {},
+  });
+  for (let i = 0; i < 200 && !connector.connected(); i++) await delay(25);
+  const connected = {
+    ok: true,
+    teamId: FAKE_TEAM_ID,
+    teamName: FAKE_TEAM_NAME,
+  };
+  const connect = (userId: string) =>
+    connector.integrationConnect(userId, "slack", {
+      code: FAKE_SLACK_CODE,
+      redirectUri: FAKE_SLACK_REDIRECT,
+    });
+  assert.deepEqual(await connect("A"), connected);
+  const A_ACCESS = slack.issuedAccess[0]!;
+  slack.access = slackJson(200, {
+    ok: true,
+    app_id: "AFAKE0001",
+    authed_user: {
+      id: B_USER,
+      scope: FAKE_SLACK_SCOPE,
+      access_token: B_ACCESS,
+      expires_in: 43_200,
+      refresh_token: "fake-slack-refresh-b",
+      token_type: "user",
+    },
+    team: { id: FAKE_TEAM_ID, name: FAKE_TEAM_NAME },
+    enterprise: null,
+    is_enterprise_install: false,
+  });
+  slack.authTest = slackJson(200, { ...AUTH_TEST_OK, user_id: B_USER });
+  assert.deepEqual(await connect("B"), connected);
+  connector.close();
+
+  // Slack's Web API, answered per bearer token.
+  const SENTINEL = "SLACK-SENTINEL-do-not-echo";
+  const rooms: Record<string, { id: string; name: string }> = {
+    [A_ACCESS]: { id: "C0A1", name: "alpha-room" },
+    [B_ACCESS]: { id: "C0B1", name: "beta-room" },
+  };
+  const zones: Record<string, string | undefined> = {
+    [FAKE_USER_ID]: "Europe/Berlin",
+    [B_USER]: undefined,
+  };
+  let failSearch: (() => Response) | undefined;
+  const calls: { url: URL; token: string; form: URLSearchParams }[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: URL | string, init?: RequestInit) => {
+      const url = new URL(String(input));
+      const token = (
+        new Headers(init?.headers).get("authorization") ?? ""
+      ).replace(/^Bearer /, "");
+      const form = new URLSearchParams(String(init?.body));
+      calls.push({ url, token, form });
+      const json = (body: object) => new Response(JSON.stringify(body));
+      switch (url.pathname.replace("/api/", "")) {
+        case "conversations.list":
+          return json({
+            ok: true,
+            channels: [
+              {
+                ...rooms[token],
+                last_read: "1773000000.000000",
+                unread_count: 0,
+              },
+            ],
+          });
+        case "users.list":
+          return json({ ok: true, members: [] });
+        case "users.info": {
+          const user = form.get("user")!;
+          const tz = zones[user];
+          return json({ ok: true, user: { id: user, ...(tz ? { tz } : {}) } });
+        }
+        case "conversations.history":
+          return json({
+            ok: true,
+            messages: [{ ts: "1773144000.000000", text: "noon" }],
+          });
+        case "conversations.replies":
+          return json({ ok: true, messages: [] });
+        case "search.messages":
+          return failSearch
+            ? failSearch()
+            : json({ ok: true, messages: { total: 0, matches: [] } });
+        default:
+          return new Response("{}", { status: 404 });
+      }
+    }),
+  );
+
+  const e = await edgeWith({ vault: link });
+  e.gateway.clients!.registry.addUser("C");
+  const clientOf = async (userId: string) => {
+    const r = await e.relay(userId);
+    return mcpClient(
+      r.url,
+      e.gateway.clients!.registry.setMcpToken(r.clientId),
+    );
+  };
+  const [a, b, c] = [
+    await clientOf("A"),
+    await clientOf("B"),
+    await clientOf("C"),
+  ];
+  const call = (client: Client, name: string, args: object) =>
+    client.callTool({ name, arguments: { ...args } });
+  const ok = async (client: Client, name: string, args: object) => {
+    const answer = await call(client, name, args);
+    assert.equal(answer.isError, undefined, `${name}: ${textOf(answer)}`);
+    return JSON.parse(textOf(answer)) as Record<string, unknown>;
+  };
+
+  // A name only in A's list: A resolves it, B does not, A again from cache.
+  const first = await ok(a, "slack_conversation_read", {
+    conversation: "alpha-room",
+  });
+  assert.equal((first.conversation as { id: string }).id, "C0A1");
+  const notB = await call(b, "slack_conversation_read", {
+    conversation: "alpha-room",
+  });
+  assert.equal(notB.isError, true);
+  assert.equal(
+    textOf(notB),
+    "No accessible Slack conversation matches; use a channel or DM id, an accessible channel name, or an unambiguous person name.",
+  );
+  await ok(a, "slack_conversation_read", { conversation: "alpha-room" });
+  const lists = (token: string) =>
+    calls.filter(
+      (seen) =>
+        seen.token === token && seen.url.pathname === "/api/conversations.list",
+    ).length;
+  assert.deepEqual([lists(A_ACCESS), lists(B_ACCESS)], [1, 1]);
+
+  // A day in each user's own profile zone: A Berlin (UTC+1 in March before
+  // the change), B none so UTC; 12:00Z is 13:00 for A and 12:00 for B.
+  const day = async (client: Client, conversation: string, token: string) => {
+    const payload = await ok(client, "slack_conversation_read", {
+      conversation,
+      date: "2026-03-10",
+    });
+    const history = calls.filter(
+      (seen) =>
+        seen.token === token &&
+        seen.url.pathname === "/api/conversations.history",
+    );
+    return {
+      oldest: history.at(-1)!.form.get("oldest"),
+      localTime: (payload.messages as { localTime: string }[])[0]!.localTime,
+    };
+  };
+  const dayA = await day(a, "C0A1", A_ACCESS);
+  const dayB = await day(b, "C0B1", B_ACCESS);
+  assert.equal(dayA.oldest, "1773097200");
+  assert.equal(dayB.oldest, "1773100800");
+  assert.match(dayA.localTime, /\b1:00:00\b/);
+  assert.match(dayB.localTime, /\b12:00:00\b/);
+
+  // The other three tools answer once each.
+  await ok(a, "slack_search", { query: "noon" });
+  await ok(a, "slack_thread_read", {
+    conversation: "C0A1",
+    threadTs: "1773144000.000000",
+  });
+  const unread = await ok(a, "slack_unread", {});
+  assert.equal(unread.capability, "unread");
+
+  // Every request went to slack.com/api with the caller's own token.
+  for (const seen of calls) {
+    assert.equal(seen.url.origin, "https://slack.com");
+    assert.ok(seen.url.pathname.startsWith("/api/"), seen.url.pathname);
+    assert.ok([A_ACCESS, B_ACCESS].includes(seen.token), seen.url.pathname);
+  }
+  assert.match(A_ACCESS, /^fake-slack-access-\d+$/);
+
+  // C has no Slack record: the fixed text and no Slack request.
+  const before = calls.length;
+  const absent = await call(c, "slack_search", { query: "x" });
+  assert.equal(absent.isError, true);
+  assert.equal(
+    textOf(absent),
+    "Slack is not connected for this user; connect it on the gateway's page.",
+  );
+  assert.equal(calls.length, before);
+
+  // The same reads over the client link's `tools.call`: the user is the
+  // registry's, never the payload's, so forged identity fields select
+  // nothing. Fresh caches, so every list and profile read shows its token.
+  clearSlackMetadataCaches();
+  const linkOf = async (userId: string) =>
+    clientLink((await e.relay(userId)).relay);
+  const [linkA, linkB] = [await linkOf("A"), await linkOf("B")];
+  const forged = { userId: "A", teamId: FAKE_TEAM_ID, user: FAKE_USER_ID };
+  const sinceLink = calls.length;
+  const viaLink = await linkB.tool({
+    name: "slack_conversation_read",
+    args: { conversation: "beta-room" },
+    ...forged,
+  });
+  assert.equal(viaLink.ok, true, JSON.stringify(viaLink));
+  const linkPayload = JSON.parse(String(viaLink.text)) as {
+    conversation: { id: string };
+  };
+  assert.equal(linkPayload.conversation.id, "C0B1");
+  const linkCalls = calls.slice(sinceLink);
+  assert.deepEqual(
+    linkCalls.map((seen) => seen.url.pathname),
+    [
+      "/api/users.info",
+      "/api/conversations.list",
+      "/api/conversations.history",
+    ],
+  );
+  for (const seen of linkCalls) assert.equal(seen.token, B_ACCESS);
+  assert.equal(linkCalls[0]!.form.get("user"), B_USER);
+  // A's name is still not B's, whatever the payload claims.
+  const forgedRoom = await linkB.tool({
+    name: "slack_conversation_read",
+    args: { conversation: "alpha-room" },
+    ...forged,
+  });
+  assert.deepEqual(forgedRoom, {
+    ok: false,
+    code: "tool_error",
+    message:
+      "No accessible Slack conversation matches; use a channel or DM id, an accessible channel name, or an unambiguous person name.",
+  });
+  // B's list served B's second call; A's first call lists with A's token.
+  assert.deepEqual([lists(A_ACCESS), lists(B_ACCESS)], [1, 2]);
+  const linkFirstA = await linkA.tool({
+    name: "slack_conversation_read",
+    args: { conversation: "alpha-room" },
+  });
+  assert.equal(linkFirstA.ok, true, JSON.stringify(linkFirstA));
+  assert.deepEqual([lists(A_ACCESS), lists(B_ACCESS)], [2, 2]);
+
+  // A malformed payload is refused before the host, with no Slack request
+  // and none of its content in the refusal.
+  const beforeMalformed = calls.length;
+  for (const json of [
+    { name: "slack_search", args: SENTINEL },
+    { name: "slack_search", args: [SENTINEL] },
+    { name: `slack_search ${SENTINEL}` },
+  ]) {
+    const refusal = await linkA.tool(json).then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+    assert.ok(refusal instanceof WorkerRequestError, JSON.stringify(json));
+    assert.equal(refusal.code, "invalid_params");
+    assert.ok(!refusal.message.includes(SENTINEL));
+  }
+  // A wrong argument type is the host's refusal, also before any request.
+  assert.deepEqual(
+    await linkA.tool({ name: "slack_search", args: { query: 5 } }),
+    {
+      ok: false,
+      code: "invalid_params",
+      message: "Invalid arguments: query must be a string.",
+    },
+  );
+  assert.equal(calls.length, beforeMalformed);
+
+  // Slack's failure is the fixed text in the tool's answer, which holds
+  // neither Slack's text nor a token.
+  failSearch = () =>
+    new Response(
+      JSON.stringify({ ok: false, error: SENTINEL, echoed: A_ACCESS }),
+    );
+  const linkRefused = await linkA.tool({
+    name: "slack_search",
+    args: { query: SENTINEL },
+  });
+  assert.deepEqual(linkRefused, {
+    ok: false,
+    code: "tool_error",
+    message: "Slack refused search.messages.",
+  });
+  failSearch = () =>
+    new Response(JSON.stringify({ ok: false, error: "invalid_auth" }));
+  assert.deepEqual(
+    await linkA.tool({ name: "slack_search", args: { query: "x" } }),
+    {
+      ok: false,
+      code: "tool_error",
+      message:
+        "Slack rejected the credential; reconnect Slack on the gateway's page.",
+    },
+  );
+  const linkSeen = JSON.stringify([viaLink, forgedRoom, linkRefused]);
+  for (const secret of [SENTINEL, A_ACCESS, B_ACCESS])
+    assert.ok(!linkSeen.includes(secret), secret);
+  failSearch = undefined;
+
+  // Slack's error text, body and the token itself never reach an answer, a
+  // log or the edge's files.
+  failSearch = () =>
+    new Response(
+      JSON.stringify({ ok: false, error: SENTINEL, echoed: A_ACCESS }),
+    );
+  const refused = await call(a, "slack_search", { query: SENTINEL });
+  assert.equal(textOf(refused), "Slack refused search.messages.");
+  failSearch = () => new Response(`${SENTINEL} ${A_ACCESS}`, { status: 500 });
+  const broken = await call(a, "slack_search", { query: "x" });
+  assert.equal(textOf(broken), "Slack answered HTTP 500.");
+  const seen = [
+    ...e.lines,
+    ...vaultLines,
+    JSON.stringify(refused),
+    JSON.stringify(broken),
+    JSON.stringify(notB),
+    JSON.stringify(absent),
+  ].join("\n");
+  for (const secret of [SENTINEL, A_ACCESS, B_ACCESS])
+    assert.ok(!seen.includes(secret), secret);
+  assert.doesNotMatch(seen, /fake-slack-refresh/);
+  assert.ok(!seen.includes(FAKE_SLACK_CLIENT.clientSecret));
+  const files = (dir: string): string[] =>
+    readdirSync(dir).flatMap((name) => {
+      const path = join(dir, name);
+      return statSync(path).isDirectory() ? files(path) : [path];
+    });
+  for (const file of files(e.stateDir)) {
+    const text = readFileSync(file, "utf8");
+    for (const secret of [SENTINEL, A_ACCESS, B_ACCESS])
+      assert.ok(!text.includes(secret), `${file} holds ${secret}`);
+  }
 });

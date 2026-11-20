@@ -15,7 +15,11 @@ import {
   type ObjectSchema,
   type ToolDescriptor,
 } from "./descriptor.ts";
-import { credentialFor, type CredentialSource } from "./toolCredential.ts";
+import {
+  atlassianCredentialFor,
+  slackCredentialFor,
+  type CredentialSource,
+} from "./toolCredential.ts";
 import { checkArguments } from "./schema.ts";
 
 const DEFAULT_DEADLINE_MS = 30_000;
@@ -84,10 +88,23 @@ export function createToolHost(
       const result = await raceAbort(
         Promise.resolve().then(() => {
           if (signal.aborted) throw abortError();
-          return tool.execute(checked.params, {
-            signal,
-            credential: () => credentialFor(caller, tool.integration, signal),
-          });
+          // Narrowed per integration: each execute gets its own credential.
+          switch (tool.integration) {
+            case "atlassian":
+              return tool.execute(checked.params, {
+                signal,
+                credential: () => atlassianCredentialFor(caller, signal),
+              });
+            case "slack":
+              return tool.execute(checked.params, {
+                signal,
+                credential: () => slackCredentialFor(caller, signal),
+              });
+            default: {
+              const never: never = tool;
+              return never;
+            }
+          }
         }),
         signal,
       );
