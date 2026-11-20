@@ -102,6 +102,7 @@ import {
 } from "./credentialProfileUsage.ts";
 import {
   modelRuntimeForProfile,
+  startModelCatalogRefresh,
   warmCredentialProfileModelRuntimes,
   linkPiToolBinaries,
   homeTranscriptImportStartupRefusal,
@@ -2060,6 +2061,10 @@ server.listen(PORT, HOST, () => {
   void warmCredentialProfileModelRuntimes().catch((err) =>
     console.warn("[models] credential profile warm-up failed:", errorText(err)),
   );
+  // Creating a runtime fetches no catalog: this checks each one now, joining
+  // the warm-up's runtimes, then hourly; pi's four-hour window gates the
+  // network.
+  startModelCatalogRefresh();
   // Turns runtime events into the Sessions inbox's run-start / failure /
   // settlement-reactivation facts for every harness at once.
   installSessionActivityTracking();

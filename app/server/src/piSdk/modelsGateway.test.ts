@@ -78,6 +78,7 @@ const before = files.map(snapshot);
 const {
   availableModelsForProfile,
   modelRuntimeForProfile,
+  refreshModelCatalogsInBackground,
   refreshModels,
   warmCredentialProfileModelRuntimes,
 } = await import("./models.ts");
@@ -115,6 +116,22 @@ test("AC2: creation, warm-up, the forced refresh and credential reads never ask 
     );
     assert.ok(codex.length > 0, `${profile.name} keeps its Codex models`);
   }
+});
+
+// Since pi 1.6.0 a catalog refresh never resolves the login under either
+// switch, so the AC2 control (getAuth) is what shows this observer would see a
+// token request; here the catalog request shows the refresh really ran: the
+// stubbed 400 left no `lastModified`, which pi refetches inside its window.
+test("the periodic background refresh fetches the catalog and never asks the token host", async () => {
+  await warmCredentialProfileModelRuntimes();
+  sent.length = 0;
+  await refreshModelCatalogsInBackground();
+  assert.ok(sent.includes(CATALOG_REQUEST), "the background refresh ran");
+  assert.ok(
+    !sent.includes(TOKEN_REQUEST),
+    `no token request: ${sent.join(", ")}`,
+  );
+  assert.deepEqual(files.map(snapshot), before, "every auth.json untouched");
 });
 
 test("AC2 control: a runtime made with the switch off refreshes the expired login", async () => {

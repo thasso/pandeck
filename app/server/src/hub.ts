@@ -16,6 +16,7 @@ import {
   type PostReloadContinuation,
 } from "./mcp/toolGroups/registry.ts";
 import { harnessRegistry } from "./harnesses/registry.ts";
+import { subscribePiPickerModelsChanged } from "./harnesses/models.ts";
 import { mergedSessionList } from "./harnesses/sessionList.ts";
 import { setWorktreeBroadcaster } from "./worktrees/worktreeEvents.ts";
 import {
@@ -249,10 +250,7 @@ class SessionHub {
         }
       }
     });
-    // An OpenAI-compatible account's models are its endpoint's: an edit, a
-    // test or a removal changes what every picker offers.
-    const compatibleModelsChanged = (profileId: string) => {
-      if (!isOpenAiCompatibleModelProvider(profileId)) return;
+    const pushModels = () => {
       for (const viewer of this.connections) {
         try {
           viewer.modelsChanged?.();
@@ -261,8 +259,15 @@ class SessionHub {
         }
       }
     };
+    // An OpenAI-compatible account's models are its endpoint's: an edit, a
+    // test or a removal changes what every picker offers.
+    const compatibleModelsChanged = (profileId: string) => {
+      if (isOpenAiCompatibleModelProvider(profileId)) pushModels();
+    };
     subscribeCredentialProfileChanges(compatibleModelsChanged);
     subscribeCredentialProfileDeleted(compatibleModelsChanged);
+    // So does a catalog the periodic refresh brought in.
+    subscribePiPickerModelsChanged(pushModels);
     subscribeHarnessOpened((sessionId) => this.sessionHarnessOpened(sessionId));
   }
 

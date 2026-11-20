@@ -44,6 +44,8 @@ vi.mock("./piSdk/models.ts", () => ({
     provider: "openai-codex",
     id: "gpt-5",
   })),
+  // The hub subscribes when it is built.
+  subscribePickerModelsChanged: vi.fn(() => () => {}),
 }));
 
 const piModels: ModelOption[] = [
