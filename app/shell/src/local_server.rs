@@ -87,8 +87,36 @@ pub fn ensure_running(app: &AppHandle) -> Result<String, String> {
     }
     let started = result?;
     let url = started.url.clone();
+    watch_for_exit(app.clone(), started.child.id());
     *running = Some(started);
     Ok(url)
+}
+
+/// Notice the server exiting without having been asked to, and open the
+/// recovery page with the reason. A deliberate [`stop`] takes the server out of
+/// [`RUNNING`] first, which ends this watch silently.
+fn watch_for_exit(app: AppHandle, pid: u32) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(1));
+        let Ok(mut running) = RUNNING.lock() else { return };
+        let Some(current) = running.as_mut().filter(|current| current.child.id() == pid) else {
+            return;
+        };
+        let Ok(Some(status)) = current.child.try_wait() else { continue };
+        *running = None;
+        drop(running);
+        let log = log_file(&app).map(|path| path.display().to_string()).unwrap_or_default();
+        let message = format!("The local server stopped unexpectedly ({status}). Its log is {log}.");
+        log_line(&message);
+        if let Ok(mut error) = LAST_ERROR.lock() {
+            *error = Some(message);
+        }
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            crate::open_bootstrap_window(&handle, false);
+        });
+        return;
+    });
 }
 
 /// Stop the server and wait for it, killing it past [`STOP_TIMEOUT`].

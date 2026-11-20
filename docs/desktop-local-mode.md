@@ -46,7 +46,10 @@ unit provides on Linux and adds no protocol of its own:
   for end-of-file was tried first; under Bun on macOS CI the server never saw
   it.
 - **Failure.** When the server cannot start, the shell opens the bootstrap page
-  with the reason and the log path instead of an app window.
+  with the reason and the log path instead of an app window. When a running
+  server exits without being stopped, the shell opens that page too, with **Run
+  Pandeck on this Mac** to restart it on the same port. Open windows then
+  reconnect by themselves.
 
 Data lives in `~/Library/Application Support/<identifier>/data`, outside the
 bundle, so replacing the app keeps it. The server's output goes to
