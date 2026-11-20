@@ -1,5 +1,5 @@
 /**
- * The Claude CLI's OAuth refresh locks, taken the way CLI 2.1.316 takes them
+ * The Claude CLI's OAuth refresh locks, taken the way CLI 2.1.329 takes them
  * (`docs/workers.md` "Renewal"), so the gateway and a CLI on the same config
  * directory ("One refresher") never refresh one login at once.
  *

@@ -1,5 +1,5 @@
 /**
- * AC1–AC3: the Claude refresh request as CLI 2.1.316 sends it, against a fake
+ * AC1–AC3: the Claude refresh request as CLI 2.1.329 sends it, against a fake
  * TLS `platform.claude.com`, and the compare-and-swap save into a temp
  * `.credentials.json`. Every token is a fake sentinel.
  */

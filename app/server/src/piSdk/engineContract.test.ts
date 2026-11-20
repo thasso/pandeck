@@ -584,7 +584,7 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
       });
       assert.equal(
         env.gateway.lines.filter((line) =>
-          /^client user-agent="pi\/1\.5\.0\b/.test(line),
+          /^client user-agent="pi\/1\.6\.0\b/.test(line),
         ).length,
         1,
         "the engine's client line is logged once",

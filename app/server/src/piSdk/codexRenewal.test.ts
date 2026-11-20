@@ -1,5 +1,5 @@
 /**
- * The gateway's Codex refresher through pi 1.5.0's real `getAuth` (AC13) and
+ * The gateway's Codex refresher through pi 1.6.0's real `getAuth` (AC13) and
  * its lock-fenced store against pi's own (AC21). `fetch` is stubbed: no
  * request leaves the process, and every token is a fake.
  */
@@ -7,12 +7,14 @@ import assert from "node:assert/strict";
 import { codexChildPort } from "../gateway/codexChild.ts";
 import { existsSync } from "node:fs";
 import {
+  lstat,
   mkdir,
   mkdtemp,
   readdir,
   readFile,
   rm,
   stat,
+  symlink,
   utimes,
   writeFile,
 } from "node:fs/promises";
@@ -323,6 +325,39 @@ test("AC21 (1): pi's own store and the renewer race a forced renewal: one fetch,
     JSON.parse(await readFile(file, "utf8"))["openai-codex"].access,
     NEW_ACCESS,
   );
+});
+
+test("AC21 (1): through a symlinked auth.json, the renewer on the alias waits behind pi refreshing the target: one fetch", async () => {
+  const expires = Date.now() + 10 * MIN;
+  const target = await authFile(expires);
+  const alias = join(await mkdtemp(join(tmpdir(), "codexalias")), "auth.json");
+  await symlink(target, alias);
+  const pi = await ModelRuntime.create({
+    authPath: target,
+    modelsPath: null,
+    refreshOnCreate: false,
+  });
+  const force = expires - Date.now() + 1;
+  const held = gate();
+  answer = held.answer;
+  // pi takes its lock and is inside its refresh, its token request held.
+  const theirs = pi.getAuth("openai-codex", {
+    minOAuthValidityMs: force,
+    signal: signal(),
+  });
+  await held.started;
+  const ours = renewCodexCredential(alias, force, signal());
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(calls.length, 1, "the renewer waits behind pi's lock");
+  held.open();
+  assert.deepEqual(await ours, { ok: true });
+  assert.equal(calls.length, 1, "one refresh: both took the target's lock");
+  assert.ok(JSON.stringify(await theirs).includes(NEW_ACCESS));
+  assert.equal(
+    JSON.parse(await readFile(target, "utf8"))["openai-codex"].access,
+    NEW_ACCESS,
+  );
+  assert.ok((await lstat(alias)).isSymbolicLink(), "the alias stays a link");
 });
 
 test("AC21 (1): a fresh pi-style lock delays the renewer; a 31 s stale one is taken", async () => {

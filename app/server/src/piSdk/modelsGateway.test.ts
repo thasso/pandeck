@@ -83,9 +83,24 @@ const {
 } = await import("./models.ts");
 const { listCredentialProfiles } = await import("../credentialProfiles.ts");
 
-test("AC2: creation, warm-up and the forced refresh never ask the token host", async () => {
+/**
+ * Resolve the account's Codex credential the way a run does: the call that
+ * refreshes an expired login. Since pi 1.6.0 the catalog refresh no longer
+ * touches the login, so this is what both tests must exercise. The token host
+ * refuses, so a refresh attempt rejects; only the request it sent matters.
+ */
+async function resolveCodexAuth(profileId: string): Promise<void> {
+  const runtime = await modelRuntimeForProfile(profileId);
+  await runtime.getAuth("openai-codex").catch(() => undefined);
+}
+
+test("AC2: creation, warm-up, the forced refresh and credential reads never ask the token host", async () => {
   await warmCredentialProfileModelRuntimes();
   await refreshModels();
+  for (const profile of listCredentialProfiles().filter(
+    (p) => p.provider === "openai-codex",
+  ))
+    await resolveCodexAuth(profile.id);
   assert.ok(
     !sent.includes(TOKEN_REQUEST),
     `no token request: ${sent.join(", ")}`,
@@ -112,7 +127,7 @@ test("AC2 control: a runtime made with the switch off refreshes the expired logi
     expiredLogin(id);
     await modelRuntimeForProfile(id);
     sent.length = 0;
-    await refreshModels();
+    await resolveCodexAuth(id);
     assert.ok(
       sent.includes(TOKEN_REQUEST),
       `the control's refresh is visible: ${sent.join(", ")}`,

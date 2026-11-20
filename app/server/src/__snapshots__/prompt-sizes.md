@@ -17,13 +17,13 @@ sizes only.
 | --- | --- | ---: | ---: | ---: |
 | assistant | pi | 6,208 | 10,697 | 16,905 |
 | assistant | claude | 6,188 | 9,994 | 16,182 |
-| personal-assistant | pi | 8,186 | 18,838 | 27,024 |
+| personal-assistant | pi | 8,186 | 18,957 | 27,143 |
 | personal-assistant | claude | 8,166 | 10,284 | 18,450 |
-| workshop | pi | 12,706 | 20,475 | 33,181 |
+| workshop | pi | 12,706 | 20,594 | 33,300 |
 | workshop | claude | 6,892 | 11,957 | 18,849 |
 | workflow-coordinator | pi | 3,386 | 2,232 | 5,618 |
 | workflow-coordinator | claude | 3,366 | 1,475 | 4,841 |
-| developer | pi | 13,390 | 19,988 | 33,378 |
+| developer | pi | 13,390 | 20,107 | 33,497 |
 | developer | claude | 7,576 | 11,461 | 19,037 |
 
 ## assistant — pi
@@ -99,7 +99,7 @@ sizes only.
 | `tools:eager:names` | tools | yes | 140 |
 | `tools:eager:descriptions` | tools | yes | 5,399 |
 | `tools:eager:schemas` | tools | yes | 9,716 |
-| `tools:eager:harness-builtin` | tools | yes | 3,583 |
+| `tools:eager:harness-builtin` | tools | yes | 3,702 |
 | `tools:deferred:universe` | tools | no | 170,189 |
 
 ## personal-assistant — claude
@@ -146,7 +146,7 @@ sizes only.
 | `tools:eager:names` | tools | yes | 214 |
 | `tools:eager:descriptions` | tools | yes | 5,876 |
 | `tools:eager:schemas` | tools | yes | 10,802 |
-| `tools:eager:harness-builtin` | tools | yes | 3,583 |
+| `tools:eager:harness-builtin` | tools | yes | 3,702 |
 | `tools:deferred:universe` | tools | no | 197,761 |
 
 ## workshop — claude
@@ -226,7 +226,7 @@ sizes only.
 | `tools:eager:names` | tools | yes | 187 |
 | `tools:eager:descriptions` | tools | yes | 5,702 |
 | `tools:eager:schemas` | tools | yes | 10,516 |
-| `tools:eager:harness-builtin` | tools | yes | 3,583 |
+| `tools:eager:harness-builtin` | tools | yes | 3,702 |
 | `tools:deferred:universe` | tools | no | 200,232 |
 
 ## developer — claude
