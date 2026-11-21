@@ -65,7 +65,7 @@ function caller(
   };
 }
 
-test("the registry lists Jira's and Slack's read tools with their schemas, effect and action key", () => {
+test("the registry lists Jira's, Confluence's and Slack's read tools with their schemas, effect and action key", () => {
   const host = createToolHost(EDGE_TOOLS, { log: () => {} });
   assert.deepEqual(
     host.list().map((t) => [t.name, t.effect, t.actionKey]),
@@ -73,6 +73,9 @@ test("the registry lists Jira's and Slack's read tools with their schemas, effec
       ["jira_get_issue", "read", "jira:read"],
       ["jira_search_issues", "read", "jira:read"],
       ["jira_lookup", "read", "jira:read"],
+      ["confluence_search", "read", "confluence:read"],
+      ["confluence_get_page", "read", "confluence:read"],
+      ["confluence_lookup", "read", "confluence:read"],
       ["slack_search", "read", "slack:read"],
       ["slack_conversation_read", "read", "slack:read"],
       ["slack_thread_read", "read", "slack:read"],
