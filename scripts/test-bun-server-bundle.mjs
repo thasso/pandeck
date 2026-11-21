@@ -96,9 +96,10 @@ if (typeof expectedBrowserMcpVersion !== "string" || !expectedBrowserMcpVersion)
 const temp = mkdtempSync(join(tmpdir(), "pa-bun-runtime-"));
 const work = join(temp, "unrelated-workspace");
 const data = join(temp, "data");
-// The booted server imports Default Claude's transcripts from
-// `~/.claude/projects` once (`docs/credential-distribution.md`): a fresh HOME
-// keeps that read off the real home, and its first boot records an empty import.
+// An install with Default Claude imports its transcripts from
+// `~/.claude/projects` once (`docs/credential-distribution.md`); this one has
+// none, so its first boot skips the import. A fresh HOME still keeps any read
+// off the real home.
 const serverHome = join(temp, "server-home");
 const token = "bun-bundle-runtime-test-token";
 const port = 19000 + Math.floor(Math.random() * 1000);
@@ -177,24 +178,16 @@ function start() {
 }
 
 /**
- * The first boot ran the home transcript import against the fresh, empty
- * `serverHome`: it recorded `done` with nothing copied and left no backup.
+ * The first boot of an install with no Default Claude (the seeded registry has
+ * only its own Claude account) skips the home transcript import entirely: it
+ * creates nothing under the default's id and never touches HOME.
  */
 function checkEmptyHomeTranscriptImport() {
-  const work = join(
-    data,
-    "credential-profiles",
-    "claude-default",
-    "home-import",
-  );
-  const state = JSON.parse(readFileSync(join(work, "state.json"), "utf8"));
-  assert(
-    state.phase === "done" &&
-      state.aside === null &&
-      state.counts?.copied === 0 &&
-      state.bytes === 0,
-    `The first boot's home transcript import is not an empty done: ${JSON.stringify(state)}`,
-  );
+  for (const id of ["claude-default", "default"])
+    assert(
+      !existsSync(join(data, "credential-profiles", id)),
+      `The first boot created credential-profiles/${id} for a missing default.`,
+    );
   assert(
     !existsSync(join(serverHome, ".claude")),
     "The home transcript import wrote to HOME.",
@@ -1042,6 +1035,22 @@ async function runRuntimeProbes() {
         },
       }),
       { mode: 0o600 },
+    );
+    // Its account record too: an install no longer creates `default` itself.
+    const probeNow = Date.now();
+    writeFileSync(
+      join(probeData, "credential-profiles", "profiles.json"),
+      JSON.stringify([
+        {
+          id: "default",
+          name: "Default OpenAI",
+          provider: "openai-codex",
+          enabled: true,
+          enterprise: false,
+          createdAt: probeNow,
+          updatedAt: probeNow,
+        },
+      ]),
     );
     const env = {
       ...process.env,

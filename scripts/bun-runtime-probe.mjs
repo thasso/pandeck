@@ -4434,7 +4434,8 @@ async function checkPackageProxyEnvironment() {
  * offline, so a missing flow is the only way this fails.
  */
 async function checkPiOAuthFlows() {
-  const runtime = await modelRuntimeForProfile();
+  // The seeded account (test-bun-server-bundle.mjs): nothing creates it now.
+  const runtime = await modelRuntimeForProfile("default");
   const auth = await runtime.getAuth("openai-codex");
   assert(
     auth?.auth?.apiKey === "bun-probe-access",
