@@ -2708,16 +2708,16 @@ plus `jira_search_issues` and `jira_lookup` (Task-1439), four Slack read tools:
   credential whose secret form equals, or is contained in, the answer's fixed
   scaffold (the `[redacted]` placeholder, the JSON keys and structure, and the
   fixed fallback texts) cannot be withheld from the answer. Provider-shaped
-  credentials (Atlassian API tokens, OAuth access tokens) cannot take that
-  shape and are unaffected. `gateway/` holds no tool
-  code or package: it takes the tools as `EdgeTools` (`gateway/edgeTools.ts`,
-  types only) through `startGateway`'s `tools`, and the vault process never
-  loads them. Without them `/mcp` is an unknown path and the integration methods
-  answer `tools_unavailable`; the packaged entry wires none yet (D1). The closed
-  schema covers strings (`maxLength`, `pattern`, `enum`), booleans, integers
-  with a range, finite numbers, arrays of strings (with an item `enum`), closed
-  nested objects (`additionalProperties: false`) and arrays of them, `minItems`
-  and `maxItems` on arrays, a string or `null` (exactly
+  credentials (Atlassian API tokens, OAuth access tokens) cannot take that shape
+  and are unaffected. `gateway/` holds no tool code or package: it takes the
+  tools as `EdgeTools` (`gateway/edgeTools.ts`, types only) through
+  `startGateway`'s `tools`, and the vault process never loads them. Without them
+  `/mcp` is an unknown path and the integration methods answer
+  `tools_unavailable`; the packaged entry wires none yet (D1). The closed schema
+  covers strings (`maxLength`, `pattern`, `enum`), booleans, integers with a
+  range, finite numbers, arrays of strings (with an item `enum`), closed nested
+  objects (`additionalProperties: false`) and arrays of them, `minItems` and
+  `maxItems` on arrays, a string or `null` (exactly
   `anyOf: [{type: "string"}, {type: "null"}]`), and an opaque `{type: "object"}`
   passed to the tool as given and never descended into (Task-1463). `default`
   applies only at the root. Its types (`descriptor.ts`) keep these branches
