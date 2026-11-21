@@ -1250,17 +1250,18 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   );
   // The same snapshot `currentId` comes from, so it describes that session.
   const viewedIdentity = viewedSessionIdentity(state.session);
-  const { route, navigate, notifyStagedFirstSend } = useSessionRouting({
-    connected: state.connected,
-    hydrated: state.hydrated,
-    sessions: state.sessions,
-    currentId,
-    hasMessages,
-    sessionListFresh: state.sessionListFresh,
-    viewedIdentity,
-    loadSession: actions.loadSession,
-    openPermanentAssistant: actions.openPermanentAssistant,
-  });
+  const { route, navigate, notifyStagedFirstSend, reopenPermanentAssistant } =
+    useSessionRouting({
+      connected: state.connected,
+      hydrated: state.hydrated,
+      sessions: state.sessions,
+      currentId,
+      hasMessages,
+      sessionListFresh: state.sessionListFresh,
+      viewedIdentity,
+      loadSession: actions.loadSession,
+      openPermanentAssistant: actions.openPermanentAssistant,
+    });
   useEffect(() => {
     if (!state.hydrated || (route.name !== "new" && route.name !== "sessions"))
       return;
@@ -4133,14 +4134,43 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   // finished, Settings included) and lives at the assistant: New Session leads
   // back to it while setup lasts, replacing the redirecting entry.
   const onboardingSeen = useRef(state.onboarding);
+  // Finishing rotates the assistant, but `/assistant` keeps showing the setup
+  // conversation, which runs nothing more. Once its turn has ended (so the
+  // closing reply is not cut off), the current conversation replaces it.
+  const reopenAfterSetup = useRef(false);
   useEffect(() => {
     const before = onboardingSeen.current;
     onboardingSeen.current = state.onboarding;
+    if (
+      before === "setup" &&
+      state.onboarding === "complete" &&
+      route.name === "permanentAssistant"
+    )
+      reopenAfterSetup.current = true;
     if (state.onboarding !== "setup") return;
     if (isNewChatRoute) navigate(PERMANENT_ASSISTANT_PATH, { replace: true });
     else if (before === "pending" && route.name !== "permanentAssistant")
       navigate(PERMANENT_ASSISTANT_PATH);
   }, [state.onboarding, isNewChatRoute, route.name, navigate]);
+  useEffect(() => {
+    if (!reopenAfterSetup.current) return;
+    if (route.name !== "permanentAssistant") {
+      // Coming back opens the current conversation anyway.
+      reopenAfterSetup.current = false;
+      return;
+    }
+    if (state.streaming) return;
+    reopenAfterSetup.current = false;
+    reopenPermanentAssistant();
+  }, [state.onboarding, state.streaming, route.name, reopenPermanentAssistant]);
+  // A send the server refused because it went to the finished setup
+  // conversation (a retained view or a deep link) lands on the current one.
+  const setupRefusalsSeen = useRef(state.setupFinishedRefusals);
+  useEffect(() => {
+    if (state.setupFinishedRefusals === setupRefusalsSeen.current) return;
+    setupRefusalsSeen.current = state.setupFinishedRefusals;
+    reopenPermanentAssistant();
+  }, [state.setupFinishedRefusals, reopenPermanentAssistant]);
   // The app's greeting above the setup transcript; stable while the name is,
   // so the transcript does not redraw for it.
   const setupAssistantName = state.settings.permanentAssistant.name;

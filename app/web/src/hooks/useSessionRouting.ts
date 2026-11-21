@@ -605,6 +605,7 @@ export function useSessionRouting({
   route: Route;
   navigate: (path: string, options?: NavigateOptions) => void;
   notifyStagedFirstSend: () => void;
+  reopenPermanentAssistant: () => void;
 } {
   const [route, setRoute] = useState<Route>(() =>
     parseRoute(location.pathname + location.search + location.hash),
@@ -881,5 +882,23 @@ export function useSessionRouting({
     stagedFirstSend.current = true;
   }, []);
 
-  return { route, navigate, notifyStagedFirstSend };
+  /**
+   * Show the Personal Assistant's CURRENT conversation: open it again when
+   * `/assistant` already shows an older one (the server rotated it, e.g. when
+   * guided setup finished), or go to `/assistant` from anywhere else.
+   */
+  const routeRef = useRef(route);
+  routeRef.current = route;
+  const reopenPermanentAssistant = useCallback(() => {
+    if (routeRef.current.name !== "permanentAssistant") {
+      navigate(PERMANENT_ASSISTANT_PATH);
+      return;
+    }
+    const key = routeKey(routeRef.current);
+    applied.current = key;
+    pending.current = key;
+    openPermanentAssistant();
+  }, [navigate, openPermanentAssistant]);
+
+  return { route, navigate, notifyStagedFirstSend, reopenPermanentAssistant };
 }

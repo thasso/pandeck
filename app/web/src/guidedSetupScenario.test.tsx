@@ -162,19 +162,23 @@ function readyMessage(onboarding: OnboardingState): ServerMessage {
   } as unknown as ServerMessage;
 }
 
-function assistantSnapshot(messages: string[]): ServerMessage {
+function assistantSnapshot(
+  messages: string[],
+  runState: "idle" | "running" = "idle",
+  sessionId = ASSISTANT,
+): ServerMessage {
   return {
     type: "snapshot",
     state: {
-      sessionId: ASSISTANT,
+      sessionId,
       harness: "claude-sdk",
       agentType: "personal-assistant",
       thinkingLevel: "medium",
     },
     contextInfo: null,
     snapshot: {
-      sessionId: ASSISTANT,
-      runState: "idle",
+      sessionId,
+      runState,
       timelineStart: 0,
       totalEntryCount: messages.length,
       timeline: messages.map((text, index) => ({
@@ -271,6 +275,68 @@ describe("guided setup", () => {
     expect(container!.textContent).toContain("Done.");
     expect(topBar()).not.toBeNull();
     expect(window.location.pathname).toBe("/assistant");
+  });
+
+  const opens = (socket: ScenarioSocket) =>
+    socket.sent.filter((message) => message.type === "openPermanentAssistant")
+      .length;
+
+  it("after setup ends, the open view moves to the current conversation once its turn ends", async () => {
+    const socket = await boot("/assistant", "setup");
+    // Larry is still writing his closing reply when his tool ends setup.
+    await act(async () =>
+      socket.receive(assistantSnapshot(["I'm done."], "running")),
+    );
+    await settle();
+    const before = opens(socket);
+    await act(async () =>
+      socket.receive({ type: "onboarding", state: "complete" }),
+    );
+    await settle();
+    expect(opens(socket)).toBe(before);
+    // The turn ends: the view asks for the assistant's current conversation.
+    await act(async () =>
+      socket.receive(assistantSnapshot(["I'm done."], "idle")),
+    );
+    await settle();
+    expect(opens(socket)).toBe(before + 1);
+    expect(window.location.pathname).toBe("/assistant");
+  });
+
+  it("a send the server refuses as the finished setup conversation lands on the assistant", async () => {
+    const OLD = "00000000-0000-4000-8000-0000000000ac";
+    const socket = await boot(`/sessions/${OLD}`, "complete");
+    await act(async () =>
+      socket.receive(assistantSnapshot(["Keep Larry."], "idle", OLD)),
+    );
+    await settle();
+    await act(async () =>
+      socket.receive({
+        type: "error",
+        message: "Setup is finished. Continue in your Personal Assistant.",
+        target: { type: "session", id: OLD },
+        setupFinished: true,
+      }),
+    );
+    await settle();
+    expect(window.location.pathname).toBe("/assistant");
+  });
+
+  it("a refused send on /assistant opens the current conversation again", async () => {
+    const socket = await boot("/assistant", "complete");
+    await act(async () => socket.receive(assistantSnapshot(["Keep Larry."])));
+    await settle();
+    const before = opens(socket);
+    await act(async () =>
+      socket.receive({
+        type: "error",
+        message: "Setup is finished. Continue in your Personal Assistant.",
+        target: { type: "session", id: ASSISTANT },
+        setupFinished: true,
+      }),
+    );
+    await settle();
+    expect(opens(socket)).toBe(before + 1);
   });
 
   it("a failed finish says so on the header and keeps setup", async () => {

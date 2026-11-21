@@ -9,7 +9,7 @@ const onboardingFinishTool = defineAgentTool<Record<string, unknown>>({
   name: "onboarding_finish",
   label: "Finish Setup",
   description:
-    "End first-run guided setup once the user is done or wants to skip the rest: the app returns to its normal layout and your next conversation starts without setup instructions. Say your closing words first.",
+    "End first-run guided setup once the user is done or wants to skip the rest. This conversation then ends and the user continues in a fresh one without setup instructions, so say your closing words first.",
   parameters: { type: "object", additionalProperties: false, properties: {} },
   async execute() {
     if (onboardingState() !== "setup")

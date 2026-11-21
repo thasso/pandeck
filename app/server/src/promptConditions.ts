@@ -225,6 +225,17 @@ export function sessionPromptConditions(
 }
 
 /**
+ * Whether this session was frozen as the guided setup conversation. Reads the
+ * record only: a session without one has not started and freezes nothing here.
+ */
+export function sessionRanGuidedSetup(sessionId: string): boolean {
+  return (
+    parsePromptConditions(sessionStore.getPromptConditions(sessionId))
+      ?.guidedSetup === true
+  );
+}
+
+/**
  * `memoryWrite` is a property of the PERSONA, not of the session, so the
  * persona always wins over the record. Every other key fails open to more text;
  * this one would fail open to a DIFFERENT rule — a record from an older build

@@ -96,7 +96,7 @@ import { hub } from "./hub.ts";
 import { sessionListHiddenProbe } from "./permanentAssistantVisibility.ts";
 import { sendAccountLoginAlertsTo } from "./accountHealth.ts";
 import { sendGatewayStatusTo } from "./gatewayStatus.ts";
-import { onboardingState } from "./onboarding.ts";
+import { onboardingState, SetupFinishedError } from "./onboarding.ts";
 import {
   isLiveSession,
   type HarnessDriver,
@@ -917,17 +917,21 @@ export class Connection implements Viewer {
                   : {}),
               },
             );
+          const setupFinished = err instanceof SetupFinishedError;
           this.send({
             type: "error",
             message: withdrawn
               ? withdrawn.uncertain
                 ? `The response stopped, and Claude may already have read your message. It is held in your queue: ${STEER_MAY_HAVE_BEEN_READ.toLowerCase()}`
                 : "The response ended before it read your message. It is waiting in your queue."
-              : `Failed to send prompt: ${errorText(err)}`,
+              : setupFinished
+                ? errorText(err)
+                : `Failed to send prompt: ${errorText(err)}`,
             target: { type: "session", id: driver.id },
             ...(msg.clientRequestId !== undefined
               ? { failedPromptClientRequestId: msg.clientRequestId }
               : {}),
+            ...(setupFinished ? { setupFinished: true as const } : {}),
           });
         });
         return;

@@ -17,8 +17,8 @@ sizes only.
 | --- | --- | ---: | ---: | ---: |
 | assistant | pi | 6,208 | 10,697 | 16,905 |
 | assistant | claude | 6,188 | 9,994 | 16,182 |
-| personal-assistant | pi | 6,913 | 18,840 | 25,753 |
-| personal-assistant | claude | 6,893 | 10,286 | 17,179 |
+| personal-assistant | pi | 6,913 | 18,838 | 25,751 |
+| personal-assistant | claude | 6,893 | 10,284 | 17,177 |
 | workshop | pi | 12,706 | 20,475 | 33,181 |
 | workshop | claude | 6,892 | 11,957 | 18,849 |
 | workflow-coordinator | pi | 3,386 | 2,232 | 5,618 |
@@ -97,7 +97,7 @@ sizes only.
 | `project-context` | prompt | yes | 0 |
 | `assembly-overhead` | prompt | yes | 50 |
 | `tools:eager:names` | tools | yes | 140 |
-| `tools:eager:descriptions` | tools | yes | 5,401 |
+| `tools:eager:descriptions` | tools | yes | 5,399 |
 | `tools:eager:schemas` | tools | yes | 9,716 |
 | `tools:eager:harness-builtin` | tools | yes | 3,583 |
 | `tools:deferred:universe` | tools | no | 168,349 |
@@ -119,7 +119,7 @@ sizes only.
 | `project-context` | prompt | no | 0 |
 | `assembly-overhead` | prompt | yes | 50 |
 | `tools:eager:names` | tools | yes | 200 |
-| `tools:eager:descriptions` | tools | yes | 1,907 |
+| `tools:eager:descriptions` | tools | yes | 1,905 |
 | `tools:eager:schemas` | tools | yes | 8,179 |
 | `tools:eager:harness-builtin` | tools | no | 0 |
 | `tools:deferred:universe` | tools | no | 169,366 |

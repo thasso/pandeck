@@ -76,12 +76,23 @@ mode 0600. It only moves forward: `pending → setup → complete`.
   the setup screen's **Finish setup** button (`POST /api/onboarding/finish`,
   answering `{ state }`), and the assistant's `onboarding_finish` tool when the
   user says they are done or want to skip the rest. It rotates the Personal
-  Assistant first, so the next conversation carries no setup instructions (the
-  setup conversation stays on disk, like any rotated one), then persists
-  `complete`, takes it in memory and broadcasts it once. A failure leaves
-  `setup` and reports it; finishing again retries. Overlapping calls share one
-  run. Outside `setup` it changes nothing: the route answers the current state,
-  the tool refuses.
+  Assistant first, so the assistant's next conversation is a fresh one without
+  setup instructions, then persists `complete`, takes it in memory and
+  broadcasts it once. A failure leaves `setup` and reports it; finishing again
+  retries. Overlapping calls share one run. Outside `setup` it changes nothing:
+  the route answers the current state, the tool refuses.
+- **The setup conversation runs nothing after setup.** Rotation only rebinds the
+  singleton; the setup session itself stays on disk and readable, and can still
+  be reached (a view left open, a `/sessions/<id>` link, a peer or session tool,
+  a queued message, a resume). Its prompt was frozen with the setup section and
+  finish tool, and frozen prompts never change, so once the state is no longer
+  `setup` the prompt door (`session/runtimePrompt.ts`) refuses every turn in a
+  session whose frozen conditions carry `guidedSetup`, before the runtime
+  session and any append, with "Setup is finished. Continue in your Personal
+  Assistant." (`SetupFinishedError`). That covers prompts, steers,
+  provider-initiated turns and account-recovery continuations. The turn that
+  called `onboarding_finish` itself runs to its end. A send from the browser
+  refused this way carries `setupFinished: true` on its `error`.
 
 The `ready` snapshot carries `onboarding`, and each change is broadcast once as
 `{ type: "onboarding", state }`. The browser keeps it as live state only: it is
@@ -181,6 +192,13 @@ replacing their history entry so Back does not bounce.
   while the request runs; a failure shows under the header and setup stays.
   Success needs nothing local: the server's broadcast removes the header and
   brings back the normal shell around the same chat.
+- When setup ends while `/assistant` shows the setup conversation (by the button
+  or the tool), the view stays on it until its current turn has ended, so the
+  assistant's closing reply is not cut off, and then opens the assistant's
+  current conversation (`reopenPermanentAssistant` in `useSessionRouting`). A
+  reload or a later visit opens that one anyway. A send refused with
+  `setupFinished` (a retained view, a deep link) lands the browser on
+  `/assistant` the same way.
 - An app-authored greeting (`GuidedSetupGreeting`, text from `setupGreeting` in
   `lib/firstRun.ts`), rendered with the shared `AssistantMessage`, that says the
   account is connected and asks whether to keep the assistant's name or choose
@@ -234,4 +252,6 @@ name from then on.
 The `ready` settings projection carries `permanentAssistant`, so the greeting
 names the assistant before Settings has ever been read. `OnboardingState` is
 `"pending" | "setup" | "complete"`, carried on `ready` and the `onboarding`
-broadcast.
+broadcast. An `error` answering a send to the finished setup conversation
+carries `setupFinished: true`; the client counts them (`setupFinishedRefusals`)
+rather than reading the sentence.

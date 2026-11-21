@@ -9124,6 +9124,12 @@ export type ServerMessage =
        * one. Distinct from `requestId`, which belongs to mutation correlation.
        */
       failedPromptClientRequestId?: string;
+      /**
+       * Set when the send was refused because its session is the guided setup
+       * conversation and setup is finished (`docs/onboarding.md`): the client
+       * takes the user to the Personal Assistant's current conversation.
+       */
+      setupFinished?: true;
     }
   /**
    * A client command carrying a `requestId` finished without an error. It says

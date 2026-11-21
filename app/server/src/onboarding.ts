@@ -118,6 +118,29 @@ export function initOnboarding(facts: () => InstallFacts): OnboardingState {
   return state;
 }
 
+/**
+ * A turn refused because it would run in the guided setup conversation after
+ * setup finished (`docs/onboarding.md`). That session's prompt was frozen with
+ * the setup section and finish tool, and frozen prompts never change, so the
+ * session stays readable but runs nothing more.
+ */
+export class SetupFinishedError extends Error {
+  constructor() {
+    super("Setup is finished. Continue in your Personal Assistant.");
+    this.name = "SetupFinishedError";
+  }
+}
+
+/**
+ * Refuse a turn in a session that ran guided setup once setup is over.
+ * `guidedSetup` is that session's frozen prompt condition; while setup lasts
+ * it may still run.
+ */
+export function assertSetupSessionOpen(guidedSetup: () => boolean): void {
+  if (onboardingState() === "setup") return;
+  if (guidedSetup()) throw new SetupFinishedError();
+}
+
 /** The install's state; `complete` until boot has decided. */
 export function onboardingState(): OnboardingState {
   return state ?? "complete";
