@@ -6,6 +6,7 @@
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { JiraIssueMutationItemDisplay } from "@assistant/shared/jiraMutation";
+import { AtlassianHttpError } from "./atlassian/atlassianFetch.ts";
 import { errorText } from "./errors.ts";
 import { setRetrySleepForTests } from "./httpRetry.ts";
 import { jiraDelete, jiraPut, type JiraConfig } from "./jiraClient.ts";
@@ -137,6 +138,43 @@ function linkItem(): JiraIssueMutationItemDisplay {
 }
 
 describe("apply over the real transport (AC5b, O3, O4)", () => {
+  test.each(["comment", "link"] as const)(
+    "an aborted %s write propagates an AtlassianHttpError reason unchanged",
+    async (operation) => {
+      const controller = new AbortController();
+      const reason = new AtlassianHttpError("caller abort reason", 404);
+      const seen = fakeFetch(() => {
+        controller.abort(reason);
+        throw reason;
+      });
+      const item: JiraIssueMutationItemDisplay =
+        operation === "comment"
+          ? {
+              clientId: "item-1",
+              issueKey: "NEB-1",
+              operation: "comment",
+              commentBody: "Hi",
+              fieldChanges: [],
+            }
+          : linkItem();
+      await expect(
+        applyJiraMutationItems(config, [item], {
+          signal: controller.signal,
+          fieldMap: async () => ({
+            fetchedAt: 1,
+            byId: new Map(),
+            byNameLower: new Map(),
+          }),
+          describeError: errorText,
+        }),
+      ).rejects.toBe(reason);
+      expect(seen).toHaveLength(1);
+      expect(item.error).toBeUndefined();
+      if (operation === "link")
+        expect(item.linkChanges![0]!.error).toBeUndefined();
+    },
+  );
+
   test("an abort during the first link POST stops the sequence at one request", async () => {
     const controller = new AbortController();
     const thrown = abortedFetch();

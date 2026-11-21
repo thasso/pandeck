@@ -630,6 +630,47 @@ describe("call arguments (AC5a)", () => {
 });
 
 describe("apply honours a signal (AC5b)", () => {
+  test.each(["rank", "sprint"] as const)(
+    "an aborted %s write preserves an AtlassianHttpError reason",
+    async (operation) => {
+      const controller = new AbortController();
+      const reason = new AtlassianHttpError("caller abort reason", 408);
+      const abortingError = async (): Promise<never> => {
+        controller.abort(reason);
+        throw reason;
+      };
+      const item: JiraIssueMutationItemDisplay =
+        operation === "rank"
+          ? rankItem()
+          : {
+              clientId: "sprint",
+              issueKey: "",
+              operation: "sprint",
+              fieldChanges: [],
+              sprint: {
+                sprintId: 5,
+                name: "Sprint 5",
+                state: "future",
+                changes: [{ field: "name", from: "Sprint 5", to: "New" }],
+              },
+            };
+      if (operation === "rank")
+        vi.mocked(jiraPut).mockImplementationOnce(abortingError);
+      else vi.mocked(jiraPost).mockImplementationOnce(abortingError);
+      await expect(
+        applyJiraMutationItems(
+          config,
+          [item],
+          applyDeps({ signal: controller.signal }),
+        ),
+      ).rejects.toBe(reason);
+      expect(operation === "rank" ? jiraPut : jiraPost).toHaveBeenCalledTimes(
+        1,
+      );
+      expect(item.error).toBeUndefined();
+    },
+  );
+
   test("an abort during the first link POST stops the link sequence", async () => {
     const controller = new AbortController();
     vi.mocked(jiraPost).mockImplementationOnce(abortingCall(controller));

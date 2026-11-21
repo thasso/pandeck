@@ -125,18 +125,20 @@ async function executeJiraMutationItem(
     };
     if (item.createDescription)
       fields.description = markdownToAdf(item.createDescription);
-    const created = await jiraWrite(() =>
-      jiraPost<{ key?: string }>(
-        config,
-        "/rest/api/3/issue",
-        {
-          fields,
-          ...(Object.keys(mutation.update).length
-            ? { update: mutation.update }
-            : {}),
-        },
-        ...signalTail(deps.signal),
-      ),
+    const created = await jiraWrite(
+      () =>
+        jiraPost<{ key?: string }>(
+          config,
+          "/rest/api/3/issue",
+          {
+            fields,
+            ...(Object.keys(mutation.update).length
+              ? { update: mutation.update }
+              : {}),
+          },
+          ...signalTail(deps.signal),
+        ),
+      deps.signal,
     );
     if (!created.key)
       throw new JiraMutationError(
@@ -166,13 +168,15 @@ async function executeJiraMutationItem(
   if (item.operation === "comment") {
     if (!item.commentBody) throw new JiraMutationError("Missing comment body.");
     const body = markdownToAdf(item.commentBody);
-    await jiraWrite(() =>
-      jiraPost(
-        config,
-        `/rest/api/3/issue/${encodeURIComponent(item.issueKey)}/comment`,
-        { body },
-        ...signalTail(deps.signal),
-      ),
+    await jiraWrite(
+      () =>
+        jiraPost(
+          config,
+          `/rest/api/3/issue/${encodeURIComponent(item.issueKey)}/comment`,
+          { body },
+          ...signalTail(deps.signal),
+        ),
+      deps.signal,
     );
     item.resultIssueUrl = item.issueUrl ?? jiraIssueUrl(config, item.issueKey);
     return;
@@ -185,26 +189,30 @@ async function executeJiraMutationItem(
   );
   if (item.targetTransitionId) {
     const transitionId = item.targetTransitionId;
-    await jiraWrite(() =>
-      jiraPost(
-        config,
-        `/rest/api/3/issue/${encodeURIComponent(item.issueKey)}/transitions`,
-        {
-          transition: { id: transitionId },
-          ...(Object.keys(fields).length ? { fields } : {}),
-          ...(Object.keys(update).length ? { update } : {}),
-        },
-        ...signalTail(deps.signal),
-      ),
+    await jiraWrite(
+      () =>
+        jiraPost(
+          config,
+          `/rest/api/3/issue/${encodeURIComponent(item.issueKey)}/transitions`,
+          {
+            transition: { id: transitionId },
+            ...(Object.keys(fields).length ? { fields } : {}),
+            ...(Object.keys(update).length ? { update } : {}),
+          },
+          ...signalTail(deps.signal),
+        ),
+      deps.signal,
     );
   } else if (Object.keys(fields).length || Object.keys(update).length) {
-    await jiraWrite(() =>
-      jiraPut(
-        config,
-        `/rest/api/3/issue/${encodeURIComponent(item.issueKey)}`,
-        { fields, update },
-        ...signalTail(deps.signal),
-      ),
+    await jiraWrite(
+      () =>
+        jiraPut(
+          config,
+          `/rest/api/3/issue/${encodeURIComponent(item.issueKey)}`,
+          { fields, update },
+          ...signalTail(deps.signal),
+        ),
+      deps.signal,
     );
   }
 
@@ -292,12 +300,14 @@ async function executeLinkChange(
     if (!change.linkId)
       throw new JiraMutationError("Missing issue link id for removal.");
     const linkId = change.linkId;
-    await jiraWrite(() =>
-      jiraDelete(
-        config,
-        `/rest/api/3/issueLink/${encodeURIComponent(linkId)}`,
-        ...signalTail(signal),
-      ),
+    await jiraWrite(
+      () =>
+        jiraDelete(
+          config,
+          `/rest/api/3/issueLink/${encodeURIComponent(linkId)}`,
+          ...signalTail(signal),
+        ),
+      signal,
     );
     return;
   }
@@ -306,17 +316,19 @@ async function executeLinkChange(
     change.direction === "outward" ? subjectKey : change.targetIssueKey;
   const inwardIssue =
     change.direction === "outward" ? change.targetIssueKey : subjectKey;
-  await jiraWrite(() =>
-    jiraPost(
-      config,
-      "/rest/api/3/issueLink",
-      {
-        type: { name: change.type },
-        inwardIssue: { key: inwardIssue },
-        outwardIssue: { key: outwardIssue },
-      },
-      ...signalTail(signal),
-    ),
+  await jiraWrite(
+    () =>
+      jiraPost(
+        config,
+        "/rest/api/3/issueLink",
+        {
+          type: { name: change.type },
+          inwardIssue: { key: inwardIssue },
+          outwardIssue: { key: outwardIssue },
+        },
+        ...signalTail(signal),
+      ),
+    signal,
   );
 }
 

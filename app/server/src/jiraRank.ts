@@ -273,18 +273,20 @@ async function rankOne(
   step: JiraIssueRankStepDisplay,
   signal: AbortSignal | undefined,
 ): Promise<void> {
-  const response = await jiraWrite(() =>
-    jiraPut<{ entries?: RankEntry[] }>(
-      config,
-      "/rest/agile/1.0/issue/rank",
-      {
-        issues: [step.issueKey],
-        ...(step.placement === "before"
-          ? { rankBeforeIssue: step.relativeToIssueKey }
-          : { rankAfterIssue: step.relativeToIssueKey }),
-      },
-      ...signalTail(signal),
-    ),
+  const response = await jiraWrite(
+    () =>
+      jiraPut<{ entries?: RankEntry[] }>(
+        config,
+        "/rest/agile/1.0/issue/rank",
+        {
+          issues: [step.issueKey],
+          ...(step.placement === "before"
+            ? { rankBeforeIssue: step.relativeToIssueKey }
+            : { rankAfterIssue: step.relativeToIssueKey }),
+        },
+        ...signalTail(signal),
+      ),
+    signal,
   );
   // A multi-status reply is a 2xx: the failure only shows up per entry.
   const failed = (response?.entries ?? []).filter(

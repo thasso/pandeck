@@ -21,10 +21,14 @@ export class JiraMutationError extends Error {}
 export class JiraWriteHttpError extends AtlassianHttpError {}
 
 /** Runs one write request, retyping Jira's rejection as `JiraWriteHttpError`. */
-export async function jiraWrite<T>(call: () => Promise<T>): Promise<T> {
+export async function jiraWrite<T>(
+  call: () => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
   try {
     return await call();
   } catch (err) {
+    if (signal?.aborted) throw err;
     if (
       err instanceof AtlassianHttpError &&
       !(err instanceof JiraWriteHttpError)

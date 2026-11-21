@@ -2739,11 +2739,11 @@ tools: `slack_search`, `slack_conversation_read`, `slack_thread_read` and
   `AtlassianHttpError`. A rank 207 takes the worst failed entry's status (5xx,
   then 401, then 403, then the highest 4xx) and carries Jira's reasons only when
   every failed entry is a 4xx other than 401/403. Every request carries the
-  caller's signal when there is one. An abort is recognised by the signal's
-  state, propagates as itself, never becomes a row or step error, and no request
-  follows it. Without a signal every call keeps the exact arguments the local
-  tool always sent; locally only user naming carries the tool call's signal, as
-  before.
+  caller's signal when there is one. Cancellation is classified by signal state;
+  when aborted, the caught error is rethrown unchanged, never becomes a row or
+  step error, and no request follows it. Without a signal every call keeps the
+  exact arguments the local tool always sent; locally only user naming carries
+  the tool call's signal, as before.
 - **Slack reads** (Task-1454). The four tools run the same read path as the
   local ones (`slackRead.ts` with `slackMetadataCache.ts` beside `tools/slack/`,
   which wraps them) with the same schema and description objects, action key

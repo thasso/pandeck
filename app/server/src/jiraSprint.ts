@@ -175,13 +175,15 @@ export async function executeJiraSprintItem(
   delete item.resultIssueUrl;
   const body: Record<string, string> = {};
   for (const change of sprint.changes) body[change.field] = change.to ?? "";
-  const updated = await jiraWrite(() =>
-    jiraPost<JiraSprintResponse | undefined>(
-      config,
-      `/rest/agile/1.0/sprint/${sprint.sprintId}`,
-      body,
-      ...signalTail(deps.signal),
-    ),
+  const updated = await jiraWrite(
+    () =>
+      jiraPost<JiraSprintResponse | undefined>(
+        config,
+        `/rest/agile/1.0/sprint/${sprint.sprintId}`,
+        body,
+        ...signalTail(deps.signal),
+      ),
+    deps.signal,
   );
   const observed =
     typeof updated?.id === "number"
