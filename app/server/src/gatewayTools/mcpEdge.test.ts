@@ -366,11 +366,11 @@ async function twoUsers(deadlineMs?: number) {
   return { e, a1, a2, b1, tokens, linkA, linkB };
 }
 
-test("the relay lists Jira's and Slack's read tools as read-only, with their schemas whole, and runs jira_lookup", async () => {
+test("the relay lists Jira's, Confluence's and Slack's read tools as read-only, with their schemas whole, and runs jira_lookup", async () => {
   const { a1, tokens } = await twoUsers();
   const client = await mcpClient(a1.url, tokens.a1);
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 7);
+  assert.equal(tools.length, 10);
   for (const tool of tools)
     assert.equal(tool.annotations?.readOnlyHint, true, tool.name);
   const lookup = tools.find((tool) => tool.name === "jira_lookup")!;
@@ -427,6 +427,9 @@ test("an SDK client lists and calls jira_get_issue through the relay, with its o
       "jira_get_issue",
       "jira_search_issues",
       "jira_lookup",
+      "confluence_search",
+      "confluence_get_page",
+      "confluence_lookup",
       "slack_search",
       "slack_conversation_read",
       "slack_thread_read",

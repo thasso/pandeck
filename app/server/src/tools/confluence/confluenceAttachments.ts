@@ -26,10 +26,7 @@ import type {
   ConfluenceAttachmentMutationDisplay,
   ConfluencePageMutationItemDisplay,
 } from "@assistant/shared";
-import {
-  atlassianBaseUrl,
-  atlassianDownload,
-} from "../../atlassian/atlassianFetch.ts";
+import { atlassianDownload } from "../../atlassian/atlassianFetch.ts";
 import {
   confluenceDelete,
   confluenceGet,
@@ -42,60 +39,14 @@ import {
   stageSessionAttachment,
   type SessionAttachmentRecord,
 } from "../../sessionAttachments.ts";
+import {
+  downloadPathOf,
+  versionOf,
+  type ConfluenceAttachmentResponse,
+} from "../../confluenceRead.ts";
 
 /** Upper bound for one attachment moved in either direction. */
 export const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024;
-
-export interface ConfluenceAttachmentResponse {
-  id?: string;
-  title?: string;
-  pageId?: string;
-  mediaType?: string;
-  fileSize?: number;
-  comment?: string;
-  downloadLink?: string;
-  version?: { number?: number };
-  _links?: { download?: string };
-}
-
-export interface ConfluenceAttachmentRow {
-  id: string;
-  title: string;
-  mediaType: string | null;
-  fileSize: number | null;
-  version: number | null;
-  downloadUrl: string | null;
-}
-
-export function normalizeAttachment(
-  raw: ConfluenceAttachmentResponse,
-  host: string,
-): ConfluenceAttachmentRow {
-  const path = downloadPathOf(raw);
-  return {
-    id: raw.id ?? "",
-    title: raw.title ?? "",
-    mediaType: raw.mediaType ?? null,
-    fileSize: typeof raw.fileSize === "number" ? raw.fileSize : null,
-    version: versionOf(raw),
-    downloadUrl: path ? `${atlassianBaseUrl(host)}${path}` : null,
-  };
-}
-
-function versionOf(raw: ConfluenceAttachmentResponse): number | null {
-  return typeof raw.version?.number === "number" ? raw.version.number : null;
-}
-
-/**
- * The site-relative path an attachment downloads from. v2 answers it relative
- * to `/wiki`; a link that already names `/wiki` is kept as is.
- */
-function downloadPathOf(raw: ConfluenceAttachmentResponse): string | null {
-  const link = raw.downloadLink ?? raw._links?.download;
-  if (!link || /^[a-z]+:/i.test(link) || link.startsWith("//")) return null;
-  const path = link.startsWith("/") ? link : `/${link}`;
-  return path === "/wiki" || path.startsWith("/wiki/") ? path : `/wiki${path}`;
-}
 
 /** Attachment ids are `att<digits>`; a bare number is taken as the same id. */
 export function normalizeAttachmentId(value: string): string {

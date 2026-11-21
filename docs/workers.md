@@ -2676,9 +2676,10 @@ writes no answer, no second record and contacts no upstream.
 
 The edge runs integration tools for its clients' users (Task-1397, M22): a tool
 host and a standalone MCP endpoint, three Jira read tools: `jira_get_issue`,
-plus `jira_search_issues` and `jira_lookup` (Task-1439), and four Slack read
-tools: `slack_search`, `slack_conversation_read`, `slack_thread_read` and
-`slack_unread` (Task-1454).
+plus `jira_search_issues` and `jira_lookup` (Task-1439), three Confluence read
+tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
+(Task-1439), and four Slack read tools: `slack_search`,
+`slack_conversation_read`, `slack_thread_read` and `slack_unread` (Task-1454).
 
 - **Host** (`gatewayTools/`, loaded only by the edge's composition
   `gatewayEdge.ts`, which both edge entries run): one module per tool
@@ -2731,6 +2732,31 @@ tools: `slack_search`, `slack_conversation_read`, `slack_thread_read` and
   part of Jira's body reaches the caller. Over OAuth, `jira_lookup kind=sprints`
   needs Jira Software scopes the gateway does not ask for yet, so Jira refuses
   it until they are added (Task-1439 D3).
+- **Confluence reads** (Task-1439). `confluence_search`, `confluence_get_page`
+  and `confluence_lookup` run the same read path as the local tools
+  (`confluenceRead.ts` with `atlassian/confluenceClient.ts` beside
+  `tools/confluence/`, which wraps them) with the same schema and description
+  objects, action key `confluence:read`, and the user's Atlassian credential: an
+  API token with Basic to the site, or the OAuth view with Bearer to
+  `https://api.atlassian.com/ex/confluence/<cloudId>`. The payload is the local
+  tool's; the edge prints it compact where the local tool pretty-prints it, and
+  display links (`url`, `downloadUrl`, `confluenceHost`) name the site either
+  way. A legacy page's storage body goes through Turndown on the edge too, so
+  `gateway-edge.js` carries it. Every request and retry carries the call's
+  signal. Input refusals are fixed texts that hold no input value (for example
+  "Could not read a page id; pass the numeric page id or a Confluence page
+  URL."). Confluence's answers map by status, never its body: 401 or 403 is the
+  credential remedy for the credential's kind; 404 "Confluence has no such page,
+  space or comment, or the user can't see it."; 400 "Confluence refused the
+  request (HTTP 400); check the CQL or filters, and resolve space keys with
+  confluence_lookup kind=spaces."; any other "Confluence answered HTTP
+  `<status>`." There is no Confluence exception to fixed texts. As for Jira
+  (D5), a result over 60,000 characters answers `result_too_large`, though local
+  `maxChars` goes to 100,000: ask again with a smaller `maxChars`, fewer
+  `include*` sections, a lower `maxComments`, or `confluence_lookup` with a
+  lower `maxResults`. `includeComments` costs one request per comment within the
+  host's 30 s, so a slow site with many comments can time out; the same lower
+  limits are the remedy.
 - **Slack reads** (Task-1454). The four tools run the same read path as the
   local ones (`slackRead.ts` with `slackMetadataCache.ts` beside `tools/slack/`,
   which wraps them) with the same schema and description objects, action key
@@ -2885,17 +2911,17 @@ tools: `slack_search`, `slack_conversation_read`, `slack_thread_read` and
   holds one.
 - **Bearer destinations.** On an OAuth view the tools call Jira with
   `Authorization: Bearer` at `https://api.atlassian.com/ex/jira/<cloudId>`
-  (`atlassian/atlassianFetch.ts`; Confluence at `/ex/confluence/<cloudId>`, for
-  a later tool), and the site makes only the browse URLs. The path must be
-  site-relative (`/…`, not `//…`, no scheme, no backslash), the cloud id a
-  lowercase UUID, and the final URL's origin and product and cloud-id prefix are
-  checked after normalization, before any request; the site never chooses the
-  destination. `atlassianDownload` follows the same rule and relies on fetch
-  dropping `Authorization` on the cross-origin redirect to Atlassian's media
-  host. An API token keeps its Basic calls to the site, absolute URLs included.
-  The access token is decoded per call (site, cloud id, at most 8 KiB of
-  printable token; any other `kind` is invalid) and never cached or written on
-  the edge.
+  (`atlassian/atlassianFetch.ts`), and Confluence at
+  `https://api.atlassian.com/ex/confluence/<cloudId>`; the site makes only the
+  browse URLs. The path must be site-relative (`/…`, not `//…`, no scheme, no
+  backslash), the cloud id a lowercase UUID, and the final URL's origin and
+  product and cloud-id prefix are checked after normalization, before any
+  request; the site never chooses the destination. `atlassianDownload` follows
+  the same rule and relies on fetch dropping `Authorization` on the cross-origin
+  redirect to Atlassian's media host. An API token keeps its Basic calls to the
+  site, absolute URLs included. The access token is decoded per call (site,
+  cloud id, at most 8 KiB of printable token; any other `kind` is invalid) and
+  never cached or written on the edge.
 - **Client methods** (`gateway-client/1.0`, additive), always for the client's
   registry user: `integrations.set {integration, site, email, token}` checks the
   credential with Atlassian (`/rest/api/3/myself`, 15 s from the check's start)

@@ -1,0 +1,19 @@
+{
+  "confluenceHost": "acme.atlassian.net",
+  "page": {
+    "id": "103",
+    "title": "Restricted space notes",
+    "status": "current",
+    "url": "https://acme.atlassian.net/wiki/spaces/SECRET/pages/103/Notes",
+    "spaceKey": null,
+    "spaceName": null,
+    "parentId": null,
+    "version": 1,
+    "updatedAt": "2026-03-04T05:06:07.000Z",
+    "bodySource": "atlas_doc_format",
+    "lossyNodes": [],
+    "truncated": false,
+    "charCount": 35,
+    "markdown": "Meeting notes for the weekly sync\\."
+  }
+}
