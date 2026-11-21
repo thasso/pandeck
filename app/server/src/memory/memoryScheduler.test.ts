@@ -348,3 +348,83 @@ test("recover returns stale processing claims to pending", () => {
   assert.equal(recovered, 1);
   assert.equal(memoryObservationStore.get(obs.id)!.state, "pending");
 });
+
+test("fresh-install memory settings run no processor from maintenance", async () => {
+  const before = getSettings().memory;
+  updateSettings({
+    memory: {
+      ...before,
+      loadingEnabled: false,
+      learningMode: "off",
+      maintenanceEnabled: false,
+    },
+  });
+  try {
+    for (const id of ["mem_a", "mem_b"])
+      memoryStore.insert({
+        id,
+        text: `Prefers metric units (${id})`,
+        kind: "preference",
+        scope: {},
+        temporal: { mode: "persistent" },
+        observedAtMs: nowMs,
+        createdAt: nowMs,
+        updatedAt: nowMs,
+        sourceKind: "manual",
+      });
+    const result = sched.memoryScheduler.runMaintenance(nowMs + 2 * 86_400_000);
+    assert.equal(result.consolidationDue, false);
+    await settle();
+    assert.equal(runCalls, 0);
+  } finally {
+    updateSettings({ memory: before });
+  }
+});
+
+test("expiry still runs with maintenance off, without the processor", async () => {
+  const before = getSettings().memory;
+  updateSettings({
+    memory: {
+      ...before,
+      loadingEnabled: false,
+      learningMode: "off",
+      maintenanceEnabled: false,
+    },
+  });
+  try {
+    memoryStore.insert({
+      id: "mem_window_off",
+      text: "In Lisbon this week",
+      kind: "working",
+      scope: {},
+      temporal: { mode: "window", validUntilMs: nowMs - 1 },
+      observedAtMs: nowMs,
+      createdAt: nowMs,
+      updatedAt: nowMs,
+      sourceKind: "manual",
+    });
+    const result = sched.memoryScheduler.runMaintenance(nowMs + 86_400_000);
+    assert.equal(result.expired, 1, "the ended window lapsed");
+    assert.equal(result.consolidationDue, false);
+    assert.equal(memoryStore.get("mem_window_off")!.state, "archived");
+    await settle();
+    assert.equal(runCalls, 0);
+  } finally {
+    updateSettings({ memory: before });
+  }
+});
+
+test("a reset flush with learning off drops the queue without the processor", async () => {
+  sched.memoryScheduler.observeTurn({
+    sessionId: "s1",
+    userTurnId: "queued-before-off",
+    persona: "personal-assistant",
+    humanText: "neutral fact to batch",
+  });
+  await settle();
+  assert.equal(memoryObservationStore.pendingCountForSession("s1"), 1);
+  setMode("off");
+  await sched.memoryScheduler.flushBeforeReset("s1");
+  assert.equal(runCalls, 0);
+  assert.equal(memoryObservationStore.pendingCountForSession("s1"), 0);
+});

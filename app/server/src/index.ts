@@ -98,6 +98,7 @@ import {
   checkOnboarding,
   finishOnboarding,
   initOnboarding,
+  persistFirstRunMemoryOptOut,
 } from "./onboarding.ts";
 import { APP_SETTINGS_PATH } from "./appSettingsFile.ts";
 import {
@@ -1995,6 +1996,9 @@ initOnboarding(() => ({
   accounts: listCredentialProfiles().length > 0,
   gatewayClient: Boolean(GATEWAY_RELAY),
 }));
+// A fresh install starts with memory off; until this lands the memory gate
+// holds it off. Retried by every onboarding check; never fails boot.
+void persistFirstRunMemoryOptOut();
 const homeImportRefusal = await homeTranscriptImportStartupRefusal();
 if (homeImportRefusal !== undefined) {
   console.error(homeImportRefusal);

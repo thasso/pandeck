@@ -16,7 +16,7 @@
  */
 import type { AgentType } from "@assistant/shared";
 import { looksSecretLike } from "@assistant/shared";
-import { getSettings } from "../settings.ts";
+import { memorySettingsInEffect } from "./memoryGate.ts";
 import { userTimeZone } from "../userProfile.ts";
 import { memoryObservationStore } from "../db/memoryObservationStore.ts";
 import { memoryOperationStore } from "../db/memoryOperationStore.ts";
@@ -112,7 +112,7 @@ class MemoryScheduler {
     try {
       const source = sessionStore.getIncludingDeleted(input.sessionId);
       if (!source || source.requiresEnterprise) return;
-      const settings = getSettings().memory;
+      const settings = memorySettingsInEffect();
       if (settings.learningMode === "off") return;
       if (!isCaptureEligiblePersona(input.persona)) return;
       const humanText = input.humanText.trim();
@@ -174,6 +174,13 @@ class MemoryScheduler {
       memoryObservationStore.discardForSession(sessionId, clock());
       return;
     }
+    // Learning off means the user declined it: what is still queued is
+    // dropped, never sent to the processor (a rotation or compaction flush
+    // included).
+    if (memorySettingsInEffect().learningMode === "off") {
+      memoryObservationStore.discardForSession(sessionId, clock());
+      return;
+    }
     if (this.inFlight.has(sessionId)) {
       this.reflush.add(sessionId);
       return;
@@ -206,7 +213,7 @@ class MemoryScheduler {
    * from a periodic timer (production) or directly (tests).
    */
   async flushIdle(nowMs = clock()): Promise<void> {
-    const settings = getSettings().memory;
+    const settings = memorySettingsInEffect();
     if (settings.learningMode === "off") return;
     const pending = memoryObservationStore.pending(500);
     const bySession = new Map<string, number>(); // session → newest pending createdAt
@@ -251,10 +258,12 @@ class MemoryScheduler {
       MAX_PENDING_CHARS,
     );
     memoryOperationStore.prune(nowMs - OPERATION_LEDGER_RETENTION_MS);
-    const settings = getSettings().memory;
-    if (!settings.maintenanceEnabled)
-      return { expired: 0, consolidationDue: false, pruned };
+    // Expiry is model-free and runs whatever the switches say: a windowed card
+    // must lapse even on an install that turned maintenance off.
     const expired = expireDueMemories(nowMs).length;
+    const settings = memorySettingsInEffect();
+    if (!settings.maintenanceEnabled)
+      return { expired, consolidationDue: false, pruned };
     const dailyIdle = nowMs - this.lastConsolidationAt >= 86_400_000;
     const consolidationDue =
       this.mutationsSinceConsolidation >= CONSOLIDATION_MUTATION_THRESHOLD ||

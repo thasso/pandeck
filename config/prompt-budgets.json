@@ -663,7 +663,7 @@
       "to": 8250,
       "task": "onboarding-3c",
       "date": "2026-11-22",
-      "why": "guided setup gains its last steps (onboarding step 3c, ~510 chars in onboarding-setup.md): offer the integrations integration_setup_read reports available in one multi-choice card and say why the rest are not, then read the two memory switches, say whether memory is on and, if it is off, turn it on only on an explicit yes; the per-integration rules live in the deferred tool, so only the one setup session per install carries this, and the budget bounds the worst case"
+      "why": "guided setup gains its last steps (onboarding step 3c, ~510 chars in onboarding-setup.md): offer the integrations integration_setup_read reports available in one multi-choice card and say why the rest are not, then read the three memory switches, say whether memory is on and, if it is off, turn it on only on an explicit yes; the per-integration rules live in the deferred tool, so only the one setup session per install carries this, and the budget bounds the worst case"
     },
     {
       "budget": "personal-assistant.pi.firstRequest",
@@ -679,7 +679,7 @@
       "to": 8250,
       "task": "onboarding-3c",
       "date": "2026-11-22",
-      "why": "guided setup gains its last steps (onboarding step 3c, ~510 chars in onboarding-setup.md): offer the integrations integration_setup_read reports available in one multi-choice card and say why the rest are not, then read the two memory switches, say whether memory is on and, if it is off, turn it on only on an explicit yes; the per-integration rules live in the deferred tool, so only the one setup session per install carries this, and the budget bounds the worst case"
+      "why": "guided setup gains its last steps (onboarding step 3c, ~510 chars in onboarding-setup.md): offer the integrations integration_setup_read reports available in one multi-choice card and say why the rest are not, then read the three memory switches, say whether memory is on and, if it is off, turn it on only on an explicit yes; the per-integration rules live in the deferred tool, so only the one setup session per install carries this, and the budget bounds the worst case"
     },
     {
       "budget": "personal-assistant.claude.firstRequest",

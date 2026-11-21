@@ -23,6 +23,7 @@ const {
   initOnboarding,
   initialOnboardingState,
   onboardingState,
+  persistFirstRunMemoryOptOut,
   setOnboardingBroadcaster,
 } = await import("./onboarding.ts");
 type UsableAccount = import("./onboarding.ts").UsableAccount;
@@ -34,6 +35,13 @@ const { saveSettings } = await import("./settingsService.ts");
 // effects can load it); load it first so the test's listener is the last one.
 await import("./hub.ts");
 const pa = await import("./permanentAssistant.ts");
+const memoryProcessor = await import("./memory/memoryProcessor.ts");
+const { memoryScheduler } = await import("./memory/memoryScheduler.ts");
+const { memoryObservationStore } =
+  await import("./db/memoryObservationStore.ts");
+const { sessionStore } = await import("./db/sessionStore.ts");
+const { permanentAssistantStore } =
+  await import("./db/permanentAssistantStore.ts");
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
@@ -239,23 +247,128 @@ describe("beginning guided setup", () => {
     assert.equal(assistant.additionalInstructions, "Be brief.");
   });
 
-  test("turns memory off before the setup conversation exists", async () => {
-    initOnboarding(() => FRESH);
+  test("boot turns memory off on a fresh install only", async () => {
     const defaults = getSettings().memory;
     assert.equal(defaults.loadingEnabled, true);
     assert.equal(defaults.learningMode, "adaptive");
-    await checkOnboarding(probe(undefined));
-    assert.equal(readStoredAppSettings().memory, undefined);
-    await checkOnboarding(probe(CLAUDE));
-    assert.equal(onboardingState(), "setup");
-    const stored = readStoredAppSettings().memory;
-    assert.equal(stored?.loadingEnabled, false);
-    assert.equal(stored?.learningMode, "off");
+    assert.equal(defaults.maintenanceEnabled, true);
+    initOnboarding(() => FRESH);
+    await persistFirstRunMemoryOptOut();
+    assert.equal(onboardingState(), "pending");
+    assert.deepEqual(
+      [
+        readStoredAppSettings().memory?.loadingEnabled,
+        readStoredAppSettings().memory?.learningMode,
+        readStoredAppSettings().memory?.maintenanceEnabled,
+      ],
+      [false, "off", false],
+    );
     // Every other memory setting keeps its default.
     assert.deepEqual(getSettings().memory, {
       ...defaults,
       loadingEnabled: false,
       learningMode: "off",
+      maintenanceEnabled: false,
+    });
+
+    rmSync(STATE_PATH);
+    rmSync(APP_SETTINGS_PATH);
+    initOnboarding(() => ({ ...FRESH, sessions: true }));
+    await persistFirstRunMemoryOptOut();
+    assert.equal(existsSync(APP_SETTINGS_PATH), false);
+  });
+
+  test("a check retries the opt-out, and setup waits for it", async () => {
+    initOnboarding(() => FRESH);
+    block(SETTINGS_TMP);
+    await persistFirstRunMemoryOptOut(); // never throws
+    await checkOnboarding(probe(CLAUDE));
+    assert.equal(onboardingState(), "pending");
+    assert.equal(readStoredAppSettings().memory, undefined);
+
+    rmSync(SETTINGS_TMP, { recursive: true });
+    await checkOnboarding(probe(undefined));
+    assert.equal(onboardingState(), "pending");
+    assert.equal(readStoredAppSettings().memory?.learningMode, "off");
+    await checkOnboarding(probe(CLAUDE));
+    assert.equal(onboardingState(), "setup");
+    assert.equal(readStoredAppSettings().memory?.maintenanceEnabled, false);
+  });
+
+  describe("with the real rotation", () => {
+    const PREVIOUS = "pa-before-setup";
+    let processorCalls = 0;
+    beforeEach(() => {
+      rotate.mockRestore();
+      processorCalls = 0;
+      memoryProcessor.setMemoryProcessorRunnerForTests({
+        run: async () => {
+          processorCalls += 1;
+          return { text: JSON.stringify({ operations: [] }) };
+        },
+      });
+      sessionStore.upsert({
+        id: PREVIOUS,
+        harness: "pi",
+        agentType: "personal-assistant",
+        requiresEnterprise: false,
+      });
+      permanentAssistantStore.setSessionId(PREVIOUS);
+      memoryObservationStore.enqueue({
+        sessionId: PREVIOUS,
+        userTurnId: `turn-${Math.random()}`,
+        persona: "personal-assistant",
+        humanText: "Remember that I prefer short answers.",
+        sourceTimestampMs: Date.now(),
+        timezone: "UTC",
+        highSignal: true,
+        createdAt: Date.now(),
+      });
+    });
+    afterEach(() => {
+      memoryProcessor.resetMemoryProcessorRunnerForTests();
+      permanentAssistantStore.clearSessionId();
+    });
+
+    test("beginning setup sends no observation to the processor", async () => {
+      initOnboarding(() => FRESH);
+      await checkOnboarding(probe(CLAUDE));
+      assert.equal(onboardingState(), "setup");
+      // The pin and the name rotated the assistant, flushing its queue.
+      assert.equal(permanentAssistantStore.sessionId(), undefined);
+      assert.equal(processorCalls, 0);
+      assert.equal(memoryObservationStore.pendingCountForSession(PREVIOUS), 0);
+    });
+
+    test("memory saved on stays off until setup begins", async () => {
+      initOnboarding(() => FRESH);
+      // Saved on, e.g. from Settings: the user's choice, which the opt-out
+      // keeps. While pending, the gate still holds memory off.
+      await saveSettings({ memory: { ...getSettings().memory } });
+      await checkOnboarding(probe(CLAUDE));
+      assert.equal(onboardingState(), "setup");
+      assert.equal(processorCalls, 0);
+      assert.equal(getSettings().memory.learningMode, "adaptive");
+
+      // Past pending, the stored settings apply: the same flush processes.
+      sessionStore.upsert({
+        id: "pa-in-setup",
+        harness: "pi",
+        agentType: "personal-assistant",
+        requiresEnterprise: false,
+      });
+      memoryObservationStore.enqueue({
+        sessionId: "pa-in-setup",
+        userTurnId: "turn-in-setup",
+        persona: "personal-assistant",
+        humanText: "Remember that I prefer short answers.",
+        sourceTimestampMs: Date.now(),
+        timezone: "UTC",
+        highSignal: true,
+        createdAt: Date.now(),
+      });
+      await memoryScheduler.flushBeforeReset("pa-in-setup");
+      assert.equal(processorCalls, 1);
     });
   });
 

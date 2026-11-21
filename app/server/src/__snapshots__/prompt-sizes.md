@@ -17,8 +17,8 @@ sizes only.
 | --- | --- | ---: | ---: | ---: |
 | assistant | pi | 6,208 | 10,697 | 16,905 |
 | assistant | claude | 6,188 | 9,994 | 16,182 |
-| personal-assistant | pi | 8,146 | 18,838 | 26,984 |
-| personal-assistant | claude | 8,126 | 10,284 | 18,410 |
+| personal-assistant | pi | 8,186 | 18,838 | 27,024 |
+| personal-assistant | claude | 8,166 | 10,284 | 18,450 |
 | workshop | pi | 12,706 | 20,475 | 33,181 |
 | workshop | claude | 6,892 | 11,957 | 18,849 |
 | workflow-coordinator | pi | 3,386 | 2,232 | 5,618 |
@@ -87,7 +87,7 @@ sizes only.
 | `pi-guidelines:app-eager` | prompt | yes | 0 |
 | `persona:personal-assistant` | prompt | yes | 1,288 |
 | `integration:tempo` | prompt | yes | 224 |
-| `onboarding:setup` | prompt | yes | 2,602 |
+| `onboarding:setup` | prompt | yes | 2,642 |
 | `project-registry` | prompt | yes | 413 |
 | `chat-files` | prompt | yes | 860 |
 | `chat-math` | prompt | yes | 234 |
@@ -109,7 +109,7 @@ sizes only.
 | `harness-base` | prompt | no | 0 |
 | `persona:personal-assistant` | prompt | yes | 1,288 |
 | `integration:tempo` | prompt | yes | 224 |
-| `onboarding:setup` | prompt | yes | 2,602 |
+| `onboarding:setup` | prompt | yes | 2,642 |
 | `project-registry` | prompt | yes | 413 |
 | `chat-files` | prompt | yes | 860 |
 | `chat-math` | prompt | yes | 234 |

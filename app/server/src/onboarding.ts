@@ -13,8 +13,10 @@
  * While `pending`, the server moves to `setup` itself the moment it sees a
  * usable account (enabled, signed in, offering a model). In the same step it
  * runs the Personal Assistant on that account when its model slot cannot run,
- * names it "Larry" when no name is saved, and turns memory off unless a memory
- * setting was saved, so the setup conversation's Memory step is an opt-in.
+ * and names it "Larry" when no name is saved. A `pending` install has memory
+ * off: persisted from boot on (unless a memory setting was saved), and
+ * enforced while `pending`, so the setup conversation's Memory step is an
+ * opt-in.
  * `setup` lasts until the user (or the assistant, on their word) finishes the
  * guided setup conversation.
  */
@@ -194,47 +196,86 @@ async function nameAssistantIfUnsaved(): Promise<boolean> {
   return true;
 }
 
-/** Memory as a first run starts it: nothing loaded, nothing learned. */
-const MEMORY_OFF = { loadingEnabled: false, learningMode: "off" } as const;
+/**
+ * Memory as a first run starts it: nothing loaded, nothing learned, no
+ * maintenance pass. It is also what `memory/memoryGate.ts` enforces while
+ * onboarding is `pending`, whatever is stored.
+ */
+export const FIRST_RUN_MEMORY = {
+  loadingEnabled: false,
+  learningMode: "off",
+  maintenanceEnabled: false,
+} as const;
+
+type FirstRunMemoryKey = keyof typeof FIRST_RUN_MEMORY;
+const FIRST_RUN_MEMORY_KEYS = Object.keys(
+  FIRST_RUN_MEMORY,
+) as FirstRunMemoryKey[];
 
 /**
- * Turn memory off on a fresh install, as leaf writes of `memory.loadingEnabled`
- * and `memory.learningMode` that run the normal settings effects. The defaults
- * leave it on, which suits an established install but would have a brand-new
- * user's turns feed the paid memory processor before they agreed to it.
+ * Turn memory off on a fresh install: leaf writes of
+ * {@link FIRST_RUN_MEMORY}'s settings that run the normal settings effects.
+ * The defaults leave memory on, which suits an established install but would
+ * have a brand-new user's turns feed the paid memory processor before they
+ * agreed to it.
  *
- * Only when the settings file holds neither: a saved memory setting is the
- * user's choice and stands, and once this has written, a retry is a no-op.
- * Check and write are one synchronous step, as in {@link nameAssistantIfUnsaved}.
+ * Writes only the fields the settings file does not hold: a saved memory
+ * setting is the user's choice and stands, and once this has written, a retry
+ * is a no-op. Check and write are one synchronous step, as in
+ * {@link nameAssistantIfUnsaved}. Throws when the write did not land.
  */
 async function turnMemoryOffIfUnchosen(): Promise<void> {
   const { saveSettings, settingsPatchForWrites } =
     await import("./settingsService.ts");
   // Synchronous from here until the write has landed.
   const stored = () => readStoredAppSettings().memory;
-  if (
-    stored()?.loadingEnabled !== undefined ||
-    stored()?.learningMode !== undefined
-  )
-    return;
+  const unchosen = FIRST_RUN_MEMORY_KEYS.filter(
+    (key) => stored()?.[key] === undefined,
+  );
+  if (unchosen.length === 0) return;
   const written = saveSettings(
-    settingsPatchForWrites([
-      { path: "memory.loadingEnabled", value: MEMORY_OFF.loadingEnabled },
-      { path: "memory.learningMode", value: MEMORY_OFF.learningMode },
-    ]),
+    settingsPatchForWrites(
+      unchosen.map((key) => ({
+        path: `memory.${key}`,
+        value: FIRST_RUN_MEMORY[key],
+      })),
+    ),
   );
   try {
     await written;
   } catch (err) {
     // As with the name: a write that landed counts as done.
     const now = stored();
-    if (
-      now?.loadingEnabled !== MEMORY_OFF.loadingEnabled ||
-      now?.learningMode !== MEMORY_OFF.learningMode
-    )
-      throw err;
+    if (unchosen.some((key) => now?.[key] !== FIRST_RUN_MEMORY[key])) throw err;
     console.warn(
       `[onboarding] turned memory off, but its follow-up failed: ${errorText(err)}`,
+    );
+  }
+}
+
+let optingOut: Promise<void> | undefined;
+
+/** {@link turnMemoryOffIfUnchosen}, one run at a time; callers share it. */
+function optOutOfMemory(): Promise<void> {
+  optingOut ??= turnMemoryOffIfUnchosen().finally(() => {
+    optingOut = undefined;
+  });
+  return optingOut;
+}
+
+/**
+ * Persist a fresh install's memory opt-out. Boot calls it right after
+ * {@link initOnboarding}; every {@link checkOnboarding} retries it while the
+ * install is `pending`, and setup does not begin until it has landed. Until
+ * then the gate keeps memory off. Never throws: a failure must not fail boot.
+ */
+export async function persistFirstRunMemoryOptOut(): Promise<void> {
+  if (state !== "pending") return;
+  try {
+    await optOutOfMemory();
+  } catch (err) {
+    console.warn(
+      `[onboarding] could not turn memory off yet, will retry: ${errorText(err)}`,
     );
   }
 }
@@ -415,8 +456,7 @@ async function pinAssistantIfUnrunnable(
  * Leave the pending state for guided setup, in an order where any failure
  * leaves it `pending` and the next check retries: run the assistant on the
  * account when its slot cannot run (a no-op once it can), name it (a no-op
- * once named), turn memory off (a no-op once any memory setting is saved),
- * retire a Personal Assistant conversation started before setup
+ * once named), retire a Personal Assistant conversation started before setup
  * so the next one carries the setup prompt, persist `setup`, then take it in
  * memory and tell the browsers, once.
  *
@@ -430,7 +470,6 @@ async function beginSetup(
   if (state !== "pending") return;
   await pinAssistantIfUnrunnable(account, probe);
   await nameAssistantIfUnsaved();
-  await turnMemoryOffIfUnchosen();
   const { permanentAssistantStore } =
     await import("./db/permanentAssistantStore.ts");
   if (permanentAssistantStore.sessionId()) {
@@ -450,8 +489,10 @@ let checkAgain = false;
 
 /**
  * Begin guided setup when a usable account exists. Called wherever the server
- * learns accounts may have changed; free once past `pending`. Checks never
- * overlap: one asked for while another runs runs once after it.
+ * learns accounts may have changed; free once past `pending`. Each check first
+ * persists the memory opt-out, so a failure there leaves `pending` for the next
+ * check. Checks never overlap: one asked for while another runs runs once
+ * after it.
  */
 export function checkOnboarding(
   probe: Partial<OnboardingProbe> = {},
@@ -467,6 +508,9 @@ export function checkOnboarding(
       do {
         checkAgain = false;
         if (state !== "pending") break;
+        // Before anything else, setup included: its pin and name writes may
+        // rotate the assistant, which flushes memory observations.
+        await optOutOfMemory();
         const account = await effective.usableAccount();
         if (account) await beginSetup(account, effective);
       } while (checkAgain && state === "pending");

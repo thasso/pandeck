@@ -68,7 +68,9 @@ export const CHAT_INTEGRATIONS: readonly ChatIntegration[] = [
     section: "confluence",
     turnOn: "confluence.enabled",
     uses: "jira",
+    // It signs in with Jira's credentials, which exist only with a Jira site.
     requires: [
+      ATLASSIAN_SITE,
       {
         path: "confluence.confluenceHost",
         missing: "this server has no Confluence site configured",

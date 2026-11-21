@@ -96,6 +96,17 @@ describe("integration_setup_read", () => {
     );
   });
 
+  test("a Confluence site without a Jira site leaves Confluence unavailable", () => {
+    // ASSISTANT_CONFLUENCE_HOST set, JIRA_HOST empty: Confluence would have
+    // no Jira credentials to sign in with.
+    const settings = deployment(true);
+    settings.jira.jiraHost = "";
+    const states = bySection(settings);
+    assert.equal(states.get("confluence")?.available, false);
+    assert.match(states.get("confluence")!.blocker!, /Atlassian site/);
+    assert.equal(states.get("jira")?.available, false);
+  });
+
   test("a configured deployment makes each available with its steps", () => {
     const states = bySection(deployment(true));
     for (const entry of states.values())

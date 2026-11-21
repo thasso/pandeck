@@ -38,18 +38,18 @@ mode 0600. It only moves forward: `pending → setup → complete`.
   (`subscribeCredentialProfileChanges`), the Claude SDK switch saved, an account
   listing, and boot. An account is usable when it is enabled, signed in
   (`status: "ready"`) and offers at least one model. The model check is what
-  makes a Claude account count only while Settings → Claude SDK is on. Checks
-  never overlap, and once past `pending` they cost nothing.
+  makes a Claude account count only while Settings → Claude SDK is on. Each
+  check first persists the memory opt-out (below) and goes no further when it
+  fails. Checks never overlap, and once past `pending` they cost nothing.
 - **Order into setup.** Leaving `pending` runs in an order where any failure
   leaves it `pending` for the next check to retry: pin the assistant's model
   (below; a no-op once it can run), name the assistant (below; a no-op once
-  named), turn memory off (below; a no-op once a memory setting is saved),
-  retire a Personal Assistant conversation bound before setup (so the next one
-  carries the setup prompt), persist `setup`, take it in memory, then broadcast
-  it once. A pin or name that was saved but whose follow-up effects failed
-  counts as done and is neither redone nor undone. The pin goes first because a
-  leaf write carries the whole current section: written after the name, the
-  default model would be stored as if the user had chosen it.
+  named), retire a Personal Assistant conversation bound before setup (so the
+  next one carries the setup prompt), persist `setup`, take it in memory, then
+  broadcast it once. A pin or name that was saved but whose follow-up effects
+  failed counts as done and is neither redone nor undone. The pin goes first
+  because a leaf write carries the whole current section: written after the
+  name, the default model would be stored as if the user had chosen it.
 - **Pinning the assistant's model.** When the saved Personal Assistant slot has
   no stored model, or one that no enabled, signed-in account can run, the server
   runs the assistant on the account it just found, as leaf writes of
@@ -69,16 +69,29 @@ mode 0600. It only moves forward: `pending → setup → complete`.
   Personal Assistant, announcing the change) run. A saved name is never
   overwritten. An established install keeps "Personal Assistant".
 - **Memory starts off.** Memory's defaults leave it on (`agent-memory.md`),
-  which an established install keeps. On a fresh install it would feed every
-  turn to the paid memory processor before the user agreed, so when the settings
-  file holds neither `memory.loadingEnabled` nor `memory.learningMode` the
-  server writes `false` and `"off"` as leaf writes through the normal settings
-  path, the rest of the section keeping its defaults. A memory setting saved
-  before setup is the user's choice and stands. It runs here rather than at boot
-  because only here does a failure have a retry built in, and the settings
-  effects run in a server that is up; no turn can run before an account is
-  usable, so memory is off before the assistant's first turn. Established
-  installs and gateway clients never leave `complete`, so it never runs there.
+  which an established install keeps. On a fresh install it would load into
+  turns, capture them and run the paid memory processor before the user agreed,
+  so a `pending` install has memory off in two ways:
+  - **Persisted.** Right after boot writes `pending`, and on every later boot
+    and check while the install stays `pending`, the server writes
+    `memory.loadingEnabled: false`, `memory.learningMode: "off"` and
+    `memory.maintenanceEnabled: false` as leaf writes through the normal
+    settings path, only the fields the settings file does not hold. The rest of
+    the section keeps its defaults; a memory setting already saved is the user's
+    choice and stands. A write that landed but whose follow-up effects failed
+    counts as done. A failure never fails boot: it is retried, and setup does
+    not begin until it has landed, because the pin and name writes may rotate
+    the assistant, which flushes its memory queue.
+  - **Enforced.** While the state is `pending`, the memory gate
+    (`memory/memoryGate.ts`) treats all three as off whatever is stored: no turn
+    of any persona loads memory, no observation is captured, a queued one is
+    dropped rather than processed, and maintenance runs no consolidation. That
+    covers the moment before the write lands, the transition into setup, and a
+    saved "on" until the user is asked.
+
+  Established installs and gateway clients are `complete` from their first boot,
+  so neither part ever applies there.
+
 - **Account health is not read**, on purpose. An enabled, signed-in account
   whose login the provider later rejects (`needs-login`) keeps the normal shell
   and the app status alert (`account-routing.md`).
@@ -317,11 +330,12 @@ name from then on.
    tools need no setup, only display preferences.
 
 2. **Memory.** Memory is off on a fresh install (above). The assistant reads
-   `memory.loadingEnabled` and `memory.learningMode`, says what memory does and
-   whether it is on, and if it is off asks whether to turn it on. Only an
-   explicit yes writes `true` and `adaptive`; a no or a skip changes nothing.
-   The two switch independently (`agent-memory.md`), so turning on loading alone
-   would not learn anything.
+   `memory.loadingEnabled`, `memory.learningMode` and
+   `memory.maintenanceEnabled`, says what memory does and whether it is on, and
+   if it is off asks whether to turn it on. Only an explicit yes writes `true`,
+   `adaptive` and `true`; a no or a skip changes nothing. The three switch
+   independently (`agent-memory.md`), so turning on loading alone would not
+   learn anything.
 
 ### Not yet built
 
