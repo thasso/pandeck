@@ -9,6 +9,9 @@
  * @payload `SettingsInputApprovalBody` (`ApprovalCard.body`).
  * @useWhen Rendered by `ApprovalCard` for `body.kind === "settingsInput"`, in
  *   place of the generic Approve/Reject footer.
+ * @intent A secret whose registry descriptor has a `setupLink` shows that
+ *   link above the private field, so the user can create the credential from
+ *   a trusted source even when the assistant's message omits or garbles it.
  */
 import { useEffect, useState } from "react";
 import { ExternalLink, LogIn, Save, XCircle } from "lucide-react";
@@ -22,6 +25,7 @@ import { startGoogleOAuth } from "../lib/googleOAuth.ts";
 import { fetchCredentialProfiles } from "../lib/credentialProfiles.ts";
 import { AccountLoginDialog } from "./AccountLoginDialog.tsx";
 import { ErrorNote, Spinner } from "./common/load.tsx";
+import { LinkButton } from "./common/LinkButton.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -62,6 +66,7 @@ function SecretControls(
 ) {
   const { body, active, busy, onSubmit, onDismiss } = props;
   const [value, setValue] = useState("");
+  const setupLink = settingDescriptor(body.path)?.setupLink;
   const submit = () => {
     const typed = value.trim();
     if (!typed) return;
@@ -70,6 +75,19 @@ function SecretControls(
   };
   return (
     <>
+      {setupLink && (
+        <div className="flex flex-col items-start gap-1">
+          <LinkButton
+            variant="outline"
+            href={setupLink.url}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {setupLink.label} <ExternalLink />
+          </LinkButton>
+          <p className="text-muted-foreground">{setupLink.hint}</p>
+        </div>
+      )}
       <form
         className="flex items-center gap-2"
         onSubmit={(event) => {

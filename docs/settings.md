@@ -40,6 +40,10 @@ are refused on every agent settings-tool path. Secrets stay out of its context
 - `uiOnly`: writable through the Settings UI, refused by agent settings tools.
   `settings_read` reports it as read-only and `settingsPatchForWrites` refuses
   an agent write.
+- `setupLink`: a `secret`'s trusted creation link (`url`, `label`, `hint`),
+  shown on the card that asks for it (below). Only `github.token` has one: the
+  classic token form from `GITHUB_CLASSIC_PAT_URL`, with
+  `GITHUB_CLASSIC_PAT_SCOPES` preselected (`github.md`).
 
 A section with nothing in the registry, or that shows something the registry
 does not hold, says what and where in `SETTINGS_OUTSIDE_REGISTRY`: Claude and
@@ -219,9 +223,26 @@ group (`app/server/src/tools/settings/settingsTools.ts`):
   `credentialsCleared`, with a note to ask the user again through
   `settings_request_input`.
 
+Two read-only tools in the same group serve the developer steps of guided setup
+(`onboarding.md`) and any later GitHub setup:
+
+- `git_setup_read`: whether `git` runs on the session's Worker (where its
+  checkouts live), its version, and the global `user.name` and `user.email`. It
+  only runs `git --version` and `git config --global --get`, in the session's
+  working directory. No git there is an answer (`not_installed`); a check that
+  could not run, or an identity that could not be read, is an error. Node
+  reports a spawn in a missing directory as ENOENT, the same as a missing `git`,
+  so ENOENT counts as `not_installed` only once the directory is confirmed on
+  that Worker; otherwise it is an error.
+- `github_pat_setup_link`: takes the user's GitHub username, refuses one that is
+  not a valid GitHub login, and returns `GITHUB_CLASSIC_PAT_URL` with
+  `GITHUB_CLASSIC_PAT_SCOPES` (each scope with what it is for). It never sees or
+  asks for the token.
+
 `settings_update`, `settings_request_input`, `accounts_update` and
 `accounts_sign_in` are `local` side effects, so Plan mode keeps only
-`settings_read`, `accounts_read` and `models_read`.
+`settings_read`, `accounts_read`, `models_read`, `git_setup_read` and
+`github_pat_setup_link`.
 
 Both tools hold four guarantees the schema alone cannot give, since neither
 harness enforces it before `execute`:
@@ -333,18 +354,20 @@ native rebuild is required for shells with the foreign-navigation guard.
 or `oauth` setting and ends the turn (`app/server/src/settingsInput.ts`,
 `app/web/src/components/SettingsInputApprovalBody.tsx`):
 
-- **Secret**: the card shows a password field. Save sends the value in the
-  approving decision's `edits` (`SettingsInputResolutionEdits`) and nowhere
-  else. The executor's `prepare` checks it and holds it in memory for that one
-  resolution; `execute` writes it through `saveSettings` and runs the section's
-  connection test. The stored card, the outcome the agent reads and every client
-  see only "saved" and the server-written test result. A failed save is reported
-  in the server's words too, since a writer's or side effect's message may carry
-  the value in some encoding. The executor's `release` drops the held value
-  however the resolution ends, including a failure between `prepare` and
-  `execute`. An approval without a value is refused and the card stays pending.
-  In the browser the field lives in a component mounted only while the card
-  waits, so a dismissed, answered or replaced card keeps no typed value.
+- **Secret**: the card shows a password field, with the descriptor's `setupLink`
+  above it when it has one, so the link the user follows comes from the registry
+  and not from the agent's text. Save sends the value in the approving
+  decision's `edits` (`SettingsInputResolutionEdits`) and nowhere else. The
+  executor's `prepare` checks it and holds it in memory for that one resolution;
+  `execute` writes it through `saveSettings` and runs the section's connection
+  test. The stored card, the outcome the agent reads and every client see only
+  "saved" and the server-written test result. A failed save is reported in the
+  server's words too, since a writer's or side effect's message may carry the
+  value in some encoding. The executor's `release` drops the held value however
+  the resolution ends, including a failure between `prepare` and `execute`. An
+  approval without a value is refused and the card stays pending. In the browser
+  the field lives in a component mounted only while the card waits, so a
+  dismissed, answered or replaced card keeps no typed value.
 - **Connect**: the card opens the descriptor's `connectPath` (the server's OAuth
   start route) in a popup, or Google's system-browser flow in a native shell.
   The card cannot be approved before the account is connected; when the OAuth

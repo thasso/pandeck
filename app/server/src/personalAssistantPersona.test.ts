@@ -56,6 +56,8 @@ test("personal-assistant is a real persona with integrations, settings and codin
       "models_read",
       "accounts_update",
       "accounts_sign_in",
+      "git_setup_read",
+      "github_pat_setup_link",
       "onboarding_finish",
       "worktree_create",
       "worktree_status",

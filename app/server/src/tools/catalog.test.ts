@@ -576,6 +576,8 @@ describe("tool catalog", () => {
         "models_read",
         "accounts_update",
         "accounts_sign_in",
+        "git_setup_read",
+        "github_pat_setup_link",
       ],
     );
     for (const persona of [
@@ -585,8 +587,11 @@ describe("tool catalog", () => {
       "workflow-coordinator",
     ] as const)
       assert.ok(
-        !agentToolsFor(persona).some((tool) =>
-          tool.name.startsWith("settings_"),
+        !agentToolsFor(persona).some(
+          (tool) =>
+            tool.name.startsWith("settings_") ||
+            tool.name === "git_setup_read" ||
+            tool.name === "github_pat_setup_link",
         ),
         `${persona} must not expose settings tools`,
       );
@@ -644,6 +649,8 @@ describe("tool catalog", () => {
         "models_read",
         "accounts_update",
         "accounts_sign_in",
+        "git_setup_read",
+        "github_pat_setup_link",
         "onboarding_finish",
         "worktree_create",
         "worktree_status",

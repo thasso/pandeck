@@ -69,9 +69,13 @@ only binding rules; everything else lives here.
   complete), the server moving to guided setup when it sees a usable account
   (pinning the assistant's model to it and naming it Larry), the welcome screen
   and first-account card that reuse Settings' sign-in flows, the guided setup
-  chat with the Personal Assistant (its frozen setup prompt, `models_read`,
-  `onboarding_finish`, Finish setup), and the focused shell (no panels, top bar
-  or edge-back) while it lasts.
+  chat with the Personal Assistant (its frozen setup prompt, `models_read`, the
+  Git, GitHub and folder steps, `onboarding_finish`, Finish setup), and the
+  focused shell (no panels, top bar or edge-back) while it lasts.
+- `github.md` — the one GitHub token: why a classic token, what each scope
+  (`repo`, `workflow`, `read:packages`, `notifications`) is for and which are
+  not needed, which account a classic token belongs to, what the connection test
+  proves, and the three places the shared token link appears.
 - `user-profile.md` — who the app works for: the profile display name and the
   one timezone every user-local day and time resolves in, its host fallback,
   use-time resolution, and where the name appears.

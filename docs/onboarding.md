@@ -7,9 +7,9 @@ empty and nothing can start until the user connects one.
 First run has three states: the welcome screen while no account works
 (`pending`), then a guided setup chat with the Personal Assistant (`setup`),
 then the normal app (`complete`). Guided setup covers the assistant's name, more
-accounts and the model picker today (step 3a); Git and GitHub, folders,
-integrations and memory are planned as later steps (3b, 3c) and do not exist
-yet.
+accounts and the model picker (step 3a), then Git, GitHub and the Projects and
+worktree folders (step 3b); the other integrations and memory are planned as
+step 3c and do not exist yet.
 
 ## The onboarding state
 
@@ -231,10 +231,38 @@ then, one question at a time and each skippable, more Claude or OpenAI accounts
 (`accounts_read`, `accounts_update`, `accounts_sign_in`; never a secret in chat;
 distinct names when two accounts share a provider) and which models the picker
 shows (`models_read`, then `settings_update` of `models.hidden` after the user
-agrees, keeping the assistant's own model shown); then it offers to finish and
-calls `onboarding_finish`. The settings tools stay deferred; `onboarding_finish`
-is eager only in this session (`eagerWhen: "guidedSetup"`) and deferred in every
+agrees, keeping the assistant's own model shown); then the developer steps
+below; then it offers to finish and calls `onboarding_finish`. The settings
+tools, `git_setup_read` and `github_pat_setup_link` among them, stay deferred,
+and the section tells the assistant to load them by name: they are 9 tools in
+one group, more than a "settings" search loads at once. `onboarding_finish` is
+eager only in this session (`eagerWhen: "guidedSetup"`) and deferred in every
 other Personal Assistant session, where it refuses.
+
+### Developer steps (3b)
+
+The section orders them; each tool's description carries its own rules
+(`settings.md` for the tools, `github.md` for the token).
+
+1. **Git.** `git_setup_read` reports whether `git` runs on the session's Worker,
+   its version, and whether the global `user.name` and `user.email` are set. Its
+   description has the assistant call it before saying anything about Git,
+   report what it returns and never change the host's Git config. It is
+   read-only, and a check that could not run is an error, never "not installed".
+2. **GitHub**, if the user wants it. The assistant asks for their GitHub
+   username, never a token, and calls `github_pat_setup_link`, which refuses an
+   invalid login and returns the classic token link with the scopes and what
+   each is for, which the assistant shows. The token is entered only in the
+   private card `settings_request_input` raises for `github.token`; that card
+   shows the same link above its field (the registry's `setupLink`). Once the
+   token is saved, one `settings_update` turns `github.enabled` on and runs the
+   `github` test, whose "Authenticated as …" names the login. The assistant
+   saves the username as `github.defaultOwner` only when that login matches it
+   or the user confirms which is right. Declining leaves GitHub off.
+3. **Folders.** The assistant shows `projectsRoot` and, when Git is installed,
+   `worktrees.root` as `settings_read` returns them (resolved, defaults filled
+   in), asks about each separately, and changes one only to an absolute path the
+   user confirms. Nothing creates or moves a directory.
 
 `models_read` lists each enabled, signed-in account's models with their
 `provider:modelId` key and whether the picker shows them, plus the assistant's
@@ -249,8 +277,6 @@ name from then on.
 
 ### Not yet built
 
-- **3b**: Git and GitHub (host Git check, GitHub token through a private card),
-  and the Projects and Worktrees folders.
 - **3c**: the other integrations (Forgejo, Jira/Confluence, Google, Slack,
   Tempo, web search) and the Memory opt-in.
 
