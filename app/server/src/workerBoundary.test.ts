@@ -930,6 +930,18 @@ function closureOf(entry: string): Set<string> {
   return reached;
 }
 
+test("the edge's jira_mutate_issue reaches no cache module (Task-1463 AC4)", () => {
+  // Its field map and link types are loaded per call; the core's cached
+  // loaders stay with the local tool.
+  const closure = closureOf("gatewayTools/jiraMutateIssue.ts");
+  assert.ok(closure.has("jiraMutate.ts"), "the scan found the core");
+  assert.ok(closure.has("jiraMutateApply.ts"), "the scan found apply");
+  assert.deepEqual(
+    [...closure].filter((module) => /cache/i.test(module)),
+    [],
+  );
+});
+
 test("the login children: only the Codex one loads pi, through the gateway port", () => {
   // The child side's protocol imports only node, so each entry adds only its
   // own driver (ADR-0005 "The login children").

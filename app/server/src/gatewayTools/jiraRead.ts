@@ -26,7 +26,7 @@ import { ToolError, type AtlassianCredential } from "./descriptor.ts";
  * The edge's text for each input refusal: the local wording, without the
  * caller's own values.
  */
-const REFUSAL_TEXT: Record<JiraReadRefusalCode, string> = {
+export const REFUSAL_TEXT: Record<JiraReadRefusalCode, string> = {
   jql_empty: "jql must not be empty.",
   jql_too_long: "jql is too long.",
   assignable_without_project:

@@ -10,7 +10,9 @@ import http from "node:http";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { afterEach, test, vi } from "vitest";
-import type { ToolHost } from "./host.ts";
+import type { ToolDescriptor } from "./descriptor.ts";
+import { createToolHost, type ToolHost } from "./host.ts";
+import { createEdgeTools } from "./index.ts";
 import { createMcpHandler, type McpHandlerOptions } from "./mcp.ts";
 
 const open: { close(): unknown }[] = [];
@@ -264,5 +266,95 @@ test("the SDK client's own exchange still works: initialize, list and call", asy
     jsonrpc: "2.0",
     id: 3,
     result: { content: [{ type: "text", text: '{"fine":true}' }] },
+  });
+});
+
+test("the listing marks jira_mutate_issue as not read-only and the read tools as read-only (Task-1463 AC3)", async () => {
+  const { url } = await serve(createEdgeTools({ log: () => {} }).host);
+  const listed = await post(
+    url,
+    { jsonrpc: "2.0", id: 1, method: "tools/list" },
+    { "mcp-protocol-version": "2025-06-18" },
+  );
+  assert.equal(listed.status, 200);
+  const tools = (
+    JSON.parse(listed.text) as {
+      result: {
+        tools: Array<{
+          name: string;
+          annotations?: { readOnlyHint?: boolean };
+        }>;
+      };
+    }
+  ).result.tools;
+  const hint = (name: string) =>
+    tools.find((tool) => tool.name === name)?.annotations?.readOnlyHint;
+  assert.equal(hint("jira_mutate_issue"), false);
+  assert.equal(hint("jira_get_issue"), true);
+});
+
+test("a cancellation notification on another POST does not reach a running write call (Task-1463 AC18)", async () => {
+  let signal: AbortSignal | undefined;
+  let started: () => void = () => {};
+  const running = new Promise<void>((resolve) => (started = resolve));
+  let release: () => void = () => {};
+  const released = new Promise<void>((resolve) => (release = resolve));
+  const slowWrite: ToolDescriptor = {
+    name: "slow_write",
+    description: "A slow fake write tool.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+    effect: "write",
+    actionKey: "jira:write",
+    integration: "atlassian",
+    async execute(_params, ctx) {
+      signal = ctx.signal;
+      started();
+      await released;
+      return { written: true, aborted: ctx.signal.aborted };
+    },
+  };
+  const { url } = await serve(createToolHost([slowWrite], { log: () => {} }));
+  const version = { "mcp-protocol-version": "2025-06-18" };
+  const answer = post(
+    url,
+    {
+      jsonrpc: "2.0",
+      id: 9,
+      method: "tools/call",
+      params: { name: "slow_write", arguments: {} },
+    },
+    version,
+  );
+  await running;
+  const notified = await post(
+    url,
+    {
+      jsonrpc: "2.0",
+      method: "notifications/cancelled",
+      params: { requestId: 9, reason: "The user interrupted." },
+    },
+    version,
+  );
+  // What the SDK answers any notification: accepted, no body.
+  assert.equal(notified.status, 202);
+  assert.equal(notified.text, "");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(signal?.aborted, false);
+  release();
+  const called = await answer;
+  assert.equal(called.status, 200);
+  const body = JSON.parse(called.text) as {
+    id: number;
+    result: { content: Array<{ text: string }>; isError?: boolean };
+  };
+  assert.equal(body.id, 9);
+  assert.equal(body.result.isError, undefined);
+  assert.deepEqual(JSON.parse(body.result.content[0]!.text), {
+    written: true,
+    aborted: false,
   });
 });

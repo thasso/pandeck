@@ -2691,29 +2691,49 @@ writes no answer, no second record and contacts no upstream.
 
 The edge runs integration tools for its clients' users (Task-1397, M22): a tool
 host and a standalone MCP endpoint, three Jira read tools: `jira_get_issue`,
-plus `jira_search_issues` and `jira_lookup` (Task-1439), and four Slack read
-tools: `slack_search`, `slack_conversation_read`, `slack_thread_read` and
-`slack_unread` (Task-1454).
+plus `jira_search_issues` and `jira_lookup` (Task-1439), four Slack read tools:
+`slack_search`, `slack_conversation_read`, `slack_thread_read` and
+`slack_unread` (Task-1454), and one Jira write tool, `jira_mutate_issue`
+(Task-1463).
 
 - **Host** (`gatewayTools/`, loaded only by the edge's composition
   `gatewayEdge.ts`, which both edge entries run): one module per tool
   (`descriptor.ts`: name, schema, `effect` read or write, action key,
   integration), registered by one line in `tools.ts`. `host.call` checks
-  arguments against a closed schema, settles by its 30 s deadline or the
-  caller's abort whatever an await inside ignores, and answers the tool's JSON
-  or a fixed failure (`unknown_tool`, `invalid_params`, `tool_error`,
-  `result_too_large`, `timeout`, `cancelled`, `failed`). Only edge-owned
-  `ToolError` text reaches a caller; any other error's message is dropped
-  unlogged. The single exception is Jira's own reasons for a rejected
-  `jira_search_issues` (below, ADR-0005). `gateway/` holds no tool code or
-  package: it takes the tools as `EdgeTools` (`gateway/edgeTools.ts`, types
-  only) through `startGateway`'s `tools`, and the vault process never loads
-  them. Without them `/mcp` is an unknown path and the integration methods
-  answer `tools_unavailable`; the packaged entry wires none yet (D1). The closed
-  schema covers strings (`maxLength`, `pattern`, `enum`), booleans, integers
-  with a range, finite numbers, arrays of strings (with an item `enum`), closed
-  nested objects (`additionalProperties: false`) and arrays of them, `minItems`
-  and `maxItems` on arrays, a string or `null` (exactly
+  arguments against a closed schema, settles by its deadline (30 s, unless the
+  tool sets its own `deadlineMs`) or the caller's abort whatever an await inside
+  ignores, and answers the tool's JSON or a fixed failure (`unknown_tool`,
+  `invalid_params`, `tool_error`, `result_too_large`, `timeout`, `cancelled`,
+  `failed`). A tool gets the deadline's epoch ms as `ctx.deadlineAt`. For a
+  write tool the `timeout`, `cancelled`, `failed` and `result_too_large` texts
+  say some changes may have been applied, so check before retrying. Only
+  edge-owned `ToolError` text reaches a caller; any other error's message is
+  dropped unlogged. The two exceptions are Jira's own reasons for a rejected
+  `jira_search_issues` (D4) and `jira_mutate_issue`'s vetted texts (D-W2), both
+  below and in ADR-0005. Both drop a text holding an authorization marker or any
+  whole form of the call's secret. The write tool also treats any 16-character
+  piece of a secret form, anywhere inside a string, as secret: in a text each
+  marker, form or piece reads `[redacted]` so the agent sees that something was
+  removed, and a key or link holding one is dropped. A cut never splits a
+  placeholder: a text cut through one, or past one, ends `[redacted]…`. The
+  string as it leaves, cut and with its ellipsis, is checked again, raw and in
+  both JSON escapings it travels in (the result, then the `/mcp` body or
+  `tools.call` frame); one that still carries material becomes a fixed text, and
+  a serialized answer that does keeps only each row's operation and outcome. No
+  string of its answer carries one (`upstreamText.ts`). Accepted limit: a
+  credential whose secret form equals, or is contained in, the answer's fixed
+  scaffold (the `[redacted]` placeholder, the JSON keys and structure, and the
+  fixed fallback texts) cannot be withheld from the answer. Provider-shaped
+  credentials (Atlassian API tokens, OAuth access tokens) cannot take that shape
+  and are unaffected. `gateway/` holds no tool code or package: it takes the
+  tools as `EdgeTools` (`gateway/edgeTools.ts`, types only) through
+  `startGateway`'s `tools`, and the vault process never loads them. Without them
+  `/mcp` is an unknown path and the integration methods answer
+  `tools_unavailable`; the packaged entry wires none yet (D1). The closed schema
+  covers strings (`maxLength`, `pattern`, `enum`), booleans, integers with a
+  range, finite numbers, arrays of strings (with an item `enum`), closed nested
+  objects (`additionalProperties: false`) and arrays of them, `minItems` and
+  `maxItems` on arrays, a string or `null` (exactly
   `anyOf: [{type: "string"}, {type: "null"}]`), and an opaque `{type: "object"}`
   passed to the tool as given and never descended into (Task-1463). `default`
   applies only at the root. Its types (`descriptor.ts`) keep these branches
@@ -2750,8 +2770,8 @@ tools: `slack_search`, `slack_conversation_read`, `slack_thread_read` and
   (`jiraMutateApply.ts`) halves of `jira_mutate_issue`, with `jiraRank.ts`,
   `jiraSprint.ts`, `jiraPermissions.ts` and the typed errors in
   `jiraMutationErrors.ts`, sit beside `tools/jira/`, which wraps them with its
-  settings, caches and approval card. The edge may import them; no edge tool
-  uses them yet. Server state arrives as injected deps: the field list, link
+  settings, caches and approval card. The edge's `jira_mutate_issue` uses them
+  too (below). Server state arrives as injected deps: the field list, link
   types, user names, `describeError`, `matchesHttpStatus` and apply's
   `stopBefore`. The display types are the import-free
   `@assistant/shared/jiraMutation` leaf, and the ADF converter brings the three
@@ -2766,6 +2786,49 @@ tools: `slack_search`, `slack_conversation_read`, `slack_thread_read` and
   step error, and no request follows it. Without a signal every call keeps the
   exact arguments the local tool always sent; locally only user naming carries
   the tool call's signal, as before.
+- **Jira write** (Task-1463). `jira_mutate_issue` (effect `write`, action key
+  `jira:write`, `readOnlyHint: false` on `/mcp`) runs the same core as the local
+  tool with the local schema's exact structure. Three schema descriptions and
+  the tool description differ: no approval card follows, since the client's own
+  approval of the call is the user's consent, and Jira changes as soon as the
+  call runs. One call prepares and applies with the calling user's credential,
+  uncached, and every request carries the call's signal. Its deadlines come from
+  the client's measured limit: Claude Code ends an HTTP MCP tool call at 60 s
+  (2026-11-21). The tool's own deadline is 45 s, and `/mcp` ends the exchange by
+  50 s. Prepare must finish 22 s before the deadline, so it has about 23 s; past
+  that, or settling at that instant, the call answers "Preparing the changes
+  took too long; nothing was written to Jira. Send fewer items or fewer issues
+  per item." and writes nothing. Its timer is cleared when prepare ends, and a
+  fence before apply checks the clock again. Apply runs on the call's signal
+  alone. It starts no further item once less than 7 s remain, and those items
+  answer "Not applied: the call ran out of time before this change; nothing was
+  sent for it." Failures follow D-W2: the core's own text (1,000 characters),
+  the credential remedy for 401 or 403, Jira's reasons for a rejected write's
+  other 4xx (500 characters) or "Jira refused the change (HTTP n).", "Jira
+  answered HTTP n." for a read or a 5xx, the read refusals' fixed texts, and
+  otherwise "The request to Jira failed; the change may or may not have been
+  applied." A refusal in prepare adds " Nothing was written to Jira."; when
+  every item fails, the answer is the core's summary of them (2,000 characters).
+  The result is `{summary, url?, warnings?, items}`, each item
+  `{operation, issueKey, ok, url?, createdKey?, warning?, error?}`. Texts are
+  vetted, with any secret piece shown as `[redacted]`, capped (summary 4,000, 20
+  warnings of 300, item error 800, warning 500) and kept well-formed. A key must
+  match `^[A-Z][A-Z0-9_]*-[1-9][0-9]*$` (64 characters) or is `null`. A link
+  must be backed by a valid key, lie under `https://<site>/`, be at most 300
+  printable ASCII characters without `"` or `\`, and neither it nor any of up to
+  three successive percent-decodings may hold the secret; otherwise it is
+  omitted, so a sprint item, which has no key, shows no link. The serialized
+  result stays under 55,000 characters, shrinking warnings, then item texts,
+  then the summary, then links, never a row's outcome. An interrupt does not
+  stop the call: Claude Code's Esc sends `notifications/cancelled` on a separate
+  POST, which the stateless endpoint answers 202 without reaching the call, and
+  keeps the call's own request open until its 60 s limit. An interrupted write
+  therefore keeps running until it completes or reaches its 45 s deadline: Esc
+  never reaches the call's `ctx.signal`, because the stateless handler cannot
+  connect that separate `notifications/cancelled` POST to the call. So after a
+  timeout or interrupt, reconcile only after that window: wait 60 s before
+  reading the issues or retrying. Pandeck's client mode still drops write tools
+  from a listing.
 - **Slack reads** (Task-1454). The four tools run the same read path as the
   local ones (`slackRead.ts` with `slackMetadataCache.ts` beside `tools/slack/`,
   which wraps them) with the same schema and description objects, action key
@@ -2802,10 +2865,10 @@ tools: `slack_search`, `slack_conversation_read`, `slack_thread_read` and
   DELETE answer 405; a JSON-RPC batch or an unsupported `mcp-protocol-version`
   400; a body over 1 MiB 413 as soon as it crosses the cap. Every JSON-RPC error
   the SDK answers is rewritten to a fixed text for its code, without `data`. The
-  exchange is bounded at the host's deadline plus 5 s: then the call is aborted,
-  the response ends 504 with fixed text and the SDK instances close. A tool
-  failure is an `isError` result with the fixed text; a client that goes away
-  aborts its call.
+  exchange is bounded at the longest tool deadline plus 5 s (50 s with
+  `jira_mutate_issue`'s 45 s): then the call is aborted, the response ends 504
+  with fixed text and the SDK instances close. A tool failure is an `isError`
+  result with the fixed text; a client that goes away aborts its call.
 - **MCP tokens.** `gateway:admin clients mcp-token <clientId>` mints one
   (`pgmcp_…`), prints it once and keeps only its SHA-256 on the client record,
   replacing an earlier one; `clients mcp-token-revoke <clientId>` removes it;

@@ -289,6 +289,25 @@ test("only bounded read tools of a mapped product are accepted", () => {
   assert.deepEqual(acceptRemoteTools({ tools: [JIRA_GET_ISSUE] }), []);
 });
 
+test("the edge's write tool is dropped while its read tools are accepted (Task-1463 AC13)", () => {
+  const mutate = tool({
+    name: "jira_mutate_issue",
+    description: "Create, edit, transition, comment on, link, rank issues.",
+    inputSchema: {
+      type: "object",
+      properties: { items: { type: "array", items: { type: "object" } } },
+      required: ["items"],
+      additionalProperties: false,
+    },
+    effect: "write",
+    actionKey: "jira:write",
+  });
+  assert.deepEqual(
+    acceptRemoteTools([mutate, JIRA_GET_ISSUE]).map((t) => t.name),
+    ["jira_get_issue"],
+  );
+});
+
 test("a name listed twice is not accepted; only the first 64 entries count", () => {
   assert.deepEqual(
     acceptRemoteTools([

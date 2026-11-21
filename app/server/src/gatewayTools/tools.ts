@@ -2,6 +2,7 @@
 import type { ToolDescriptor } from "./descriptor.ts";
 import { jiraGetIssue } from "./jiraGetIssue.ts";
 import { jiraLookup } from "./jiraLookup.ts";
+import { jiraMutateIssue } from "./jiraMutateIssue.ts";
 import { jiraSearchIssues } from "./jiraSearchIssues.ts";
 import { slackConversationRead } from "./slackConversationRead.ts";
 import { slackSearch } from "./slackSearch.ts";
@@ -16,4 +17,5 @@ export const EDGE_TOOLS: readonly ToolDescriptor[] = [
   slackConversationRead,
   slackThreadRead,
   slackUnread,
+  jiraMutateIssue,
 ];

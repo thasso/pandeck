@@ -3,10 +3,13 @@
  * call for one client. MCP (`mcp.ts`) is one adapter over it; gateway client
  * 1.0's `tools.*` (`gateway/clientListener.ts`, Task-1398) is the other.
  *
- * `call` never throws and settles by its deadline (30 s) or the caller's
- * abort, whatever an await inside the tool ignores. It answers the tool's
- * JSON or a fixed failure: only `ToolError` text passes, every other error's
- * message is dropped unread and unlogged.
+ * `call` never throws and settles by its deadline (the tool's own, else the
+ * host's, 30 s by default) or the caller's abort, whatever an await inside the
+ * tool ignores. It answers the tool's JSON or a fixed failure: only
+ * `ToolError` text passes, every other error's message is dropped unread and
+ * unlogged. A write tool's timeout, cancel, failure and oversized result say
+ * that changes may have been applied (Task-1463); a read tool's texts stay as
+ * they were.
  */
 import {
   ToolError,
@@ -63,11 +66,57 @@ export interface ToolHostOptions {
   log?: (line: string) => void;
 }
 
+/** The deadline one call of `tool` runs under. */
+export function effectiveDeadlineMs(
+  tool: Pick<ToolDescriptor, "deadlineMs">,
+  hostDeadlineMs?: number,
+): number {
+  return tool.deadlineMs ?? hostDeadlineMs ?? DEFAULT_DEADLINE_MS;
+}
+
+/** The longest deadline any call of these tools can run under. */
+export function longestDeadlineMs(
+  tools: readonly Pick<ToolDescriptor, "deadlineMs">[],
+  hostDeadlineMs?: number,
+): number {
+  return Math.max(
+    hostDeadlineMs ?? DEFAULT_DEADLINE_MS,
+    ...tools.map((tool) => effectiveDeadlineMs(tool, hostDeadlineMs)),
+  );
+}
+
+/** A failure's fixed text, by the tool's effect. */
+function failureText(
+  tool: ToolDescriptor,
+  code: "timeout" | "cancelled" | "failed" | "result_too_large",
+): string {
+  if (tool.effect === "write")
+    switch (code) {
+      case "timeout":
+        return "The tool timed out; some changes may have been applied, so check before retrying.";
+      case "cancelled":
+        return "The call was cancelled; some changes may have been applied, so check before retrying.";
+      case "failed":
+        return `${tool.name} failed; some changes may have been applied, so check before retrying.`;
+      case "result_too_large":
+        return "The tool's result is too large; the changes may have been applied, so check before retrying.";
+    }
+  switch (code) {
+    case "timeout":
+      return "The tool timed out.";
+    case "cancelled":
+      return "The call was cancelled.";
+    case "failed":
+      return `${tool.name} failed.`;
+    case "result_too_large":
+      return "The tool's result is too large.";
+  }
+}
+
 export function createToolHost(
   tools: readonly ToolDescriptor[],
   options: ToolHostOptions = {},
 ): ToolHost {
-  const deadlineMs = options.deadlineMs ?? DEFAULT_DEADLINE_MS;
   const log = options.log ?? ((line: string) => console.log(`[tools] ${line}`));
   const byName = new Map(tools.map((tool) => [tool.name, tool]));
 
@@ -80,6 +129,8 @@ export function createToolHost(
     if (!checked.ok)
       return { ok: false, code: "invalid_params", message: checked.message };
     const deadline = new AbortController();
+    const deadlineMs = effectiveDeadlineMs(tool, options.deadlineMs);
+    const deadlineAt = Date.now() + deadlineMs;
     const timer = setTimeout(() => deadline.abort(), deadlineMs);
     const signal = caller.signal
       ? AbortSignal.any([caller.signal, deadline.signal])
@@ -93,11 +144,13 @@ export function createToolHost(
             case "atlassian":
               return tool.execute(checked.params, {
                 signal,
+                deadlineAt,
                 credential: () => atlassianCredentialFor(caller, signal),
               });
             case "slack":
               return tool.execute(checked.params, {
                 signal,
+                deadlineAt,
                 credential: () => slackCredentialFor(caller, signal),
               });
             default: {
@@ -113,22 +166,30 @@ export function createToolHost(
         return {
           ok: false,
           code: "result_too_large",
-          message: "The tool's result is too large.",
+          message: failureText(tool, "result_too_large"),
         };
       return { ok: true, text };
     } catch (err) {
       // By which signal aborted, never by error text.
       if (deadline.signal.aborted)
-        return { ok: false, code: "timeout", message: "The tool timed out." };
+        return {
+          ok: false,
+          code: "timeout",
+          message: failureText(tool, "timeout"),
+        };
       if (signal.aborted)
         return {
           ok: false,
           code: "cancelled",
-          message: "The call was cancelled.",
+          message: failureText(tool, "cancelled"),
         };
       if (err instanceof ToolError)
         return { ok: false, code: "tool_error", message: err.message };
-      return { ok: false, code: "failed", message: `${tool.name} failed.` };
+      return {
+        ok: false,
+        code: "failed",
+        message: failureText(tool, "failed"),
+      };
     } finally {
       clearTimeout(timer);
     }
@@ -150,7 +211,7 @@ export function createToolHost(
         ? await run(tool, args, caller).catch((): ToolAnswer => ({
             ok: false,
             code: "failed",
-            message: `${tool.name} failed.`,
+            message: failureText(tool, "failed"),
           }))
         : { ok: false, code: "unknown_tool", message: "No such tool." };
       // The tool name only from the registry: a request's string is not logged.

@@ -518,3 +518,27 @@ test("arguments the schema refuses, and an empty JQL, never reach Jira", async (
   });
   assert.equal(seen.length, 0);
 });
+
+test("D4 is unchanged by the write tool's stricter check: a reason that is only a piece of the token still shows (Task-1463 fix-1 F002)", async () => {
+  // The base (47611df4) shows a reason unless it holds a whole secret form
+  // or an auth marker; the write tool's 16-character-piece rule is not D4's.
+  const credential = { ...FAKE, token: "zzSLICEKEY-1234567890zz" };
+  const caller: ToolCaller = {
+    clientId: "client-1",
+    credential: () =>
+      Promise.resolve({
+        ok: true,
+        credential: encodeAtlassianCredential(credential),
+      }),
+  };
+  const { message } = await rejectedSearch(
+    { errorMessages: ["SLICEKEY-1234567"] },
+    caller,
+  );
+  assert.equal(message, `${REASONS}SLICEKEY-1234567`);
+  const whole = await rejectedSearch(
+    { errorMessages: [`near ${credential.token}`] },
+    caller,
+  );
+  assert.equal(whole.message, D4_NO);
+});
