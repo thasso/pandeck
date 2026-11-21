@@ -66,8 +66,9 @@ only binding rules; everything else lives here.
   Personal Assistant's `settings_read`/`settings_update` tools.
 - `onboarding.md` — first run: when an install with no usable account shows the
   welcome screen instead of New Session, the app-authored greeting, the
-  first-account card and how it reuses Settings' sign-in flows, and the focused
-  shell (no panels, top bar or edge-back) until an account works.
+  first-account card and how it reuses Settings' sign-in flows, the focused
+  shell (no panels, top bar or edge-back) until an account works, and how first
+  run names the assistant Larry.
 - `user-profile.md` — who the app works for: the profile display name and the
   one timezone every user-local day and time resolves in, its host fallback,
   use-time resolution, and where the name appears.

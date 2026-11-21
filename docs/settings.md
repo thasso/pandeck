@@ -133,9 +133,9 @@ minimum runtime version are described in
 [deployment.md](deployment.md#streaming-conversation-recognition).
 
 The ready projection also carries `permanentAssistant`, so the shell names the
-assistant (default "Larry") before Settings is read (`onboarding.md`). It
-includes all three speech settings groups, including synthesis enablement so a
-reload preserves the composer's gate. It nests streaming STT availability under
+assistant before Settings is read (`onboarding.md`). It includes all three
+speech settings groups, including synthesis enablement so a reload preserves the
+composer's gate. It nests streaming STT availability under
 `speechToText.conversation`. Settings writes echo that status to all
 connections. Capability status does not depend on the user's enabled switch.
 Both the browser and server check that switch before starting capture. Changes

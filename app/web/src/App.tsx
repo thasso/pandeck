@@ -207,6 +207,7 @@ import {
 } from "./lib/credentialProfileProjection.ts";
 import { hasUsableAccount } from "./lib/firstRun.ts";
 import { useCredentialProfileProjection } from "./hooks/useCredentialProfileProjection.ts";
+import { useFirstRunNaming } from "./hooks/useFirstRunNaming.ts";
 import {
   dataOf,
   errorOf,
@@ -908,9 +909,18 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   // First run (`docs/onboarding.md`): the accounts have answered and none is
   // usable. Unknown (still loading, or failed) is never first run, so an
   // established install cannot flash the welcome screen.
-  const firstRun =
-    credentialProfileProjection !== undefined &&
-    !hasUsableAccount(credentialProfiles, credentialProfileModels);
+  const accountsUsable =
+    credentialProfileProjection === undefined
+      ? undefined
+      : hasUsableAccount(credentialProfiles, credentialProfileModels);
+  const firstRun = accountsUsable === false;
+  // Finishing first run with no saved name saves "Larry"; a saved name stays.
+  useFirstRunNaming({
+    accountsUsable,
+    settingsLive: state.connected,
+    assistant: state.settings.permanentAssistant,
+    saveSettings: actions.updateSettings,
+  });
   // The Claude SDK switch decides whether a Claude account offers models at
   // all, and the projection does not hear about settings: re-read it when the
   // switch flips (the first-run card turns it on after a Claude sign-in).
@@ -6415,7 +6425,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
           assistantLabel={
             state.settings.permanentAssistant.name || "Personal Assistant"
           }
-          settingsOnlyNav={firstRun}
+          firstRunNav={firstRun}
           onArchive={archiveSession}
           onSettleSession={settleSession}
           onDismissSessionFailure={dismissSessionFailure}

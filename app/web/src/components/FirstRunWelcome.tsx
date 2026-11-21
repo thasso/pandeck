@@ -40,8 +40,8 @@ const KIND_COPY: Record<
     createLabel: "Sign in",
   },
   "openai-codex": {
-    title: "ChatGPT",
-    create: "Sign in with ChatGPT to use Codex.",
+    title: "OpenAI",
+    create: "Sign in with your ChatGPT plan to use OpenAI’s Codex models.",
     createLabel: "Sign in",
   },
   "openai-compatible": {
@@ -104,7 +104,7 @@ export function FirstRunWelcome({
   error,
   onStep,
 }: {
-  /** The configured assistant name; the greeting falls back to Larry. */
+  /** The saved assistant name; an unsaved one is introduced as Larry. */
   assistantName: string;
   steps: readonly FirstAccountStep[];
   /** The kind whose step is running, so its button shows busy. */
@@ -152,7 +152,11 @@ export function FirstRunWelcome({
                   </ItemMedia>
                   <ItemContent>
                     <ItemTitle>{KIND_COPY[step.kind].title}</ItemTitle>
-                    <ItemDescription>{description}</ItemDescription>
+                    {/* Whole, never clamped: it says what the row is, and
+                        a status line carries the user's account name. */}
+                    <ItemDescription className="line-clamp-none">
+                      {description}
+                    </ItemDescription>
                   </ItemContent>
                   <ItemActions>
                     <Button

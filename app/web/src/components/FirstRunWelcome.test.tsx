@@ -46,12 +46,12 @@ describe("FirstRunWelcome", () => {
     );
     expect(labels).toEqual([
       "Sign in: Claude",
-      "Sign in: ChatGPT",
+      "Sign in: OpenAI",
       "Set up: OpenAI-compatible endpoint",
     ]);
     act(() =>
       container
-        .querySelector<HTMLButtonElement>('[aria-label="Sign in: ChatGPT"]')
+        .querySelector<HTMLButtonElement>('[aria-label="Sign in: OpenAI"]')
         ?.click(),
     );
     expect(onStep).toHaveBeenCalledWith({
@@ -80,7 +80,7 @@ describe("FirstRunWelcome", () => {
     expect(claude?.getAttribute("aria-busy")).toBe("true");
     expect(
       container.querySelector<HTMLButtonElement>(
-        '[aria-label="Sign in: ChatGPT"]',
+        '[aria-label="Sign in: OpenAI"]',
       )?.disabled,
     ).toBe(true);
     expect(container.querySelector('[role="alert"]')?.textContent).toContain(

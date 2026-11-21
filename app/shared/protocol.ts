@@ -613,6 +613,12 @@ export const DEFAULT_HELPER_MODEL = {
 } as const;
 
 /**
+ * The Personal Assistant's name while none is saved. First run saves "Larry"
+ * instead (`docs/onboarding.md`); an established install keeps this one.
+ */
+export const DEFAULT_PERMANENT_ASSISTANT_NAME = "Personal Assistant";
+
+/**
  * User preferences for the model picker. An overlay on the live model list:
  * models the registry offers but settings don't mention stay visible, ordered
  * after the explicitly arranged ones — so newly available models just appear.

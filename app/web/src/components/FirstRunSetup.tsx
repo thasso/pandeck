@@ -53,7 +53,7 @@ export function FirstRunSetup({
     null,
   );
   const [error, setError] = useState<string | null>(null);
-  // The login dialog's account (Claude or ChatGPT), while it is open.
+  // The login dialog's account (Claude or OpenAI), while it is open.
   const [loginProfile, setLoginProfile] =
     useState<CredentialProfileSummary | null>(null);
 

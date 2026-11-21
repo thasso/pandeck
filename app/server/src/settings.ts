@@ -32,6 +32,7 @@ import type {
 import {
   CLAUDE_SDK_PROVIDER,
   DEFAULT_HELPER_MODEL,
+  DEFAULT_PERMANENT_ASSISTANT_NAME,
   DEFAULT_SESSION_PEER_PROMPT_MAX_HOPS,
   DEFAULT_SESSION_PEER_PROMPT_REMINDER_LIMIT,
   isPeerRuntimeRelativeCost,
@@ -140,7 +141,7 @@ const DEFAULT_PERMANENT_ASSISTANT_SETTINGS: Omit<
   PermanentAssistantSettings,
   "defaultWorkingDirectory"
 > = {
-  name: "Larry",
+  name: DEFAULT_PERMANENT_ASSISTANT_NAME,
   workingDirectory: "",
   ...DEFAULT_HELPER_MODEL,
   thinkingLevel: "off",

@@ -143,9 +143,10 @@ interface Props {
   assistantUnread?: boolean;
   /**
    * First run (`docs/onboarding.md`): nothing can run yet, so the nav bar
-   * offers only Settings. The saved slot order is untouched.
+   * offers only New Session (which shows the welcome screen) and Settings.
+   * The saved slot order is untouched.
    */
-  settingsOnlyNav?: boolean;
+  firstRunNav?: boolean;
   /** Mobile (single-pane) layout: the sidebar renders as a full-screen overlay. */
   mobile: boolean;
   /** Hover "+" on task rows: start a session with that task as context. */
@@ -482,7 +483,7 @@ function SidebarImpl({
   onOpenBackgroundTasks,
   assistantLabel,
   assistantUnread = false,
-  settingsOnlyNav = false,
+  firstRunNav = false,
   mobile,
   onStartSessionForProject,
   tasksFresh,
@@ -854,7 +855,7 @@ function SidebarImpl({
     [onUpdatePrefs],
   );
   const navSlots: Array<PrimaryNavSection<NavSlot>> = prefs.navSlots
-    .filter((id) => !settingsOnlyNav || id === "settings")
+    .filter((id) => !firstRunNav || id === "new-session" || id === "settings")
     .filter((id) => id !== "knowledge" || knowledgeEnabled)
     .map((id) => ({
       id,

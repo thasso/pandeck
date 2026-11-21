@@ -5,6 +5,7 @@ import {
   DEFAULT_SPEECH_CONVERSATION_SETTINGS,
   DEFAULT_SPEECH_SYNTHESIS_SETTINGS,
   DEFAULT_HELPER_MODEL,
+  DEFAULT_PERMANENT_ASSISTANT_NAME,
   DEFAULT_SESSION_PEER_PROMPT_MAX_HOPS,
   DEFAULT_SESSION_PEER_PROMPT_REMINDER_LIMIT,
   MAX_OPEN_COMMENT_TARGETS,
@@ -221,7 +222,7 @@ const defaultSettings: AppSettings = {
   // skill reads OFF, which is what an unanswered settings read may claim.
   skills: {},
   permanentAssistant: {
-    name: "Larry",
+    name: DEFAULT_PERMANENT_ASSISTANT_NAME,
     workingDirectory: "",
     defaultWorkingDirectory: "",
     ...DEFAULT_HELPER_MODEL,

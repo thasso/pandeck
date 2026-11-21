@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { CredentialProfileSummary, ModelOption } from "@assistant/shared";
 import {
   firstAccountSteps,
+  firstRunAssistantName,
+  firstRunNameToSave,
   hasUsableAccount,
   welcomeGreeting,
 } from "./firstRun.ts";
@@ -117,8 +119,24 @@ describe("firstAccountSteps", () => {
 describe("welcomeGreeting", () => {
   it("introduces Larry by default and keeps a custom name as plain text", () => {
     expect(welcomeGreeting("  ")).toContain("I’m Larry,");
+    expect(welcomeGreeting("Personal Assistant")).toContain("I’m Larry,");
     expect(welcomeGreeting("**Ada** [x](y)")).toContain(
       "I’m \\*\\*Ada\\*\\* \\[x\\]\\(y\\),",
     );
+  });
+});
+
+describe("first-run naming", () => {
+  it("introduces Larry while no name is saved, and keeps a saved one", () => {
+    expect(firstRunAssistantName("")).toBe("Larry");
+    expect(firstRunAssistantName("Personal Assistant")).toBe("Larry");
+    expect(firstRunAssistantName(" Ada ")).toBe("Ada");
+  });
+
+  it("saves Larry only over an unsaved name, never over a chosen one", () => {
+    expect(firstRunNameToSave("Personal Assistant")).toBe("Larry");
+    expect(firstRunNameToSave("")).toBe("Larry");
+    expect(firstRunNameToSave("Ada")).toBeNull();
+    expect(firstRunNameToSave("Larry")).toBeNull();
   });
 });

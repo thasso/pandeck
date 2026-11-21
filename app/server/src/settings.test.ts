@@ -21,6 +21,11 @@ test("appearance settings default to separators + stats on, per-request off", ()
   });
 });
 
+test("an install with no saved assistant name keeps “Personal Assistant”", () => {
+  // Only first run saves "Larry" (docs/onboarding.md); the default never moved.
+  assert.equal(getSettings().permanentAssistant.name, "Personal Assistant");
+});
+
 test("peer-prompt hop limit defaults high and persists a bounded runtime setting", () => {
   const original = getSettings().sessionPeerPromptMaxHops;
   assert.equal(original, DEFAULT_SESSION_PEER_PROMPT_MAX_HOPS);

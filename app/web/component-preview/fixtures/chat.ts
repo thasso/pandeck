@@ -132,7 +132,7 @@ export const chatAccounts: CredentialProfileSummary[] = [
     updatedAt: 0,
   },
 ];
-/** An install that tried before: an unfinished Claude login and a disabled ChatGPT account. */
+/** An install that tried before: an unfinished Claude login and a disabled OpenAI account. */
 export const firstRunEarlierAccounts: CredentialProfileSummary[] = [
   {
     id: "cp_claude",

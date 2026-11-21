@@ -149,10 +149,10 @@ describe("settings_update", () => {
     });
     assert.equal("assistantRestart" in same, false);
     const renamed = await call(settingsUpdate, {
-      changes: [{ path: "permanentAssistant.name", value: "Ada" }],
+      changes: [{ path: "permanentAssistant.name", value: "Larry" }],
     });
     assert.match(String(renamed.assistantRestart), /fresh session/);
-    assert.equal(getSettings().permanentAssistant.name, "Ada");
+    assert.equal(getSettings().permanentAssistant.name, "Larry");
   });
 
   test("runs a connection test after saving", async () => {
