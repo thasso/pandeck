@@ -4,12 +4,11 @@
  *
  * D4, Jira's own reasons for a rejected search (`jiraSearchIssues.ts`), checks
  * for an auth marker or a whole secret form (`hasAuthMarker`, `secretForms`).
- * The write tool's texts, identifiers and links (`writeFailure.ts`,
- * `jiraMutateIssue.ts`) pass the stricter `holdsSecret`, which also refuses
- * any 16-character piece of a secret form anywhere in the text.
- *
- * A text that fails is dropped whole for a fixed fallback: redacting would
- * leave a partial secret across a cut or an overlap.
+ * The write tool is stricter (`holdsSecret`): it also finds any 16-character
+ * piece of a secret form anywhere in a text. Its texts (`writeFailure.ts`,
+ * `jiraMutateIssue.ts`) show each such span, and each auth marker, as the
+ * fixed placeholder `[redacted]`, so the reader sees that something was
+ * removed (`vettedText`); its identifiers and links are dropped whole.
  */
 import type { AtlassianCredential } from "./descriptor.ts";
 
@@ -22,6 +21,8 @@ import type { AtlassianCredential } from "./descriptor.ts";
 const AUTH_MARKER = /authorization|(?:bearer|basic)[\s\p{Cc}]/iu;
 /** A piece of a secret form this long counts as the secret (A1). */
 const MIN_SECRET_FRAGMENT = 16;
+/** What a redacted span of a write tool's text reads as (Task-1463 fix-1). */
+export const REDACTED = "[redacted]";
 
 /** C0 and C1 control characters (DEL included) as spaces. */
 export function withoutControls(text: string): string {
@@ -58,19 +59,56 @@ export function holdsSecret(
   value: string,
   credential: AtlassianCredential,
 ): boolean {
+  return [value, withoutControls(value)].some(
+    (form) => secretSpans(form, credential).length > 0,
+  );
+}
+
+/**
+ * The spans of `text` that carry credential material, as `[start, end)`
+ * pairs in order and possibly overlapping: each auth marker, each whole
+ * secret form, and each 16-character window that is a piece of one.
+ */
+function secretSpans(
+  text: string,
+  credential: AtlassianCredential,
+): Array<[number, number]> {
+  const spans: Array<[number, number]> = [];
+  for (const match of text.matchAll(new RegExp(AUTH_MARKER, "giu")))
+    spans.push([match.index, match.index + match[0].length]);
   const secrets = secretForms(credential);
+  for (const secret of secrets)
+    for (
+      let at = text.indexOf(secret);
+      at !== -1;
+      at = text.indexOf(secret, at + 1)
+    )
+      spans.push([at, at + secret.length]);
   const pieces = new Set<string>();
   for (const secret of secrets)
     for (let at = 0; at + MIN_SECRET_FRAGMENT <= secret.length; at += 1)
       pieces.add(secret.slice(at, at + MIN_SECRET_FRAGMENT));
-  for (const form of [value, withoutControls(value)]) {
-    if (AUTH_MARKER.test(form)) return true;
-    // A secret shorter than a piece counts whole.
-    if (secrets.some((secret) => form.includes(secret))) return true;
-    for (let at = 0; at + MIN_SECRET_FRAGMENT <= form.length; at += 1)
-      if (pieces.has(form.slice(at, at + MIN_SECRET_FRAGMENT))) return true;
+  for (let at = 0; at + MIN_SECRET_FRAGMENT <= text.length; at += 1)
+    if (pieces.has(text.slice(at, at + MIN_SECRET_FRAGMENT)))
+      spans.push([at, at + MIN_SECRET_FRAGMENT]);
+  return spans.sort((a, b) => a[0] - b[0]);
+}
+
+/** `text` with each run of overlapping or touching secret spans as `REDACTED`. */
+function redacted(text: string, credential: AtlassianCredential): string {
+  let out = "";
+  let from = 0;
+  let end = -1;
+  for (const [start, stop] of secretSpans(text, credential)) {
+    if (start > end) {
+      if (end >= 0) out += REDACTED;
+      out += text.slice(from, start);
+    }
+    end = Math.max(end, stop);
+    from = end;
   }
-  return false;
+  if (end >= 0) out += REDACTED;
+  return out + text.slice(from);
 }
 
 /**
@@ -87,15 +125,17 @@ export function cappedText(text: string, max: number): string {
 }
 
 /**
- * `text` for a caller of the write tool: the fallback when it carries
- * credential material (`holdsSecret`, checked on the whole raw text first),
- * else `cappedText`.
+ * `text` for a caller of the write tool: controls as spaces, each span that
+ * carries credential material as `REDACTED` (never silently removed), then
+ * `cappedText`. Should the result still carry material (a placeholder joining
+ * pieces into a new one), the fallback instead.
  */
 export function vettedText(
   text: string,
   credential: AtlassianCredential,
   options: { max: number; fallback: string },
 ): string {
-  if (holdsSecret(text, credential)) return options.fallback;
-  return cappedText(text, options.max);
+  const shown = redacted(withoutControls(text), credential);
+  if (holdsSecret(shown, credential)) return options.fallback;
+  return cappedText(shown, options.max);
 }

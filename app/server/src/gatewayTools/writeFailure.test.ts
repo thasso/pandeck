@@ -95,11 +95,11 @@ test("rule 2: the code's own text, vetted and capped at 1,000", () => {
   assert.ok(long.endsWith("…"));
   assert.equal(
     describe(new JiraMutationError(`transition named ${TOKEN}`)),
-    "Jira refused the change.",
+    "transition named [redacted]",
   );
   assert.equal(
     describe(new JiraMutationError("Authorization: x")),
-    "Jira refused the change.",
+    "[redacted]: x",
   );
 });
 
@@ -128,16 +128,17 @@ test("rule 4: a write call's 4xx shows Jira's reasons when present and safe", ()
     describe(writeError(400)),
     "Jira refused the change (HTTP 400).",
   );
-  for (const unsafe of [
-    `token ${TOKEN}`,
-    `x ${BASIC}`,
-    `x ${BASIC.replace(/=+$/, "")}`,
-    "Bearer abc",
-    "TOKEN-SENTINEL-0123",
+  // Each span that carries the secret, or a marker, reads "[redacted]".
+  for (const [unsafe, shown] of [
+    [`token ${TOKEN}`, "token [redacted]"],
+    [`x ${BASIC}`, "x [redacted]"],
+    [`x ${BASIC.replace(/=+$/, "")}`, "x [redacted]"],
+    ["Bearer abc", "[redacted]abc"],
+    ["TOKEN-SENTINEL-0123", "[redacted]"],
   ])
     assert.equal(
-      describe(writeError(400, [REASON_SENTINEL, unsafe])),
-      "Jira refused the change (HTTP 400).",
+      describe(writeError(400, [REASON_SENTINEL, unsafe!])),
+      `Jira refused the change (HTTP 400): ${REASON_SENTINEL}; ${shown}`,
       unsafe,
     );
   const capped = describe(writeError(400, ["r".repeat(800)]));
@@ -274,15 +275,18 @@ test("wrapped: a rank 207 shows a 4xx entry's reasons, the remedy for 401/403, t
   }
 });
 
-test("a piece of the token inside a longer text drops it: rule 2's own text and rule 4's reasons (Task-1463 fix-1 F001)", () => {
+test("a piece of the token inside a longer text reads [redacted]: rule 2's own text and rule 4's reasons (Task-1463 fix-1 F001)", () => {
   const piece = TOKEN.slice(5, 21);
   const own = describe(
     new JiraMutationError(`Transition "Move ${piece}" is not available.`),
   );
-  assert.equal(own, "Jira refused the change.");
+  assert.equal(own, 'Transition "Move [redacted]" is not available.');
   const reasons = describe(
     writeError(400, ["field x is required", `invalid near ${piece} here`]),
   );
-  assert.equal(reasons, "Jira refused the change (HTTP 400).");
+  assert.equal(
+    reasons,
+    "Jira refused the change (HTTP 400): field x is required; invalid near [redacted] here",
+  );
   for (const text of [own, reasons]) assertNoCredential(text, CREDENTIAL);
 });

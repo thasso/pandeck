@@ -16,7 +16,7 @@ import { JiraReadRefusal } from "../jiraRead.ts";
 import { credentialRejectedText } from "./atlassian.ts";
 import type { AtlassianCredential } from "./descriptor.ts";
 import { REFUSAL_TEXT } from "./jiraRead.ts";
-import { holdsSecret, vettedText } from "./upstreamText.ts";
+import { vettedText } from "./upstreamText.ts";
 
 const OWN_TEXT_MAX = 1_000;
 const REASONS_MAX = 500;
@@ -68,8 +68,8 @@ export function describeWriteFailure(
 }
 
 /**
- * A write's 4xx: Jira's reasons pass only when none of them, whole and
- * unsanitized, holds the secret; otherwise, or without reasons, the status.
+ * A write's 4xx: Jira's reasons, each piece of the secret in them shown as
+ * `[redacted]` (`vettedText`); without reasons, the status.
  */
 function writeRefusedText(
   err: JiraWriteHttpError,
@@ -77,11 +77,7 @@ function writeRefusedText(
 ): string {
   const plain = `Jira refused the change (HTTP ${err.status}).`;
   const reasons = (err.reasons ?? []).filter((reason) => reason.trim() !== "");
-  if (
-    reasons.length === 0 ||
-    reasons.some((reason) => holdsSecret(reason, credential))
-  )
-    return plain;
+  if (reasons.length === 0) return plain;
   return vettedText(
     `Jira refused the change (HTTP ${err.status}): ${reasons.join("; ")}`,
     credential,

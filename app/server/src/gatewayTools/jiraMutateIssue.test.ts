@@ -52,6 +52,7 @@ import {
   projectMutationResult,
   type ProjectedResult,
 } from "./jiraMutateIssue.ts";
+import { REDACTED } from "./upstreamText.ts";
 import { EDGE_TOOLS } from "./tools.ts";
 
 const FAKE: AtlassianTokenCredential = {
@@ -788,7 +789,7 @@ test("A1 (i): a created key equal to the API token is never shown, nor its link"
   assert.ok(answer.ok);
   const result = JSON.parse(answer.text) as ProjectedResult;
   assert.deepEqual(result, {
-    summary: "Applied 1 change(s); 0 failed.",
+    summary: "Applied 1 change(s) (created [redacted])",
     items: [{ operation: "create", issueKey: null, ok: true }],
   });
   assert.ok(!answer.text.includes("TOKENKEY-123456"));
@@ -805,7 +806,7 @@ test("A1 (ii): the same for an OAuth access token shaped like a key", async () =
   });
   assert.ok(answer.ok);
   assert.deepEqual(JSON.parse(answer.text), {
-    summary: "Applied 1 change(s); 0 failed.",
+    summary: "Applied 1 change(s) (created [redacted])",
     items: [{ operation: "create", issueKey: null, ok: true }],
   });
   assertNoSecret(answer.text, {
@@ -966,18 +967,18 @@ const slicedCaller = () => ({
   credential: encodeAtlassianCredential(SLICED),
 });
 
-test("F001: a created key that is a piece of the token stays out of the summary too (the reviewer's scenario)", async () => {
+test("F001: a created key that is a piece of the token reads [redacted] in the summary (the reviewer's scenario)", async () => {
   stubJiraFetch((request) => fakeJiraAnswer(request, { createdKey: SLICE }));
   const answer = await mutate([OPERATIONS[3]![1]], slicedCaller());
   assert.ok(answer.ok);
   assert.deepEqual(JSON.parse(answer.text), {
-    summary: "Applied 1 change(s); 0 failed.",
+    summary: "Applied 1 change(s) (created [redacted])",
     items: [{ operation: "create", issueKey: null, ok: true }],
   });
   assertNoCredential(answer.text, SLICED);
 });
 
-test("F001: a write's 400 reason holding a piece of the token shows the status alone", async () => {
+test("F001: a write's 400 reason holding a piece of the token shows it as [redacted]", async () => {
   stubJiraFetch((request) =>
     request.method === "PUT"
       ? json({ errorMessages: [`Summary is invalid near ${SLICE} here`] }, 400)
@@ -987,12 +988,12 @@ test("F001: a write's 400 reason holding a piece of the token shows the status a
   assert.deepEqual(answer, {
     ok: false,
     code: "tool_error",
-    message: "All 1 Jira change(s) failed: Jira refused the change (HTTP 400).",
+    message: `All 1 Jira change(s) failed: Jira refused the change (HTTP 400): Summary is invalid near ${REDACTED} here`,
   });
   assertNoCredential(answer.message, SLICED);
 });
 
-test("F001: a created issue's link warning holding a piece of the token keeps only the status", async () => {
+test("F001: a created issue's link warning holding a piece of the token shows it as [redacted]", async () => {
   stubJiraFetch((request) =>
     request.path === "/rest/api/3/issueLink"
       ? json({ errorMessages: [`Link refused for ${SLICE}`] }, 400)
@@ -1013,11 +1014,11 @@ test("F001: a created issue's link warning holding a piece of the token keeps on
   const result = JSON.parse(answer.text) as ProjectedResult;
   assert.equal(result.items[0]!.createdKey, "STAR-200");
   assert.ok(result.items[0]!.warning?.startsWith("Issue created, but "));
-  assert.ok(result.items[0]!.warning?.includes("(HTTP 400)"));
+  assert.ok(result.items[0]!.warning?.includes(`Link refused for ${REDACTED}`));
   assertNoCredential(answer.text, SLICED);
 });
 
-test("F001: a prepare refusal naming a Jira transition that holds a piece of the token falls back", async () => {
+test("F001: a prepare refusal naming a Jira transition that holds a piece of the token shows it as [redacted]", async () => {
   const seen = stubJiraFetch((request) =>
     request.method === "GET" && request.path.endsWith("/transitions")
       ? json({
@@ -1029,11 +1030,15 @@ test("F001: a prepare refusal naming a Jira transition that holds a piece of the
     [{ issue: "STAR-1", transitionName: "Nope" }],
     slicedCaller(),
   );
-  assert.deepEqual(answer, {
-    ok: false,
-    code: "tool_error",
-    message: "Jira refused the change. Nothing was written to Jira.",
-  });
+  assert.ok(!answer.ok && answer.code === "tool_error");
+  assert.ok(
+    answer.message.startsWith(
+      "Requested transition is not available for STAR-1.",
+    ),
+    answer.message,
+  );
+  assert.ok(answer.message.includes(`Move ${REDACTED}`), answer.message);
+  assert.ok(answer.message.endsWith(" Nothing was written to Jira."));
   assert.equal(writesIn(seen).length, 0);
   assertNoCredential(answer.message, SLICED);
 });

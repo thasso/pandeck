@@ -2696,17 +2696,19 @@ plus `jira_search_issues` and `jira_lookup` (Task-1439), four Slack read tools:
   dropped unlogged. The two exceptions are Jira's own reasons for a rejected
   `jira_search_issues` (D4) and `jira_mutate_issue`'s vetted texts (D-W2), both
   below and in ADR-0005. Both drop a text holding an authorization marker or any
-  whole form of the call's secret. The write tool also drops any text, key or
-  link holding a 16-character piece of a secret form anywhere inside it, so no
-  string of its answer carries one (`upstreamText.ts`). `gateway/` holds no tool
-  code or package: it takes the tools as `EdgeTools` (`gateway/edgeTools.ts`,
-  types only) through `startGateway`'s `tools`, and the vault process never
-  loads them. Without them `/mcp` is an unknown path and the integration methods
-  answer `tools_unavailable`; the packaged entry wires none yet (D1). The closed
-  schema covers strings (`maxLength`, `pattern`, `enum`), booleans, integers
-  with a range, finite numbers, arrays of strings (with an item `enum`), closed
-  nested objects (`additionalProperties: false`) and arrays of them, `minItems`
-  and `maxItems` on arrays, a string or `null` (exactly
+  whole form of the call's secret. The write tool also treats any 16-character
+  piece of a secret form, anywhere inside a string, as secret: in a text each
+  marker, form or piece reads `[redacted]` so the agent sees that something was
+  removed, and a key or link holding one is dropped. No string of its answer
+  carries one (`upstreamText.ts`). `gateway/` holds no tool code or package: it
+  takes the tools as `EdgeTools` (`gateway/edgeTools.ts`, types only) through
+  `startGateway`'s `tools`, and the vault process never loads them. Without them
+  `/mcp` is an unknown path and the integration methods answer
+  `tools_unavailable`; the packaged entry wires none yet (D1). The closed schema
+  covers strings (`maxLength`, `pattern`, `enum`), booleans, integers with a
+  range, finite numbers, arrays of strings (with an item `enum`), closed nested
+  objects (`additionalProperties: false`) and arrays of them, `minItems` and
+  `maxItems` on arrays, a string or `null` (exactly
   `anyOf: [{type: "string"}, {type: "null"}]`), and an opaque `{type: "object"}`
   passed to the tool as given and never descended into (Task-1463). `default`
   applies only at the root. Its types (`descriptor.ts`) keep these branches
@@ -2784,18 +2786,18 @@ plus `jira_search_issues` and `jira_lookup` (Task-1439), four Slack read tools:
   every item fails, the answer is the core's summary of them (2,000 characters).
   The result is `{summary, url?, warnings?, items}`, each item
   `{operation, issueKey, ok, url?, createdKey?, warning?, error?}`. Texts are
-  vetted and capped (summary 4,000, 20 warnings of 300, item error 800,
-  warning 500) and kept well-formed. A key must match
-  `^[A-Z][A-Z0-9_]*-[1-9][0-9]*$` (64 characters) or is `null`. A link must be
-  backed by a valid key, lie under `https://<site>/`, be at most 300 printable
-  ASCII characters without `"` or `\`, and neither it nor any of up to three
-  successive percent-decodings may hold the secret; otherwise it is omitted, so
-  a sprint item, which has no key, shows no link. The serialized result stays
-  under 55,000 characters, shrinking warnings, then item texts, then the
-  summary, then links, never a row's outcome. An interrupt does not stop the
-  call: Claude Code's Esc sends `notifications/cancelled` on a separate POST,
-  which the stateless endpoint answers 202 without reaching the call, and keeps
-  the call's own request open until its 60 s limit. So after a timeout or
+  vetted, with any secret piece shown as `[redacted]`, capped (summary 4,000, 20
+  warnings of 300, item error 800, warning 500) and kept well-formed. A key must
+  match `^[A-Z][A-Z0-9_]*-[1-9][0-9]*$` (64 characters) or is `null`. A link
+  must be backed by a valid key, lie under `https://<site>/`, be at most 300
+  printable ASCII characters without `"` or `\`, and neither it nor any of up to
+  three successive percent-decodings may hold the secret; otherwise it is
+  omitted, so a sprint item, which has no key, shows no link. The serialized
+  result stays under 55,000 characters, shrinking warnings, then item texts,
+  then the summary, then links, never a row's outcome. An interrupt does not
+  stop the call: Claude Code's Esc sends `notifications/cancelled` on a separate
+  POST, which the stateless endpoint answers 202 without reaching the call, and
+  keeps the call's own request open until its 60 s limit. So after a timeout or
   interrupt, reconcile only after that window: wait 60 s before reading the
   issues or retrying. Pandeck's client mode still drops write tools from a
   listing.

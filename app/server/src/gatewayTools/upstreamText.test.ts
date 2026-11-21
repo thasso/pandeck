@@ -59,7 +59,14 @@ test("holdsSecret: markers, whole forms and long fragments; short or unrelated t
 });
 
 test("vettedText falls back on a secret, strips controls and cuts without splitting a pair", () => {
-  assert.equal(vettedText("bearer abc", TOKEN, options), "FALLBACK");
+  assert.equal(vettedText("bearer abc", TOKEN, options), "[redacted]abc");
+  assert.equal(
+    vettedText("x FAKE-TOKEN-SENTINEL-0123456789 y", TOKEN, {
+      max: 100,
+      fallback: "F",
+    }),
+    "x [redacted] y",
+  );
   assert.equal(withoutControls("a\u0000b\u007fc\u0085d"), "a b c d");
   assert.equal(vettedText("a\nb", TOKEN, options), "a b");
   const long = "x".repeat(38) + "😀" + "y";
