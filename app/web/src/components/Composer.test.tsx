@@ -2010,3 +2010,42 @@ describe("draft refinement account scope", () => {
     );
   });
 });
+
+describe("inert composer (first run)", () => {
+  it("stays expanded on mobile, takes no text and offers only a disabled Send", () => {
+    const onSend = vi.fn();
+    const { container } = mount(
+      <Composer
+        onSend={onSend}
+        onAbort={() => {}}
+        streaming={false}
+        disabled={false}
+        contextInfo={null}
+        session={null}
+        models={[]}
+        slashCommands={[]}
+        actions={{} as AssistantActions}
+        draft={{ sessionId: "s", token: 1, text: "left over" }}
+        draftAutoFocus={false}
+        mobile
+        inertPlaceholder="Connect an account to start chatting"
+      />,
+    );
+    const field = container.querySelector("textarea");
+    expect(field?.disabled).toBe(true);
+    expect(field?.value).toBe("");
+    expect(field?.placeholder).toBe("Connect an account to start chatting");
+    expect(field?.closest("[inert]")).toBeNull();
+    for (const label of [
+      "Attach files or images",
+      "Refine draft prompt",
+      "Start dictation",
+    ])
+      expect(container.querySelector(`[aria-label="${label}"]`)).toBeNull();
+    const send = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Send message"]',
+    );
+    expect(send?.disabled).toBe(true);
+    expect(onSend).not.toHaveBeenCalled();
+  });
+});

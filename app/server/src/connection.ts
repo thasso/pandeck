@@ -5830,6 +5830,9 @@ interface ViewedModelSelection {
 function readySettings(settings: AppSettings): Partial<AppSettings> {
   return {
     models: settings.models,
+    // The first-run welcome introduces the assistant by its configured name
+    // before Settings has ever been read.
+    permanentAssistant: settings.permanentAssistant,
     // The composer's mic button renders from this, so the shell needs it on connect.
     speechToText: settings.speechToText,
     speechConversation: settings.speechConversation,

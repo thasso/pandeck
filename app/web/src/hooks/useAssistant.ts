@@ -221,7 +221,7 @@ const defaultSettings: AppSettings = {
   // skill reads OFF, which is what an unanswered settings read may claim.
   skills: {},
   permanentAssistant: {
-    name: "Personal Assistant",
+    name: "Larry",
     workingDirectory: "",
     defaultWorkingDirectory: "",
     ...DEFAULT_HELPER_MODEL,

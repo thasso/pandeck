@@ -132,6 +132,31 @@ export const chatAccounts: CredentialProfileSummary[] = [
     updatedAt: 0,
   },
 ];
+/** An install that tried before: an unfinished Claude login and a disabled ChatGPT account. */
+export const firstRunEarlierAccounts: CredentialProfileSummary[] = [
+  {
+    id: "cp_claude",
+    name: "Claude",
+    health: { state: "unknown", since: null },
+    provider: "claude",
+    enabled: true,
+    enterprise: false,
+    status: "connecting",
+    createdAt: 0,
+    updatedAt: 0,
+  },
+  {
+    id: "cp_openai",
+    name: "Work ChatGPT",
+    health: { state: "unknown", since: null },
+    provider: "openai-codex",
+    enabled: false,
+    enterprise: false,
+    status: "ready",
+    createdAt: 0,
+    updatedAt: 0,
+  },
+];
 const envelope = (seq: number) => ({
   id: `rich-${seq}`,
   seq,

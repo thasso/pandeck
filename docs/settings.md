@@ -132,17 +132,18 @@ turn. Model ids name catalog entries, never paths. Deployment wiring and the
 minimum runtime version are described in
 [deployment.md](deployment.md#streaming-conversation-recognition).
 
-The ready projection includes all three speech settings groups, including
-synthesis enablement so a reload preserves the composer's gate. It nests
-streaming STT availability under `speechToText.conversation`. Settings writes
-echo that status to all connections. Capability status does not depend on the
-user's enabled switch. Both the browser and server check that switch before
-starting capture. Changes to model, inference threads or endpoint silence take
-effect on the next conversation; starting a differently configured stream while
-another is active is refused rather than interrupting it. Vocabulary comes from
-the existing `speechToText.vocabulary` list and is captured at conversation
-start, so partial and final results use the same one-pass replacement engine as
-dictation.
+The ready projection also carries `permanentAssistant`, so the shell names the
+assistant (default "Larry") before Settings is read (`onboarding.md`). It
+includes all three speech settings groups, including synthesis enablement so a
+reload preserves the composer's gate. It nests streaming STT availability under
+`speechToText.conversation`. Settings writes echo that status to all
+connections. Capability status does not depend on the user's enabled switch.
+Both the browser and server check that switch before starting capture. Changes
+to model, inference threads or endpoint silence take effect on the next
+conversation; starting a differently configured stream while another is active
+is refused rather than interrupting it. Vocabulary comes from the existing
+`speechToText.vocabulary` list and is captured at conversation start, so partial
+and final results use the same one-pass replacement engine as dictation.
 
 ## Speech synthesis
 

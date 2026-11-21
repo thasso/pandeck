@@ -140,7 +140,7 @@ const DEFAULT_PERMANENT_ASSISTANT_SETTINGS: Omit<
   PermanentAssistantSettings,
   "defaultWorkingDirectory"
 > = {
-  name: "Personal Assistant",
+  name: "Larry",
   workingDirectory: "",
   ...DEFAULT_HELPER_MODEL,
   thinkingLevel: "off",
