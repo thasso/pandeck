@@ -198,15 +198,15 @@ function writeResponse(path: string) {
 
 // Importing the tools also registers the "confluencePage" approval executor.
 const {
-  buildSearchCql,
   confluenceDownloadAttachmentTool,
   confluenceGetPageTool,
   confluenceLookupTool,
   confluenceMutatePageTool,
   confluenceSearchTool,
-  normalizePageInput,
   spliceAdf,
 } = await import("./confluenceTools.ts");
+const { buildSearchCql, normalizePageInput } =
+  await import("../../confluenceRead.ts");
 const {
   approvalsForSession,
   createApproval,
