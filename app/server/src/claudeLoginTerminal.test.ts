@@ -18,7 +18,6 @@ import { loginStuckText } from "@assistant/shared";
 const tmp = mkdtempSync(join(tmpdir(), "claude-login-terminal-test-"));
 const previousDataDir = process.env.DATA_DIR;
 const previousHome = process.env.HOME;
-const previousNodeEnv = process.env.NODE_ENV;
 process.env.DATA_DIR = join(tmp, "data");
 process.env.HOME = join(tmp, "home");
 
@@ -103,22 +102,7 @@ afterAll(() => {
   else process.env.DATA_DIR = previousDataDir;
   if (previousHome === undefined) delete process.env.HOME;
   else process.env.HOME = previousHome;
-  if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
-  else process.env.NODE_ENV = previousNodeEnv;
   rmSync(tmp, { recursive: true, force: true });
-});
-
-test("production resolves the native CLI bundled with the Agent SDK", async () => {
-  process.env.NODE_ENV = "production";
-  try {
-    const { bundledClaudeCliPath } = await import("./claudeLoginDriver.ts");
-    const path = bundledClaudeCliPath();
-    assert.equal(existsSync(path), true);
-    assert.match(path, /claude-agent-sdk-.*\/claude(?:\.exe)?$/);
-  } finally {
-    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
-    else process.env.NODE_ENV = previousNodeEnv;
-  }
 });
 
 test("streams the official profile-isolated CLI flow and never echoes the submitted authorization code", () => {

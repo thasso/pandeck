@@ -6,43 +6,11 @@
  * gateway process can load it without a `DATA_DIR`.
  */
 import { spawn } from "node:child_process";
-import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
 import { errorText } from "./errors.ts";
-import { packagedClaudeCliPath } from "./runtimeAssets.ts";
+import { claudeCliPath } from "./runtimeAssets.ts";
 
 /** How long a SIGTERM'd child has before SIGKILL. */
 export const KILL_AFTER_MS = 5_000;
-
-/** Resolve the exact native Claude CLI bundled with the installed Agent SDK. */
-export function bundledClaudeCliPath(): string {
-  const packaged = packagedClaudeCliPath();
-  if (packaged) return packaged;
-  // The Nix package wraps the bundled native executable with its glibc loader;
-  // an unpackaged NixOS checkout cannot execute that raw FHS binary, so local
-  // development deliberately uses the CLI already available on PATH.
-  if (process.env.NODE_ENV !== "production") return "claude";
-  const packageArch =
-    process.arch === "arm64"
-      ? "arm64"
-      : process.arch === "x64"
-        ? "x64"
-        : process.arch;
-  const packageName = `@anthropic-ai/claude-agent-sdk-${process.platform}-${packageArch}`;
-  try {
-    const localRequire = createRequire(import.meta.url);
-    const sdkEntry = localRequire.resolve("@anthropic-ai/claude-agent-sdk");
-    const sdkRequire = createRequire(sdkEntry);
-    const packageJson = sdkRequire.resolve(`${packageName}/package.json`);
-    return join(
-      dirname(packageJson),
-      process.platform === "win32" ? "claude.exe" : "claude",
-    );
-  } catch {
-    // Development environments may intentionally use a separately installed CLI.
-    return "claude";
-  }
-}
 
 /** The login child's arguments: the official CLI's subscription login. */
 export const CLAUDE_LOGIN_ARGS = ["auth", "login", "--claudeai"];
@@ -124,7 +92,7 @@ export function claudeLoginDriver(
   configDir: string,
   events: { output(text: string): void; url(url: string): void },
 ): { input(text: string): void; cancel(): void; done: Promise<void> } {
-  const child = spawn(bundledClaudeCliPath(), [...CLAUDE_LOGIN_ARGS], {
+  const child = spawn(claudeCliPath(), [...CLAUDE_LOGIN_ARGS], {
     env: {
       ...claudeLoginEnvironmentFrom(process.env),
       CLAUDE_CONFIG_DIR: configDir,

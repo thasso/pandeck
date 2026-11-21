@@ -12,6 +12,10 @@ const mocks = vi.hoisted(() => ({
   relay: undefined as { port: number } | undefined,
 }));
 vi.mock("./spawnBroker.ts", () => ({ brokerExecFile: mocks.exec }));
+// The probe pretends to run on macOS, whose CLI package this host lacks.
+vi.mock("./runtimeAssets.ts", () => ({
+  claudeCliPath: () => "/fixtures/claude",
+}));
 vi.mock("./config.ts", () => ({
   get GATEWAY_ENABLED() {
     return mocks.gateway;

@@ -1497,8 +1497,8 @@ on its own ([deployment.md](deployment.md) "Credential gateway unit").
     - A pi login whose provider never settles keeps its hold: Clear refuses it
       while this server runs it, and a restart ends it. Its abort on Cancel or
       the timeout normally ends it.
-    - In development, a `claude` wrapper on `PATH` that does not `exec`
-      registers the wrapper's pid.
+    - A `claude` wrapper named by `ASSISTANT_CLAUDE_CLI_BIN` that does not
+      `exec` registers the wrapper's pid.
     - A `login_stuck` refusal for another boot's hold that later ends by
       evidence leaves the account login-stuck until Clear or another login.
     - Deletion's SIGKILL precedes the removal of the profile's files without

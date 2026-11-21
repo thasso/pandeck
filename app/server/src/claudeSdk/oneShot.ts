@@ -13,7 +13,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { CWD } from "../config.ts";
-import { packagedClaudeSdkOptions } from "../runtimeAssets.ts";
+import { claudeSdkExecutableOptions } from "../runtimeAssets.ts";
 import {
   claudeProfileEnvironment,
   DEFAULT_CLAUDE_PROFILE_ID,
@@ -130,7 +130,7 @@ function buildOneShotOptions(
   return {
     cwd: CWD,
     abortController,
-    ...packagedClaudeSdkOptions(),
+    ...claudeSdkExecutableOptions(),
     env: oneShotEnvironment(input),
     model: claudeSdkModelId(input.modelId),
     systemPrompt: input.systemPrompt,

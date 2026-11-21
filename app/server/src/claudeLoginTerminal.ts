@@ -57,13 +57,13 @@ import {
   type LoginHoldTaken,
 } from "./loginHolds.ts";
 import {
-  bundledClaudeCliPath,
   CLAUDE_LOGIN_ARGS,
   claudeLoginEnvironmentFrom,
   claudeLoginInput,
   KILL_AFTER_MS,
   sanitizeClaudeLoginOutput,
 } from "./claudeLoginDriver.ts";
+import { claudeCliPath } from "./runtimeAssets.ts";
 import { refreshClaudeCredentialStatus } from "./claudeCredentialStatus.ts";
 
 const MAX_OUTPUT_CHARS = 64_000;
@@ -261,7 +261,7 @@ function begin(run: LoginRun, taken: LoginHoldTaken): void {
   }
   let child: ChildProcessWithoutNullStreams;
   try {
-    child = spawnClaudeLogin(bundledClaudeCliPath(), [...CLAUDE_LOGIN_ARGS], {
+    child = spawnClaudeLogin(claudeCliPath(), [...CLAUDE_LOGIN_ARGS], {
       env: claudeLoginEnvironment(run.profileId),
       windowsHide: true,
     });

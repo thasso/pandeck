@@ -3,10 +3,8 @@
  * only its profile's Keychain entry; PA retains a boolean, never a credential.
  * Gateway modes remain file-backed (or use the remote account mirror).
  */
-import {
-  bundledClaudeCliPath,
-  claudeLoginEnvironmentFrom,
-} from "./claudeLoginDriver.ts";
+import { claudeLoginEnvironmentFrom } from "./claudeLoginDriver.ts";
+import { claudeCliPath } from "./runtimeAssets.ts";
 import { GATEWAY_ENABLED, GATEWAY_RELAY } from "./config.ts";
 import {
   claudeCredentialFileExists,
@@ -63,7 +61,7 @@ async function probe(profileId: string): Promise<void> {
   const observed = credentialProfileLoginStateMark(profileId);
   try {
     const result = await brokerExecFile({
-      file: bundledClaudeCliPath(),
+      file: claudeCliPath(),
       args: ["auth", "status", "--json"],
       cwd: userHomeDir(),
       env: claudeLoginEnvironmentFrom(claudeProfileEnvironment(profileId)),
