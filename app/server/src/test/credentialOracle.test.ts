@@ -57,3 +57,14 @@ test("the oracle passes clean answers, scheme words without a gap included", () 
   );
   assertNoCredential({ accessToken: "x" }, { accessToken: FAKE_ACCESS });
 });
+
+test("the oracle rejects a string whose first or second JSON escaping spells the token (fix-4)", () => {
+  const once = { ...CREDENTIAL, token: 'Q\\"X123' };
+  const twice = { ...CREDENTIAL, token: 'Q\\\\\\"X123' };
+  for (const credential of [once, twice]) {
+    assert.ok(!'{ "summary": Q"X123 }'.includes(credential.token));
+    assert.throws(() => assertNoCredential({ summary: 'Q"X123' }, credential));
+  }
+  // A backslash-free token is unaffected by escaping.
+  assertNoCredential({ summary: 'Q"X123' }, CREDENTIAL);
+});

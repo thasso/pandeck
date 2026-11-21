@@ -26,7 +26,7 @@ import {
 } from "../jiraMutate.ts";
 import { applyJiraMutationItems } from "../jiraMutateApply.ts";
 import { FAKE_CLOUD_ID } from "../test/atlassianFake.ts";
-import { assertNoCredential } from "../test/credentialOracle.ts";
+import { assertNoCredential, oracleForms } from "../test/credentialOracle.ts";
 import {
   json,
   pendingUntilAbort,
@@ -48,6 +48,7 @@ import { createEdgeTools } from "./index.ts";
 import {
   PREPARE_TOO_LONG,
   RESULT_BUDGET,
+  RESULT_WITHHELD,
   STOP_TEXT,
   projectMutationResult,
   type ProjectedResult,
@@ -918,7 +919,16 @@ class FakeResponse extends EventEmitter {
   }
 }
 
-function mcpCall(options: { deadlineMs: number; lifecycleMs?: number }) {
+function mcpCall({
+  credential = FAKE,
+  items = [COMMENT],
+  ...options
+}: {
+  deadlineMs: number;
+  lifecycleMs?: number;
+  credential?: AtlassianTokenCredential;
+  items?: unknown[];
+}) {
   const edge = createEdgeTools({ ...options, log: () => {} });
   const req = Object.assign(
     Readable.from([
@@ -929,7 +939,7 @@ function mcpCall(options: { deadlineMs: number; lifecycleMs?: number }) {
           method: "tools/call",
           params: {
             name: "jira_mutate_issue",
-            arguments: { items: [COMMENT] },
+            arguments: { items },
           },
         }),
       ),
@@ -952,13 +962,13 @@ function mcpCall(options: { deadlineMs: number; lifecycleMs?: number }) {
       credential: () =>
         Promise.resolve({
           ok: true,
-          credential: encodeAtlassianCredential(FAKE),
+          credential: encodeAtlassianCredential(credential),
         }),
     },
   );
   // The oracle on the whole /mcp response body (fix-2).
   return res.done.then((answer) => {
-    assertNoCredential(answer.body, FAKE);
+    assertNoCredential(answer.body, credential);
     return answer;
   });
 }
@@ -1159,4 +1169,84 @@ test("F001-a: strings that JSON joins into a secret leave only the rows' outcome
     summary: REDACTED,
     items: [{ operation: "edit", issueKey: null, ok: true }],
   });
+});
+
+// --- fix-4 F003: a success answer is escaped twice on /mcp ---
+
+/** The /mcp body's tool text, with the raw body checked for the token's forms first. */
+async function mcpToolText(
+  credential: AtlassianTokenCredential,
+  items: unknown[],
+): Promise<{ text: string; isError?: boolean }> {
+  const answer = await mcpCall({ deadlineMs: 10_000, credential, items });
+  assert.equal(answer.status, 200);
+  // The raw bytes hold no whole form and no 16-character window of one.
+  for (const form of oracleForms(credential)) {
+    assert.ok(!answer.body.includes(form), form);
+    for (let at = 0; at + 16 <= form.length; at += 1)
+      assert.ok(!answer.body.includes(form.slice(at, at + 16)));
+  }
+  const body = JSON.parse(answer.body) as {
+    result: { content: Array<{ text: string }>; isError?: boolean };
+  };
+  return {
+    text: body.result.content[0]!.text,
+    ...(body.result.isError ? { isError: true } : {}),
+  };
+}
+
+test("F003: a 400 reason that the /mcp body's second escaping turns into the token is withheld (second reviewer's probe)", async () => {
+  const credential = { ...FAKE, token: 'ABCDEFGH\\\\\\"IJKLMNOP' };
+  assert.equal(credential.token.length, 20);
+  let comments = 0;
+  stubJiraFetch((request) =>
+    request.method === "POST" &&
+    request.path.endsWith("/comment") &&
+    ++comments === 2
+      ? json({ errorMessages: ['ABCDEFGH"IJKLMNOP'] }, 400)
+      : fakeJiraAnswer(request),
+  );
+  const answer = await mcpToolText(credential, [
+    COMMENT,
+    { ...COMMENT, issue: "STAR-2" },
+  ]);
+  assert.equal(answer.isError, undefined);
+  const result = JSON.parse(answer.text) as ProjectedResult;
+  assert.deepEqual(
+    result.items.map((row) => [row.issueKey, row.ok]),
+    [
+      ["STAR-1", true],
+      ["STAR-2", false],
+    ],
+  );
+  assert.equal(result.items[1]!.error, "Jira refused the change (HTTP 400).");
+});
+
+test("F003: a created key that the /mcp body's second escaping turns into the token is withheld (primary reviewer's probe)", async () => {
+  const credential = { ...FAKE, token: 'Q\\\\\\"X123' };
+  assert.equal(credential.token.length, 9);
+  stubJiraFetch((request) => fakeJiraAnswer(request, { createdKey: 'Q"X123' }));
+  const answer = await mcpToolText(credential, [OPERATIONS[3]![1]]);
+  assert.deepEqual(JSON.parse(answer.text), {
+    summary: "Applied 1 change(s); 0 failed.",
+    items: [{ operation: "create", issueKey: null, ok: true }],
+  });
+});
+
+test("F003: when even the rows' outcomes would spell the token in the body, the call answers a fixed text", () => {
+  // R3: a secret made of the result's own scaffold, as the body escapes it.
+  const credential = { ...FAKE, token: '\\"ok\\":true' };
+  assert.throws(
+    () =>
+      projectMutationResult(
+        {
+          items: [item()],
+          warnings: [],
+          succeeded: 1,
+          resultSummary: "Applied 1 change(s)",
+        },
+        credential,
+      ),
+    (err: unknown) => err instanceof Error && err.message === RESULT_WITHHELD,
+  );
 });

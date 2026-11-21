@@ -2701,9 +2701,10 @@ plus `jira_search_issues` and `jira_lookup` (Task-1439), four Slack read tools:
   marker, form or piece reads `[redacted]` so the agent sees that something was
   removed, and a key or link holding one is dropped. A cut never splits a
   placeholder: a text cut through one, or past one, ends `[redacted]…`. The
-  string as it leaves, cut and with its ellipsis, raw and JSON-escaped, is
-  checked again; one that still carries material becomes a fixed text, and a
-  serialized answer that does keeps only each row's operation and outcome. No
+  string as it leaves, cut and with its ellipsis, is checked again, raw and in
+  both JSON escapings it travels in (the result, then the `/mcp` body or
+  `tools.call` frame); one that still carries material becomes a fixed text, and
+  a serialized answer that does keeps only each row's operation and outcome. No
   string of its answer carries one (`upstreamText.ts`). Accepted limit: a
   credential whose secret form equals, or is contained in, the answer's fixed
   scaffold (the `[redacted]` placeholder, the JSON keys and structure, and the
@@ -2806,10 +2807,13 @@ plus `jira_search_issues` and `jira_lookup` (Task-1439), four Slack read tools:
   then the summary, then links, never a row's outcome. An interrupt does not
   stop the call: Claude Code's Esc sends `notifications/cancelled` on a separate
   POST, which the stateless endpoint answers 202 without reaching the call, and
-  keeps the call's own request open until its 60 s limit. So after a timeout or
-  interrupt, reconcile only after that window: wait 60 s before reading the
-  issues or retrying. Pandeck's client mode still drops write tools from a
-  listing.
+  keeps the call's own request open until its 60 s limit. An interrupted write
+  therefore keeps running until it completes or reaches its 45 s deadline: Esc
+  never reaches the call's `ctx.signal`, because the stateless handler cannot
+  connect that separate `notifications/cancelled` POST to the call. So after a
+  timeout or interrupt, reconcile only after that window: wait 60 s before
+  reading the issues or retrying. Pandeck's client mode still drops write tools
+  from a listing.
 - **Slack reads** (Task-1454). The four tools run the same read path as the
   local ones (`slackRead.ts` with `slackMetadataCache.ts` beside `tools/slack/`,
   which wraps them) with the same schema and description objects, action key

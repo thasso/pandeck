@@ -5,6 +5,7 @@
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { test } from "vitest";
 import { JIRA_LOOKUP_DESCRIPTION, lookupParamsSchema } from "../jiraLookup.ts";
 import {
@@ -201,6 +202,18 @@ test("jira_mutate_issue differs from the local tool in exactly four prose string
     "Use it only when the user explicitly asks for the change",
   ])
     assert.ok(jiraMutateIssue.description.includes(clause), clause);
+});
+
+test("docs/workers.md states A3's interrupt clauses for the edge write (AC16, fix-4)", () => {
+  const docs = readFileSync(
+    new URL("../../../../docs/workers.md", import.meta.url),
+    "utf8",
+  ).replace(/\s+/g, " ");
+  for (const clause of [
+    "An interrupted write therefore keeps running until it completes or reaches its 45 s deadline",
+    "Esc never reaches the call's `ctx.signal`, because the stateless handler cannot connect that separate `notifications/cancelled` POST to the call.",
+  ])
+    assert.ok(docs.includes(clause), clause);
 });
 
 test("the local jira_mutate_issue schema and description stay byte-identical", () => {

@@ -3,7 +3,9 @@
  * fix-1), written apart from `gatewayTools/upstreamText.ts` so a test never
  * checks the production predicate with itself. Every string of the answer,
  * object keys included, at any depth, must hold no full secret form, no
- * 16-character window of one, and no authorization marker (fix-2).
+ * 16-character window of one, and no authorization marker (fix-2), neither
+ * as it is nor once or twice JSON-escaped, as a success answer's texts are in
+ * the `/mcp` body (fix-4).
  */
 import assert from "node:assert/strict";
 
@@ -71,8 +73,29 @@ function markerIn(text: string): string | undefined {
   return undefined;
 }
 
-/** The first secret form, 16-character window of one, or marker inside `text`. */
+/** How often the transport may JSON-escape a string: in the result, then in the body. */
+const ESCAPINGS = 2;
+
+/**
+ * The first secret form, 16-character window of one, or marker inside `text`
+ * or inside its once or twice JSON-escaped form (each `"` as `\"`, each `\`
+ * doubled).
+ */
 function leakIn(text: string, forms: readonly string[]): string | undefined {
+  let form = text;
+  for (let round = 0; round <= ESCAPINGS; round += 1) {
+    const leak = plainLeakIn(form, forms);
+    if (leak !== undefined) return leak;
+    form = JSON.stringify(form);
+  }
+  return undefined;
+}
+
+/** The first secret form, 16-character window of one, or marker inside `text` as given. */
+function plainLeakIn(
+  text: string,
+  forms: readonly string[],
+): string | undefined {
   const marker = markerIn(text);
   if (marker !== undefined) return marker;
   for (const form of forms) {

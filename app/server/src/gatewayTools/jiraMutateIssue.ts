@@ -40,7 +40,7 @@ import {
   type ObjectSchema,
 } from "./descriptor.ts";
 import { edgeReadDeps } from "./jiraRead.ts";
-import { holdsSecret, REDACTED, vettedText } from "./upstreamText.ts";
+import { holdsSecret, leaks, REDACTED, vettedText } from "./upstreamText.ts";
 import { describeWriteFailure } from "./writeFailure.ts";
 
 /** The call's deadline: the measured 60 s client limit less 15 s. */
@@ -62,6 +62,9 @@ const PREPARE_REFUSAL_MAX = 1_200;
 const PREPARE_REFUSAL_FALLBACK = `Jira refused the change.${NOTHING_WRITTEN}`;
 const ALL_FAILED_MAX = 2_000;
 const ALL_FAILED_FALLBACK = "Every Jira change failed.";
+/** When not even the rows' outcomes can be shown without the credential (R3). */
+export const RESULT_WITHHELD =
+  "The changes ran, but their result cannot be shown without revealing the credential; check the issues before retrying.";
 
 const SUMMARY_MAX = 4_000;
 const WARNINGS_MAX = 20;
@@ -300,10 +303,12 @@ export function projectMutationResult(
     credential,
     budget,
   );
-  // The answer as it is sent: should joining its strings into JSON make a
-  // secret (fix-2), only the rows' outcomes remain.
-  if (!holdsSecret(JSON.stringify(kept), credential)) return kept;
-  return {
+  // The answer as it is sent, and as the `/mcp` body or `tools.call` frame
+  // escapes it once more (fix-2, fix-4): should joining its strings into JSON
+  // make a secret, only the rows' outcomes remain; should even those (R3), a
+  // fixed text.
+  if (!leaks(JSON.stringify(kept), credential, 1)) return kept;
+  const outcomes: ProjectedResult = {
     summary: REDACTED,
     items: kept.items.map(({ operation, ok }) => ({
       operation,
@@ -311,6 +316,8 @@ export function projectMutationResult(
       ok,
     })),
   };
+  if (!leaks(JSON.stringify(outcomes), credential, 1)) return outcomes;
+  throw new ToolError(RESULT_WITHHELD);
 }
 
 /**

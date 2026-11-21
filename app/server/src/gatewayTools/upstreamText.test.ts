@@ -207,3 +207,12 @@ test("documented limit: a token that is the placeholder itself cannot be withhel
   assert.equal(out, `x ${REDACTED} ${REDACTED} y`);
   assert.equal(out.includes(provider), false);
 });
+
+test("F003: a text whose second JSON escaping (the /mcp body's) spells the token gives the fallback", () => {
+  const twice = { ...DIGITS, token: 'Q\\\\\\"X123' };
+  assert.ok(!JSON.stringify('a Q"X123 b').includes(twice.token));
+  assert.equal(vettedText('a Q"X123 b', twice, options), "FALLBACK");
+  // A third escaping is no transport's: left alone.
+  const thrice = { ...DIGITS, token: 'Q\\\\\\\\\\\\\\"X123' };
+  assert.equal(vettedText('a Q"X123 b', thrice, options), 'a Q"X123 b');
+});

@@ -161,12 +161,29 @@ function cappedRedacted(text: string, max: number): string {
   return `${head}${REDACTED}…`;
 }
 
-/** Whether a text, as given or as a JSON string, carries credential material. */
-function leaks(text: string, credential: AtlassianCredential): boolean {
-  return (
-    holdsSecret(text, credential) ||
-    holdsSecret(JSON.stringify(text), credential)
-  );
+/**
+ * How often a text of the write tool is JSON-escaped on its way out (fix-4):
+ * once in the result's JSON, and once more in the `/mcp` JSON-RPC body or the
+ * `tools.call` frame that carries that JSON as a string.
+ */
+const ESCAPINGS = 2;
+
+/**
+ * Whether `text` carries credential material as given or after up to
+ * `escapings` JSON escapings, each of which turns `"` into `\"` and doubles a
+ * `\`, so a secret holding them can appear only in an escaped form.
+ */
+export function leaks(
+  text: string,
+  credential: AtlassianCredential,
+  escapings = ESCAPINGS,
+): boolean {
+  let form = text;
+  for (let round = 0; ; round += 1) {
+    if (holdsSecret(form, credential)) return true;
+    if (round === escapings) return false;
+    form = JSON.stringify(form);
+  }
 }
 
 /**
@@ -174,9 +191,9 @@ function leaks(text: string, credential: AtlassianCredential): boolean {
  * each span that carries credential material as `REDACTED`, never silently
  * removed; lone surrogates as U+FFFD; cut to `max` (`cappedRedacted`). The
  * string that results is what is checked (fix-2): should it still carry
- * material, raw or JSON-escaped (a cut, an ellipsis or a placeholder joining
- * characters into a secret), the fallback, and should that carry it too,
- * `REDACTED` alone.
+ * material, raw or in either JSON escaping it leaves in (`leaks`; a cut, an
+ * ellipsis, a placeholder or an escape joining characters into a secret), the
+ * fallback, and should that carry it too, `REDACTED` alone.
  */
 export function vettedText(
   text: string,
