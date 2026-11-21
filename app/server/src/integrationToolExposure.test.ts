@@ -36,6 +36,7 @@ const ALL_OFF = {
   jira: false,
   gatewayJira: false,
   confluence: false,
+  gatewayConfluence: false,
   tempo: false,
   google: false,
   slack: false,

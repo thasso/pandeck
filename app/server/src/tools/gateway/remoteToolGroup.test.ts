@@ -1,11 +1,15 @@
 /**
- * The gateway tools (Task-1398, Slack Task-1455): a call reaches the port
+ * The gateway tools (Task-1398, Slack Task-1455, Confluence Task-1439): a call reaches the port
  * only while the gateway is connected, the tool's product is on and the
  * latest listing still offers the tool as a read tool; answers and refusals become fixed text, except the
  * gateway's own `tool_error` and `invalid_params` texts.
  */
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "vitest";
+import {
+  getConfluenceToolConfig,
+  updateConfluenceSettings,
+} from "../../confluenceSettings.ts";
 import { updateJiraSettings } from "../../jiraSettings.ts";
 import type { ToolCallContext } from "../../mcp/tool.ts";
 import { updateSlackSettings } from "../../slackSettings.ts";
@@ -216,4 +220,49 @@ test("a Slack tool follows the Slack toggle, not Jira's, and passes the edge's t
     message: notConnected,
   });
   updateSlackSettings({ enabled: false });
+});
+
+test("a Confluence tool follows the Confluence toggle, not Jira's, with its own disabled text", async () => {
+  const reads = [
+    "confluence_search",
+    "confluence_get_page",
+    "confluence_lookup",
+  ].map((name) =>
+    listed({ name, description: `${name}.`, actionKey: "confluence:read" }),
+  );
+  applyListing(acceptRemoteTools([listed(), ...reads]));
+  assert.deepEqual(
+    remoteToolsFor("confluence").map((t) => [t.name, t.sideEffects]),
+    [
+      ["confluence_search", "none"],
+      ["confluence_get_page", "none"],
+      ["confluence_lookup", "none"],
+    ],
+  );
+  const tool = remoteToolsFor("confluence")[0]!;
+  // Built once while its descriptor stays.
+  assert.equal(remoteToolsFor("confluence")[0], tool);
+  try {
+    // Confluence off, Jira on: refused before any port call, in the local
+    // tools' own text.
+    updateConfluenceSettings({ enabled: false });
+    const disabled =
+      "Confluence tools are disabled. Enable them in Settings → Confluence.";
+    assert.throws(() => getConfluenceToolConfig(), { message: disabled });
+    await assert.rejects(tool.execute({ query: "x" }, ctx()), {
+      message: disabled,
+    });
+    assert.equal(calls.length, 0);
+
+    // Confluence on, Jira off: reaches the port with its name and arguments.
+    updateConfluenceSettings({ enabled: true });
+    await updateJiraSettings({ enabled: false });
+    const signal = new AbortController().signal;
+    await tool.execute({ query: "x" }, ctx(signal));
+    assert.deepEqual(calls, [
+      { name: "confluence_search", args: { query: "x" }, signal },
+    ]);
+  } finally {
+    updateConfluenceSettings({ enabled: false });
+  }
 });

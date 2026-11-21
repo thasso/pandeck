@@ -8,6 +8,11 @@
  * difference: Confluence cannot degrade, since every call it makes is
  * authenticated. Without Jira credentials its tools fail fast with a hint
  * rather than returning an unauthenticated half-answer.
+ *
+ * Client mode (Task-1439 P3): the agents' Confluence reads run on the gateway
+ * with its Atlassian connection, so Settings answers from the gateway's last
+ * Atlassian status and reads no local credential, and the connection test
+ * makes no call at all: the Jira test checks the shared connection.
  */
 import { join } from "node:path";
 import type {
@@ -20,6 +25,10 @@ import { CONFLUENCE_HOST, DATA_DIR } from "./config.ts";
 import type { ConfluenceApiConfig } from "./atlassian/confluenceClient.ts";
 import { getJiraCredsIfAvailable } from "./jiraSettings.ts";
 import { createPrivateJsonFile } from "./privateJsonFile.ts";
+import {
+  lastAtlassianStatus,
+  remoteIntegrationPort,
+} from "./remoteIntegrations.ts";
 
 const CONFLUENCE_SETTINGS_PATH = join(DATA_DIR, "settings", "confluence.json");
 
@@ -40,6 +49,13 @@ function readPrivate(): Required<ConfluenceSettingsFile> {
 }
 
 export function getConfluenceSettings(): ConfluenceSettings {
+  if (remoteIntegrationPort())
+    return {
+      enabled: readPrivate().enabled,
+      confluenceHost: CONFLUENCE_HOST,
+      credentialsAvailable: lastAtlassianStatus().stored,
+      credentialStore: "gateway",
+    };
   return {
     enabled: readPrivate().enabled,
     confluenceHost: CONFLUENCE_HOST,
@@ -81,6 +97,17 @@ export function getConfluenceToolConfig(): ConfluenceApiConfig {
  */
 export async function testConfluenceSettings(): Promise<ConfluenceConnectionStatus> {
   const checkedAt = Date.now();
+  if (remoteIntegrationPort()) {
+    // A stored record says nothing about its health; Settings → Jira tests it.
+    const stored = lastAtlassianStatus().stored;
+    return {
+      ok: stored,
+      checkedAt,
+      message: stored
+        ? "Confluence uses this Pandeck's gateway Atlassian connection; test it under Settings → Jira."
+        : "No Atlassian connection on the gateway. Connect Atlassian under Settings → Jira.",
+    };
+  }
   const creds = getJiraCredsIfAvailable();
   if (!creds) {
     return {

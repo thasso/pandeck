@@ -36,6 +36,28 @@ The connection test calls `GET /wiki/rest/api/user/current` for a name and
 accountId, and falls back to `GET /wiki/api/v2/spaces?limit=1` when a site
 refuses the identity call — reachability is what the tools actually need.
 
+## Client mode
+
+In gateway client mode (Task-1439, `docs/workers.md` "Client mode") the agents'
+Confluence tools are the gateway's: the catalog's `gateway-confluence` group,
+gated by `gatewayConfluence` (the gateway is connected and Confluence is
+`enabled`; Jira's toggle plays no part), replaces the local group. Only the
+three reads are offered: `confluence_search`, `confluence_get_page` and
+`confluence_lookup`, with the edge's names and schemas, run with the gateway's
+Atlassian connection. `remoteTools.ts` accepts no other Confluence name, so
+`confluence_mutate_page` waits for gateway writes and
+`confluence_download_attachment` for Task-1441. With Confluence off a call
+answers the local tools' text, "Confluence tools are disabled. Enable them in
+Settings → Confluence."
+
+Settings → Confluence then reads no local credential. `ConfluenceSettings` gains
+`credentialStore: "gateway"`, and `credentialsAvailable` says whether the
+gateway's last Atlassian status had a credential stored, without verifying it.
+The connection test makes no call: it says the connection is the gateway's and
+points to Settings → Jira to test it, or that the gateway has none stored. The
+card reads "Uses the gateway's Atlassian connection (Settings → Jira)." Outside
+client mode the projection has no `credentialStore` key and nothing changes.
+
 ## Two API versions, on purpose
 
 Pages, spaces, comments, labels and attachments are read and written on **v2**
