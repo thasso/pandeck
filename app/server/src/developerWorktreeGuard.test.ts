@@ -20,6 +20,7 @@ import { afterAll, test, vi } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { seedLegacyDefaultAccounts } from "./test/legacyDefaultAccounts.ts";
 
 // Isolate CWD and DATA_DIR BEFORE importing the connection, and enable the
 // claude-sdk harness so its first send reaches the guard.
@@ -94,6 +95,9 @@ function assertOnlyRejection(sent: SentMessage[], path: string) {
     `${path}: rejection names the worktree requirement`,
   );
 }
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 test("guardDeveloperWorktree only rejects a bare developer session", () => {
   const { conn, sent } = makeConnection();

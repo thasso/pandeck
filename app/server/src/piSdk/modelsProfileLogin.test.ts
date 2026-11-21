@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "pi-profile-login-test-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -76,6 +77,9 @@ function recordingObserver(events?: string[]) {
     },
   });
 }
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 test("OpenAI device-code login hands the device code only to its observer; the summary shows connecting, then ready", async () => {
   const profile = createCredentialProfile({

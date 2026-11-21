@@ -31,7 +31,6 @@ const sandbox = {
   home: join(root, "home"),
   tmp: join(root, "tmp"),
   cache: join(root, "cache"),
-  legacy: join(root, "no-legacy-pi-agent"),
   config: join(root, "app.json"),
   gitconfig: join(root, "gitconfig"),
 };
@@ -240,7 +239,6 @@ async function runPhase(phase: string): Promise<Record<string, any>> {
         DATA_DIR: sandbox.data,
         ASSISTANT_CWD: sandbox.cwd,
         ASSISTANT_CONFIG: sandbox.config,
-        ASSISTANT_LEGACY_PI_AGENT_DIR: sandbox.legacy,
         HOME: sandbox.home,
         TMPDIR: sandbox.tmp,
         XDG_CACHE_HOME: sandbox.cache,

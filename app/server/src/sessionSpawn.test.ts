@@ -26,6 +26,7 @@ import type {
   ModelOption,
   SessionSpawnApprovalBody,
 } from "@assistant/shared";
+import { seedLegacyDefaultAccounts } from "./test/legacyDefaultAccounts.ts";
 
 // Isolate DATA_DIR and enable the claude-sdk harness BEFORE the modules load,
 // so a `claude-sdk` hint has real models to resolve against.
@@ -278,6 +279,9 @@ for (const enterprise of [false, true]) {
     }
   });
 }
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 test("a dead non-compatible hint never inherits the proposer's compatible endpoint", async () => {
   const endpoint = createCredentialProfile({

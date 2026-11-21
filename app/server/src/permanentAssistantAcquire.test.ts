@@ -8,6 +8,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, test, vi } from "vitest";
+import { seedLegacyDefaultAccounts } from "./test/legacyDefaultAccounts.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "permanent-assistant-acquire-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -73,6 +74,9 @@ function held() {
   const promise = new Promise<void>((resolve) => (release = resolve));
   return { promise, release };
 }
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 afterEach(() => {

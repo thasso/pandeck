@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, test, vi } from "vitest";
 import { parseServerFrame } from "./test/serverFrames.ts";
+import { seedLegacyDefaultAccounts } from "./test/legacyDefaultAccounts.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "presence-consumers-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -480,6 +481,9 @@ function assertWorkerFailure(result: unknown): unknown {
   assert.ok(isWorkerFailure(error), String(error));
   return error;
 }
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 beforeEach(() => {
   clearMainRepoCache();

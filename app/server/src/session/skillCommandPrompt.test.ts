@@ -22,6 +22,7 @@ import type {
 } from "./adapters/contract.ts";
 import type { SessionMode } from "@assistant/shared";
 import type { ClaudeQuery, ClaudeQueryParams } from "../claudeSdk/sdkSeam.ts";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "skill-command-prompt-test-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -49,6 +50,9 @@ updateSettings({
   memory: { ...getSettings().memory, learningMode: "off" },
   sessionNaming: { ...getSettings().sessionNaming, enabled: false },
 });
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 afterEach(() => setDeferredBackgroundContextProvider(undefined));
 afterAll(() => {

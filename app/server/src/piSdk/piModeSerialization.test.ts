@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, test } from "vitest";
 import type { SessionMode } from "@assistant/shared";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "pi-mode-serialization-test-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -34,6 +35,9 @@ interface StoreInternals {
   sessionModes: Map<string, SessionMode>;
 }
 const internals = piStore as unknown as StoreInternals;
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 afterAll(() => {
   rmSync(tmp, { recursive: true, force: true });

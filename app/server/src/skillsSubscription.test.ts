@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, test, vi } from "vitest";
 import type { BroadcastTopic, ServerMessage } from "@assistant/shared";
+import { seedLegacyDefaultAccounts } from "./test/legacyDefaultAccounts.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "skills-subscribe-test-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -17,6 +18,9 @@ const { setAgentRuntimeSourcesForTests } =
   await import("./agents/agentRuntime.ts");
 const { setAgentSpawnSourcesForTests } = await import("./agents/agentSpawn.ts");
 const { setLibraryBroadcaster } = await import("./library/libraryPublish.ts");
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 afterAll(() => {
   setLibraryBroadcaster({ broadcast: () => {} });

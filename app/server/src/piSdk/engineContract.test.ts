@@ -165,8 +165,11 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
     const { DATA_DIR } = await import("../config.ts");
     assert.ok(under(userHomeDir(), tmpdir()), userHomeDir());
     assert.ok(under(DATA_DIR, tmpdir()), DATA_DIR);
+    // An install that still has its protected defaults.
+    await (
+      await import("../test/legacyDefaultAccounts.ts")
+    ).seedLegacyDefaultAccounts();
     const profiles = await import("../credentialProfiles.ts");
-    profiles.listCredentialProfiles();
     const named = profiles.createCredentialProfile({
       name: "Contract",
       provider: "openai-codex",

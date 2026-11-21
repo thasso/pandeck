@@ -22,6 +22,16 @@ import {
   deleteCredentialProfile,
 } from "../credentialProfiles.ts";
 
+let account: string | undefined;
+/** A Claude account the usage reads run as, made once. */
+function claudeAccount(): string {
+  account ??= createCredentialProfile({
+    name: "Usage reads",
+    provider: "claude",
+  }).id;
+  return account;
+}
+
 const RAW_RESPONSE = {
   session: {
     total_cost_usd: 0,
@@ -127,7 +137,7 @@ test("asks the CLI to skip its local transcript scan", async () => {
   };
   setClaudeSdkUsageSeam(() => Promise.resolve(seam));
 
-  await fetchClaudeSdkUsage();
+  await fetchClaudeSdkUsage(20_000, claudeAccount());
   assert.deepEqual(received, { skipBehaviors: true });
 });
 
@@ -141,7 +151,7 @@ test("fetches usage through a fake seam without sending any prompt turn", async 
   };
   setClaudeSdkUsageSeam(() => Promise.resolve(seam));
 
-  const snapshot = await fetchClaudeSdkUsage();
+  const snapshot = await fetchClaudeSdkUsage(20_000, claudeAccount());
   assert.equal(snapshot.subscriptionType, "team");
   assert.ok(captured, "query() was called");
   assert.notEqual(
@@ -193,5 +203,8 @@ test("runs profile-scoped usage queries in the selected scrubbed Claude environm
 test("throws when the connected CLI does not expose the usage control request", async () => {
   const seam: ClaudeSdkSeam = { query: fakeQuery(undefined) };
   setClaudeSdkUsageSeam(() => Promise.resolve(seam));
-  await assert.rejects(() => fetchClaudeSdkUsage(), /does not support/);
+  await assert.rejects(
+    () => fetchClaudeSdkUsage(20_000, claudeAccount()),
+    /does not support/,
+  );
 });

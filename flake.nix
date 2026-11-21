@@ -1680,6 +1680,8 @@ EOF
                 environment = {
                   NODE_ENV = "production";
                   ASSISTANT_HOST = cfg.host;
+                  # A preview-local home: the one-time Default Claude transcript
+                  # import never sees the service user's production ~/.claude.
                   HOME = "${pr.stateDir}/%i/home";
                   XDG_CONFIG_HOME = "${pr.stateDir}/%i/home/.config";
                   XDG_DATA_HOME = "${pr.stateDir}/%i/home/.local/share";
@@ -1693,11 +1695,6 @@ EOF
                   # for it, so now that the recognizer is a host tool every preview
                   # would otherwise find it and be able to warm its own copy.
                   ASSISTANT_STT_DISABLED = "1";
-                  # Never invoke the one-time production legacy ~/.pi seed. Default
-                  # Claude lives in the preview DATA_DIR, and HOME above gives its
-                  # one-time home transcript import an empty preview-local home
-                  # instead of the service user's production ~/.claude.
-                  ASSISTANT_LEGACY_PI_AGENT_DIR = "${pr.stateDir}/%i/home/no-legacy-pi-agent";
                   # A preview must not act as production on Slack. This remains a
                   # second guard after removing production env files and settings:
                   # Socket Mode load-balances real events across open connections.

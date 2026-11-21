@@ -43,12 +43,24 @@ const { usageProfileForSession } = await import("./harnesses/usage.ts");
 const CACHE_DIR = join(process.env.DATA_DIR, "cache", "usage");
 
 describe("run usage attribution", () => {
+  test.each(["claude-sdk", "pi"] as const)(
+    "without protected defaults, an unbound %s session dirties no account",
+    (harness) => {
+      expect(usageProfileForSession({ harness })).toBeNull();
+      expect(
+        usageProfileForSession({ harness, credentialProfileId: "bound-work" }),
+      ).toBe("bound-work");
+    },
+  );
   test.each([
     ["claude-sdk", "claude-default"],
     ["pi", "default"],
   ] as const)(
     "legacy %s sessions dirty their protected default",
-    (harness, expected) => {
+    async (harness, expected) => {
+      await (
+        await import("./test/legacyDefaultAccounts.ts")
+      ).seedLegacyDefaultAccounts();
       expect(usageProfileForSession({ harness })).toBe(expected);
       expect(
         usageProfileForSession({ harness, credentialProfileId: "bound-work" }),

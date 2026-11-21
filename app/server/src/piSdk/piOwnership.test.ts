@@ -15,6 +15,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, test, vi } from "vitest";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "pi-ownership-test-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -26,6 +27,9 @@ const { PiSessionDeletedError, piStore } = await import("./piStore.ts");
 const { openPiEngine } = await import("./piEngineHost.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
 const { closeDb } = await import("../db/index.ts");
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 afterAll(() => {
   closeDb();

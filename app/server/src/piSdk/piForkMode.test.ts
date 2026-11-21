@@ -16,6 +16,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "pi-fork-mode-test-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -38,6 +39,9 @@ interface StoreInternals {
     opened: PiEngineOpened,
   ) => { sessionId: string; sessionFile?: string };
 }
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 test("a fork of a Plan session opens (and persists) in Plan", async () => {
   const parentId = "fork-mode-parent";

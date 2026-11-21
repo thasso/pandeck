@@ -24,9 +24,12 @@ import type {
   ClaudeSdkSeam,
 } from "./claudeSdk/sdkSeam.ts";
 import { parseServerFrame } from "./test/serverFrames.ts";
+import { seedLegacyDefaultAccounts } from "./test/legacyDefaultAccounts.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "session-view-race-"));
 process.env.ASSISTANT_CWD = tmp;
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 const { Connection } = await import("./connection.ts");
 const { hub } = await import("./hub.ts");

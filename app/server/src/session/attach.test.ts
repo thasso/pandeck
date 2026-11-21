@@ -18,6 +18,7 @@ import type {
   ClaudeSdkMessage,
   ClaudeSdkSeam,
 } from "../claudeSdk/sdkSeam.ts";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "attach-test-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -80,6 +81,9 @@ function fakeSeam(messages: ClaudeSdkMessage[]): ClaudeSdkSeam {
 }
 
 /* --------------------- attach an existing session ------------------------ */
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
+
 test("attach an existing session, and a durable /commit card survives reconnect", async () => {
   const runtime = new SessionRuntime(new SessionLogStore(true));
   const hubSession = new ClaudeSdkSession("cs", {

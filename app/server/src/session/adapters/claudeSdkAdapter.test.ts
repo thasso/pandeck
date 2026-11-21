@@ -16,6 +16,7 @@ import type {
   ClaudeSdkMessage,
   ClaudeSdkSeam,
 } from "../../claudeSdk/sdkSeam.ts";
+import { seedLegacyDefaultAccounts } from "../../test/legacyDefaultAccounts.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "claude-sdk-adapter-test-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -235,6 +236,9 @@ function abortableSeam(): ClaudeSdkSeam {
 }
 
 /* -------------------- adapter → runtime: normalized projection ----------- */
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
+
 test("adapter → runtime: normalized projection", async () => {
   const runtime = new SessionRuntime(new SessionLogStore(true));
   const session = new ClaudeSdkSession("cs-1", {

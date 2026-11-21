@@ -3,6 +3,7 @@ import { afterAll, test, vi } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "pi-profile-models-test-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -93,6 +94,9 @@ modelsByAuthPath.set(join(piAgentDir(secondary.id), "auth.json"), [
 
 const { findModelForProfile, listModelsForProfile } =
   await import("./models.ts");
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 test("profile model projection and lookup use the selected isolated runtime", async () => {
   assert.deepEqual(

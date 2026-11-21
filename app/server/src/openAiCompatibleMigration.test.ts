@@ -21,13 +21,14 @@ import {
   credentialProfileById,
   deleteCredentialProfile,
   DEFAULT_OPENAI_PROFILE_ID,
-  ensureDefaultPiProfile,
   LEGACY_OPENAI_COMPATIBLE_SETTINGS_PATH,
   listCredentialProfiles,
   migrateOpenAiCompatibleSettingsToAccount,
   patchCredentialProfile,
   type OpenAiCompatibleMigrationStep,
 } from "./credentialProfiles.ts";
+import { seedLegacyDefaultAccounts } from "./test/legacyDefaultAccounts.ts";
+import { CREDENTIAL_PROFILES_ROOT } from "./credentialProfilePaths.ts";
 import {
   openAiCompatibleEndpointPath,
   readOpenAiCompatibleEndpoint,
@@ -99,8 +100,9 @@ function assertMigrated(): void {
   assert.equal(statSync(openAiCompatibleEndpointPath(ID)).mode & 0o777, 0o600);
 }
 
-beforeEach(() => {
-  ensureDefaultPiProfile();
+// The former single endpoint predates fresh installs without defaults.
+beforeEach(async () => {
+  await seedLegacyDefaultAccounts();
   warnings = [];
   vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => {
     warnings.push(args.map(String).join(" "));
@@ -120,7 +122,8 @@ afterEach(() => {
     recursive: true,
     force: true,
   });
-  patchCredentialProfile(DEFAULT_OPENAI_PROFILE_ID, { enterprise: false });
+  if (credentialProfileById(DEFAULT_OPENAI_PROFILE_ID))
+    patchCredentialProfile(DEFAULT_OPENAI_PROFILE_ID, { enterprise: false });
 });
 
 test("no old file is a no-op", () => {
@@ -159,6 +162,19 @@ test("the account copies Default OpenAI's enterprise flag and the file's enabled
   assert.equal(account?.enterprise, true);
   assert.equal(account?.enabled, false);
   assert.equal(account?.name, "OpenAI-compatible");
+});
+
+test("without Default OpenAI the account is personal, and no default appears", () => {
+  // A fresh install's registry: the protected defaults cannot be deleted
+  // through the API, so the file is written empty.
+  writeFileSync(join(CREDENTIAL_PROFILES_ROOT, "profiles.json"), "[]\n");
+  writeLegacy(LEGACY);
+  migrateOpenAiCompatibleSettingsToAccount();
+  assert.equal(credentialProfileById(ID)?.enterprise, false);
+  assert.deepEqual(
+    listCredentialProfiles().map((profile) => profile.id),
+    [ID],
+  );
 });
 
 for (const step of [

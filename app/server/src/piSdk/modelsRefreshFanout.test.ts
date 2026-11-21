@@ -3,10 +3,13 @@ import { afterAll, test, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "pi-models-refresh-test-"));
 process.env.ASSISTANT_CWD = tmp;
 process.env.DATA_DIR = join(tmp, "data");
+// An install that still has Default OpenAI: its runtime is the display one.
+await seedLegacyDefaultAccounts();
 
 /** Every `refresh` the runtimes saw, by auth path, with the options it carried. */
 const refreshCalls: Array<{ authPath: string; force: boolean }> = [];

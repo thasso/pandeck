@@ -7,7 +7,13 @@
  * Run through Vitest: `pnpm --filter @assistant/server test src/claudeSdk/remoteClaudeQuery.test.ts`
  */
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -37,6 +43,10 @@ afterAll(() => {
   else process.env.ANTHROPIC_API_KEY = savedApiKey;
 });
 
+// An install that still has Default Claude: unbound sessions run as it.
+await (
+  await import("../test/legacyDefaultAccounts.ts")
+).seedLegacyDefaultAccounts();
 const { ClaudeSdkSession } = await import("../test/claudeSdkSession.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
 const { updateSettings } = await import("../settings.ts");
@@ -1137,6 +1147,43 @@ test("without a link, a session with no account still runs as the default's DATA
     session.dispose();
   }
   await until(() => inProcessWorkerEnginesForTests() === 0);
+});
+
+test("without Default Claude, a session with no account refuses its turn before any engine or query", async () => {
+  // A fresh install's registry has no default record.
+  const registry = join(dataDir, "credential-profiles", "profiles.json");
+  const saved = readFileSync(registry, "utf8");
+  writeFileSync(
+    registry,
+    JSON.stringify(
+      (JSON.parse(saved) as Array<{ id: string }>).filter(
+        (profile) => profile.id !== profiles.DEFAULT_CLAUDE_PROFILE_ID,
+      ),
+    ),
+  );
+  const engines = inProcessWorkerEnginesForTests();
+  let opened = 0;
+  const disarm = answerNextInProcessWorkerCallForTests(
+    ENGINE_METHODS.open,
+    (payload, signal, real) => {
+      opened += 1;
+      return real(payload, signal);
+    },
+  );
+  const { session, queries } = makeSession();
+  try {
+    const outcome = await session.createRuntimeAdapter().prompt("off");
+    assert.equal(outcome.stopReason, "error");
+    assert.match(outcome.errorMessage ?? "", /^No Claude account is set up\./);
+    assert.equal(opened, 0);
+    assert.equal(queries.length, 0);
+    assert.equal(inProcessWorkerEnginesForTests(), engines);
+    assert.equal(session.credentialProfileId, undefined);
+  } finally {
+    disarm();
+    session.dispose();
+    writeFileSync(registry, saved);
+  }
 });
 
 test("a Claude engine opened with gateway access and no profile is refused before any query", async () => {

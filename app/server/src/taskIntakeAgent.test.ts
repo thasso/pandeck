@@ -8,6 +8,7 @@ import {
 import type { AgentTool } from "./mcp/tool.ts";
 import { runClaudeSdkOneShot } from "./claudeSdk/oneShot.ts";
 import { runPiOneShot, selectPiModelWithFallback } from "./piSdk/oneShot.ts";
+import { seedLegacyDefaultAccounts } from "./test/legacyDefaultAccounts.ts";
 
 vi.mock("./piSdk/oneShot.ts", () => ({
   runPiOneShot: vi.fn(),
@@ -28,6 +29,9 @@ const input = {
   sourceUrl: "https://example.slack.com/archives/C1/p1",
   projectId: "personal-assistant",
 };
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 beforeEach(() => {
   vi.resetAllMocks();

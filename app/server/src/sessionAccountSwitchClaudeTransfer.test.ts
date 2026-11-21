@@ -12,14 +12,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, test, vi } from "vitest";
 import type { ClaudeSdkMessage, ClaudeSdkSeam } from "./claudeSdk/sdkSeam.ts";
+import { seedLegacyDefaultAccounts } from "./test/legacyDefaultAccounts.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "account-transfer-"));
 const originalHome = process.env.HOME;
 process.env.HOME = join(tmp, "home");
 process.env.DATA_DIR = join(tmp, "data");
 process.env.ASSISTANT_CWD = tmp;
+// An install that still has its protected defaults (the delete sweep below
+// reaches Default Claude's directory), disabled so no test selects them.
+await seedLegacyDefaultAccounts();
 const profiles = await import("./credentialProfiles.ts");
-profiles.listCredentialProfiles();
 profiles.setCredentialProfileEnabled(profiles.DEFAULT_CLAUDE_PROFILE_ID, false);
 profiles.setCredentialProfileEnabled(profiles.DEFAULT_OPENAI_PROFILE_ID, false);
 const { sessionStore } = await import("./db/sessionStore.ts");

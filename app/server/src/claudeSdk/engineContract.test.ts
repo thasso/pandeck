@@ -136,6 +136,11 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
     const { DATA_DIR } = await import("../config.ts");
     assert.ok(under(userHomeDir(), tmpdir()), userHomeDir());
     assert.ok(under(DATA_DIR, tmpdir()), DATA_DIR);
+    // An install that still has its protected defaults: a profile-less turn
+    // runs as Default Claude.
+    await (
+      await import("../test/legacyDefaultAccounts.ts")
+    ).seedLegacyDefaultAccounts();
     const profiles = await import("../credentialProfiles.ts");
     const { analyzeProviderError, isLoginDeath, loginEnded, runFailureFacts } =
       await import("../providerErrors.ts");

@@ -18,8 +18,9 @@
  *   epoch whose failed Stop left control acknowledgements abandoned.
  */
 import {
-  DEFAULT_CLAUDE_PROFILE_ID,
   claudeProfileRuntime,
+  legacyDefaultProfileId,
+  noAccountError,
 } from "../credentialProfiles.ts";
 import type { EngineItem } from "../workerProtocol/engineMethods.ts";
 import {
@@ -255,12 +256,13 @@ function remoteClaudeQuery(
  * Open `spec`'s query on the session's Worker. Aborting `signal` aborts the
  * hosted query's own controller; its stream then ends as the query does.
  * With a gateway link, the query's engine holds a lease for
- * `credentialProfileId`, owned by the session. A session without one always
- * runs as `claude-default` with that profile's environment (U12): its scrub
- * and its DATA_DIR `CLAUDE_CONFIG_DIR`, whether or not a gateway link is
+ * `credentialProfileId`, owned by the session. A session without one runs
+ * as `claude-default` with that profile's environment (U12): its scrub and
+ * its DATA_DIR `CLAUDE_CONFIG_DIR`, whether or not a gateway link is
  * installed, so no Claude child inherits the service's credentials or
  * `~/.claude`. It is leased only when a link exists, and its binding and
- * records stay as they are.
+ * records stay as they are. An install without that protected default
+ * refuses such a session before any child starts.
  */
 export async function openHostedClaudeQuery(input: {
   prompt: AsyncIterable<ClaudeSdkUserMessage>;
@@ -271,14 +273,15 @@ export async function openHostedClaudeQuery(input: {
 }): Promise<RemoteClaudeQuery> {
   const asDefault = input.credentialProfileId === undefined;
   const profileId = asDefault
-    ? DEFAULT_CLAUDE_PROFILE_ID
+    ? legacyDefaultProfileId("claude")
     : input.credentialProfileId;
+  if (profileId === undefined) throw noAccountError("claude");
   const spec: ClaudeQueryOpenSpec = asDefault
     ? {
         ...input.spec,
         env: {
           ...input.spec.env,
-          profile: claudeProfileRuntime(DEFAULT_CLAUDE_PROFILE_ID),
+          profile: claudeProfileRuntime(profileId),
         },
       }
     : input.spec;
@@ -295,9 +298,7 @@ export async function openHostedClaudeQuery(input: {
       );
       return { sink: remote.sink, value: remote };
     },
-    profileId !== undefined
-      ? { profileId, sessionId: spec.sessionId }
-      : undefined,
+    { profileId, sessionId: spec.sessionId },
   );
   // Only a live channel takes commands, and it is live once the open
   // resolves: an abort that came before is sent now, a later one as it comes.

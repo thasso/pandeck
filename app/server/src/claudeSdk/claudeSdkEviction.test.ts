@@ -28,6 +28,7 @@ import {
   readClaudeSdkRecord,
   removeClaudeSdkRecord,
 } from "./claudeSdkRecords.ts";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 const STORE_DIR = join(DATA_DIR, "claude-sdk");
 
@@ -107,6 +108,9 @@ function lateReleaseAttempts(session: ClaudeSdkSession): number {
 function resident(id: string): boolean {
   return Boolean(claudeSdkStore.get(id) && sessionRuntime.get(id));
 }
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 beforeAll(() => claudeSdkStore.setSeam(() => Promise.resolve(gatedSeam)));
 

@@ -1,10 +1,8 @@
 import {
   chmodSync,
-  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
-  readdirSync,
   renameSync,
   rmSync,
   statSync,
@@ -203,15 +201,6 @@ function privateFile(path: string): void {
   }
 }
 
-function privateTree(path: string): void {
-  privateDir(path);
-  for (const entry of readdirSync(path, { withFileTypes: true })) {
-    const child = join(path, entry.name);
-    if (entry.isDirectory()) privateTree(child);
-    else privateFile(child);
-  }
-}
-
 /**
  * Client mode (`gatewayClientLink.ts`): the gateway owns the accounts, and
  * the registry is their mirror, metadata only. No token file, no write: an
@@ -355,7 +344,7 @@ function writeRegistry(profiles: CredentialProfile[]): void {
 const profileRoot = credentialProfileRoot;
 
 /** The whole pi agent directory is PA-owned, including models/auth/settings. */
-export function piAgentDir(profileId = "default"): string {
+export function piAgentDir(profileId: string): string {
   const dir = join(profileRoot(profileId), "pi-agent");
   privateDir(dir);
   return dir;
@@ -542,47 +531,6 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
-/**
- * One-time compatibility seed: copies the former pi agent state into PA-owned
- * storage only from an explicit argument or ASSISTANT_LEGACY_PI_AGENT_DIR.
- * A fresh DATA_DIR never silently imports credentials from the user's home.
- */
-export function migrateLegacyDefaultPiProfile(legacyAgentDir?: string): void {
-  const source = legacyAgentDir ?? process.env.ASSISTANT_LEGACY_PI_AGENT_DIR;
-  if (!source) return;
-  const destination = piAgentDir(DEFAULT_OPENAI_PROFILE_ID);
-  const marker = join(
-    profileRoot(DEFAULT_OPENAI_PROFILE_ID),
-    ".legacy-pi-imported-v1",
-  );
-  if (existsSync(marker)) return;
-  if (existsSync(source) && readdirSync(destination).length === 0) {
-    // Keep login/config plus supported PA customizations, never old terminal
-    // transcripts or caches (which would bloat DATA_DIR backups).
-    for (const entry of [
-      "auth.json",
-      "models.json",
-      "models-store.json",
-      "settings.json",
-      "extensions",
-      "skills",
-      "prompt-templates",
-    ]) {
-      const from = join(source, entry);
-      if (existsSync(from))
-        cpSync(from, join(destination, entry), {
-          recursive: true,
-          force: false,
-          errorOnExist: false,
-          preserveTimestamps: true,
-        });
-    }
-    privateTree(destination);
-  }
-  writeFileSync(marker, "seeded\n", { encoding: "utf8", mode: 0o600 });
-  privateFile(marker);
-}
-
 /** The single endpoint's former settings file, read only by the migration below. */
 export const LEGACY_OPENAI_COMPATIBLE_SETTINGS_PATH = join(
   DATA_DIR,
@@ -714,91 +662,52 @@ function endpointStored(
   }
 }
 
-/** Ensure PA has isolated default profiles for interactive and automatic work. */
-export function ensureDefaultPiProfile(): CredentialProfile {
-  const profiles = readRegistry();
-  const now = Date.now();
-  // Client mode creates no account: the gateway's are all there is.
-  if (remoteProfiles)
-    return (
-      profiles.find((profile) => profile.provider === "openai-codex") ?? {
-        id: DEFAULT_OPENAI_PROFILE_ID,
-        name: "Default OpenAI",
-        provider: "openai-codex",
-        enabled: false,
-        enterprise: false,
-        createdAt: now,
-        updatedAt: now,
-      }
-    );
-  let changed = false;
-  let openai = profiles.find(
-    (profile) => profile.id === DEFAULT_OPENAI_PROFILE_ID,
-  );
-  if (!openai) {
-    openai = {
-      id: DEFAULT_OPENAI_PROFILE_ID,
-      name: "Default OpenAI",
-      provider: "openai-codex",
-      enabled: true,
-      enterprise: false,
-      createdAt: now,
-      updatedAt: now,
-    };
-    profiles.unshift(openai);
-    changed = true;
-  }
-  if (!profiles.some((profile) => profile.id === DEFAULT_CLAUDE_PROFILE_ID)) {
-    profiles.push({
-      id: DEFAULT_CLAUDE_PROFILE_ID,
-      name: "Default Claude",
-      provider: "claude",
-      enabled: true,
-      enterprise: false,
-      createdAt: now,
-      updatedAt: now,
-    });
-    changed = true;
-  }
-  if (changed) writeRegistry(profiles);
-  piAgentDir(openai.id);
-  migrateLegacyDefaultPiProfile();
-  return openai;
+/**
+ * The account a session or record with no binding runs on: the protected
+ * default, on an install created before defaults stopped being made
+ * (`docs/account-routing.md`). A fresh install has none, and then nothing
+ * falls back: the caller refuses with {@link noAccountError} or reads nothing.
+ */
+export function legacyDefaultProfileId(
+  provider: "openai-codex" | "claude",
+): string | undefined {
+  const id =
+    provider === "claude"
+      ? DEFAULT_CLAUDE_PROFILE_ID
+      : DEFAULT_OPENAI_PROFILE_ID;
+  return credentialProfileById(id)?.provider === provider ? id : undefined;
 }
 
-let defaultProfilesEnsured = false;
-
-function ensureDefaultProfilesOnce(): void {
-  if (defaultProfilesEnsured) return;
-  ensureDefaultPiProfile();
-  defaultProfilesEnsured = true;
+/** The refusal for work that needs an account of `provider` and has none. */
+export function noAccountError(provider: "openai-codex" | "claude"): Error {
+  return new Error(
+    `No ${ACCOUNT_KINDS[provider].label} account is set up. Add one in Settings → Accounts.`,
+  );
 }
 
 /**
  * First-enabled information for non-routing UI (login/usage defaults and
- * account-management hints), else the protected default. New sessions and
- * background work use accountRouter instead.
+ * account-management hints), else the protected default an older install
+ * still has, else none. New sessions and background work use accountRouter
+ * instead.
  */
-function automaticProfileIdFor(provider: "openai-codex" | "claude"): string {
-  ensureDefaultProfilesOnce();
-  const protectedId =
-    provider === "claude"
-      ? DEFAULT_CLAUDE_PROFILE_ID
-      : DEFAULT_OPENAI_PROFILE_ID;
+function automaticProfileIdFor(
+  provider: "openai-codex" | "claude",
+): string | undefined {
   return (
     readRegistry().find(
       (profile) => profile.provider === provider && profile.enabled,
-    )?.id ?? protectedId
+    )?.id ?? legacyDefaultProfileId(provider)
   );
 }
 
 /** Default OpenAI account for non-routing login/usage UI. */
-export function defaultOpenAiProfileId(): string {
+export function defaultOpenAiProfileId(): string | undefined {
   return automaticProfileIdFor("openai-codex");
 }
 
 /** Default Claude account for non-routing login/usage UI. */
-export function defaultClaudeProfileId(): string {
+export function defaultClaudeProfileId(): string | undefined {
   return automaticProfileIdFor("claude");
 }
 
@@ -807,7 +716,6 @@ function isProtectedProfile(id: string): boolean {
 }
 
 export function listCredentialProfiles(): CredentialProfileSummary[] {
-  ensureDefaultPiProfile();
   return withAccountHealthProfiles(() =>
     readRegistry()
       .map(summary)

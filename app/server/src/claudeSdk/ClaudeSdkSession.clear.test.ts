@@ -16,6 +16,7 @@ import { entriesToDisplayMessages } from "@assistant/shared/display";
 import { runClearForHost } from "../hostSlashCommands.ts";
 import { ClaudeSdkSession } from "../test/claudeSdkSession.ts";
 import type { ClaudeSdkMessage, ClaudeSdkSeam } from "./sdkSeam.ts";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 const PROVIDER_SESSION = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 
@@ -201,6 +202,9 @@ async function testNoProviderHistory(): Promise<void> {
     "a session with no Claude context has nothing to clear",
   );
 }
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 test(
   "Claude /clear drops the resume id, reports what it dropped, and renders one durable card",

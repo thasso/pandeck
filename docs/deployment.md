@@ -1007,22 +1007,24 @@ hosting APIs they share with production.
 
 Every boot runs the one-time import of Default Claude's transcripts from
 `~/.claude/projects` (`docs/credential-distribution.md`) before the gateway, the
-listener and any session start. This gate also precedes the client-mode relay
-link and remote login setup; a refusal prevents either gateway mode from
-starting. The local transcript import does not move or create the gateway's
-accounts or credentials (`docs/credential-distribution.md`). Until the import
-has durably recorded phase `copy` or `done` in
-`credential-profiles/claude-default/home-import/state.json`, the service refuses
-to start, because a session could otherwise write transcripts that a later
-attempt would set aside with the old `projects/`. A state file it cannot read or
-does not recognize refuses the same way at any later boot. Each boot renews the
-saved state's file and directory syncs before accepting `copy` or `done`. A
-failed renewal at or below `DATA_DIR` also refuses startup, even after `done`.
-Renewal stops at the existing `DATA_DIR` inclusive; it never opens or syncs
-directories above it. Those ancestors need normal path traversal permission, not
-directory-read permission or directory-fsync support. The refusal stops every
-account, not only Default Claude, and the unit exits 1, so systemd restarts it
-and each start retries.
+listener and any session start. An install without Default Claude (every fresh
+one) skips it entirely, writing nothing and never reading home; with it, a first
+run with no session to import records `done` without reading home. This gate
+also precedes the client-mode relay link and remote login setup; a refusal
+prevents either gateway mode from starting. The local transcript import does not
+move or create the gateway's accounts or credentials
+(`docs/credential-distribution.md`). Until the import has durably recorded phase
+`copy` or `done` in `credential-profiles/claude-default/home-import/state.json`,
+the service refuses to start, because a session could otherwise write
+transcripts that a later attempt would set aside with the old `projects/`. A
+state file it cannot read or does not recognize refuses the same way at any
+later boot. Each boot renews the saved state's file and directory syncs before
+accepting `copy` or `done`. A failed renewal at or below `DATA_DIR` also refuses
+startup, even after `done`. Renewal stops at the existing `DATA_DIR` inclusive;
+it never opens or syncs directories above it. Those ancestors need normal path
+traversal permission, not directory-read permission or directory-fsync support.
+The refusal stops every account, not only Default Claude, and the unit exits 1,
+so systemd restarts it and each start retries.
 
 The journal names the cause in one line starting
 `[home-transcript-import] startup refused:`. It gives the operation that failed
@@ -1369,11 +1371,10 @@ none of them. Later deploys retain state created by that preview.
 The preview unit inherits the host-tool PATH because previews still need the
 host toolchain. It does not inherit production's `tokenFile`,
 `extraEnvironment`, HOME, or DATA_DIR. The server mints its own browser token in
-the empty preview DATA_DIR. Default Claude lives in that preview DATA_DIR like
-every account, and its one-time home transcript import reads only the empty
-preview-local HOME, never the service user's `~/.claude`. The legacy pi import
-points at a nonexistent preview-local path. Slack app mode and speech
-recognition remain explicitly disabled as extra guards.
+the empty preview DATA_DIR, which starts with no accounts. The one-time home
+transcript import has nothing to import there and never reads home; HOME is
+preview-local anyway, never the service user's `~/.claude`. Slack app mode and
+speech recognition remain explicitly disabled as extra guards.
 
 Independent preview credentials require deliberate host configuration. Set
 `prDeployments.credentialEnvironmentFile` to a runtime secret path such as

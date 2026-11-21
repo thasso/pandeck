@@ -31,22 +31,21 @@ and headless one-shot utility runs.
 - `piStore.ts` owns the live-session registry: acquire/open/fork/create/track,
   eviction (runtime dispose stays adjacent to map removal), rename, image
   resolution, list aggregation, and per-session tool activation
-  construction/teardown. Fresh sessions without an explicit binding select the
-  first enabled OpenAI profile, so automatic/background pi work does not
-  silently use a disabled protected default. Forks immediately persist the
-  parent's immutable credential-profile binding on the child so cold reopen
-  selects the same runtime. Interactive pi sessions also carry their mutable
-  Build/Plan mode here: creation prefers the persisted `session_index.mode` over
-  a requested start value, and a live flip re-applies the active-set merge.
-  Every create/open calls `sessionSkills`; a fork freezes a legacy parent first
-  and passes its exact list to the child. `PiLiveSession.state()` reads the
-  frozen row into `activeSkills` for coding personas without creating one.
-  `track` claims the session's `SessionScope` ([Task-492](pa://task/492)) before
-  the live map can hand it to the session list, so a session that is not the
-  user's is persisted as such before anything can observe it; a caller creating
-  one declares it on `acquireNew` rather than upserting the scope afterwards, a
-  fork inherits its parent's scope, and a claim that contradicts the stored
-  scope throws instead of registering.
+  construction/teardown. A session with no binding reopens on an older install's
+  protected default and is refused where there is none. Forks immediately
+  persist the parent's immutable credential-profile binding on the child so cold
+  reopen selects the same runtime. Interactive pi sessions also carry their
+  mutable Build/Plan mode here: creation prefers the persisted
+  `session_index.mode` over a requested start value, and a live flip re-applies
+  the active-set merge. Every create/open calls `sessionSkills`; a fork freezes
+  a legacy parent first and passes its exact list to the child.
+  `PiLiveSession.state()` reads the frozen row into `activeSkills` for coding
+  personas without creating one. `track` claims the session's `SessionScope`
+  ([Task-492](pa://task/492)) before the live map can hand it to the session
+  list, so a session that is not the user's is persisted as such before anything
+  can observe it; a caller creating one declares it on `acquireNew` rather than
+  upserting the scope afterwards, a fork inherits its parent's scope, and a
+  claim that contradicts the stored scope throws instead of registering.
 - `options.ts` owns pi session options: resource loaders per persona, the
   always-loaded hidden `outputPolicyExtension.ts` inline extension, the manager
   sub-variant, tool policy (`agentTools` from the persona registry plus the
@@ -176,27 +175,24 @@ and headless one-shot utility runs.
   (models.json config, provider composition, availability), so both are
   collected — discarding the map would make an unreachable catalog look like a
   clean update. Every entry is labelled by provider and account and joined into
-  `error`; the default runtime's projection is still the answer. Its default
-  runtime and every `DefaultResourceLoader` use the PA-owned
-  `DATA_DIR/credential-profiles/default/pi-agent/` directory for
-  auth/models/settings — never `~/.pi` or a global pi installation.
-  `credentialProfiles.ts` makes the documented one-time startup seed from a
-  legacy `~/.pi/agent` only when that protected destination is empty;
-  `ASSISTANT_LEGACY_PI_AGENT_DIR` overrides that source and can point to a
-  nonexistent path to disable the seed. Every subsequent runtime read remains
-  PA-owned. `startOpenAiProfileLogin` delegates device-code OAuth to pi and
-  hands the short-lived verification instructions only to its observer (the
-  login dialog's run, `openAiLoginTerminal.ts`); `cancelOpenAiProfileLogin`
-  aborts it before its commit. Tokens remain in the private pi auth file. Pi
-  writes OAuth before its post-login model refresh resolves, so a changed
-  credential hash completes the UI and the profile projection immediately
-  includes that profile's built-in OpenAI models even if the SDK availability
-  snapshot is still stale. The underlying operation remains serialized until it
-  settles (no overlapping auth/model-file writers), and deleting its profile
-  invalidates callbacks plus removes any late provider writes.
-  `modelRuntimeForProfile` caches one runtime per selected OpenAI profile, and
-  `options.ts` receives that profile id so its resource loader uses the matching
-  private agent directory.
+  `error`; the default runtime's projection is still the answer. Each runtime
+  and every `DefaultResourceLoader` use its account's PA-owned
+  `DATA_DIR/credential-profiles/<id>/pi-agent/` directory for
+  auth/models/settings — never `~/.pi` or a global pi installation. The global
+  display runtime is Default OpenAI's on an older install that has it, else in
+  memory with pi's built-in catalog and no credential. `startOpenAiProfileLogin`
+  delegates device-code OAuth to pi and hands the short-lived verification
+  instructions only to its observer (the login dialog's run,
+  `openAiLoginTerminal.ts`); `cancelOpenAiProfileLogin` aborts it before its
+  commit. Tokens remain in the private pi auth file. Pi writes OAuth before its
+  post-login model refresh resolves, so a changed credential hash completes the
+  UI and the profile projection immediately includes that profile's built-in
+  OpenAI models even if the SDK availability snapshot is still stale. The
+  underlying operation remains serialized until it settles (no overlapping
+  auth/model-file writers), and deleting its profile invalidates callbacks plus
+  removes any late provider writes. `modelRuntimeForProfile` caches one runtime
+  per selected OpenAI profile, and `options.ts` receives that profile id so its
+  resource loader uses the matching private agent directory.
 - `oneShot.ts` owns the pi engine half of headless one-shot runs and shared
   model fallback selection; runs are reached only through `runOneShot`
   (`harnesses/oneShot.ts`), while `permanentAssistant.ts` still calls

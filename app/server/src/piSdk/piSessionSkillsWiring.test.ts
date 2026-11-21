@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, afterEach, beforeEach, test, vi } from "vitest";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "pi-session-skills-wiring-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -59,6 +60,9 @@ const originalTrack = internals.track;
 /** Every spec the store opened, and what each id had frozen when tracked. */
 let specs: PiEngineOpenSpec[] = [];
 let atTrack: Array<{ id: string; skills?: string; agent?: unknown }> = [];
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 beforeEach(() => {
   specs = [];

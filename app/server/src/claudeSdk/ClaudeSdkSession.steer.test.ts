@@ -21,6 +21,7 @@ import type {
   ClaudeSdkSeam,
   ClaudeSdkUserMessage,
 } from "./sdkSeam.ts";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 const dataDir = mkdtempSync(join(tmpdir(), "claude-steer-test-"));
 process.env.DATA_DIR = dataDir;
@@ -206,6 +207,9 @@ async function steerIntoTurn(h: ReturnType<typeof makeHarness>) {
   assert.ok(uuid, "a steer carries the uuid the CLI reports back");
   return { turn, steer, uuid, query: h.queries[0]! };
 }
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 test("a steer the CLI dequeues mid-turn joins that turn", async () => {
   const h = makeHarness();

@@ -1880,21 +1880,19 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   subscribing is the authoritative read — never as the raw snapshot. Deleting an
   account drops its entry and its file. Full contract: `docs/usage.md`.
 - `credentialProfiles.ts` owns PA-local provider-profile metadata and private
-  directories under `DATA_DIR/credential-profiles/`.
-  `ASSISTANT_LEGACY_PI_AGENT_DIR` optionally overrides the one-time legacy pi
-  seed source (a nonexistent path disables it for credential-free previews):
-  profile metadata is atomic/mode `0600`; directories are `0700`; pi and Claude
-  tokens remain in their provider-owned files and never cross this module's safe
-  summary/API boundary. `claudeLoginTerminal.ts` owns the authenticated
-  browser/mobile wrapper around the official bundled
-  `claude auth login --claudeai` CLI: one reconnectable bounded process per
-  profile, a minimal secret-free child environment, bounded/control-stripped
-  output, direct unlogged stdin forwarding of the authorization code,
-  timeout/cancel/deletion/shutdown cleanup, and no app-owned OAuth exchange.
-  Protected default OpenAI and Claude profiles are created for ordinary and
-  automatic session paths; they cannot be deleted but can be disabled once a
-  secondary account should be the active default. Default Claude is isolated
-  like the named profiles, in
+  directories under `DATA_DIR/credential-profiles/`: profile metadata is
+  atomic/mode `0600`; directories are `0700`; pi and Claude tokens remain in
+  their provider-owned files and never cross this module's safe summary/API
+  boundary. `claudeLoginTerminal.ts` owns the authenticated browser/mobile
+  wrapper around the official bundled `claude auth login --claudeai` CLI: one
+  reconnectable bounded process per profile, a minimal secret-free child
+  environment, bounded/control-stripped output, direct unlogged stdin forwarding
+  of the authorization code, timeout/cancel/deletion/shutdown cleanup, and no
+  app-owned OAuth exchange. No account is created implicitly: a fresh registry
+  stays empty. An older install's protected default OpenAI and Claude profiles
+  are kept; they cannot be deleted but can be disabled once a secondary account
+  should be the active default, and `legacyDefaultProfileId` names them for
+  unbound sessions. Default Claude is isolated like the named profiles, in
   `DATA_DIR/credential-profiles/claude-default/claude` (its transcripts copied
   once from `~/.claude/projects` at boot). Disabled profiles remain resolvable
   for already-bound sessions but are ineligible for new sessions and omitted by
@@ -1902,22 +1900,22 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   first enabled account in registry order. Every Claude SDK acquisition strips
   inherited provider credential/transport variables, then injects the selected
   profile's isolated `CLAUDE_CONFIG_DIR` (Default Claude's for a session with no
-  account). A changed hash of the profile-local OpenAI credential is the safe
-  device-login completion signal because pi persists OAuth before its unbounded
-  post-login model refresh settles; the hash is never projected. Non-default
-  profiles can be renamed or deleted only when no session remains bound;
-  deletion removes their private directory and tells provider runtime owners to
-  invalidate in-flight work before late completion can restore files.
-  `connection.ts` validates the selected enabled profile before pi's first
-  prompt or review-handoff creation and immediately records its id in session
-  metadata; message-level draft creation inherits and persists the source pi
-  session's binding. Pi reopens through that same profile-local runtime.
-  `credentialProfileUsage.ts` (separate module so the
-  settings→slot-registry→profile-registry chain stays acyclic) projects what
-  depends on one account — pinned settings slots, bound sessions, and whether it
-  is the current automatic pick plus where that would move — behind
-  `GET /api/credential-profiles?includeUsage=1`. A settings pin never blocks
-  deletion: `DELETE` refuses only while sessions are bound, then
+  account, refused where the install has none). A changed hash of the
+  profile-local OpenAI credential is the safe device-login completion signal
+  because pi persists OAuth before its unbounded post-login model refresh
+  settles; the hash is never projected. Non-default profiles can be renamed or
+  deleted only when no session remains bound; deletion removes their private
+  directory and tells provider runtime owners to invalidate in-flight work
+  before late completion can restore files. `connection.ts` validates the
+  selected enabled profile before pi's first prompt or review-handoff creation
+  and immediately records its id in session metadata; message-level draft
+  creation inherits and persists the source pi session's binding. Pi reopens
+  through that same profile-local runtime. `credentialProfileUsage.ts` (separate
+  module so the settings→slot-registry→profile-registry chain stays acyclic)
+  projects what depends on one account — pinned settings slots, bound sessions,
+  and whether it is the current automatic pick plus where that would move —
+  behind `GET /api/credential-profiles?includeUsage=1`. A settings pin never
+  blocks deletion: `DELETE` refuses only while sessions are bound, then
   `clearProfilePins` drops the account's pins and reports the affected slots.
 - `settingsModelSlots.ts` owns the ONE inventory of configured model slots in
   `AppSettings` (helper one-shots, permanent assistant, memory processor,

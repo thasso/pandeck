@@ -44,8 +44,12 @@ import { claudeSdkStore } from "./claudeSdkStore.ts";
 import { installClaudeStateBuilder } from "../test/claudeSdkSession.ts";
 installClaudeStateBuilder(claudeSdkStore);
 import { claudeTurnSeam } from "../test/claudeTurnSeam.ts";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "claude-sdk-records-"));
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
+
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
 let seq = 0;

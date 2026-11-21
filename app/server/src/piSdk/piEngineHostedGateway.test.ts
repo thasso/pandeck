@@ -25,6 +25,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, afterEach, test, vi } from "vitest";
 import type { HostedEngineHost } from "../workerProtocol/engineMethods.ts";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "pi-hosted-gateway-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -74,6 +75,9 @@ const {
   materializeSkillsThroughWorker,
   persistSessionOutput,
 } = await import("../workers/inProcessWorker.ts");
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 afterEach(() => vi.restoreAllMocks());
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));

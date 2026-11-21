@@ -20,9 +20,10 @@ const {
   credentialProfileSummaryById,
   createCredentialProfile,
   patchCredentialProfile,
-  ensureDefaultPiProfile,
   setCredentialProfileEnabled,
 } = await import("./credentialProfiles.ts");
+const { seedLegacyDefaultAccounts } =
+  await import("./test/legacyDefaultAccounts.ts");
 const { getSettings, updateSettings } = await import("./settings.ts");
 const {
   accountForSlot,
@@ -35,7 +36,7 @@ const { clearProfilePins, credentialProfileUsage } =
 
 const dataDir = process.env.DATA_DIR;
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.mocked(pickAccount).mockReset();
   vi.mocked(pickAccount).mockImplementation(async ({ model }) => ({
     profileId:
@@ -46,7 +47,8 @@ beforeEach(() => {
     force: true,
   });
   rmSync(join(dataDir, "settings"), { recursive: true, force: true });
-  ensureDefaultPiProfile();
+  // These cover an install that still has its protected defaults.
+  await seedLegacyDefaultAccounts();
 });
 
 /** Every `{ provider, modelId }` object reachable in the settings tree. */

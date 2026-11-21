@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { beforeEach, test, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CLAUDE_SDK_PROVIDER } from "@assistant/shared";
@@ -23,9 +23,10 @@ const { runPiOneShot, selectPiModelWithFallback } =
 const {
   createCredentialProfile,
   patchCredentialProfile,
-  ensureDefaultPiProfile,
   setCredentialProfileEnabled,
 } = await import("./credentialProfiles.ts");
+const { seedLegacyDefaultAccounts } =
+  await import("./test/legacyDefaultAccounts.ts");
 const { updateSettings } = await import("./settings.ts");
 const { generateCommitMessageJson } = await import("./commitAgent.ts");
 const { refinePromptText } = await import("./promptRefinement.ts");
@@ -38,14 +39,15 @@ const commitJson = JSON.stringify({
   body: "",
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.resetAllMocks();
   rmSync(join(dataDir, "credential-profiles"), {
     recursive: true,
     force: true,
   });
   rmSync(join(dataDir, "settings"), { recursive: true, force: true });
-  ensureDefaultPiProfile();
+  // These cover an install that still has its protected defaults.
+  await seedLegacyDefaultAccounts();
 });
 
 test("a Claude helper agent authenticates as its pinned account", async () => {
@@ -160,6 +162,39 @@ test("an unpinned agent follows the automatic account", async () => {
     vi.mocked(runPiOneShot).mock.calls[0]?.[0]?.credentialProfileId,
     "default",
   );
+});
+
+test("with no account at all, a helper refuses before any run and makes no default", async () => {
+  // A fresh install: the registry has nothing in it.
+  rmSync(join(dataDir, "credential-profiles"), {
+    recursive: true,
+    force: true,
+  });
+  await assert.rejects(
+    () =>
+      generateCommitMessageJson("diff", {
+        provider: CLAUDE_SDK_PROVIDER,
+        modelId: "sonnet",
+        thinkingLevel: "off",
+      }),
+    /No account is available/,
+  );
+  await assert.rejects(
+    () =>
+      refinePromptText({
+        text: "make this better",
+        settings: {
+          provider: "openai-codex",
+          modelId: "gpt-6-luna",
+          thinkingLevel: "off",
+        },
+      }),
+    /No account is available/,
+  );
+  assert.equal(vi.mocked(runClaudeSdkOneShot).mock.calls.length, 0);
+  assert.equal(vi.mocked(runPiOneShot).mock.calls.length, 0);
+  for (const id of ["default", "claude-default"])
+    assert.equal(existsSync(join(dataDir, "credential-profiles", id)), false);
 });
 
 test("enterprise refinement context overrides explicit false and refuses a personal pin", async () => {

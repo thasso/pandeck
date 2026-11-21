@@ -14,10 +14,7 @@
 import { randomUUID } from "node:crypto";
 import { CWD } from "../config.ts";
 import { claudeSdkExecutableOptions } from "../runtimeAssets.ts";
-import {
-  claudeProfileEnvironment,
-  DEFAULT_CLAUDE_PROFILE_ID,
-} from "../credentialProfiles.ts";
+import { claudeProfileEnvironment } from "../credentialProfiles.ts";
 import { claudeGatewayEnvironment } from "../claudeChildEnvironment.ts";
 import { MCP_SERVER_NAME } from "../mcp/names.ts";
 import {
@@ -75,8 +72,8 @@ export interface RunClaudeSdkOneShotInput {
   systemPrompt: string;
   /** The single user prompt. */
   prompt: string;
-  /** Isolated Claude credential profile; defaults to PA's protected profile. */
-  credentialProfileId?: string;
+  /** The isolated Claude account the run signs in as. */
+  credentialProfileId: string;
   /** The profile's server lease: the child's only credential when set. */
   gateway?: EngineGatewayAccess;
   /** Abort the query after this many ms. Defaults to 60s. */
@@ -116,9 +113,7 @@ export function setClaudeSdkOneShotSeam(
 function oneShotEnvironment(
   input: RunClaudeSdkOneShotInput,
 ): Record<string, string> {
-  const env = claudeProfileEnvironment(
-    input.credentialProfileId ?? DEFAULT_CLAUDE_PROFILE_ID,
-  );
+  const env = claudeProfileEnvironment(input.credentialProfileId);
   return input.gateway ? claudeGatewayEnvironment(env, input.gateway) : env;
 }
 

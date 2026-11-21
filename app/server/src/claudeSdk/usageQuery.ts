@@ -10,10 +10,7 @@
  */
 import { CWD } from "../config.ts";
 import { claudeSdkExecutableOptions } from "../runtimeAssets.ts";
-import {
-  claudeProfileEnvironment,
-  defaultClaudeProfileId,
-} from "../credentialProfiles.ts";
+import { claudeProfileEnvironment } from "../credentialProfiles.ts";
 import type {
   ClaudeUsageSnapshot,
   UsageGenericLimit,
@@ -67,7 +64,7 @@ async function* neverEndingPrompt(): AsyncGenerator<ClaudeSdkUserMessage> {
 
 function buildUsageQueryOptions(
   abortController: AbortController,
-  credentialProfileId = defaultClaudeProfileId(),
+  credentialProfileId: string,
 ): ClaudeSdkOptions {
   return {
     cwd: CWD,
@@ -204,8 +201,8 @@ export function mapClaudeUsageResponse(
  * bundled version, or a fake test seam).
  */
 export async function fetchClaudeSdkUsage(
-  timeoutMs = 20_000,
-  credentialProfileId?: string,
+  timeoutMs: number,
+  credentialProfileId: string,
 ): Promise<ClaudeUsageSnapshot> {
   const seam = await seamFactory();
   const abortController = new AbortController();

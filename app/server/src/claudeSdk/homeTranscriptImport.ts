@@ -8,7 +8,10 @@
  * - **Selection.** Every non-deleted `claude-sdk` row bound to the default or
  *   to nothing, in any scope (`db/defaultClaudeTranscriptSelection.ts`). For
  *   each, `<key>/<id>.jsonl` and its `<key>/<id>/` tree, under the same `<key>`.
- *   Nothing else: no config, no credential, no terminal-only transcript.
+ *   Nothing else: no config, no credential, no terminal-only transcript. An
+ *   install without a Default Claude record (every fresh one) skips the
+ *   import entirely, writing nothing; a first run with the record that
+ *   selects nothing records `done` without reading home.
  * - **Home is read-only and the backup.** Nothing under home is written,
  *   renamed, chmodded or deleted. Once the state records `done`, home is never
  *   read again.
@@ -50,7 +53,10 @@ import {
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { DATA_DIR } from "../config.ts";
 import { credentialProfileRoot } from "../credentialProfilePaths.ts";
-import { DEFAULT_CLAUDE_PROFILE_ID } from "../credentialProfiles.ts";
+import {
+  DEFAULT_CLAUDE_PROFILE_ID,
+  legacyDefaultProfileId,
+} from "../credentialProfiles.ts";
 import { defaultClaudeProviderSessionIds } from "../db/defaultClaudeTranscriptSelection.ts";
 import { userHomeDir } from "../userHome.ts";
 
@@ -107,6 +113,11 @@ interface HomeTranscriptImportCounts {
 
 export type HomeTranscriptImportResult =
   | { outcome: "already-done" }
+  /**
+   * The install has no Default Claude (every fresh one): nothing of its own
+   * is in home and there is nowhere to put it, so nothing is read or written.
+   */
+  | { outcome: "no-default-account" }
   | {
       outcome: "done";
       sourceMissing: boolean;
@@ -254,6 +265,15 @@ async function runImport(
   const step = (operation: string) => {
     progress.operation = operation;
   };
+  // 0. Without Default Claude no session can run as it (an unbound one is
+  // refused), so there is nothing to import, now or later. Neither home nor
+  // `credential-profiles/` is touched, and no state is kept: the check is
+  // one registry read per boot. An explicit profile root is a test's.
+  if (
+    options.profileRoot === undefined &&
+    legacyDefaultProfileId("claude") === undefined
+  )
+    return { outcome: "no-default-account" };
   const now = options.now ?? Date.now;
   const afterStep = options.afterStep ?? (() => {});
   const io = options.manifestIo ?? fileManifestIo;
@@ -306,7 +326,32 @@ async function runImport(
   const records = await repairManifest(manifestPath, io);
   afterStep("manifest-repaired");
 
-  // 4. Source: only whether it is there, before the boundary.
+  // 4. Nothing selected on a first run: done, without reading home at all. A selection that
+  // fails here is left to the plan, after the boundary, as before.
+  const selection = options.providerSessionIds ?? selectedIds;
+  if (state === undefined && nothingSelected(selection)) {
+    step("record the finished import");
+    await writeState(dataDir, work, statePath, {
+      phase: "done",
+      aside: null,
+      counts: zeroCounts(),
+      bytes: 0,
+      startedAt,
+      finishedAt: now(),
+    });
+    progress.startupSafe = true;
+    console.info(`${LOG} done: no sessions to import`);
+    return {
+      outcome: "done",
+      sourceMissing: false,
+      aside: null,
+      counts: zeroCounts(),
+      bytes: 0,
+      preflight: "not-needed",
+    };
+  }
+
+  // 5. Source: only whether it is there, before the boundary.
   step("check the home transcript directory");
   const source =
     options.homeProjectsDir ?? join(userHomeDir(), ".claude", "projects");
@@ -369,7 +414,7 @@ async function runImport(
   if (!sourceStat.isDirectory())
     throw new ImportAbort("the home transcript path is not a directory");
 
-  // 5. Boundary, before the source is listed or the space checked: the
+  // 6. Boundary, before the source is listed or the space checked: the
   // set-aside and a durable `copy`. Only then may the service start, so no
   // session can have written the destination before it is set aside.
   let aside: string | null;
@@ -404,12 +449,12 @@ async function runImport(
     afterStep("state-copy");
   } else aside = state.aside;
 
-  // 6. Plan against the destination as it stands: a unit whose main is there
+  // 7. Plan against the destination as it stands: a unit whose main is there
   // is installed, never staged, and not in the need.
   step("plan the copy");
   const counts = zeroCounts();
   const ids = new Set<string>();
-  for (const id of (options.providerSessionIds ?? selectedIds)()) {
+  for (const id of selection()) {
     counts.selected += 1;
     if (PROVIDER_ID.test(id)) ids.add(id);
     else counts.invalid += 1;
@@ -419,7 +464,7 @@ async function runImport(
   const found = new Set([...units.map((u) => u.id), ...unsupported]);
   counts.missing = [...ids].filter((id) => !found.has(id)).length;
 
-  // 7. Preflight: below the need, stage nothing and retry next boot.
+  // 8. Preflight: below the need, stage nothing and retry next boot.
   const pending: Unit[] = [];
   for (const unit of units)
     if (!(await exists(mainPath(destination, unit)))) pending.push(unit);
@@ -434,7 +479,7 @@ async function runImport(
   }
   afterStep("planned");
 
-  // 8. Copy each unit not installed yet.
+  // 9. Copy each unit not installed yet.
   step("copy the transcripts");
   let bytes = 0;
   for (const unit of units) {
@@ -486,7 +531,7 @@ async function runImport(
   }
   progress.providerSessionId = undefined;
 
-  // 9. Done.
+  // 10. Done.
   await rm(staging, { recursive: true, force: true });
   await writeState(dataDir, work, statePath, {
     phase: "done",
@@ -511,6 +556,15 @@ async function runImport(
 
 function byName(a: Dirent, b: Dirent): number {
   return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+}
+
+/** Whether the selection is surely empty; a failing one is not. */
+function nothingSelected(selection: () => string[]): boolean {
+  try {
+    return selection().length === 0;
+  } catch {
+    return false;
+  }
 }
 
 function selectedIds(): string[] {

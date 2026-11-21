@@ -103,9 +103,11 @@ The browser token is created on first start at `assistant-data/.assistant-token`
 and injected into the page, so there is nothing to log in to. Then open
 **Settings → Models & providers** and connect a provider:
 
-- **Claude SDK**: every Claude profile, Default Claude included, keeps its own
-  login under `DATA_DIR/credential-profiles/`. Connect one from the browser,
-  which streams the official `claude auth login` flow.
+A fresh install has no accounts: add one there before starting a session.
+
+- **Claude SDK**: every Claude profile keeps its own login under
+  `DATA_DIR/credential-profiles/`. Connect one from the browser, which streams
+  the official `claude auth login` flow.
 - **OpenAI**: OpenAI/Codex profiles.
 - **OpenAI-compatible**: a self-hosted or hosted endpoint.
 
@@ -310,31 +312,29 @@ are the module's defaults.
 
 ### Existing pi and Claude logins
 
-On its first start, the server makes a one-time private copy of the existing
-`~/.pi/agent/` state into `DATA_DIR/credential-profiles/default/pi-agent/`, then
-marks the import complete. This preserves existing pi provider logins, model
-settings, extensions, skills, and prompt templates (not old terminal transcripts
-or caches) without retaining a runtime dependency on `~/.pi`. Set
-`ASSISTANT_LEGACY_PI_AGENT_DIR` to an alternate source directory (or a
-nonexistent path to disable the seed, as PR previews do). Back up or remove the
-old directory only after confirming the service starts normally.
+Pandeck never reads `~/.pi` or the service user's `~/.claude` login, API key or
+personal Claude config. Every account, Claude or OpenAI, is one the user added
+in Settings, isolated under `DATA_DIR/credential-profiles/<id>/`.
 
-Claude's protected **Default Claude** profile is an isolated account like any
-other, in `DATA_DIR/credential-profiles/claude-default/claude`; it does not use
-the service user's `~/.claude` login, API key or personal Claude config. On the
-first boot after upgrading, the server copies Pandeck's own Default Claude
-transcripts from `~/.claude/projects` once, so old sessions still resume; home
-is left untouched (`docs/credential-distribution.md`). Settings → Claude SDK can
-connect or reconnect any Claude profile from a desktop or phone: it streams the
-official bundled `claude auth login --claudeai` command, offers Claude's
-authorization URL as a tappable link, and forwards the pasted authorization code
-directly to the CLI without displaying or storing it. PA does not implement the
-OAuth exchange. Settings marks the profile Ready as soon as Claude writes
-`.credentials.json`. The displayed isolated `CLAUDE_CONFIG_DIR=… claude` command
-remains the terminal fallback for every profile, Default Claude included.
-Automatic Claude workflows use the first enabled Claude profile. PR previews use
-a separate per-instance HOME, so their Default Claude and named profile
-directories start empty and require preview-local setup. They do not inherit the
+Installs from before Pandeck stopped creating default accounts keep their
+protected **Default OpenAI** (`default`) and **Default Claude**
+(`claude-default`) accounts, logins and bound sessions unchanged. On the first
+boot after the move to isolated Claude profiles, the server copies Pandeck's own
+Default Claude transcripts from `~/.claude/projects` once, so old sessions still
+resume; home is left untouched, and a fresh install, which has no Default
+Claude, never reads it or writes anything for it
+(`docs/credential-distribution.md`).
+
+Settings → Claude SDK can connect or reconnect any Claude profile from a desktop
+or phone: it streams the official bundled `claude auth login --claudeai`
+command, offers Claude's authorization URL as a tappable link, and forwards the
+pasted authorization code directly to the CLI without displaying or storing it.
+PA does not implement the OAuth exchange. Settings marks the profile Ready as
+soon as Claude writes `.credentials.json`. The displayed isolated
+`CLAUDE_CONFIG_DIR=… claude` command remains the terminal fallback for every
+profile. Automatic Claude workflows use the first enabled Claude profile. PR
+previews use a separate per-instance HOME and an empty DATA_DIR, so they start
+with no accounts and require preview-local setup. They do not inherit the
 service user's `~/.claude` login or transcripts.
 
 ### Status and logs

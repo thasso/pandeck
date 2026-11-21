@@ -23,6 +23,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "claude-sdk-fork-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -56,6 +57,9 @@ writeFileSync(
     },
   ]),
 );
+// An install that still has its protected defaults: unbound sessions run as
+// Default Claude.
+await seedLegacyDefaultAccounts();
 
 /** Worktree edges are a DB concern; drive them directly instead. */
 const worktreeCwds = new Map<string, string>();

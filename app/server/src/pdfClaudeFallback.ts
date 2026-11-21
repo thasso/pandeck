@@ -3,7 +3,7 @@
  * in-process Claude Agent SDK one-shot. The bytes are sent as a Claude document
  * block; model, thinking level, timeout, and the master enable switch come from
  * the `pdfConversion` app settings. It runs as a Claude account's login under
- * DATA_DIR (`claude-default` unless one is named). Registered once at startup.
+ * DATA_DIR (the routed one unless one is named). Registered once at startup.
  */
 import { Buffer } from "node:buffer";
 import { CLAUDE_SDK_PROVIDER } from "@assistant/shared";

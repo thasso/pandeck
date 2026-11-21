@@ -22,6 +22,7 @@ import type {
   ClaudeSdkSeam,
   ClaudeSdkUserMessage,
 } from "./sdkSeam.ts";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 const dataDir = mkdtempSync(join(tmpdir(), "claude-compaction-window-test-"));
 process.env.DATA_DIR = dataDir;
@@ -37,6 +38,9 @@ const { inProcessWorkerEnginesForTests } =
   await import("../workers/inProcessWorker.ts");
 
 const ENV_BEFORE = process.env[CLAUDE_AUTO_COMPACT_WINDOW_ENV];
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
+
 afterEach(() => {
   vi.useRealTimers();
   if (ENV_BEFORE === undefined)

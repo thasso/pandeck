@@ -56,7 +56,6 @@ import {
   claudeConfigDir,
   credentialProfileById,
   credentialProfilesOfKind,
-  ensureDefaultPiProfile,
   piAgentDir,
   subscribeCredentialProfileChanges,
   type CredentialProfile,
@@ -358,12 +357,10 @@ function gatewayProfile(
 }
 
 /**
- * Every account as the registry has it, oldest first, the defaults ensured.
- * Not the summaries: they read each account's files, and one unreadable
+ * Every account as the registry has it, oldest first. Not the summaries: they read each account's files, and one unreadable
  * endpoint would fail the boot instead of only its own push.
  */
 function registeredProfiles(): CredentialProfile[] {
-  ensureDefaultPiProfile();
   return (Object.keys(ACCOUNT_KINDS) as CredentialProfileProvider[])
     .flatMap((provider) => credentialProfilesOfKind(provider))
     .sort((a, b) => a.createdAt - b.createdAt);

@@ -360,10 +360,10 @@ accounts sign in through the same card in `signIn` mode (see Accounts).
 
 ## Accounts
 
-A fresh data directory never imports `~/.pi/agent/auth.json` implicitly. To opt
-into the one-time legacy pi import, set `ASSISTANT_LEGACY_PI_AGENT_DIR` to the
-source directory before startup. Existing imports and their markers are
-preserved; an unconfigured import creates no marker and can be enabled later.
+A fresh data directory has no accounts and creates none, not even a default: the
+Accounts list stays empty until the user adds one, and nothing is imported from
+`~/.pi` or `~/.claude`. An older install keeps its protected Default OpenAI and
+Default Claude unchanged (`docs/account-routing.md`, "No account").
 
 The accounts models run on (Claude and OpenAI logins, and OpenAI-compatible
 endpoints) are credential profiles (`app/server/src/credentialProfiles.ts`),
@@ -376,11 +376,12 @@ page's `/api/credential-profiles` routes call:
   whether it takes its provider's unpinned work. A login in progress never shows
   its device code or link here: the code travels only on the login dialog's
   socket, never in an account summary.
-- `accounts_update`: create, rename, enable, disable or delete. Delete refuses a
-  default account or one a session is bound to, as the page does, and unpins the
-  account from every setting through `clearProfilePins`. Only login kinds are
-  created here; an endpoint account is created and its endpoint edited only on
-  the Settings page, so no agent tool reads or writes a URL or key.
+- `accounts_update`: create, rename, enable, disable or delete. Delete refuses
+  an older install's protected default account or one a session is bound to, as
+  the page does, and unpins the account from every setting through
+  `clearProfilePins`. Only login kinds are created here; an endpoint account is
+  created and its endpoint edited only on the Settings page, so no agent tool
+  reads or writes a URL or key.
 - `accounts_sign_in`: raises a `settingsInput` card in `signIn` mode
   (`path: accounts.<id>`, `account: { id, provider }`) and ends the turn. In the
   browser, Sign in (Continue sign-in while a login runs) opens the same login
@@ -454,15 +455,15 @@ change.
 id without a suffix, before any runtime exists
 (`migrateOpenAiCompatibleSettingsToAccount`, from `piSdk/models.ts`). It writes
 `endpoint.json`, checks its mode and reads it back, then adds the registry entry
-(enterprise copied from Default OpenAI) and reads that back: the registry entry
-is the commit point. Only then is the old file deleted. A crash at any step
-leaves the old file, and the next boot converges: with the entry already there,
-it deletes the old file only if `endpoint.json` still equals it and is 0600, and
-otherwise leaves both for manual review, since the user may have edited the
-account. An old file holding nothing is deleted; an unreadable one stays.
-Nothing it logs names the key or URL, and boot goes on either way. SQL migration
-0099 rebinds every session and held peer child on an `openai-compatible` model
-to that account.
+(enterprise copied from Default OpenAI where the install has it, else personal)
+and reads that back: the registry entry is the commit point. Only then is the
+old file deleted. A crash at any step leaves the old file, and the next boot
+converges: with the entry already there, it deletes the old file only if
+`endpoint.json` still equals it and is 0600, and otherwise leaves both for
+manual review, since the user may have edited the account. An old file holding
+nothing is deleted; an unreadable one stays. Nothing it logs names the key or
+URL, and boot goes on either way. SQL migration 0099 rebinds every session and
+held peer child on an `openai-compatible` model to that account.
 
 **Before deploying, and rolling back.** The migration keeps no backup: once it
 succeeds, the only copy of the key is

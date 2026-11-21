@@ -22,10 +22,6 @@ const tmp = mkdtempSync(join(tmpdir(), "remote-pi-engine-"));
 process.env.ASSISTANT_CWD = tmp;
 process.env.DATA_DIR = join(tmp, "data");
 const profiles = await import("../credentialProfiles.ts");
-// Protected defaults may point at real host credentials. Never select them in a fake-provider test.
-profiles.listCredentialProfiles();
-profiles.setCredentialProfileEnabled(profiles.DEFAULT_CLAUDE_PROFILE_ID, false);
-profiles.setCredentialProfileEnabled(profiles.DEFAULT_OPENAI_PROFILE_ID, false);
 const { piStore } = await import("./piStore.ts");
 const { nativePiSessionForTests, piToolActivationForTests } =
   await import("./piEngine.ts");
