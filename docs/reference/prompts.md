@@ -24,6 +24,10 @@ Agent persona prompts, project prompts, and workshop UI/tool widget conventions.
   `contacts_manage` in any context) and the Tempo time-logging routing guidance
   (right ticket + activity; a cost center that Jira derives from the ticket
   follows it; create a ticket when none fits, then log/comment).
+- `onboarding-setup.md` is the Personal Assistant's first-run guided setup
+  section (`docs/onboarding.md`): conditional on `guidedSetup`, which only the
+  singleton created while onboarding is in `setup` freezes, and which fails
+  closed for old records and unconditioned callers.
 - `integration-slack.md`, `integration-google.md` and `integration-tempo.md` own
   the CONDITIONAL persona sections (Task-287): text that only ships to a session
   whose matching integration gate was on when it started. Their content moved

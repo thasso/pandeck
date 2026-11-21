@@ -909,6 +909,12 @@ export interface UIState {
    * cache, so a cached boot can never show first run.
    */
   onboarding: OnboardingState | null;
+  /**
+   * How many sends the server refused because they went to the finished
+   * guided setup conversation (`setupFinished` on `error`). A change tells the
+   * app to show the Personal Assistant's current conversation instead.
+   */
+  setupFinishedRefusals: number;
   /** Compact title/route/existence metadata for resolved pa:// object links. */
   objectLinks: Record<string, PaObjectLinkResolution>;
 }
@@ -1070,6 +1076,7 @@ const emptyInitial: UIState = {
   accountLoginAlerts: [],
   gatewayStatus: "ok",
   onboarding: null,
+  setupFinishedRefusals: 0,
   objectLinks: {},
 };
 
@@ -6586,6 +6593,9 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
           worktreeListError:
             listFailureFor(msg, "worktree") ?? state.worktreeListError,
           error: msg.message,
+          setupFinishedRefusals: msg.setupFinished
+            ? state.setupFinishedRefusals + 1
+            : state.setupFinishedRefusals,
         },
         {
           liveStreams: [],

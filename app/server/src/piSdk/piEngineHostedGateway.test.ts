@@ -173,6 +173,7 @@ const conditions = {
   knowledgeBase: false,
   projectRegistryPointer: false,
   memoryWrite: false,
+  guidedSetup: false,
 };
 
 function agentOn(model: string) {

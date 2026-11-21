@@ -83,6 +83,7 @@ test("only the retained persona/project assets are required and packaged", () =>
     "integration-google.md",
     "integration-slack.md",
     "integration-tempo.md",
+    "onboarding-setup.md",
     "personal-assistant.md",
     "project-registry.md",
     "workflow-coordinator.md",
@@ -165,7 +166,7 @@ test("every persona resolves its packaged prompt assets from tracked files", () 
   }
   const diagnostic = promptAssetDiagnostic();
   assert.equal(diagnostic.level, "info");
-  assert.match(diagnostic.lines[0] ?? "", /resolved 11\/11 .*\(packaged\)/);
+  assert.match(diagnostic.lines[0] ?? "", /resolved 12\/12 .*\(packaged\)/);
 });
 
 test("a missing prompt asset throws instead of degrading to built-in text", () => {

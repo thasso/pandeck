@@ -1171,7 +1171,9 @@ inspector shows the envelope as object references.
 An install with no usable account has no draft to stage: its New Session routes
 show the first-run welcome screen instead, with both panels, the top bar and
 edge-back omitted (without touching saved layout) and the nav bar reduced to New
-Session and Settings (`docs/onboarding.md`).
+Session and Settings (`docs/onboarding.md`). During the guided setup that
+follows, the New Session routes lead to `/assistant`, which keeps that focused
+shell and adds a Finish setup header.
 
 Creating a session is instant — no modal setup flow. A draft session opens as a
 main-pane view with the composer focused; starting from another object stages

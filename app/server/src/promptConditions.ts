@@ -69,6 +69,13 @@ export interface PromptConditions {
   projectRegistryPointer: boolean;
   /** This persona may WRITE memory (the write-side rules apply to it). */
   memoryWrite: boolean;
+  /**
+   * The Personal Assistant session that runs first-run guided setup
+   * (`docs/onboarding.md`): its setup section and finish tool ship. Unlike
+   * every other key it fails CLOSED — a record without it, or a caller without
+   * conditions, never gets setup instructions (see {@link parsePromptConditions}).
+   */
+  guidedSetup: boolean;
 }
 
 export type PromptConditionKey = keyof PromptConditions;
@@ -81,6 +88,7 @@ export const PROMPT_CONDITION_KEYS: readonly PromptConditionKey[] = [
   "knowledgeBase",
   "projectRegistryPointer",
   "memoryWrite",
+  "guidedSetup",
 ];
 
 /**
@@ -97,6 +105,9 @@ const ALL_PROMPT_CONDITIONS: PromptConditions = {
   knowledgeBase: true,
   projectRegistryPointer: true,
   memoryWrite: true,
+  // The one key that is not a saving: setup instructions in an ordinary
+  // session would be a wrong rule, not a lost saving.
+  guidedSetup: false,
 };
 
 /** What a session knows about itself when it starts. */
@@ -105,6 +116,11 @@ export interface SessionPromptEvidence {
   hasAttachments?: boolean;
   /** Project id the session opens on (standalone Project, worktree, or Task). */
   projectId?: string;
+  /**
+   * The Personal Assistant singleton is being created while first run is in
+   * guided setup. Only that creation path sets it.
+   */
+  guidedSetup?: boolean;
 }
 
 /** Only these personas may write memory (coding sessions read it only). */
@@ -116,7 +132,9 @@ function personaWritesMemory(agentType: AgentType): boolean {
  * Everything this persona could possibly carry: the measurement baseline the
  * per-condition savings are subtracted from. Unlike {@link ALL_PROMPT_CONDITIONS}
  * it keeps `memoryWrite` at the persona's real capability, because that one is
- * a property of the persona, not a saving a session can win.
+ * a property of the persona, not a saving a session can win, and it includes
+ * guided setup for the persona that runs it, so the budgets bound that session
+ * too.
  */
 export function maximalPromptConditions(
   agentType: AgentType,
@@ -124,6 +142,7 @@ export function maximalPromptConditions(
   return {
     ...ALL_PROMPT_CONDITIONS,
     memoryWrite: personaWritesMemory(agentType),
+    guidedSetup: agentType === "personal-assistant",
   };
 }
 
@@ -150,6 +169,8 @@ export function computePromptConditions(
     knowledgeBase: gates.knowledgeBase,
     projectRegistryPointer: !knownProject,
     memoryWrite: personaWritesMemory(agentType),
+    guidedSetup:
+      agentType === "personal-assistant" && evidence.guidedSetup === true,
   };
 }
 
@@ -204,6 +225,17 @@ export function sessionPromptConditions(
 }
 
 /**
+ * Whether this session was frozen as the guided setup conversation. Reads the
+ * record only: a session without one has not started and freezes nothing here.
+ */
+export function sessionRanGuidedSetup(sessionId: string): boolean {
+  return (
+    parsePromptConditions(sessionStore.getPromptConditions(sessionId))
+      ?.guidedSetup === true
+  );
+}
+
+/**
  * `memoryWrite` is a property of the PERSONA, not of the session, so the
  * persona always wins over the record. Every other key fails open to more text;
  * this one would fail open to a DIFFERENT rule — a record from an older build
@@ -225,7 +257,9 @@ function withPersonaMemoryRule(
  * Read a persisted record back into a full condition set. Unknown/missing keys
  * fail open to "section included" for the same reason as
  * {@link ALL_PROMPT_CONDITIONS}: a record written by an older build must not
- * silently drop a rule from the prompt.
+ * silently drop a rule from the prompt. `guidedSetup` is the exception and
+ * fails closed: every record written before it existed belongs to a session
+ * that is not running guided setup.
  */
 export function parsePromptConditions(
   raw: string | undefined,

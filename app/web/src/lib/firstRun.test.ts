@@ -3,6 +3,7 @@ import type { CredentialProfileSummary } from "@assistant/shared";
 import {
   firstAccountSteps,
   firstRunAssistantName,
+  setupGreeting,
   welcomeGreeting,
 } from "./firstRun.ts";
 
@@ -85,6 +86,17 @@ describe("welcomeGreeting", () => {
     expect(welcomeGreeting("**Ada** [x](y)")).toContain(
       "I’m \\*\\*Ada\\*\\* \\[x\\]\\(y\\),",
     );
+  });
+});
+
+describe("setupGreeting", () => {
+  it("says the account is connected and asks about the saved name", () => {
+    const text = setupGreeting("Larry");
+    expect(text).toContain("Your account is connected");
+    expect(text).toContain(
+      "I’m Larry. Should I keep it, or would you like to call me something else?",
+    );
+    expect(setupGreeting("**Ada**")).toContain("I’m \\*\\*Ada\\*\\*.");
   });
 });
 

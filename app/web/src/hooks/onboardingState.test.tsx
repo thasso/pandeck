@@ -63,17 +63,30 @@ describe("first run comes only from the live server", () => {
     expect(live.onboarding).toBe("complete");
   });
 
-  it("follows the server from pending to complete", () => {
+  it("follows the server from pending through setup to complete", () => {
     const pending = reduceAssistantState(createInitialState(), {
       kind: "server",
       msg: ready("pending"),
     });
     expect(pending.onboarding).toBe("pending");
-    const done = reduceAssistantState(pending, {
+    const setup = reduceAssistantState(pending, {
+      kind: "server",
+      msg: { type: "onboarding", state: "setup" },
+    });
+    expect(setup.onboarding).toBe("setup");
+    const done = reduceAssistantState(setup, {
       kind: "server",
       msg: { type: "onboarding", state: "complete" },
     });
     expect(done.onboarding).toBe("complete");
+  });
+
+  it("a reload during setup reads setup from ready", () => {
+    const live = reduceAssistantState(createInitialState(), {
+      kind: "server",
+      msg: ready("setup"),
+    });
+    expect(live.onboarding).toBe("setup");
   });
 });
 

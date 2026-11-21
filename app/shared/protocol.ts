@@ -393,11 +393,13 @@ export interface AccountLoginAlert {
 }
 
 /**
- * Whether the install is on its first run (`docs/onboarding.md`): `pending`
- * until the server sees a usable account, then `complete` for good. The
- * server owns it; the web shows the welcome screen only while it is `pending`.
+ * Where the install is in its first run (`docs/onboarding.md`): `pending`
+ * until the server sees a usable account, then `setup` while the Personal
+ * Assistant walks the user through the basics, then `complete` for good. The
+ * server owns it; the web shows the welcome screen while `pending` and the
+ * focused setup chat while `setup`.
  */
-export type OnboardingState = "pending" | "complete";
+export type OnboardingState = "pending" | "setup" | "complete";
 
 /** The credential gateway's state as app status (`gatewayStatus`). */
 export type GatewayStatusState = "ok" | "unreachable" | "incompatible";
@@ -9122,6 +9124,12 @@ export type ServerMessage =
        * one. Distinct from `requestId`, which belongs to mutation correlation.
        */
       failedPromptClientRequestId?: string;
+      /**
+       * Set when the send was refused because its session is the guided setup
+       * conversation and setup is finished (`docs/onboarding.md`): the client
+       * takes the user to the Personal Assistant's current conversation.
+       */
+      setupFinished?: true;
     }
   /**
    * A client command carrying a `requestId` finished without an error. It says

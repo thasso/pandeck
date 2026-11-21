@@ -225,7 +225,12 @@ function toolsByTier(
   eager: AgentTool[];
   deferred: AgentTool[];
 } {
-  const eagerNames = eagerToolNamesFor(agentType);
+  // Every condition on, like the prompt layers: the worst case a session of
+  // this persona can carry (`maximalPromptConditions`).
+  const eagerNames = eagerToolNamesFor(
+    agentType,
+    maximalPromptConditions(agentType),
+  );
   const eager: AgentTool[] = [];
   const deferred: AgentTool[] = [];
   for (const group of toolGroupsFor(agentType))

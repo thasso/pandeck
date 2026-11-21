@@ -71,6 +71,12 @@ export type WorktreeView = "changes" | "files";
 
 export const PERMANENT_ASSISTANT_PATH = "/assistant";
 
+/** How {@link useSessionRouting}'s `navigate` records the move in history. */
+interface NavigateOptions {
+  asPage?: boolean;
+  replace?: boolean;
+}
+
 export type Route =
   | { name: "permanentAssistant" }
   | { name: "session"; id: string }
@@ -597,8 +603,9 @@ export function useSessionRouting({
   openPermanentAssistant,
 }: Args): {
   route: Route;
-  navigate: (path: string, options?: { asPage?: boolean }) => void;
+  navigate: (path: string, options?: NavigateOptions) => void;
   notifyStagedFirstSend: () => void;
+  reopenPermanentAssistant: () => void;
 } {
   const [route, setRoute] = useState<Route>(() =>
     parseRoute(location.pathname + location.search + location.hash),
@@ -809,54 +816,55 @@ export function useSessionRouting({
    * `asPage`: open even a document as an ordinary page, with no origin to
    * Close back to — the sidebar's browsing, where the reader is already where
    * the file lives. A chat's link keeps the origin, and its Close.
+   * `replace`: take the current entry's place instead of adding one, for a
+   * route that only redirects (Back would land on it and redirect again).
    */
-  const navigate = useCallback(
-    (path: string, options?: { asPage?: boolean }) => {
-      // Any explicit navigation cancels a still-armed staged advance. Callers that
-      // navigate to the staging route AND immediately send (e.g. inspector "start
-      // chat") re-arm via notifyStagedFirstSend right after this call.
-      stagedFirstSend.current = false;
-      stagedKnownIdsAtArm.current = null;
-      const currentHref = location.pathname + location.search + location.hash;
-      let routePath = path;
-      if (currentHref !== path) {
-        const nextDocument = resolveInternalDocumentTarget(path);
-        const currentDocument = resolveInternalDocumentTarget(currentHref);
-        // A worktree file's Review scope (`from`/`to`) is not part of its
-        // document identity, but it IS a different page: switching scope with
-        // a file open must navigate, not be folded into "same document".
-        const sameDocument =
-          nextDocument !== null &&
-          currentDocument !== null &&
-          sameDocumentIdentity(nextDocument, currentDocument) &&
-          reviewScopeOf(path) === reviewScopeOf(currentHref);
-        // Valid line anchors are part of document navigation even when the source
-        // identity is unchanged. Unrelated fragments such as transcript `#m-*`
-        // parse with no document anchor and must not manufacture an entry.
-        const hashIndex = path.indexOf("#");
-        const unrelatedFragment =
-          hashIndex >= 0 &&
-          parseDocumentLineAnchor(path.slice(hashIndex + 1)) === undefined;
-        const changedLineAnchor =
-          sameDocument &&
-          !unrelatedFragment &&
-          nextDocument !== null &&
-          currentDocument !== null &&
-          documentTargetHref(nextDocument) !==
-            documentTargetHref(currentDocument);
-        if (!sameDocument || changedLineAnchor) {
-          if (nextDocument && !options?.asPage) pushDocumentEntry(path);
-          else pushEntry(path);
-        } else {
-          routePath = currentHref;
-        }
+  const navigate = useCallback((path: string, options?: NavigateOptions) => {
+    // Any explicit navigation cancels a still-armed staged advance. Callers that
+    // navigate to the staging route AND immediately send (e.g. inspector "start
+    // chat") re-arm via notifyStagedFirstSend right after this call.
+    stagedFirstSend.current = false;
+    stagedKnownIdsAtArm.current = null;
+    const currentHref = location.pathname + location.search + location.hash;
+    let routePath = path;
+    if (currentHref !== path) {
+      const nextDocument = resolveInternalDocumentTarget(path);
+      const currentDocument = resolveInternalDocumentTarget(currentHref);
+      // A worktree file's Review scope (`from`/`to`) is not part of its
+      // document identity, but it IS a different page: switching scope with
+      // a file open must navigate, not be folded into "same document".
+      const sameDocument =
+        nextDocument !== null &&
+        currentDocument !== null &&
+        sameDocumentIdentity(nextDocument, currentDocument) &&
+        reviewScopeOf(path) === reviewScopeOf(currentHref);
+      // Valid line anchors are part of document navigation even when the source
+      // identity is unchanged. Unrelated fragments such as transcript `#m-*`
+      // parse with no document anchor and must not manufacture an entry.
+      const hashIndex = path.indexOf("#");
+      const unrelatedFragment =
+        hashIndex >= 0 &&
+        parseDocumentLineAnchor(path.slice(hashIndex + 1)) === undefined;
+      const changedLineAnchor =
+        sameDocument &&
+        !unrelatedFragment &&
+        nextDocument !== null &&
+        currentDocument !== null &&
+        documentTargetHref(nextDocument) !==
+          documentTargetHref(currentDocument);
+      if (options?.replace) {
+        replaceEntry(path);
+      } else if (!sameDocument || changedLineAnchor) {
+        if (nextDocument && !options?.asPage) pushDocumentEntry(path);
+        else pushEntry(path);
+      } else {
+        routePath = currentHref;
       }
-      // Re-parse even for same-path clicks so a sidebar item can recover from a
-      // stale/pending route state without requiring a separate navigation first.
-      setRoute(parseRoute(routePath));
-    },
-    [],
-  );
+    }
+    // Re-parse even for same-path clicks so a sidebar item can recover from a
+    // stale/pending route state without requiring a separate navigation first.
+    setRoute(parseRoute(routePath));
+  }, []);
 
   // App calls this when the user sends the first prompt from a staging route,
   // for BOTH harnesses (pi mints the id server-side; claude-sdk keeps the staged
@@ -874,5 +882,23 @@ export function useSessionRouting({
     stagedFirstSend.current = true;
   }, []);
 
-  return { route, navigate, notifyStagedFirstSend };
+  /**
+   * Show the Personal Assistant's CURRENT conversation: open it again when
+   * `/assistant` already shows an older one (the server rotated it, e.g. when
+   * guided setup finished), or go to `/assistant` from anywhere else.
+   */
+  const routeRef = useRef(route);
+  routeRef.current = route;
+  const reopenPermanentAssistant = useCallback(() => {
+    if (routeRef.current.name !== "permanentAssistant") {
+      navigate(PERMANENT_ASSISTANT_PATH);
+      return;
+    }
+    const key = routeKey(routeRef.current);
+    applied.current = key;
+    pending.current = key;
+    openPermanentAssistant();
+  }, [navigate, openPermanentAssistant]);
+
+  return { route, navigate, notifyStagedFirstSend, reopenPermanentAssistant };
 }

@@ -53,6 +53,7 @@ const PROMPT_FILE_PERSONAS: Record<string, AgentType[]> = {
   "integration-slack.md": ["assistant"],
   "integration-google.md": ["assistant"],
   "integration-tempo.md": ["personal-assistant"],
+  "onboarding-setup.md": ["personal-assistant"],
   "workshop-ui-conventions.md": ["workshop"],
   "workshop-tool-widget-conventions.md": ["workshop"],
 };

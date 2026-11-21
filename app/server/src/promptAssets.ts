@@ -167,6 +167,12 @@ const CONDITIONAL_ASSET_LAYERS: readonly ConditionalAssetLayer[] = [
     condition: "tempo",
     personas: ["personal-assistant"],
   },
+  {
+    id: "onboarding:setup",
+    file: "onboarding-setup.md",
+    condition: "guidedSetup",
+    personas: ["personal-assistant"],
+  },
 ];
 
 /** Every tracked asset this server expects to load, for the startup report. */
@@ -257,8 +263,11 @@ function personaLayers(
   opts?: PromptAssetOptions,
 ): ResolvedLayer[] {
   const promptsDir = opts?.promptsDir ?? PROMPTS_DIR;
+  // Absent conditions include every section, except guided setup: setup
+  // instructions in a session that is not running setup would be a wrong
+  // rule, not a lost saving (`promptConditions.ts`).
   const on = (key: PromptConditionKey): boolean =>
-    opts?.conditions?.[key] ?? true;
+    opts?.conditions?.[key] ?? key !== "guidedSetup";
   if (agentType === "workflow-coordinator")
     return [
       resolveAsset(

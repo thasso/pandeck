@@ -72,13 +72,13 @@ It writes app sections through `updateSettings` (each section replaced whole)
 and integration sections through their own module, then runs what the written
 sections need:
 
-| Section written       | Effect                                                                                                                               |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `permanentAssistant`  | A changed name, provider, model, thinking level, instructions or working directory rotates the Personal Assistant to a fresh session |
-| `slack`               | Reconcile Socket Mode                                                                                                                |
-| `github`              | Reconcile the package proxy                                                                                                          |
-| any other integration | `notifyIntegrationToolsChanged` (live `tools/list_changed`)                                                                          |
-| `knowledgeBase`       | `notifyIntegrationToolsChanged`: the setting gates the `kb_*` tool groups                                                            |
+| Section written       | Effect                                                                                                                                                                                                        |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `permanentAssistant`  | A changed name, provider, model, thinking level, instructions or working directory rotates the Personal Assistant to a fresh session; a rename alone during first-run guided setup does not (`onboarding.md`) |
+| `slack`               | Reconcile Socket Mode                                                                                                                                                                                         |
+| `github`              | Reconcile the package proxy                                                                                                                                                                                   |
+| any other integration | `notifyIntegrationToolsChanged` (live `tools/list_changed`)                                                                                                                                                   |
+| `knowledgeBase`       | `notifyIntegrationToolsChanged`: the setting gates the `kb_*` tool groups                                                                                                                                     |
 
 Then every `onSettingsChanged` listener hears which sections were written. The
 hub forwards that to each connection's `settingsChanged`, which sends that
@@ -212,15 +212,16 @@ group (`app/server/src/tools/settings/settingsTools.ts`):
   normalization. A secret accepts only `null` (clear); any other value is
   refused with a pointer to the section's Settings page, so the user never
   pastes a token into the chat. `test` runs a section's connection test through
-  `testSettingsSection`, the same tests the page runs. When the write changes
-  the assistant's own profile, the result says the user's next message starts a
-  fresh Personal Assistant session. A credential the save dropped because its
-  URL moved to another host (see below) is listed under `credentialsCleared`,
-  with a note to ask the user again through `settings_request_input`.
+  `testSettingsSection`, the same tests the page runs. When the write rotates
+  the assistant (`assistantChangeRotates`), the result says the user's next
+  message starts a fresh Personal Assistant session. A credential the save
+  dropped because its URL moved to another host (see below) is listed under
+  `credentialsCleared`, with a note to ask the user again through
+  `settings_request_input`.
 
 `settings_update`, `settings_request_input`, `accounts_update` and
 `accounts_sign_in` are `local` side effects, so Plan mode keeps only
-`settings_read` and `accounts_read`.
+`settings_read`, `accounts_read` and `models_read`.
 
 Both tools hold four guarantees the schema alone cannot give, since neither
 harness enforces it before `execute`:
@@ -405,6 +406,13 @@ page's `/api/credential-profiles` routes call:
   code, link or token, so the tools never return it: an account in `error`
   status carries a server-written note pointing at its Settings page, which
   shows the error to the user.
+
+A fourth, `models_read`, lists the models each enabled, signed-in account
+offers, each with its `provider:modelId` key and whether the model picker shows
+it (not in `models.hidden`), plus the Personal Assistant's own model key. An
+account whose models cannot be listed is reported as such rather than guessed.
+It reads only, so Plan mode keeps it. First-run guided setup uses it to ask
+which models the picker shows (`onboarding.md`).
 
 ### OpenAI-compatible accounts
 

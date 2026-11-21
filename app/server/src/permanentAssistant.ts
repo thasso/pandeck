@@ -28,6 +28,7 @@ import { permanentAssistantProfileInstructions } from "./permanentAssistantProfi
 import { memoryScheduler } from "./memory/memoryScheduler.ts";
 import { resetMemorySessionContext } from "./memory/memoryRuntime.ts";
 import { accountForSlot } from "./settingsModelSlots.ts";
+import { onboardingState } from "./onboarding.ts";
 import {
   acknowledgeSlackAssistantTurn,
   permanentAssistantReadBoundary,
@@ -282,6 +283,9 @@ async function acquireOrCreatePermanentAssistant(
 
   const profileInstructions = permanentAssistantProfileInstructions(profile);
   const credentialProfileId = await accountForSlot(profile);
+  // Frozen with the session: only a singleton created during first-run guided
+  // setup carries the setup section and finish tool (`docs/onboarding.md`).
+  const promptEvidence = { guidedSetup: onboardingState() === "setup" };
   let driver: PermanentAssistantDriver;
   if (
     profile.provider === CLAUDE_SDK_PROVIDER &&
@@ -295,6 +299,7 @@ async function acquireOrCreatePermanentAssistant(
       thinkingLevel: profile.thinkingLevel,
       additionalSystemPrompt: profileInstructions,
       credentialProfileId,
+      promptEvidence,
     });
   } else {
     const model = await piModelForSlot(profile, credentialProfileId);
@@ -309,6 +314,7 @@ async function acquireOrCreatePermanentAssistant(
       model,
       thinkingLevel: profile.thinkingLevel,
       credentialProfileId,
+      promptEvidence,
     });
   }
   if (rotated()) return acquirePermanentAssistant();

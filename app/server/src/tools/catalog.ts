@@ -53,6 +53,7 @@ import { showFilesTool } from "./core/showFilesTool.ts";
 import { assistantProjectRegistryTools } from "./core/projectRegistryTools.ts";
 import { projectCreateTool } from "./core/projectCreateTool.ts";
 import { assistantTimeTools } from "./core/timeTools.ts";
+import { onboardingTools } from "./settings/onboardingTools.ts";
 import { settingsTools } from "./settings/settingsTools.ts";
 import {
   githubActivityTools,
@@ -163,8 +164,10 @@ const TOOL_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
   settings_update: "local",
   settings_request_input: "local",
   accounts_read: "none",
+  models_read: "none",
   accounts_update: "local",
   accounts_sign_in: "local",
+  onboarding_finish: "local",
   task_read: "none",
   task_manage: "local",
   initiative_read: "none",
@@ -1074,6 +1077,16 @@ export function toolGroupsFor(agentType: AgentType): ToolGroup[] {
       ? [
           settingsToolGroup(),
           {
+            // Eager only in the session running first-run guided setup.
+            id: "onboarding",
+            label: "Guided setup",
+            description: "End the app's first-run guided setup.",
+            loading: "eager" as const,
+            eagerWhen: "guidedSetup" as const,
+            family: "shared" as const,
+            tools: onboardingTools,
+          },
+          {
             id: "worktree-start",
             label: "Start coding work",
             description:
@@ -1150,7 +1163,8 @@ export function agentToolsFor(agentType: AgentType): AgentTool[] {
  * (`promptConditions.ts`): a group with `eagerWhen` is eager only for a session
  * whose condition holds, and deferred (still discoverable) for the rest. Omit
  * them and every eager group is eager, which is what a measurement or a caller
- * without a session wants.
+ * without a session wants — except guided setup's, which only the session
+ * running setup carries (`promptConditions.ts`).
  */
 export function eagerToolNamesFor(
   agentType: AgentType,
@@ -1161,7 +1175,9 @@ export function eagerToolNamesFor(
       .filter(
         (group) =>
           group.loading === "eager" &&
-          (!group.eagerWhen || (conditions?.[group.eagerWhen] ?? true)),
+          (!group.eagerWhen ||
+            (conditions?.[group.eagerWhen] ??
+              group.eagerWhen !== "guidedSetup")),
       )
       .flatMap((group) => group.tools.map((tool) => tool.name)),
   );

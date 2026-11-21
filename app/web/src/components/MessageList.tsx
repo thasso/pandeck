@@ -7,6 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import { Button } from "./ui/button.tsx";
 import { Badge } from "./ui/badge.tsx";
@@ -825,6 +826,12 @@ function promptOriginLabel(origin: DisplayMessage["promptOrigin"]): string {
 interface Props {
   sessionId: string | undefined;
   messages: DisplayMessage[];
+  /**
+   * App-authored content above the first durable row, in the same scroll
+   * owner (the guided setup greeting, `docs/onboarding.md`). Shown only once
+   * the transcript reaches its start.
+   */
+  intro?: ReactNode;
   /** Durable entries behind the rendered messages (tool-result target mapping). */
   timeline?: readonly ClientTimelineEntry[] | undefined;
   /** Browser-local annotations attached to this session's next composer send. */
@@ -1258,6 +1265,7 @@ function messageHasEntry(message: DisplayMessage, entryId: string): boolean {
 export function MessageList({
   sessionId,
   messages,
+  intro,
   timeline = [],
   chatComments,
   commentDraft,
@@ -1953,6 +1961,8 @@ export function MessageList({
                   : "Load earlier messages"}
               </Button>
             </div>
+          ) : intro ? (
+            <div data-role="intro">{intro}</div>
           ) : null}
           {visibleRows.map(({ message: m, key }) => {
             const focusKey =

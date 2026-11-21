@@ -41,6 +41,8 @@ import { beginPromptRun } from "./sessionRunLease.ts";
 import { planTurnHintFor } from "./planHint.ts";
 import { sessionSkills, skillUserInvocable } from "../sessionSkills.ts";
 import { sessionStore } from "../db/sessionStore.ts";
+import { assertSetupSessionOpen } from "../onboarding.ts";
+import { sessionRanGuidedSetup } from "../promptConditions.ts";
 import { credentialProfileById } from "../credentialProfiles.ts";
 import {
   installAccountRecovery,
@@ -147,6 +149,7 @@ export function ensureRuntimeSessionWithRuntime(
       driver,
       () => {
         assertSessionWorktreePresent(driver.sessionId);
+        assertNotFinishedSetup(driver.sessionId);
         assertTurnAllowed(driver.sessionId, undefined);
       },
       () => {
@@ -233,6 +236,15 @@ function assertSessionWorktreePresent(sessionId: string): void {
   if (missing) throw new Error(WORKTREE_MISSING_BLOCKED_REASON);
 }
 
+/**
+ * The guided setup conversation runs nothing once setup is finished: its
+ * frozen prompt still carries the setup section and finish tool
+ * (`docs/onboarding.md`). Refused before the runtime session and any append.
+ */
+export function assertNotFinishedSetup(sessionId: string): void {
+  assertSetupSessionOpen(() => sessionRanGuidedSetup(sessionId));
+}
+
 function warnCheckFailed(err: unknown): void {
   console.warn(
     "Failed to check session worktree before prompting:",
@@ -293,6 +305,7 @@ export async function beginRuntimeProviderTurn(
 ): Promise<() => void> {
   assertAccountRecoveryAdmission(driver.sessionId);
   assertSessionWorktreePresent(driver.sessionId);
+  assertNotFinishedSetup(driver.sessionId);
   assertTurnAllowed(driver.sessionId, undefined);
   const releaseRun = beginPromptRun(driver.sessionId);
   const releaseAdmission = sessionRuntime.admitPrompt(driver.sessionId);
@@ -302,6 +315,7 @@ export async function beginRuntimeProviderTurn(
     assertTurnAllowed(driver.sessionId, undefined);
     assertAccountRecoveryAdmission(driver.sessionId);
     assertSessionEnterpriseAccount(driver);
+    assertNotFinishedSetup(driver.sessionId);
     const live = ensureRuntimeSessionWithRuntime(sessionRuntime, driver);
     // The provider supplied no user message. Stamp its provenance on the next
     // durable assistant entry instead of fabricating a user row.
@@ -358,6 +372,7 @@ async function deliverWithRuntime(
   // BEFORE the runtime session is ensured and before any append: a refused turn
   // must leave no trace of itself in the session.
   assertSessionWorktreePresent(driver.sessionId);
+  assertNotFinishedSetup(driver.sessionId);
   // A Stop holds every turn the user did not just ask for
   // (`automaticTurnHold.ts`). Checked here and again after the last await
   // below, so neither a caller that sampled the session before the Stop nor a
@@ -406,6 +421,8 @@ async function deliverWithRuntime(
     // delivery, and a refusal after that reservation could strand the prompt.
     accountMove?.usable();
     assertSessionEnterpriseAccount(driver);
+    // Setup may have finished while this send awaited above.
+    assertNotFinishedSetup(driver.sessionId);
     admit?.();
     const live = ensureRuntimeSessionWithRuntime(runtime, driver);
     if (accountMove) live.appendNotice(accountMove.notice);
