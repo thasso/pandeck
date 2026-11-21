@@ -184,6 +184,7 @@ const CLASSIFIED: Record<
       liveDefaultScopeGate: "read",
       claimScope: "projected-write",
       countArchived: "read",
+      hasAnySession: "read",
       upsert: "projected-write",
       setPeerTurnCap: "projected-write",
       switchCredentialProfile: "projected-write",

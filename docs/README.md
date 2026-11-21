@@ -64,6 +64,11 @@ only binding rules; everything else lives here.
   complete, and the one write path: `saveSettings`, its per-section side
   effects, and the per-connection push that keeps every client current; and the
   Personal Assistant's `settings_read`/`settings_update` tools.
+- `onboarding.md` — first run: the server-owned `pending`/`complete` state
+  (decided once at boot from a fresh install's empty data, final once complete),
+  the server ending it when it sees a usable account and naming the assistant
+  Larry, the welcome screen and first-account card that reuse Settings' sign-in
+  flows, and the focused shell (no panels, top bar or edge-back) while it lasts.
 - `user-profile.md` — who the app works for: the profile display name and the
   one timezone every user-local day and time resolves in, its host fallback,
   use-time resolution, and where the name appears.

@@ -9,6 +9,7 @@ import {
 import type { AppSettings, ServerMessage } from "@assistant/shared";
 import { DATA_DIR } from "./config.ts";
 import { subscribeIntegrationToolChanges } from "./integrationToolChanges.ts";
+import { readStoredAppSettings } from "./appSettingsFile.ts";
 import { getSettings } from "./settings.ts";
 import {
   IntegrationRefusal,
@@ -421,6 +422,20 @@ describe("saveSettings", () => {
   const cleanups: Array<() => void> = [];
   afterEach(() => {
     while (cleanups.length) cleanups.pop()?.();
+  });
+
+  test("persists an app section before its first await", async () => {
+    // First run's conditional naming (`onboarding.ts`) reads the stored name
+    // and writes in one synchronous step; it relies on exactly this.
+    const before = getSettings().sessionStatus;
+    const next = {
+      ...before,
+      thinkingLevel: before.thinkingLevel === "high" ? "low" : "high",
+    } as const;
+    const pending = saveSettings({ sessionStatus: next });
+    assert.deepEqual(readStoredAppSettings().sessionStatus, next);
+    await pending;
+    await saveSettings({ sessionStatus: before });
   });
 
   test("a failing effect or listener skips nothing after it", async () => {

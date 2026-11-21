@@ -6,6 +6,7 @@ import "./heapSnapshotSignal.ts";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { timingSafeEqual } from "node:crypto";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { WebSocketServer } from "ws";
@@ -90,8 +91,11 @@ import {
   listCredentialProfiles,
   patchCredentialProfile,
   patchOpenAiCompatibleEndpoint,
+  subscribeCredentialProfileChanges,
   testOpenAiCompatibleProfile,
 } from "./credentialProfiles.ts";
+import { checkOnboarding, initOnboarding } from "./onboarding.ts";
+import { APP_SETTINGS_PATH } from "./appSettingsFile.ts";
 import {
   markUsageProfileDirty,
   readUsageSnapshot,
@@ -887,6 +891,8 @@ async function handleRequest(
       const profiles = includeUsage
         ? listCredentialProfilesWithUsage()
         : listCredentialProfiles();
+      // A listing is where a finished login may first be seen (first run only).
+      void checkOnboarding();
       const includeModels =
         requestUrl.searchParams.get("includeModels") === "1";
       const modelsByProfile = includeModels
@@ -1953,6 +1959,15 @@ startInProcessWorker();
 // durable, nothing may write there, so a refusal stops the service here, before
 // the gateway, the listener and every session; the next start retries
 // (docs/deployment.md, "Default Claude transcript import").
+// First run is decided once, from what this install holds before anything this
+// boot writes, and remembered (docs/onboarding.md). A gateway client is never
+// enrolled: its accounts arrive from the remote gateway after boot.
+initOnboarding(() => ({
+  settingsFile: existsSync(APP_SETTINGS_PATH),
+  sessions: sessionStore.hasAnySession(),
+  accounts: listCredentialProfiles().length > 0,
+  gatewayClient: Boolean(GATEWAY_RELAY),
+}));
 const homeImportRefusal = await homeTranscriptImportStartupRefusal();
 if (homeImportRefusal !== undefined) {
   console.error(homeImportRefusal);
@@ -2075,7 +2090,13 @@ server.listen(PORT, HOST, () => {
   onSettingsChanged(({ sections }) => {
     if (sections.includes("sessionPeerPromptReminderLimit"))
       touchAllSessionRows("reminder-limit");
+    // The Claude SDK switch decides whether a Claude account offers models.
+    if (sections.includes("claudeSdk")) void checkOnboarding();
   });
+  // First run ends where the server learns an account changed: created,
+  // enabled, signed in, an endpoint saved or its models discovered.
+  subscribeCredentialProfileChanges(() => void checkOnboarding());
+  void checkOnboarding();
   // Publishes proxy/CA env vars to `childProcessEnv()` (never process.env), so
   // every later-spawned agent, host command and build tool gets them while the
   // server's own traffic stays direct. Best-effort: a failure here must

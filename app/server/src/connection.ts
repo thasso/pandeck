@@ -96,6 +96,7 @@ import { hub } from "./hub.ts";
 import { sessionListHiddenProbe } from "./permanentAssistantVisibility.ts";
 import { sendAccountLoginAlertsTo } from "./accountHealth.ts";
 import { sendGatewayStatusTo } from "./gatewayStatus.ts";
+import { onboardingState } from "./onboarding.ts";
 import {
   isLiveSession,
   type HarnessDriver,
@@ -662,6 +663,7 @@ export class Connection implements Viewer {
       },
       slashCommands,
       contextInfo: viewing?.contextInfo() ?? null,
+      onboarding: onboardingState(),
     });
     if (initial.unavailable) this.send(initial.unavailable);
     hub.sendReloadStateTo(this);
@@ -5830,6 +5832,9 @@ interface ViewedModelSelection {
 function readySettings(settings: AppSettings): Partial<AppSettings> {
   return {
     models: settings.models,
+    // The first-run welcome introduces the assistant by its configured name
+    // before Settings has ever been read.
+    permanentAssistant: settings.permanentAssistant,
     // The composer's mic button renders from this, so the shell needs it on connect.
     speechToText: settings.speechToText,
     speechConversation: settings.speechConversation,

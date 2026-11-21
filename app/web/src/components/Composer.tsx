@@ -210,6 +210,12 @@ interface Props {
   /** Hide runtime model/thinking controls for server-configured special sessions. */
   hideRuntimeControls?: boolean;
   /**
+   * A composer shown but not usable yet (first run, `docs/onboarding.md`): it
+   * stays expanded on every layout, takes no text, offers only the field and a
+   * disabled Send, and its field says this instead of the usual placeholder.
+   */
+  inertPlaceholder?: string | undefined;
+  /**
    * A resting strip on the card's top edge (`ComposerLedge`): session state
    * that stays visible while the conversation goes on. Rendered above the card
    * in normal flow, joined to it while the card is visible and standing alone
@@ -899,7 +905,7 @@ export const Composer = memo(function Composer({
   onQueue,
   onAbort,
   streaming,
-  disabled,
+  disabled: disabledProp,
   contextInfo,
   session,
   models,
@@ -919,7 +925,8 @@ export const Composer = memo(function Composer({
   modelLocked = false,
   thinkingLocked = false,
   accountName,
-  hideRuntimeControls = false,
+  hideRuntimeControls: hideRuntimeControlsProp = false,
+  inertPlaceholder,
   ledge,
   mobile = false,
   onVisibilityChange,
@@ -941,6 +948,9 @@ export const Composer = memo(function Composer({
   conversation,
 }: Props) {
   usePerfRenderCount("Composer");
+  const inert = inertPlaceholder !== undefined;
+  const disabled = disabledProp || inert;
+  const hideRuntimeControls = hideRuntimeControlsProp || inert;
   const [text, setText] = useBrowserDraft(draftStorageKey);
   const [attachments, setAttachments] = useState<AttachmentDraft[]>([]);
   // Deliberately independent from `text`: leaving comment mode must restore the
@@ -1769,7 +1779,7 @@ export const Composer = memo(function Composer({
   // it mid-interaction), a file is being dragged, or an attachment is staged (the
   // collapsed bar cannot show attachments). Unsent text survives via the draft
   // and shows as a preview in the collapsed bar, so hiding it here is safe.
-  const collapsible = collapseWhenBlurred || mobile;
+  const collapsible = !inert && (collapseWhenBlurred || mobile);
   // Recording forces the compact bar EVERYWHERE, including the desktop chat
   // composer that never collapses otherwise: the bar is the recording surface, so
   // one flow serves both entry points and both viewports.
@@ -2225,7 +2235,7 @@ export const Composer = memo(function Composer({
               <InputGroupTextarea
                 ref={ref}
                 rows={1}
-                value={commentMode ? commentBody : text}
+                value={inert ? "" : commentMode ? commentBody : text}
                 disabled={disabled}
                 onChange={(e) => {
                   if (commentMode) setCommentBody(e.target.value);
@@ -2240,17 +2250,19 @@ export const Composer = memo(function Composer({
                 onFocus={() => setIsFocused(true)}
                 onBlur={() => setIsFocused(false)}
                 placeholder={
-                  commentMode
-                    ? editingComment
-                      ? "Edit this comment…"
-                      : "Add a comment…"
-                    : streaming
-                      ? queueing
-                        ? "Queue a message for after this response…"
-                        : providerCanSteer
-                          ? "Send a message to steer…"
-                          : "Wait for this provider to finish before sending…"
-                      : COMPOSER_PLACEHOLDER
+                  inert
+                    ? inertPlaceholder
+                    : commentMode
+                      ? editingComment
+                        ? "Edit this comment…"
+                        : "Add a comment…"
+                      : streaming
+                        ? queueing
+                          ? "Queue a message for after this response…"
+                          : providerCanSteer
+                            ? "Send a message to steer…"
+                            : "Wait for this provider to finish before sending…"
+                        : COMPOSER_PLACEHOLDER
                 }
                 className={COMPOSER_FIELD_CLASS}
               />
@@ -2303,7 +2315,7 @@ export const Composer = memo(function Composer({
                     no attachments, no session context and no runtime, so in
                     comment mode the row keeps its geometry and empties. */}
                   <div className="flex shrink-0 items-center gap-1">
-                    {commentMode ? null : (
+                    {commentMode || inert ? null : (
                       <IconButton
                         label="Attach files or images"
                         title="Attach files or images"
@@ -2327,7 +2339,7 @@ export const Composer = memo(function Composer({
                 </div>
 
                 <div className={COMPOSER_ACTION_CLUSTER_CLASS}>
-                  {showBranches && !commentMode && (
+                  {showBranches && !commentMode && !inert && (
                     <IconButton
                       label="Conversation branches"
                       onClick={() => {
@@ -2353,20 +2365,22 @@ export const Composer = memo(function Composer({
                       )}
                     </IconButton>
                   )}
-                  <IconButton
-                    label="Refine draft prompt"
-                    busy={isRefining}
-                    onClick={() => void refineDraft()}
-                    disabled={
-                      disabled ||
-                      isRefining ||
-                      !(commentMode ? commentBody : text).trim()
-                    }
-                    title="Refine draft prompt"
-                  >
-                    <WandSparkles />
-                  </IconButton>
-                  {conversation && (
+                  {inert ? null : (
+                    <IconButton
+                      label="Refine draft prompt"
+                      busy={isRefining}
+                      onClick={() => void refineDraft()}
+                      disabled={
+                        disabled ||
+                        isRefining ||
+                        !(commentMode ? commentBody : text).trim()
+                      }
+                      title="Refine draft prompt"
+                    >
+                      <WandSparkles />
+                    </IconButton>
+                  )}
+                  {conversation && !inert && (
                     <Button
                       variant={voice.active ? "secondary" : "ghost"}
                       size="sm"
@@ -2383,7 +2397,7 @@ export const Composer = memo(function Composer({
                       Conversation
                     </Button>
                   )}
-                  {dictationAvailable && (
+                  {dictationAvailable && !inert && (
                     <IconButton
                       label="Start dictation"
                       // One gesture: this collapses the composer (dropping the keyboard)

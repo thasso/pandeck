@@ -27,6 +27,7 @@ type State =
   | "model"
   | "streaming"
   | "disabled"
+  | "inert"
   | "dictation";
 function ComposerPreview({
   state,
@@ -119,6 +120,9 @@ function ComposerPreview({
         actions={chatActions}
         draft={{ sessionId: chatSession.sessionId, token: 1, text }}
         draftAutoFocus={false}
+        inertPlaceholder={
+          state === "inert" ? "Connect an account to start chatting" : undefined
+        }
       />
     </div>
   );
@@ -138,6 +142,8 @@ export const SlashMenu = { args: { state: "slash" } } satisfies Story;
 export const ModelPicker = { args: { state: "model" } } satisfies Story;
 export const StreamingStop = { args: { state: "streaming" } } satisfies Story;
 export const Disabled = { args: { state: "disabled" } } satisfies Story;
+/** First run: shown, but takes no text until an account works. */
+export const Inert = { args: { state: "inert" } } satisfies Story;
 export const Dictation = { args: { state: "dictation" } } satisfies Story;
 export const Phone = {
   args: { frameWidth: 390, state: "typed" },

@@ -155,6 +155,7 @@ async function boot(): Promise<void> {
     socket.open();
     socket.receive({
       type: "ready",
+      onboarding: "complete",
       serverBuild: { version: "test" },
       state: null,
       models: [],

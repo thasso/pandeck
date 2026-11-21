@@ -473,6 +473,12 @@ const SettingsPage = lazy(() =>
     default: module.SettingsPage,
   })),
 );
+// Only a first run shows it, so it never weighs on an established install's boot.
+const FirstRunSetup = lazy(() =>
+  import("./components/FirstRunSetup.tsx").then((module) => ({
+    default: module.FirstRunSetup,
+  })),
+);
 const TaskManagementPage = lazy(() =>
   import("./components/TaskManagementPage.tsx").then((module) => ({
     default: module.TaskManagementPage,
@@ -898,6 +904,10 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   const credentialProfileModels =
     credentialProfileProjection?.modelsByProfile ??
     NO_CREDENTIAL_PROFILE_MODELS;
+  // First run (`docs/onboarding.md`) is the server's call, made once per
+  // install: only a live `pending` shows it. Unknown (before `ready`, or a
+  // cached boot) never does, and the account projection only fills the card.
+  const firstRun = state.onboarding === "pending";
   // Settings configures agents as account/model combinations, so its pickers
   // list every enabled account's models rather than the default account's.
   const settingsAccountModels = useMemo(
@@ -4098,6 +4108,9 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   // disappears once the session actually has messages (i.e. after the first
   // prompt, which also navigates to /sessions/<id> off this route).
   const isNewChatRoute = route.name === "new" || route.name === "sessions";
+  // The first-run welcome stands in for the New Session screen and focuses the
+  // shell on it: no side panels, top bar or edge-back while it shows.
+  const welcomeScreen = firstRun && isNewChatRoute;
   // The account Automatic would land on for the staged model, as the server's
   // router sees it now (`previewAutomaticAccount`). Refetched when the model,
   // effort, enterprise requirement, accounts or their usage change.
@@ -4149,11 +4162,14 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   const provisionFailed =
     provisionCardOwned && state.worktreeProvision?.state === "failed";
   const showAgentTypePicker =
-    isNewChatRoute && !displayHasMessages && availableAgentTypes.length > 1;
+    isNewChatRoute &&
+    !welcomeScreen &&
+    !displayHasMessages &&
+    availableAgentTypes.length > 1;
   // The composable staged-context bar (Project + Worktree + Task, plus a staged
   // Knowledge entry / comment-review bundle) shows on a fresh new-chat surface.
   const showContextPicker =
-    isNewChatRoute && !displayHasUserPrompt && !sendInFlight;
+    isNewChatRoute && !welcomeScreen && !displayHasUserPrompt && !sendInFlight;
   // A project-only draft starts in its main checkout as Developer. Wait for
   // the worktree subscription if necessary, but never replace a staged runtime
   // or object handoff. Writing the record also makes this a one-time default:
@@ -4220,8 +4236,10 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   // refuses every run until the user acknowledges running in the app directory,
   // so the composer stays disabled behind the banner that offers exactly that.
   const worktreeMissing = Boolean(displaySession?.worktreeMissing);
+  // The welcome screen's composer is inert and says why itself; the "no
+  // visible models" reason would only repeat that as an error.
   const credentialProfileSendBlockedReason =
-    isNewChatRoute && !displayHasUserPrompt && !sendInFlight
+    isNewChatRoute && !welcomeScreen && !displayHasUserPrompt && !sendInFlight
       ? credentialProfileProjectionBlockReason(
           credentialProfileFetch.state,
           { profileId: credentialProfileId, requiresEnterprise },
@@ -4337,7 +4355,8 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   // first prompt is sent that stops being true — the screen is a session being
   // created, and the row carries the identity the transcript never states plus
   // the bootstrap's progress.
-  const chatHeaderHidden = route.name === "new" && !sessionShell.bootstrapping;
+  const chatHeaderHidden =
+    welcomeScreen || (route.name === "new" && !sessionShell.bootstrapping);
   const displaySessionTitle =
     route.name === "permanentAssistant"
       ? state.settings.permanentAssistant.name || "Personal Assistant"
@@ -6163,6 +6182,10 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     (link: MarkdownPaObjectReference) => navigate(link.href),
     [navigate],
   );
+  const enableClaudeSdk = useCallback(
+    () => actions.updateSettings({ claudeSdk: { enabled: true } }),
+    [actions],
+  );
   if (showLoadingShell) {
     return (
       <LoadingShell
@@ -6213,6 +6236,9 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
           ? "Developer sessions run in a worktree — pick one to continue."
           : credentialProfileSendBlockedReason,
         sendBlocked: credentialProfileSendBlocked,
+        inertPlaceholder: welcomeScreen
+          ? "Connect an account to start chatting"
+          : undefined,
         mobile: mobileLayout,
         // Mobile has no collapsed bar: the composer reports when it takes over the
         // bottom edge (so the dock's row stands down) and when a draft is waiting in
@@ -6261,71 +6287,87 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       // No horizontal padding here: the quick-start rows own their own inset so
       // they can scroll edge-to-edge instead of being clipped by a page gutter.
       emptySurface={
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto py-6">
-          {showContextPicker ? (
-            <NewSessionQuickStart
-              credentialProfiles={activeCredentialProfiles}
-              credentialProfileModels={credentialProfileModels}
-              credentialProfilesLoaded={
-                credentialProfileProjection !== undefined
-              }
-              credentialProfilesError={errorOf(credentialProfileFetch.state)}
-              onRetryCredentialProfiles={credentialProfileFetch.reload}
-              usageIndicators={state.usageIndicators}
-              selectedCredentialProfileId={credentialProfileId}
-              automaticAccountName={automaticPreviewName}
-              requiresEnterprise={requiresEnterprise}
-              onRequiresEnterpriseChange={(enterprise) =>
-                selectNewSessionAccount(
-                  // An explicit account the requirement excludes falls back to
-                  // Automatic rather than silently running elsewhere.
-                  enterprise &&
-                    !activeCredentialProfiles.some(
-                      (item) =>
-                        item.id === credentialProfileId && item.enterprise,
-                    )
-                    ? null
-                    : credentialProfileId,
-                  enterprise,
-                )
-              }
-              onSelectCredentialProfile={(id) =>
-                selectNewSessionAccount(id, requiresEnterprise)
-              }
-              agentTypes={availableAgentTypes}
-              selectedAgentType={agentTypeForPicker}
-              onSelectAgentType={pickStagedAgentType}
-              worktrees={orderedWorktrees}
-              worktreesLoaded={state.worktrees !== null}
-              projects={orderedPickerProjects}
-              projectsLoaded={projectsLoaded}
-              selectedProjectId={pendingProjectContext}
-              onSelectProject={stageProjectContext}
-              selectedWorktreeId={pendingWorktreeContext}
-              onSelectWorktree={stageWorktreeContext}
-              newWorktreeStaged={pendingNewWorktree}
-              onSelectNewWorktree={stageNewWorktree}
-              models={pickerModels}
-              selectedModel={displaySession?.model}
-              onSelectModel={(m) => runtimeActions.setModel(m.provider, m.id)}
-              thinkingLevel={currentThinkingLevel}
-              onSelectThinking={(level) =>
-                runtimeActions.setThinkingLevel(level)
-              }
-              // A comment-review draft starts through the review handoff,
-              // which carries no agent definition.
-              // Offered on /sessions/create only, where the `agents` topic is
-              // held.
-              agents={
-                route.name === "new" && !pendingWorktreeReview
-                  ? state.agentLibrary
-                  : undefined
-              }
-              selectedAgent={(pendingStart ?? stagedStart)?.agent ?? null}
-              onSelectAgent={stageAgent}
-            />
-          ) : null}
-        </div>
+        welcomeScreen ? (
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+            <Suspense
+              fallback={<LazySurfaceFallback label="Opening welcome…" />}
+            >
+              <FirstRunSetup
+                assistantName={state.settings.permanentAssistant.name}
+                profiles={credentialProfiles}
+                modelsByProfile={credentialProfileModels}
+                onEnableClaude={enableClaudeSdk}
+                onNavigate={navigate}
+              />
+            </Suspense>
+          </div>
+        ) : (
+          <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto py-6">
+            {showContextPicker ? (
+              <NewSessionQuickStart
+                credentialProfiles={activeCredentialProfiles}
+                credentialProfileModels={credentialProfileModels}
+                credentialProfilesLoaded={
+                  credentialProfileProjection !== undefined
+                }
+                credentialProfilesError={errorOf(credentialProfileFetch.state)}
+                onRetryCredentialProfiles={credentialProfileFetch.reload}
+                usageIndicators={state.usageIndicators}
+                selectedCredentialProfileId={credentialProfileId}
+                automaticAccountName={automaticPreviewName}
+                requiresEnterprise={requiresEnterprise}
+                onRequiresEnterpriseChange={(enterprise) =>
+                  selectNewSessionAccount(
+                    // An explicit account the requirement excludes falls back to
+                    // Automatic rather than silently running elsewhere.
+                    enterprise &&
+                      !activeCredentialProfiles.some(
+                        (item) =>
+                          item.id === credentialProfileId && item.enterprise,
+                      )
+                      ? null
+                      : credentialProfileId,
+                    enterprise,
+                  )
+                }
+                onSelectCredentialProfile={(id) =>
+                  selectNewSessionAccount(id, requiresEnterprise)
+                }
+                agentTypes={availableAgentTypes}
+                selectedAgentType={agentTypeForPicker}
+                onSelectAgentType={pickStagedAgentType}
+                worktrees={orderedWorktrees}
+                worktreesLoaded={state.worktrees !== null}
+                projects={orderedPickerProjects}
+                projectsLoaded={projectsLoaded}
+                selectedProjectId={pendingProjectContext}
+                onSelectProject={stageProjectContext}
+                selectedWorktreeId={pendingWorktreeContext}
+                onSelectWorktree={stageWorktreeContext}
+                newWorktreeStaged={pendingNewWorktree}
+                onSelectNewWorktree={stageNewWorktree}
+                models={pickerModels}
+                selectedModel={displaySession?.model}
+                onSelectModel={(m) => runtimeActions.setModel(m.provider, m.id)}
+                thinkingLevel={currentThinkingLevel}
+                onSelectThinking={(level) =>
+                  runtimeActions.setThinkingLevel(level)
+                }
+                // A comment-review draft starts through the review handoff,
+                // which carries no agent definition.
+                // Offered on /sessions/create only, where the `agents` topic is
+                // held.
+                agents={
+                  route.name === "new" && !pendingWorktreeReview
+                    ? state.agentLibrary
+                    : undefined
+                }
+                selectedAgent={(pendingStart ?? stagedStart)?.agent ?? null}
+                onSelectAgent={stageAgent}
+              />
+            ) : null}
+          </div>
+        )
       }
     />
   );
@@ -6359,6 +6401,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
           assistantLabel={
             state.settings.permanentAssistant.name || "Personal Assistant"
           }
+          firstRunNav={firstRun}
           onArchive={archiveSession}
           onSettleSession={settleSession}
           onDismissSessionFailure={dismissSessionFailure}
@@ -7111,8 +7154,11 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                   // panel toggles never existed there, so the bar had nothing left to hold
                   // (ui-shell.md, Small Screens). On wide layouts it survives as the home of
                   // the two pane toggles, which have nowhere better yet.
+                  // The first-run welcome omits the top bar, both panels and
+                  // edge-back without touching the saved layout preferences:
+                  // it is the only thing the install can do yet.
                   header={
-                    mobileLayout ? undefined : (
+                    mobileLayout || welcomeScreen ? undefined : (
                       <Topbar
                         prefs={prefs}
                         updatePrefs={update}
@@ -7131,54 +7177,65 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                       />
                     )
                   }
-                  left={{
-                    open: sidebarPanelOpen,
-                    width: prefs.sidebarWidth,
-                    minWidth: SIDEBAR_MIN_WIDTH,
-                    onResize: (width) => update({ sidebarWidth: width }),
-                    animate: prefs.animateLeftSidebar,
-                    // On mobile the browser is a route-driven screen, so it has no dismiss.
-                    mobilePresentation: "screen",
-                    onDismiss: () => setSidebarOpen(false),
-                    label: "sidebar",
-                    content: sidebarContent,
-                  }}
-                  right={{
-                    open: inspectorOpen,
-                    width: prefs.taskDrawerWidth,
-                    minWidth: TASK_DRAWER_MIN_WIDTH,
-                    onResize: (width) => update({ taskDrawerWidth: width }),
-                    animate: prefs.animateRightDrawer,
-                    // On mobile the object panel is a bottom dock: peek at rest, sheet when
-                    // expanded. `open` therefore means expanded there.
-                    mobilePresentation: "dock",
-                    ...(dockPeek !== undefined ? { peek: dockPeek } : {}),
-                    mobileDockSuppressed:
-                      dockSuppressed || composerOwnsBottomEdge,
-                    onExpand: () => setInspectorOpen(true),
-                    onDismiss: () => setInspectorOpen(false),
-                    label: "inspector",
-                    // The page header owns the inspector's overflow actions on wide layouts,
-                    // so keep their publisher alive even when the panel itself is closed.
-                    keepMountedWhenClosed: true,
-                    // The expanded sheet is where a document's detailed zoom controls
-                    // live on a phone; the desktop keeps them in the viewer's header.
-                    content: mobileLayout ? (
-                      <>
-                        {documentRoute && documentNavigation?.zoom ? (
-                          <DocumentZoomSection zoom={documentNavigation.zoom} />
-                        ) : null}
-                        <SessionRowDetailsContext.Provider
-                          value={sessionRowDetails}
-                        >
-                          {rightPanelContent}
-                        </SessionRowDetailsContext.Provider>
-                      </>
-                    ) : (
-                      desktopRightPanelContent
-                    ),
-                  }}
-                  edgeBack={edgeBack}
+                  left={
+                    welcomeScreen
+                      ? undefined
+                      : {
+                          open: sidebarPanelOpen,
+                          width: prefs.sidebarWidth,
+                          minWidth: SIDEBAR_MIN_WIDTH,
+                          onResize: (width) => update({ sidebarWidth: width }),
+                          animate: prefs.animateLeftSidebar,
+                          // On mobile the browser is a route-driven screen, so it has no dismiss.
+                          mobilePresentation: "screen",
+                          onDismiss: () => setSidebarOpen(false),
+                          label: "sidebar",
+                          content: sidebarContent,
+                        }
+                  }
+                  right={
+                    welcomeScreen
+                      ? undefined
+                      : {
+                          open: inspectorOpen,
+                          width: prefs.taskDrawerWidth,
+                          minWidth: TASK_DRAWER_MIN_WIDTH,
+                          onResize: (width) =>
+                            update({ taskDrawerWidth: width }),
+                          animate: prefs.animateRightDrawer,
+                          // On mobile the object panel is a bottom dock: peek at rest, sheet when
+                          // expanded. `open` therefore means expanded there.
+                          mobilePresentation: "dock",
+                          ...(dockPeek !== undefined ? { peek: dockPeek } : {}),
+                          mobileDockSuppressed:
+                            dockSuppressed || composerOwnsBottomEdge,
+                          onExpand: () => setInspectorOpen(true),
+                          onDismiss: () => setInspectorOpen(false),
+                          label: "inspector",
+                          // The page header owns the inspector's overflow actions on wide layouts,
+                          // so keep their publisher alive even when the panel itself is closed.
+                          keepMountedWhenClosed: true,
+                          // The expanded sheet is where a document's detailed zoom controls
+                          // live on a phone; the desktop keeps them in the viewer's header.
+                          content: mobileLayout ? (
+                            <>
+                              {documentRoute && documentNavigation?.zoom ? (
+                                <DocumentZoomSection
+                                  zoom={documentNavigation.zoom}
+                                />
+                              ) : null}
+                              <SessionRowDetailsContext.Provider
+                                value={sessionRowDetails}
+                              >
+                                {rightPanelContent}
+                              </SessionRowDetailsContext.Provider>
+                            </>
+                          ) : (
+                            desktopRightPanelContent
+                          ),
+                        }
+                  }
+                  edgeBack={welcomeScreen ? undefined : edgeBack}
                 >
                   {routeDocumentTarget ? (
                     <DocumentNavigationMarker

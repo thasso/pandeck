@@ -1546,6 +1546,16 @@ function countArchived(opts: SessionScopeFilter = {}): number {
   return row?.n ?? 0;
 }
 
+/**
+ * Whether the index holds any session row at all, in any scope or state:
+ * first-run detection's "this install was used" (`onboarding.ts`).
+ */
+function hasAnySession(): boolean {
+  return (
+    getDb().prepare("SELECT 1 FROM session_index LIMIT 1").get() !== undefined
+  );
+}
+
 /* --------------------------------- links --------------------------------- */
 
 interface DbSessionLinkRow {
@@ -2144,6 +2154,7 @@ export const sessionStore = {
   liveDefaultScopeGate,
   claimScope,
   countArchived,
+  hasAnySession,
   upsert,
   setPeerTurnCap,
   switchCredentialProfile,

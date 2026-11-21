@@ -70,6 +70,7 @@ class ScenarioSocket {
 function readyMessage(): ServerMessage {
   return {
     type: "ready",
+    onboarding: "complete",
     serverBuild: { version: "0.0.0-test" },
     state: {
       sessionId: "s1",
