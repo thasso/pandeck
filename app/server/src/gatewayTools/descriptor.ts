@@ -6,11 +6,16 @@
  * Only `ToolError` text reaches a caller, and it must be fixed text this
  * module tree owns: never a credential, an upstream body, a request string or
  * any other error's message. `ToolError` exists only inside `gatewayTools/`.
- * The single exception (Task-1439 D4, ADR-0005): Jira's own `errorMessages`
- * and `errors` reasons for a `jira_search_issues` HTTP 400
- * (`jiraSearchIssues.ts`). They are never shown with credential material,
- * and are sanitized and capped. They may quote the user's JQL, field names or
- * a URL Jira chose to mention.
+ * Two exceptions (ADR-0005), both vetted by `upstreamText.ts`, never shown
+ * with credential material, sanitized and capped:
+ *
+ * - D4 (Task-1439): Jira's own `errorMessages` and `errors` reasons for a
+ *   `jira_search_issues` HTTP 400 (`jiraSearchIssues.ts`). They may quote the
+ *   user's JQL, field names or a URL Jira chose to mention.
+ * - D-W2 (Task-1463, 2026-11-21): for `jira_mutate_issue`, the shared
+ *   prepare/apply code's own messages, and Jira's reasons for a 4xx on a write
+ *   call (`writeFailure.ts`). 401/403 keep the fixed credential text; 5xx,
+ *   network errors and timeouts stay fixed.
  */
 import type { SlackAccessView } from "./slack.ts";
 
@@ -162,6 +167,11 @@ interface ToolContext<C> {
   credential(): Promise<C>;
   /** Aborts at the host's deadline or when the caller goes away. */
   signal: AbortSignal;
+  /**
+   * The epoch ms at which the host's deadline fires, fixed when its timer is
+   * armed, before the credential read.
+   */
+  deadlineAt: number;
 }
 
 interface ToolDescriptorBase {
@@ -173,6 +183,8 @@ interface ToolDescriptorBase {
   actionKey: string;
   /** The JSON result's limit; 60,000 characters unless given. */
   maxResultChars?: number;
+  /** The call's own deadline; the host's (30 s by default) unless given. */
+  deadlineMs?: number;
 }
 
 /** A tool run with the user's Atlassian credential. */

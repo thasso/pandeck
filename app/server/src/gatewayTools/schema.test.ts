@@ -919,3 +919,96 @@ void [
   refused10b,
   refused10c,
 ];
+
+// AC17 (Task-1463 P4b2): a `default` applies at the root only, even when a
+// schema reaches the checker without its type guard.
+
+/** A schema the type guard never saw: nested string defaults, cast through `unknown`. */
+const NESTED_DEFAULTS = JSON.parse(
+  JSON.stringify({
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      count: { type: "integer", minimum: 1, maximum: 9, default: 4 },
+      nested: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          mode: { type: "string", default: "NESTED-DEFAULT" },
+          keep: { type: "string" },
+        },
+      },
+      rows: {
+        type: "array",
+        maxItems: 3,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            label: { type: "string", default: "ITEM-DEFAULT" },
+            keep: { type: "string" },
+          },
+        },
+      },
+    },
+  }),
+) as unknown as ObjectSchema;
+
+test("a default below the root is never applied, even on a schema that bypassed the type guard", () => {
+  const params = acceptedBy(NESTED_DEFAULTS, {
+    nested: { keep: "a" },
+    rows: [{ keep: "b" }, {}],
+  });
+  assert.deepEqual(params, {
+    count: 4,
+    nested: { keep: "a" },
+    rows: [{ keep: "b" }, {}],
+  });
+  assert.ok(!("mode" in (params.nested as object)));
+  for (const row of params.rows as object[]) assert.ok(!("label" in row));
+  // The root default is applied when omitted, and a given value wins.
+  assert.equal(acceptedBy(NESTED_DEFAULTS, {}).count, 4);
+  assert.equal(acceptedBy(NESTED_DEFAULTS, { count: 7 }).count, 7);
+  assert.ok(!JSON.stringify(params).includes("DEFAULT"));
+});
+
+/** Every path below the root of `schema` that holds a `default`. */
+function nestedDefaults(value: unknown, path: string, found: string[]): void {
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) =>
+      nestedDefaults(entry, `${path}[${index}]`, found),
+    );
+    return;
+  }
+  if (typeof value !== "object" || value === null) return;
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === "default") found.push(path);
+    nestedDefaults(entry, `${path}.${key}`, found);
+  }
+}
+
+/** The paths of every `default` below `schema`'s root properties. */
+function defaultsBelowRoot(schema: ObjectSchema): string[] {
+  const found: string[] = [];
+  for (const [name, property] of Object.entries(schema.properties)) {
+    // A root property's own `default` is allowed; anything inside it is not.
+    const { default: _root, ...rest } = property as unknown as Record<
+      string,
+      unknown
+    >;
+    void _root;
+    nestedDefaults(rest, `properties.${name}`, found);
+  }
+  return found;
+}
+
+test("the edge jira_mutate_issue schema holds no default below the root", () => {
+  const edge = EDGE_TOOLS.find((tool) => tool.name === "jira_mutate_issue");
+  assert.ok(edge);
+  assert.deepEqual(defaultsBelowRoot(edge.inputSchema), []);
+  // The walk finds planted ones, so an empty result is not vacuous.
+  assert.deepEqual(defaultsBelowRoot(NESTED_DEFAULTS), [
+    "properties.nested.properties.mode",
+    "properties.rows.items.properties.label",
+  ]);
+});

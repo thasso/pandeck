@@ -138,12 +138,22 @@ on the edge"):
   the edge's read methods (Task-1454), as `Authorization: Bearer`, redirects
   refused.
 - The gateway hands tools typed credential outcomes and never builds a tool
-  error; only fixed, edge-owned tool texts reach a caller. The single exception
-  (Task-1439 D4, amended 2026-11-19): Jira's own `errorMessages` and `errors`
-  reasons for a `jira_search_issues` HTTP 400, never with credential material
-  (any form of the call's token or an authorization marker drops all of them for
-  the fixed text), sanitized and capped. They may quote the user's JQL, field
-  names or a URL Jira chose to mention, and reach only that user's caller.
+  error; only fixed, edge-owned tool texts reach a caller. Two exceptions, each
+  never with credential material (any form of the call's token, a fragment of
+  one or an authorization marker drops the text for a fixed one), sanitized and
+  capped, and each reaching only that user's caller:
+  - Task-1439 D4 (amended 2026-11-19): Jira's own `errorMessages` and `errors`
+    reasons for a `jira_search_issues` HTTP 400. They may quote the user's JQL,
+    field names or a URL Jira chose to mention.
+  - Task-1463 D-W2 (2026-11-21): for `jira_mutate_issue`, the mutation core's
+    own texts and Jira's reasons for a rejected write (a 4xx other than 401 and
+    403), plus the issue keys and browse links Jira answered, each vetted on its
+    raw value and every percent-decoding.
+- The edge's one write tool, `jira_mutate_issue` (Task-1463), writes in the call
+  itself: the client asks the user to approve the call, and the edge applies the
+  changes at once. It runs on its own 45 s deadline, inside the client's
+  measured 60 s tool limit. An interrupt on the client does not reach a running
+  call, so it may still write; see `docs/workers.md` "Tools on the edge".
 - The MCP endpoint needs the client's certificate and that client's MCP token,
   kept only as a hash; it never forwards and spends no lease.
 - Gateway client 1.0's `tools.list` and `tools.call` (Task-1398) are the second

@@ -12,7 +12,12 @@ import {
   type SlackToolDescriptor,
 } from "./descriptor.ts";
 import type { CredentialOutcome } from "./toolCredential.ts";
-import { createToolHost, type ToolCaller } from "./host.ts";
+import {
+  createToolHost,
+  effectiveDeadlineMs,
+  longestDeadlineMs,
+  type ToolCaller,
+} from "./host.ts";
 import { EDGE_TOOLS } from "./tools.ts";
 
 const SENTINEL = "SENTINEL-do-not-echo";
@@ -72,6 +77,7 @@ test("the registry lists Jira's and Slack's read tools with their schemas, effec
       ["slack_conversation_read", "read", "slack:read"],
       ["slack_thread_read", "read", "slack:read"],
       ["slack_unread", "read", "slack:read"],
+      ["jira_mutate_issue", "write", "jira:write"],
     ],
   );
   const [listed] = host.list();
@@ -421,4 +427,139 @@ test("Slack credential outcomes become Slack's fixed texts; a view of the other 
   );
   assert.equal(fetch.mock.calls.length, 0, "no upstream request");
   assert.doesNotMatch(lines.join("\n"), new RegExp(SENTINEL));
+});
+
+test("each failure code answers a write tool's write-uncertain text; a read tool's texts are unchanged", async () => {
+  const write = { effect: "write" as const, actionKey: "probe:write" };
+  const cases = (effect: Partial<AtlassianToolDescriptor>) => [
+    tool(() => new Promise(() => {}), { ...effect, name: "slow" }),
+    tool(
+      async () => {
+        throw new Error(SENTINEL);
+      },
+      { ...effect, name: "broken" },
+    ),
+    tool(async () => "x".repeat(50), {
+      ...effect,
+      name: "big",
+      maxResultChars: 10,
+    }),
+    tool(
+      async () => {
+        throw new ToolError("Fixed edge text.");
+      },
+      { ...effect, name: "refused" },
+    ),
+  ];
+  const run = async (effect: Partial<AtlassianToolDescriptor>) => {
+    const host = createToolHost(cases(effect), {
+      deadlineMs: 30,
+      log: () => {},
+    });
+    const controller = new AbortController();
+    const cancelled = host.call(
+      "slow",
+      { issue: "OPS-1" },
+      caller(undefined, controller.signal),
+    );
+    setTimeout(() => controller.abort(), 5);
+    return [
+      await host.call("slow", { issue: "OPS-1" }, caller()),
+      await cancelled,
+      await host.call("broken", { issue: "OPS-1" }, caller()),
+      await host.call("big", { issue: "OPS-1" }, caller()),
+      await host.call("refused", { issue: "OPS-1" }, caller()),
+    ];
+  };
+  assert.deepEqual(await run(write), [
+    {
+      ok: false,
+      code: "timeout",
+      message:
+        "The tool timed out; some changes may have been applied, so check before retrying.",
+    },
+    {
+      ok: false,
+      code: "cancelled",
+      message:
+        "The call was cancelled; some changes may have been applied, so check before retrying.",
+    },
+    {
+      ok: false,
+      code: "failed",
+      message:
+        "broken failed; some changes may have been applied, so check before retrying.",
+    },
+    {
+      ok: false,
+      code: "result_too_large",
+      message:
+        "The tool's result is too large; the changes may have been applied, so check before retrying.",
+    },
+    { ok: false, code: "tool_error", message: "Fixed edge text." },
+  ]);
+  assert.deepEqual(await run({}), [
+    { ok: false, code: "timeout", message: "The tool timed out." },
+    { ok: false, code: "cancelled", message: "The call was cancelled." },
+    { ok: false, code: "failed", message: "broken failed." },
+    {
+      ok: false,
+      code: "result_too_large",
+      message: "The tool's result is too large.",
+    },
+    { ok: false, code: "tool_error", message: "Fixed edge text." },
+  ]);
+});
+
+test("a tool's own deadline wins over the host's, and ctx.deadlineAt is when it fires", async () => {
+  vi.useFakeTimers({ now: 1_000_000 });
+  try {
+    const seen: Array<{ at: number; deadlineAt: number }> = [];
+    const slow = (name: string, deadlineMs?: number) =>
+      tool(
+        (_params, ctx) => {
+          seen.push({ at: Date.now(), deadlineAt: ctx.deadlineAt });
+          return new Promise(() => {});
+        },
+        { name, ...(deadlineMs !== undefined ? { deadlineMs } : {}) },
+      );
+    const host = createToolHost([slow("own", 500), slow("hosts")], {
+      deadlineMs: 200,
+      log: () => {},
+    });
+    const own = host.call("own", { issue: "OPS-1" }, caller());
+    const hosts = host.call("hosts", { issue: "OPS-1" }, caller());
+    await vi.advanceTimersByTimeAsync(0);
+    assert.deepEqual(seen, [
+      { at: 1_000_000, deadlineAt: 1_000_500 },
+      { at: 1_000_000, deadlineAt: 1_000_200 },
+    ]);
+    let ownSettled = false;
+    void own.then(() => (ownSettled = true));
+    await vi.advanceTimersByTimeAsync(200);
+    assert.ok(!(await hosts).ok);
+    assert.equal(ownSettled, false);
+    await vi.advanceTimersByTimeAsync(300);
+    const answer = await own;
+    assert.ok(!answer.ok && answer.code === "timeout");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("the effective and longest deadlines", () => {
+  assert.equal(effectiveDeadlineMs({}), 30_000);
+  assert.equal(effectiveDeadlineMs({}, 1_000), 1_000);
+  assert.equal(effectiveDeadlineMs({ deadlineMs: 45_000 }, 1_000), 45_000);
+  assert.equal(longestDeadlineMs([]), 30_000);
+  assert.equal(longestDeadlineMs([{}, {}], 1_000), 1_000);
+  assert.equal(
+    longestDeadlineMs(
+      [{}, { deadlineMs: 45_000 }, { deadlineMs: 2_000 }],
+      1_000,
+    ),
+    45_000,
+  );
+  assert.equal(longestDeadlineMs(EDGE_TOOLS), 45_000);
+  assert.equal(longestDeadlineMs(EDGE_TOOLS, 60_000), 60_000);
 });

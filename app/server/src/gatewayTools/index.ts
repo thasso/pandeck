@@ -13,7 +13,12 @@ import {
   parseAtlassianCredential,
   type AtlassianCheck,
 } from "./atlassian.ts";
-import { createToolHost, type ToolHost, type ToolHostOptions } from "./host.ts";
+import {
+  createToolHost,
+  longestDeadlineMs,
+  type ToolHost,
+  type ToolHostOptions,
+} from "./host.ts";
 import {
   createMcpHandler,
   type McpCaller,
@@ -56,9 +61,8 @@ export function createEdgeTools(
   const host = createToolHost(EDGE_TOOLS, { ...options, log });
   return {
     handleMcp: createMcpHandler(host, log, {
-      ...(options.deadlineMs !== undefined
-        ? { deadlineMs: options.deadlineMs }
-        : {}),
+      // A write tool's own deadline can outlast the host's (Task-1463).
+      deadlineMs: longestDeadlineMs(EDGE_TOOLS, options.deadlineMs),
       ...(options.lifecycleMs !== undefined
         ? { lifecycleMs: options.lifecycleMs }
         : {}),

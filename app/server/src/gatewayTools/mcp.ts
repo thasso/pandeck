@@ -13,14 +13,18 @@
  *   refused with fixed text before the SDK runs.
  * - Every JSON-RPC error the SDK answers is rewritten to a fixed text for its
  *   code, without `data`, so no SDK, schema or request text reaches a client.
- *   A tool failure is an `isError` result with the host's fixed text. The
- *   single exception is Jira's own `errorMessages`/`errors` reasons for a
- *   rejected `jira_search_issues` (HTTP 400, D4-yes): never shown with
- *   credential material, sanitized and capped.
- * - The whole exchange is bounded (the host's deadline plus a margin): at
- *   that point the call is aborted, the response ends with a fixed error and
- *   the SDK instances close, whatever the SDK still waits for. A response
- *   that closes early aborts the call too.
+ *   A tool failure is an `isError` result with the host's fixed text. Two
+ *   exceptions (ADR-0005), never shown with credential material, sanitized
+ *   and capped: Jira's own `errorMessages`/`errors` reasons for a rejected
+ *   `jira_search_issues` (HTTP 400, D4-yes), and `jira_mutate_issue`'s
+ *   shared-code messages and Jira's reasons for a write call's 4xx (D-W2).
+ * - The whole exchange is bounded (the longest deadline a call can run plus a
+ *   margin): at that point the call is aborted, the response ends with a
+ *   fixed error and the SDK instances close, whatever the SDK still waits
+ *   for. A response that closes early aborts the call too.
+ * - Each POST is its own SDK server, so a `notifications/cancelled` on a
+ *   separate POST never reaches a running call: only the call's own response
+ *   closing aborts it.
  */
 import type http from "node:http";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -60,7 +64,10 @@ export interface McpCaller extends CredentialSource {
 }
 
 export interface McpHandlerOptions {
-  /** The host's own deadline; the exchange is bounded a margin beyond it. */
+  /**
+   * The longest deadline a call can run (`longestDeadlineMs`); the exchange
+   * is bounded a margin beyond it.
+   */
   deadlineMs?: number;
   /** Test seam: the exchange's bound itself. */
   lifecycleMs?: number;
