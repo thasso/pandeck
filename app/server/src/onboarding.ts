@@ -82,13 +82,25 @@ function readState(): OnboardingState {
 /**
  * Read the state, or decide and persist it on the first boot that has no file.
  * `facts` is only consulted then, before anything else this boot writes.
+ *
+ * Never throws: the marker is optional, and boot must not fail over it. When
+ * the decision cannot be read or persisted, this boot treats the install as
+ * `complete` in memory (no welcome, no naming) and a later boot decides again.
  */
 export function initOnboarding(facts: () => InstallFacts): OnboardingState {
-  if (existsSync(ONBOARDING_PATH)) {
-    state = readState();
-  } else {
-    state = initialOnboardingState(facts());
-    writeState(state);
+  try {
+    if (existsSync(ONBOARDING_PATH)) {
+      state = readState();
+    } else {
+      const decided = initialOnboardingState(facts());
+      writeState(decided);
+      state = decided;
+    }
+  } catch (err) {
+    console.warn(
+      `[onboarding] could not record first-run state, treating this install as set up: ${errorText(err)}`,
+    );
+    state = "complete";
   }
   return state;
 }
@@ -129,8 +141,18 @@ async function nameAssistantIfUnsaved(): Promise<boolean> {
       { path: "permanentAssistant.name", value: FIRST_RUN_ASSISTANT_NAME },
     ]),
   );
-  // The write is on disk now; what is awaited is its effects.
-  await written;
+  // What is awaited is the write's outcome and its effects.
+  try {
+    await written;
+  } catch (err) {
+    // The name was saved but an effect after it failed: the naming itself is
+    // done and is neither redone nor undone. A write that did not land throws.
+    const now = readStoredAppSettings().permanentAssistant?.name?.trim();
+    if (now !== FIRST_RUN_ASSISTANT_NAME) throw err;
+    console.warn(
+      `[onboarding] named the assistant, but its follow-up failed: ${errorText(err)}`,
+    );
+  }
   return true;
 }
 
@@ -146,15 +168,16 @@ async function anyUsableAccount(): Promise<boolean> {
   return false;
 }
 
+/**
+ * Finish first run, in an order where any failure leaves it `pending` and the
+ * next check retries: name the assistant (a no-op once named), persist
+ * `complete`, then take it in memory and tell the browsers, once.
+ */
 async function complete(): Promise<void> {
   if (state !== "pending") return;
+  await nameAssistantIfUnsaved();
+  writeState("complete");
   state = "complete";
-  writeState(state);
-  try {
-    await nameAssistantIfUnsaved();
-  } catch (err) {
-    console.warn(`[onboarding] naming the assistant failed: ${errorText(err)}`);
-  }
   broadcast?.({ type: "onboarding", state });
 }
 

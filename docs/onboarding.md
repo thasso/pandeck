@@ -23,6 +23,10 @@ mode 0600.
   `pending`, anything else `complete`. Later boots read the file, so an
   established install never sees first run and is never renamed. An unreadable
   file reads as `complete`.
+- **Boot never fails over the marker.** If the decision cannot be read or
+  persisted (no space, read-only disk, a blocked path), the server warns and
+  treats the install as `complete` in memory for this boot: no welcome, no
+  naming. A later boot decides again.
 - **`complete` is final.** Nothing moves an install back to `pending`.
 - **The server ends first run.** While `pending`, it checks for a usable account
   wherever it learns accounts may have changed: an account created, enabled,
@@ -32,13 +36,18 @@ mode 0600.
   (`status: "ready"`) and offers at least one model. The model check is what
   makes a Claude account count only while Settings → Claude SDK is on. Checks
   never overlap, and once `complete` they cost nothing.
-- **Naming.** In the same step, when no Personal Assistant name is saved (none,
-  blank, or the default "Personal Assistant"), the server saves **Larry**. It is
-  a leaf write: the stored name is re-read and the rest of the section taken
-  from the current settings in the same synchronous step as the write, so a
-  value another writer saved is never replaced, and the normal settings effects
-  (rotating the Personal Assistant, announcing the change) run. A saved name is
-  never overwritten. An established install keeps "Personal Assistant".
+- **Finishing order.** Finishing runs in an order where any failure leaves first
+  run `pending` for the next check to retry: name the assistant (below; a no-op
+  once named), persist `complete`, take it in memory, then broadcast it once. A
+  name that was saved but whose follow-up effects failed counts as named and is
+  neither redone nor undone.
+- **Naming.** When no Personal Assistant name is saved (none, blank, or the
+  default "Personal Assistant"), the server saves **Larry**. It is a leaf write:
+  the stored name is re-read and the rest of the section taken from the current
+  settings in the same synchronous step as the write, so a value another writer
+  saved is never replaced, and the normal settings effects (rotating the
+  Personal Assistant, announcing the change) run. A saved name is never
+  overwritten. An established install keeps "Personal Assistant".
 - **Account health is not read**, on purpose. An enabled, signed-in account
   whose login the provider later rejects (`needs-login`) keeps the normal shell
   and the app status alert (`account-routing.md`).

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -42,9 +43,14 @@ const FRESH = {
 const broadcasts: ServerMessage[] = [];
 setOnboardingBroadcaster((message) => broadcasts.push(message));
 
+/** A directory where a write's temp file goes makes that write fail (EISDIR). */
+const STATE_TMP = `${STATE_PATH}.tmp`;
+const SETTINGS_TMP = `${APP_SETTINGS_PATH}.tmp`;
+const block = (path: string) => mkdirSync(path, { recursive: true });
+
 beforeEach(() => {
-  rmSync(STATE_PATH, { force: true });
-  rmSync(APP_SETTINGS_PATH, { force: true });
+  for (const path of [STATE_PATH, APP_SETTINGS_PATH, STATE_TMP, SETTINGS_TMP])
+    rmSync(path, { recursive: true, force: true });
   broadcasts.length = 0;
 });
 
@@ -171,5 +177,61 @@ describe("finishing first run", () => {
     await Promise.all([first, second]);
     assert.equal(onboardingState(), "complete");
     assert.equal(broadcasts.length, 1);
+  });
+});
+
+describe("storage failures", () => {
+  test("a marker that cannot be written never blocks boot and never enrolls", async () => {
+    block(STATE_TMP);
+    for (const facts of [{ ...FRESH, accounts: true }, FRESH]) {
+      assert.equal(
+        initOnboarding(() => facts),
+        "complete",
+      );
+      assert.equal(onboardingState(), "complete");
+      assert.equal(existsSync(STATE_PATH), false);
+      await checkOnboarding(async () => true);
+      assert.equal(existsSync(APP_SETTINGS_PATH), false);
+      assert.equal(broadcasts.length, 0);
+    }
+  });
+
+  test("a failed completion write stays pending and the next check finishes it", async () => {
+    initOnboarding(() => FRESH);
+    block(STATE_TMP);
+    await checkOnboarding(async () => true);
+    assert.equal(onboardingState(), "pending");
+    assert.deepEqual(JSON.parse(readFileSync(STATE_PATH, "utf8")), {
+      state: "pending",
+    });
+    assert.equal(broadcasts.length, 0);
+    // Named already; the retry does not name again, it only completes.
+    assert.equal(readStoredAppSettings().permanentAssistant?.name, "Larry");
+
+    rmSync(STATE_TMP, { recursive: true });
+    await checkOnboarding(async () => true);
+    assert.equal(onboardingState(), "complete");
+    assert.deepEqual(JSON.parse(readFileSync(STATE_PATH, "utf8")), {
+      state: "complete",
+    });
+    assert.deepEqual(broadcasts, [{ type: "onboarding", state: "complete" }]);
+  });
+
+  test("a failed naming write stays pending, and completes only once Larry is saved", async () => {
+    initOnboarding(() => FRESH);
+    block(SETTINGS_TMP);
+    await checkOnboarding(async () => true);
+    assert.equal(onboardingState(), "pending");
+    assert.equal(readStoredAppSettings().permanentAssistant, undefined);
+    assert.deepEqual(JSON.parse(readFileSync(STATE_PATH, "utf8")), {
+      state: "pending",
+    });
+    assert.equal(broadcasts.length, 0);
+
+    rmSync(SETTINGS_TMP, { recursive: true });
+    await checkOnboarding(async () => true);
+    assert.equal(readStoredAppSettings().permanentAssistant?.name, "Larry");
+    assert.equal(onboardingState(), "complete");
+    assert.deepEqual(broadcasts, [{ type: "onboarding", state: "complete" }]);
   });
 });
