@@ -26,15 +26,42 @@ import {
 
 const PW = "config-test-client-pw";
 
-/** The split plan's default list (Task-1411 PR2), written out, not imported. */
+/**
+ * The default list (Task-1439 P1), written out literally, not imported from
+ * config.ts: a change there must show up as a failing test here.
+ */
 const DEFAULT_SCOPES = [
+  // Classic scopes.
   "read:jira-work",
   "write:jira-work",
   "read:jira-user",
-  "read:servicedesk-request",
-  "write:servicedesk-request",
   "read:confluence-content.all",
   "write:confluence-content",
+  "search:confluence",
+  "read:confluence-space.summary",
+  "read:confluence-content.summary",
+  "readonly:content.attachment:confluence",
+  "write:confluence-file",
+  // Granular Jira Software.
+  "read:board-scope:jira-software",
+  "read:project:jira",
+  "read:sprint:jira-software",
+  "read:epic:jira-software",
+  "read:issue-details:jira",
+  "read:board-scope.admin:jira-software",
+  "write:issue:jira-software",
+  "write:sprint:jira-software",
+  // Granular Confluence, with the two deletes last in the group.
+  "read:page:confluence",
+  "read:space:confluence",
+  "read:comment:confluence",
+  "read:attachment:confluence",
+  "write:page:confluence",
+  "write:comment:confluence",
+  "read:label:confluence",
+  "read:hierarchical-content:confluence",
+  "delete:page:confluence",
+  "delete:attachment:confluence",
   "offline_access",
 ];
 const directories: string[] = [];
@@ -348,6 +375,24 @@ test("atlassian.scopes refuses a non-list, an empty or spaced entry, a long entr
     assert.match(message, /^gateway UI config: atlassian\.scopes /);
     assert.doesNotMatch(message, new RegExp(SENTINEL));
   }
+});
+
+test("the default list is also a valid atlassian.scopes override: the same list comes back, 29 distinct entries, within the 2,048-character bound", () => {
+  const config = loadGatewayWebConfig(
+    fixture(
+      (c) =>
+        (c.atlassian = {
+          clientId: FAKE_CLIENT.clientId,
+          scopes: DEFAULT_SCOPES,
+        }),
+    ).file,
+  );
+  assert.deepEqual(config.atlassian?.scopes, DEFAULT_SCOPES);
+  assert.equal(DEFAULT_SCOPES.length, 29);
+  assert.equal(new Set(DEFAULT_SCOPES).size, DEFAULT_SCOPES.length);
+  // The vault refuses a token answer whose `scope` exceeds MAX_SCOPE_CHARS
+  // (2,048) in app/server/src/gateway/vaultAtlassian.ts, so connect would fail.
+  assert.ok(DEFAULT_SCOPES.join(" ").length <= 2_048);
 });
 
 /** Synthetic: Coder's Google client id and a v02-style Coder token. */
