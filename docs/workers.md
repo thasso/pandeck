@@ -2696,8 +2696,15 @@ tools: `slack_search`, `slack_conversation_read`, `slack_thread_read` and
   them. Without them `/mcp` is an unknown path and the integration methods
   answer `tools_unavailable`; the packaged entry wires none yet (D1). The closed
   schema covers strings (`maxLength`, `pattern`, `enum`), booleans, integers
-  with a range, finite numbers and arrays of strings (with an item `enum`); a
-  refusal names the property, never a value.
+  with a range, finite numbers, arrays of strings (with an item `enum`), closed
+  nested objects (`additionalProperties: false`) and arrays of them, `minItems`
+  and `maxItems` on arrays, a string or `null` (exactly
+  `anyOf: [{type: "string"}, {type: "null"}]`), and an opaque `{type: "object"}`
+  passed to the tool as given and never descended into (Task-1463). `default`
+  applies only at the root. Its types (`descriptor.ts`) keep these branches
+  mutually exclusive; an unknown keyword is refused only in a literal checked
+  with `satisfies ObjectSchema`. A refusal names the property by its schema path
+  (`items[0].labels`), never a value or a key the caller sent.
 - **Jira search and lookup** (Task-1439). `jira_search_issues` and `jira_lookup`
   run the same read path as the local tools (`jiraSearch.ts`, `jiraLookup.ts`,
   `jiraSprintLookup.ts`, `jiraFields.ts`, `jiraRead.ts` beside `tools/jira/`,
