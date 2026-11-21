@@ -5,7 +5,9 @@
  * already knows about into an immediate, actionable tool error instead of an
  * approval the user can only watch fail.
  */
-import { jiraGet, type JiraApiConfig } from "../../jiraClient.ts";
+import { jiraGet, type JiraConfig } from "./jiraClient.ts";
+import { JiraMutationError } from "./jiraMutationErrors.ts";
+import { signalOptions } from "./jiraRead.ts";
 
 /** The issue-scoped permissions the Jira tools gate a write on. */
 export type JiraIssuePermission =
@@ -19,10 +21,11 @@ type JiraPermissionsResponse = {
 };
 
 export async function assertIssuePermission(
-  config: JiraApiConfig,
+  config: JiraConfig,
   issueKey: string,
   permission: JiraIssuePermission,
   action: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   const response = await jiraGet<JiraPermissionsResponse>(
     config,
@@ -31,9 +34,10 @@ export async function assertIssuePermission(
       issueKey,
       permissions: permission,
     },
+    ...signalOptions(signal),
   );
   if (response.permissions?.[permission]?.havePermission === false) {
-    throw new Error(
+    throw new JiraMutationError(
       `Jira does not grant permission to ${action} ${issueKey} (${permission}).`,
     );
   }

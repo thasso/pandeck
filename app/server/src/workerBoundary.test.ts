@@ -654,31 +654,52 @@ test("the gateway's edge reaches the vault only through its port", () => {
 });
 
 /**
- * The edge's tools (Task-1397, Task-1439, Task-1454): beyond `node:`,
- * themselves and the MCP SDK, only the shared Jira client, the shared Jira
- * and Slack read modules and their helpers, a closed set; never a tool under
- * `tools/`, settings, a cache file, approvals or `@assistant/shared` beyond
- * the import-free `zonedTime` leaf. They import nothing from `gateway/`,
- * which reaches them only through `EdgeTools`, and only the edge's entry
- * loads them, so the vault process never does.
+ * The edge's tools (Task-1397, Task-1439, Task-1454, Task-1463): beyond
+ * `node:`, themselves and the MCP SDK, only the shared Jira client, the shared
+ * Jira and Slack read modules, the shared Jira mutation core (prepare, apply,
+ * rank, sprint, permissions and their typed errors) and their helpers, a
+ * closed set, plus the three Markdown packages the ADF converter uses; never a
+ * tool under `tools/`, settings, a cache file, approvals or
+ * `@assistant/shared` beyond the import-free `zonedTime` and `jiraMutation`
+ * leaves. They import nothing from `gateway/`, which reaches them only through
+ * `EdgeTools`, and only the edge's entry loads them, so the vault process
+ * never does.
  */
 const GATEWAY_TOOLS_ALLOWED = new Set([
+  "atlassian/adfFromMarkdown.ts",
   "atlassian/adfToMarkdown.ts",
   "atlassian/atlassianFetch.ts",
   "httpRetry.ts",
   "jiraClient.ts",
   "jiraFields.ts",
   "jiraLookup.ts",
+  "jiraMutate.ts",
+  "jiraMutateApply.ts",
+  "jiraMutationErrors.ts",
+  "jiraPermissions.ts",
+  "jiraRank.ts",
   "jiraRead.ts",
   "jiraSearch.ts",
+  "jiraSprint.ts",
   "jiraSprintLookup.ts",
+  "jiraUsers.ts",
   "slackMetadataCache.ts",
   "slackRead.ts",
   "slackUrls.ts",
+  "@assistant/shared/jiraMutation",
   "@assistant/shared/zonedTime",
 ]);
 /** Allowed specifiers outside this package: scanned on their own below. */
-const GATEWAY_TOOLS_SHARED = new Set(["@assistant/shared/zonedTime"]);
+const GATEWAY_TOOLS_SHARED = new Set([
+  "@assistant/shared/jiraMutation",
+  "@assistant/shared/zonedTime",
+]);
+/** Third-party packages the allowed modules may import (Markdown to ADF). */
+const GATEWAY_TOOLS_PACKAGES = new Set([
+  "mdast-util-from-markdown",
+  "mdast-util-gfm",
+  "micromark-extension-gfm",
+]);
 
 test("only the edge's entry loads its tools, and they reach no server state", () => {
   assert.deepEqual(
@@ -697,7 +718,8 @@ test("only the edge's entry loads its tools, and they reach no server state", ()
         target.startsWith("node:") ||
           target.startsWith("gatewayTools/") ||
           target.startsWith("@modelcontextprotocol/sdk/") ||
-          GATEWAY_TOOLS_ALLOWED.has(target),
+          GATEWAY_TOOLS_ALLOWED.has(target) ||
+          GATEWAY_TOOLS_PACKAGES.has(target),
         `${module} imports ${target}`,
       );
   for (const module of GATEWAY_TOOLS_ALLOWED) {
@@ -706,16 +728,21 @@ test("only the edge's entry loads its tools, and they reach no server state", ()
     assert.ok(scan, `the scan found ${module}`);
     for (const target of scan.imports)
       assert.ok(
-        target.startsWith("node:") || GATEWAY_TOOLS_ALLOWED.has(target),
+        target.startsWith("node:") ||
+          GATEWAY_TOOLS_ALLOWED.has(target) ||
+          GATEWAY_TOOLS_PACKAGES.has(target),
         `${module}, which the edge's tools may import, imports ${target}`,
       );
   }
-  const zonedTime = scanModule(resolve(SRC_ROOT, "../../shared/zonedTime.ts"));
-  assert.deepEqual(
-    [...zonedTime.imports],
-    [],
-    "the shared leaf imports nothing",
-  );
+  for (const specifier of GATEWAY_TOOLS_SHARED) {
+    const leaf = specifier.slice("@assistant/shared/".length);
+    const scan = scanModule(resolve(SRC_ROOT, `../../shared/${leaf}.ts`));
+    assert.deepEqual(
+      [...scan.imports],
+      [],
+      `the shared leaf ${leaf} imports nothing`,
+    );
+  }
 });
 
 /**
@@ -800,6 +827,7 @@ test("the packaged edge loads the gateway, its tools and its sign-in, and no eng
         module.startsWith("@modelcontextprotocol/sdk/") ||
         GATEWAY_ALLOWED.has(module) ||
         GATEWAY_TOOLS_ALLOWED.has(module) ||
+        GATEWAY_TOOLS_PACKAGES.has(module) ||
         GATEWAY_WEB_ALLOWED.has(module),
       `gateway-edge.js reaches ${module}`,
     );

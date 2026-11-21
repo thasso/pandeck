@@ -14,22 +14,38 @@
  * chain states it; and when a step fails the steps already applied hold the
  * requested relative order instead of reversing it, with the rest left
  * untouched rather than ranked against an issue that never moved.
+ *
+ * Part of the shared mutation core (Task-1463): boundary-clean, so the edge
+ * may import it. Errors are typed (`jiraMutationErrors.ts`), a read's failure
+ * is described and classified by the caller's deps, and every request carries
+ * the caller's signal when there is one. An abort is never recorded as a step
+ * error, wrapped or swallowed.
  */
 import type {
   JiraIssueMutationItemDisplay,
   JiraIssueRankPosition,
   JiraIssueRankScopeDisplay,
   JiraIssueRankStepDisplay,
-} from "@assistant/shared";
+} from "@assistant/shared/jiraMutation";
 import {
   jiraBaseUrl,
   jiraGet,
   jiraPost,
   jiraPut,
-  type JiraApiConfig,
-} from "../../jiraClient.ts";
-import { errorText } from "../../errors.ts";
+  type JiraConfig,
+} from "./jiraClient.ts";
+import {
+  JiraMutationError,
+  JiraWriteHttpError,
+  jiraWrite,
+} from "./jiraMutationErrors.ts";
 import { assertIssuePermission } from "./jiraPermissions.ts";
+import {
+  signalOptions,
+  signalTail,
+  stopIfAborted,
+  withSignal,
+} from "./jiraRead.ts";
 
 /** Jira caps one rank call at 50 issues; the chain honours the same ceiling. */
 const RANK_MAX_ISSUES = 50;
@@ -54,6 +70,18 @@ type RankIssueMeta = {
   summary: string | null;
 };
 
+/** What staging a rank item needs besides the config. */
+export interface JiraRankDeps {
+  /** Carried by every request; an abort is never wrapped. */
+  signal?: AbortSignal | undefined;
+  describeError(err: unknown): string;
+  /** Whether a failed read is one of these HTTP statuses. */
+  matchesHttpStatus(err: unknown, statuses: readonly number[]): boolean;
+}
+
+/** What applying a rank item needs besides the config. */
+type JiraRankApplyDeps = Pick<JiraRankDeps, "signal" | "describeError">;
+
 type JiraRankBuildResult = {
   item: JiraIssueMutationItemDisplay;
   warnings: string[];
@@ -67,9 +95,10 @@ type JiraRankBuildResult = {
  * that is guaranteed to fail.
  */
 export async function buildJiraRankItem(
-  config: JiraApiConfig,
+  config: JiraConfig,
   clientId: string,
   raw: JiraRankItemInput,
+  deps: JiraRankDeps,
 ): Promise<JiraRankBuildResult> {
   const warnings: string[] = [];
   const position = normalizeRankPosition(clientId, raw.rankPosition);
@@ -84,36 +113,37 @@ export async function buildJiraRankItem(
 
   if (position === "before" || position === "after") {
     if (!targetInput)
-      throw new Error(
+      throw new JiraMutationError(
         `rank item ${clientId} with rankPosition=${position} requires rankTargetIssue.`,
       );
     if (parentInput)
-      throw new Error(
+      throw new JiraMutationError(
         `rank item ${clientId} cannot combine rankPosition=${position} with rankParentIssue; the target issue already fixes the position.`,
       );
     if (requested.includes(targetInput))
-      throw new Error(
+      throw new JiraMutationError(
         `rank item ${clientId} cannot rank ${targetInput} relative to itself.`,
       );
   } else {
     if (targetInput)
-      throw new Error(
+      throw new JiraMutationError(
         `rank item ${clientId} cannot combine rankPosition=${position} with rankTargetIssue; use before/after to rank against a specific issue.`,
       );
     if (boardId !== null && parentInput)
-      throw new Error(
+      throw new JiraMutationError(
         `rank item ${clientId} must bound rankPosition=${position} by either rankBoardId or rankParentIssue, not both.`,
       );
     if (boardId === null && !parentInput)
-      throw new Error(
+      throw new JiraMutationError(
         `rank item ${clientId} with rankPosition=${position} requires rankBoardId or rankParentIssue to bound the backlog it moves within.`,
       );
   }
 
   const metas: RankIssueMeta[] = [];
-  for (const key of requested) metas.push(await fetchRankIssue(config, key));
+  for (const key of requested)
+    metas.push(await fetchRankIssue(config, key, deps));
   const targetMeta = targetInput
-    ? await fetchRankIssue(config, targetInput)
+    ? await fetchRankIssue(config, targetInput, deps)
     : null;
   const all = targetMeta ? [...metas, targetMeta] : metas;
 
@@ -126,11 +156,17 @@ export async function buildJiraRankItem(
     all.find((meta) => meta.hierarchyLevel !== null)?.hierarchyLevel ?? null;
 
   if (boardId !== null && projectKey)
-    await assertBoardCoversProject(config, boardId, projectKey);
-  if (parentInput) await assertChildrenOf(config, parentInput, metas);
+    await assertBoardCoversProject(config, boardId, projectKey, deps);
+  if (parentInput) await assertChildrenOf(config, parentInput, metas, deps);
 
   for (const meta of all)
-    await assertIssuePermission(config, meta.key, "SCHEDULE_ISSUES", "rank");
+    await assertIssuePermission(
+      config,
+      meta.key,
+      "SCHEDULE_ISSUES",
+      "rank",
+      deps.signal,
+    );
 
   let anchorKey = targetMeta?.key ?? null;
   let scope: JiraIssueRankScopeDisplay | null = null;
@@ -140,13 +176,13 @@ export async function buildJiraRankItem(
       boardId !== null
         ? { kind: "board", boardId, epics: (hierarchyLevel ?? 0) > 0 }
         : { kind: "parent", parentIssueKey: parentInput! };
-    const order = await readScopeOrder(config, scope);
+    const order = await readScopeOrder(config, scope, deps.signal);
     const ranked = new Set(issueKeys);
     const others = order.filter((key) => !ranked.has(key));
     anchorKey =
       (position === "top" ? others[0] : others[others.length - 1]) ?? null;
     if (!anchorKey && issueKeys.length < 2)
-      throw new Error(
+      throw new JiraMutationError(
         `Jira ${rankScopeLabel(scope)} holds no other issue to rank ${issueKeys[0]} against, so ${position} has nothing to move it past.`,
       );
     if (position === "bottom" && order.length >= RANK_SCOPE_LIMIT)
@@ -157,7 +193,7 @@ export async function buildJiraRankItem(
 
   const steps = buildRankSteps(issueKeys, position, anchorKey);
   if (steps.length === 0)
-    throw new Error(
+    throw new JiraMutationError(
       `rank item ${clientId} produced no Jira rank operation to apply.`,
     );
 
@@ -186,22 +222,25 @@ export async function buildJiraRankItem(
  * scatter the batch instead of leaving the applied prefix intact.
  */
 export async function executeJiraRankItem(
-  config: JiraApiConfig,
+  config: JiraConfig,
   item: JiraIssueMutationItemDisplay,
+  deps: JiraRankApplyDeps,
 ): Promise<void> {
   const steps = item.rankSteps ?? [];
-  if (steps.length === 0) throw new Error("Missing Jira rank operations.");
+  if (steps.length === 0)
+    throw new JiraMutationError("Missing Jira rank operations.");
   const applied: string[] = [];
   let failure: string | null = null;
   for (const [index, step] of steps.entries()) {
     try {
-      await rankOne(config, step);
+      await rankOne(config, step, deps.signal);
       step.resultOk = true;
       delete step.error;
       applied.push(step.issueKey);
     } catch (err) {
+      if (deps.signal?.aborted) throw err;
       step.resultOk = false;
-      step.error = errorText(err);
+      step.error = deps.describeError(err);
       for (const later of steps.slice(index + 1)) {
         delete later.resultOk;
         delete later.error;
@@ -219,35 +258,81 @@ export async function executeJiraRankItem(
       break;
     }
   }
-  const observed = await observeRankOrder(config, item);
+  stopIfAborted(deps.signal);
+  const observed = await observeRankOrder(config, item, deps.signal);
   if (observed) item.rankResultOrder = observed;
   else delete item.rankResultOrder;
-  if (failure) throw new Error(failure);
+  if (failure) throw new JiraMutationError(failure);
 }
+
+type RankEntry = { issueId?: number; status?: number; errors?: string[] };
 
 /** One `PUT /rest/agile/1.0/issue/rank`, surfacing Jira's per-issue 207 shape. */
 async function rankOne(
-  config: JiraApiConfig,
+  config: JiraConfig,
   step: JiraIssueRankStepDisplay,
+  signal: AbortSignal | undefined,
 ): Promise<void> {
-  const response = await jiraPut<{
-    entries?: Array<{ issueId?: number; status?: number; errors?: string[] }>;
-  }>(config, "/rest/agile/1.0/issue/rank", {
-    issues: [step.issueKey],
-    ...(step.placement === "before"
-      ? { rankBeforeIssue: step.relativeToIssueKey }
-      : { rankAfterIssue: step.relativeToIssueKey }),
-  });
+  const response = await jiraWrite(
+    () =>
+      jiraPut<{ entries?: RankEntry[] }>(
+        config,
+        "/rest/agile/1.0/issue/rank",
+        {
+          issues: [step.issueKey],
+          ...(step.placement === "before"
+            ? { rankBeforeIssue: step.relativeToIssueKey }
+            : { rankAfterIssue: step.relativeToIssueKey }),
+        },
+        ...signalTail(signal),
+      ),
+    signal,
+  );
   // A multi-status reply is a 2xx: the failure only shows up per entry.
   const failed = (response?.entries ?? []).filter(
-    (entry) => typeof entry.status === "number" && entry.status >= 400,
+    (entry): entry is RankEntry & { status: number } =>
+      typeof entry.status === "number" && entry.status >= 400,
   );
-  if (failed.length > 0)
-    throw new Error(
-      failed
-        .map((entry) => entry.errors?.join("; ") || `HTTP ${entry.status}`)
-        .join("; "),
-    );
+  if (failed.length > 0) throw rankEntriesError(failed);
+}
+
+/**
+ * A 207's failed entries as one rejected write. The message is the one the
+ * local tool always showed. The status is the worst kind among the entries —
+ * a 5xx, else 401, else 403, else the highest 4xx — and Jira's reasons ride
+ * along only when every failed entry is a 4xx other than 401/403, so they are
+ * never paired with a status whose text a caller must keep fixed.
+ */
+function rankEntriesError(
+  failed: Array<RankEntry & { status: number }>,
+): JiraWriteHttpError {
+  const message = failed
+    .map((entry) => entry.errors?.join("; ") || `HTTP ${entry.status}`)
+    .join("; ");
+  const statuses = failed.map((entry) => entry.status);
+  const serverErrors = statuses.filter((status) => status >= 500);
+  const status = serverErrors.length
+    ? Math.max(...serverErrors)
+    : statuses.includes(401)
+      ? 401
+      : statuses.includes(403)
+        ? 403
+        : Math.max(...statuses);
+  const plain = statuses.every(
+    (entry) => entry < 500 && entry !== 401 && entry !== 403,
+  );
+  const reasons = plain
+    ? failed.flatMap((entry) =>
+        (entry.errors ?? []).filter(
+          (reason): reason is string => typeof reason === "string",
+        ),
+      )
+    : [];
+  return new JiraWriteHttpError(
+    message,
+    status,
+    reasons.length > 0 ? reasons : undefined,
+  );
 }
 
 /** Chain the batch: the head takes the requested position, the tail follows it. */
@@ -280,12 +365,14 @@ function buildRankSteps(
  * turning a successful rank into a failure.
  */
 async function observeRankOrder(
-  config: JiraApiConfig,
+  config: JiraConfig,
   item: JiraIssueMutationItemDisplay,
+  signal: AbortSignal | undefined,
 ): Promise<string[] | null> {
   const ranked = item.rankIssueKeys ?? [];
   try {
-    if (item.rankScope) return await readScopeOrder(config, item.rankScope);
+    if (item.rankScope)
+      return await readScopeOrder(config, item.rankScope, signal);
     const keys = [
       ...ranked,
       ...(item.rankTargetIssueKey ? [item.rankTargetIssueKey] : []),
@@ -294,21 +381,25 @@ async function observeRankOrder(
     return await searchRankOrder(
       config,
       `key in (${keys.map((key) => `"${key}"`).join(", ")}) ORDER BY Rank ASC`,
+      signal,
     );
-  } catch {
+  } catch (err) {
+    if (signal?.aborted) throw err;
     return null;
   }
 }
 
 /** Read one bounded scope in Jira's own rank order. */
 async function readScopeOrder(
-  config: JiraApiConfig,
+  config: JiraConfig,
   scope: JiraIssueRankScopeDisplay,
+  signal: AbortSignal | undefined,
 ): Promise<string[]> {
   if (scope.kind === "parent")
     return searchRankOrder(
       config,
       `parent = "${scope.parentIssueKey}" ORDER BY Rank ASC`,
+      signal,
     );
   // The board backlog endpoint answers with the board's own ordering, but it
   // only carries issues at the standard level; epics are their own ranked list.
@@ -317,6 +408,7 @@ async function readScopeOrder(
       config,
       `/rest/agile/1.0/board/${scope.boardId}/epic`,
       { maxResults: RANK_SCOPE_LIMIT },
+      ...signalOptions(signal),
     );
     return (response.values ?? [])
       .map((epic) => epic.key)
@@ -326,6 +418,7 @@ async function readScopeOrder(
     config,
     `/rest/agile/1.0/board/${scope.boardId}/backlog`,
     { maxResults: RANK_SCOPE_LIMIT, fields: "key" },
+    ...signalOptions(signal),
   );
   return (response.issues ?? [])
     .map((issue) => issue.key)
@@ -333,15 +426,16 @@ async function readScopeOrder(
 }
 
 async function searchRankOrder(
-  config: JiraApiConfig,
+  config: JiraConfig,
   jql: string,
+  signal: AbortSignal | undefined,
 ): Promise<string[]> {
   const response = await jiraPost<{ issues?: Array<{ key?: string }> }>(
     config,
     "/rest/api/3/search/jql",
     { jql, maxResults: RANK_SCOPE_LIMIT, fields: ["key"] },
     undefined,
-    { retry: true },
+    withSignal(signal, { retry: true }),
   );
   return (response.issues ?? [])
     .map((issue) => issue.key)
@@ -349,8 +443,9 @@ async function searchRankOrder(
 }
 
 async function fetchRankIssue(
-  config: JiraApiConfig,
+  config: JiraConfig,
   key: string,
+  deps: JiraRankDeps,
 ): Promise<RankIssueMeta> {
   let issue: {
     key?: string;
@@ -361,12 +456,13 @@ async function fetchRankIssue(
       config,
       `/rest/api/3/issue/${encodeURIComponent(key)}`,
       { fields: "summary,project,issuetype,parent" },
+      ...signalOptions(deps.signal),
     );
   } catch (err) {
-    const message = errorText(err);
-    if (/HTTP 40(4|3)\b/.test(message))
-      throw new Error(
-        `Jira issue ${key} could not be read for ranking: ${message}`,
+    if (deps.signal?.aborted) throw err;
+    if (deps.matchesHttpStatus(err, [404, 403]))
+      throw new JiraMutationError(
+        `Jira issue ${key} could not be read for ranking: ${deps.describeError(err)}`,
       );
     throw err;
   }
@@ -391,7 +487,7 @@ function assertOneProject(metas: RankIssueMeta[]): void {
     if (meta.projectKey && !seen.has(meta.projectKey))
       seen.set(meta.projectKey, meta.key);
   if (seen.size > 1)
-    throw new Error(
+    throw new JiraMutationError(
       `Jira ranks issues within one project's backlog, but ${[...seen]
         .map(([project, key]) => `${key} (${project})`)
         .join(" and ")} are in different projects.`,
@@ -405,7 +501,7 @@ function assertOneHierarchyLevel(metas: RankIssueMeta[]): void {
     if (meta.hierarchyLevel !== null && !seen.has(meta.hierarchyLevel))
       seen.set(meta.hierarchyLevel, meta);
   if (seen.size > 1)
-    throw new Error(
+    throw new JiraMutationError(
       `Jira ranks each hierarchy level separately, but ${[...seen.values()]
         .map(
           (meta) =>
@@ -430,9 +526,10 @@ function hierarchyLabel(level: number | null): string {
 }
 
 async function assertBoardCoversProject(
-  config: JiraApiConfig,
+  config: JiraConfig,
   boardId: number,
   projectKey: string,
+  deps: JiraRankDeps,
 ): Promise<void> {
   let response: { values?: Array<{ key?: string }> };
   try {
@@ -440,12 +537,13 @@ async function assertBoardCoversProject(
       config,
       `/rest/agile/1.0/board/${boardId}/project`,
       { maxResults: 50 },
+      ...signalOptions(deps.signal),
     );
   } catch (err) {
-    const message = errorText(err);
-    if (/HTTP 40(0|3|4)\b/.test(message))
-      throw new Error(
-        `Jira board ${boardId} could not be read: ${message} Use a board id you can see in Jira.`,
+    if (deps.signal?.aborted) throw err;
+    if (deps.matchesHttpStatus(err, [400, 403, 404]))
+      throw new JiraMutationError(
+        `Jira board ${boardId} could not be read: ${deps.describeError(err)} Use a board id you can see in Jira.`,
       );
     throw err;
   }
@@ -453,20 +551,21 @@ async function assertBoardCoversProject(
     .map((project) => project.key)
     .filter((key): key is string => Boolean(key));
   if (keys.length > 0 && !keys.includes(projectKey))
-    throw new Error(
+    throw new JiraMutationError(
       `Jira board ${boardId} does not cover project ${projectKey} (it covers ${keys.join(", ")}), so its backlog cannot rank these issues.`,
     );
 }
 
 async function assertChildrenOf(
-  config: JiraApiConfig,
+  config: JiraConfig,
   parentKey: string,
   metas: RankIssueMeta[],
+  deps: JiraRankDeps,
 ): Promise<void> {
-  const parent = await fetchRankIssue(config, parentKey);
+  const parent = await fetchRankIssue(config, parentKey, deps);
   const strays = metas.filter((meta) => meta.parentKey !== parent.key);
   if (strays.length > 0)
-    throw new Error(
+    throw new JiraMutationError(
       `${strays
         .map((meta) => `${meta.key} (parent ${meta.parentKey ?? "none"})`)
         .join(
@@ -486,7 +585,7 @@ function normalizeRankPosition(
     value === "bottom"
   )
     return value;
-  throw new Error(
+  throw new JiraMutationError(
     `rank item ${clientId} requires rankPosition: before, after, top, or bottom.`,
   );
 }
@@ -496,18 +595,18 @@ function normalizeRankIssues(
   value: string[] | undefined,
 ): string[] {
   if (!Array.isArray(value) || value.length === 0)
-    throw new Error(
+    throw new JiraMutationError(
       `rank item ${clientId} requires rankIssues: the issue keys to move, in the order they should end up.`,
     );
   if (value.length > RANK_MAX_ISSUES)
-    throw new Error(
+    throw new JiraMutationError(
       `rank item ${clientId} lists ${value.length} issues; Jira ranks at most ${RANK_MAX_ISSUES} at a time.`,
     );
   const keys = value.map((entry) => normalizeKey(entry));
   const seen = new Set<string>();
   for (const key of keys) {
     if (seen.has(key))
-      throw new Error(
+      throw new JiraMutationError(
         `rank item ${clientId} lists ${key} twice, so the requested order is ambiguous.`,
       );
     seen.add(key);
@@ -521,7 +620,7 @@ function normalizeBoardId(
 ): number | null {
   if (value === undefined || value === null) return null;
   if (!Number.isInteger(value) || value <= 0)
-    throw new Error(
+    throw new JiraMutationError(
       `rank item ${clientId} rankBoardId must be a positive Jira board id.`,
     );
   return value;
@@ -529,12 +628,15 @@ function normalizeBoardId(
 
 function normalizeKey(value: string): string {
   const trimmed = String(value ?? "").trim();
-  if (!trimmed) throw new Error("A rank issue must be a Jira issue key or id.");
+  if (!trimmed)
+    throw new JiraMutationError("A rank issue must be a Jira issue key or id.");
   if (trimmed.length > 120)
-    throw new Error("A rank issue is too long to be a Jira issue key or id.");
+    throw new JiraMutationError(
+      "A rank issue is too long to be a Jira issue key or id.",
+    );
   return trimmed.toUpperCase();
 }
 
-function issueUrl(config: JiraApiConfig, issueKey: string): string {
+function issueUrl(config: JiraConfig, issueKey: string): string {
   return `${jiraBaseUrl(config.jiraHost)}/browse/${encodeURIComponent(issueKey)}`;
 }

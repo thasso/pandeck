@@ -171,16 +171,18 @@ export async function jiraPut<T>(
   path: string,
   body: unknown,
   query?: AtlassianQuery,
+  options: JiraCallOptions = {},
 ): Promise<T> {
-  return jiraFetch<T>(config, "PUT", path, body, query);
+  return jiraFetch<T>(config, "PUT", path, body, query, options);
 }
 
 export async function jiraDelete<T>(
   config: JiraConfig,
   path: string,
   query?: AtlassianQuery,
+  options: JiraCallOptions = {},
 ): Promise<T> {
-  return jiraFetch<T>(config, "DELETE", path, undefined, query);
+  return jiraFetch<T>(config, "DELETE", path, undefined, query, options);
 }
 
 /** Jira's call, delegating transport and retry policy to the shared Atlassian client. */
