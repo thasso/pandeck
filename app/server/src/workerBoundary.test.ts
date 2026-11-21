@@ -656,10 +656,11 @@ test("the gateway's edge reaches the vault only through its port", () => {
 /**
  * The edge's tools (Task-1397, Task-1439, Task-1454, Task-1463): beyond
  * `node:`, themselves and the MCP SDK, only the shared Jira client, the shared
- * Jira and Slack read modules, the shared Jira mutation core (prepare, apply,
- * rank, sprint, permissions and their typed errors) and their helpers, a
- * closed set, plus the three Markdown packages the ADF converter uses; never a
- * tool under `tools/`, settings, a cache file, approvals or
+ * Jira, Confluence and Slack read modules, the shared Jira mutation core
+ * (prepare, apply, rank, sprint, permissions and their typed errors) and their
+ * helpers, a closed set, plus the three Markdown packages the ADF converter
+ * uses and Turndown, which the Confluence client brings for the storage
+ * fallback; never a tool under `tools/`, settings, a cache file, approvals or
  * `@assistant/shared` beyond the import-free `zonedTime` and `jiraMutation`
  * leaves. They import nothing from `gateway/`, which reaches them only through
  * `EdgeTools`, and only the edge's entry loads them, so the vault process
@@ -669,6 +670,9 @@ const GATEWAY_TOOLS_ALLOWED = new Set([
   "atlassian/adfFromMarkdown.ts",
   "atlassian/adfToMarkdown.ts",
   "atlassian/atlassianFetch.ts",
+  "atlassian/confluenceClient.ts",
+  "atlassian/storageToMarkdown.ts",
+  "confluenceRead.ts",
   "httpRetry.ts",
   "jiraClient.ts",
   "jiraFields.ts",
@@ -688,17 +692,25 @@ const GATEWAY_TOOLS_ALLOWED = new Set([
   "slackUrls.ts",
   "@assistant/shared/jiraMutation",
   "@assistant/shared/zonedTime",
+  "mdast-util-from-markdown",
+  "mdast-util-gfm",
+  "micromark-extension-gfm",
+  "turndown",
 ]);
 /** Allowed specifiers outside this package: scanned on their own below. */
 const GATEWAY_TOOLS_SHARED = new Set([
   "@assistant/shared/jiraMutation",
   "@assistant/shared/zonedTime",
 ]);
-/** Third-party packages the allowed modules may import (Markdown to ADF). */
+/**
+ * Third-party packages the allowed modules may import (Markdown to ADF, and
+ * Turndown for Confluence storage to Markdown): targets only, not scanned.
+ */
 const GATEWAY_TOOLS_PACKAGES = new Set([
   "mdast-util-from-markdown",
   "mdast-util-gfm",
   "micromark-extension-gfm",
+  "turndown",
 ]);
 
 test("only the edge's entry loads its tools, and they reach no server state", () => {
@@ -723,7 +735,8 @@ test("only the edge's entry loads its tools, and they reach no server state", ()
         `${module} imports ${target}`,
       );
   for (const module of GATEWAY_TOOLS_ALLOWED) {
-    if (GATEWAY_TOOLS_SHARED.has(module)) continue;
+    if (GATEWAY_TOOLS_SHARED.has(module) || GATEWAY_TOOLS_PACKAGES.has(module))
+      continue;
     const scan = scans.get(module);
     assert.ok(scan, `the scan found ${module}`);
     for (const target of scan.imports)

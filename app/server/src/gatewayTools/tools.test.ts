@@ -7,6 +7,17 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { test } from "vitest";
+import {
+  CONFLUENCE_GET_PAGE_DESCRIPTION,
+  CONFLUENCE_GET_PAGE_SCHEMA,
+  CONFLUENCE_LOOKUP_DESCRIPTION,
+  CONFLUENCE_LOOKUP_SCHEMA,
+  CONFLUENCE_SEARCH_DESCRIPTION,
+  CONFLUENCE_SEARCH_SCHEMA,
+} from "../confluenceRead.ts";
+import { confluenceGetPage } from "./confluenceGetPage.ts";
+import { confluenceLookup } from "./confluenceLookup.ts";
+import { confluenceSearch } from "./confluenceSearch.ts";
 import { JIRA_LOOKUP_DESCRIPTION, lookupParamsSchema } from "../jiraLookup.ts";
 import {
   JIRA_SEARCH_ISSUES_DESCRIPTION,
@@ -56,7 +67,11 @@ test("every edge tool's descriptor is within the client's bounds", () => {
       tool.name,
     );
     // The prefix names the product Pandeck maps the tool to.
-    assert.match(tool.actionKey, /^(jira|slack):[a-z_]{1,32}$/, tool.name);
+    assert.match(
+      tool.actionKey,
+      /^(jira|slack|confluence):[a-z_]{1,32}$/,
+      tool.name,
+    );
   }
 });
 
@@ -68,6 +83,9 @@ test("the edge's tools offer the host's listing", () => {
       "jira_get_issue",
       "jira_search_issues",
       "jira_lookup",
+      "confluence_search",
+      "confluence_get_page",
+      "confluence_lookup",
       "slack_search",
       "slack_conversation_read",
       "slack_thread_read",
@@ -228,4 +246,26 @@ test("the local jira_mutate_issue schema and description stay byte-identical", (
     sha(JIRA_MUTATE_ISSUE_DESCRIPTION),
     "30ef8a697b876432041e3e23631785fae50bd3b28003c6c76d10d245694d2edd",
   );
+});
+
+test("the Confluence reads share the local tools' schema and description objects", () => {
+  const triples = [
+    [confluenceSearch, CONFLUENCE_SEARCH_SCHEMA, CONFLUENCE_SEARCH_DESCRIPTION],
+    [
+      confluenceGetPage,
+      CONFLUENCE_GET_PAGE_SCHEMA,
+      CONFLUENCE_GET_PAGE_DESCRIPTION,
+    ],
+    [confluenceLookup, CONFLUENCE_LOOKUP_SCHEMA, CONFLUENCE_LOOKUP_DESCRIPTION],
+  ] as const;
+  for (const [tool, schema, description] of triples) {
+    // Identity, not equality: one constant serves both, so they cannot drift.
+    assert.ok(tool.inputSchema === schema, tool.name);
+    assert.ok(tool.description === description, tool.name);
+    assert.equal(tool.inputSchema.additionalProperties, false, tool.name);
+    assert.equal(tool.effect, "read");
+    assert.equal(tool.actionKey, "confluence:read");
+    assert.equal(tool.integration, "atlassian");
+    assert.equal(tool.maxResultChars, undefined, `${tool.name}: 60,000`);
+  }
 });

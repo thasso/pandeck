@@ -178,6 +178,13 @@ Three properties make that guard total rather than best-effort:
   staged, so a missing space, an unreadable page or an unsupported placement is
   a tool error rather than an approval that can only fail.
 
+The three reads share their schemas, descriptions and runs with the credential
+gateway's edge (`app/server/src/confluenceRead.ts`), which offers them to
+enrolled machines with the user's own Atlassian credential. The edge answers the
+same payload compact, with fixed error texts and a 60,000-character result
+ceiling: `docs/workers.md` "Tools on the edge". All three schemas refuse unknown
+arguments.
+
 ## Attachments
 
 Attachment writes live in `tools/confluence/confluenceAttachments.ts` and ride
