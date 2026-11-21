@@ -249,7 +249,14 @@ describe("guided setup", () => {
 
   it("moves from the welcome screen to setup when the server says so", async () => {
     const socket = await boot("/sessions/create", "pending");
-    expect(container!.textContent).toContain("Connect your first AI account");
+    // The welcome screen is a lazy chunk; under load it arrives later.
+    await vi.waitFor(
+      () =>
+        expect(container!.textContent).toContain(
+          "Connect your first AI account",
+        ),
+      { timeout: 10_000 },
+    );
     await act(async () =>
       socket.receive({ type: "onboarding", state: "setup" }),
     );

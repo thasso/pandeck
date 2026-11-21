@@ -16,7 +16,10 @@ import { toLinkedPushDisplay } from "./pushLinks.ts";
 import { resetMemorySessionContext } from "./memory/memoryRuntime.ts";
 import { memoryScheduler } from "./memory/memoryScheduler.ts";
 import { runPrWorkflow, type PrWorkflowPhase } from "./prWorkflow.ts";
-import { assertSessionEnterpriseAccount } from "./session/runtimePrompt.ts";
+import {
+  assertNotFinishedSetup,
+  assertSessionEnterpriseAccount,
+} from "./session/runtimePrompt.ts";
 import { sessionCheckoutSide } from "./workers/placement.ts";
 
 /**
@@ -153,6 +156,7 @@ export async function runCommitForHost(
   host: SyntheticToolHost,
   rawArgs: string,
 ): Promise<void> {
+  assertNotFinishedSetup(host.sessionId);
   const args = parseCommitArgs(rawArgs);
   const commandText = `/commit${rawArgs.trim() ? ` ${rawArgs.trim()}` : ""}`;
   if (refusedInPlan(host, "/commit", commandText, rawArgs)) return;
@@ -200,6 +204,7 @@ export async function runPushForHost(
   host: SyntheticToolHost,
   rawArgs: string,
 ): Promise<void> {
+  assertNotFinishedSetup(host.sessionId);
   const args = parsePushArgs(rawArgs);
   const commandText = `/push${rawArgs.trim() ? ` ${rawArgs.trim()}` : ""}`;
   if (refusedInPlan(host, "/push", commandText, rawArgs)) return;
@@ -236,6 +241,7 @@ export async function runPrForHost(
   host: SyntheticToolHost,
   rawArgs: string,
 ): Promise<void> {
+  assertNotFinishedSetup(host.sessionId);
   const args = parsePrArgs(rawArgs);
   const commandText = `/pr${rawArgs.trim() ? ` ${rawArgs.trim()}` : ""}`;
   // /pr is commit + push phases, so it takes the same Plan refusal.
@@ -330,6 +336,13 @@ export const CONTEXT_ONLY_SLASH_COMMANDS: ReadonlySet<string> = new Set([
   "clear",
 ]);
 
+/**
+ * The runner every dispatcher (the viewed session, the prompt queue) calls for
+ * a host command. Each runner refuses the finished guided setup conversation
+ * first, before any synthetic turn opens (`docs/onboarding.md`): it is
+ * read-only once setup is over, and `/compact` would send its frozen setup
+ * prompt to the provider.
+ */
 export function hostSlashCommandRunner(
   name: string,
 ): ((host: SyntheticToolHost, rawArgs: string) => Promise<void>) | undefined {
@@ -354,6 +367,8 @@ export async function runCompactForHost(
   host: SyntheticToolHost,
   rawArgs: string,
 ): Promise<void> {
+  // Refused before any synthetic turn, like a busy session.
+  assertNotFinishedSetup(host.sessionId);
   const customInstructions = rawArgs.trim() || undefined;
   const commandText = `/compact${customInstructions ? ` ${customInstructions}` : ""}`;
   const { toolId } = host.beginSyntheticTool("/compact", {
@@ -367,6 +382,8 @@ export async function runCompactForHost(
     // real conversation rather than the summary; single-flight, so a redundant
     // trigger (e.g. an automatic compaction racing this one) is harmless.
     await memoryScheduler.flushBeforeReset(host.sessionId);
+    // Setup may have finished during the flush; compaction is model-backed.
+    assertNotFinishedSetup(host.sessionId);
     const result = await host.compactContext(customInstructions);
     if (result.kind === "skipped") {
       host.finishSyntheticTool(toolId, result.reason, false);
@@ -409,6 +426,7 @@ export async function runCompactForHost(
  * itself what sets the session running.
  */
 export async function runClearForHost(host: SyntheticToolHost): Promise<void> {
+  assertNotFinishedSetup(host.sessionId);
   const { toolId } = host.beginSyntheticTool("/clear", { command: "/clear" });
   try {
     host.updateSyntheticTool("Clearing session context…");

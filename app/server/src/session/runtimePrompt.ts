@@ -241,7 +241,7 @@ function assertSessionWorktreePresent(sessionId: string): void {
  * frozen prompt still carries the setup section and finish tool
  * (`docs/onboarding.md`). Refused before the runtime session and any append.
  */
-function assertNotFinishedSetup(sessionId: string): void {
+export function assertNotFinishedSetup(sessionId: string): void {
   assertSetupSessionOpen(() => sessionRanGuidedSetup(sessionId));
 }
 

@@ -90,9 +90,16 @@ mode 0600. It only moves forward: `pending → setup → complete`.
   session whose frozen conditions carry `guidedSetup`, before the runtime
   session and any append, with "Setup is finished. Continue in your Personal
   Assistant." (`SetupFinishedError`). That covers prompts, steers,
-  provider-initiated turns and account-recovery continuations. The turn that
-  called `onboarding_finish` itself runs to its end. A send from the browser
-  refused this way carries `setupFinished: true` on its `error`.
+  provider-initiated turns and account-recovery continuations. Host commands
+  (`/compact`, `/clear`, `/commit`, `/push`, `/pr`) are refused the same way at
+  admission: each runner in `hostSlashCommands.ts` checks first, before a
+  synthetic turn opens, whichever dispatcher (the viewed session, the prompt
+  queue) calls it; `/compact` checks again after its memory flush, right before
+  the model-backed compaction. Automatic compaction only happens inside a turn,
+  and the helper one-shots (naming, status) bring their own system prompt, so
+  neither can carry the setup prompt. The turn that called `onboarding_finish`
+  itself runs to its end. A send or host command from the browser refused this
+  way carries `setupFinished: true` on its `error`.
 
 The `ready` snapshot carries `onboarding`, and each change is broadcast once as
 `{ type: "onboarding", state }`. The browser keeps it as live state only: it is

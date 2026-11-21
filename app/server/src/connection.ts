@@ -3438,12 +3438,16 @@ export class Connection implements Viewer {
         await runner(viewing, rawArgs);
       });
     } catch (err) {
+      const setupFinished = err instanceof SetupFinishedError;
       this.send({
         type: "error",
-        message: `Failed to run /${name}: ${errorText(err)}`,
+        message: setupFinished
+          ? errorText(err)
+          : `Failed to run /${name}: ${errorText(err)}`,
         ...(commandSessionId
           ? { target: { type: "session" as const, id: commandSessionId } }
           : {}),
+        ...(setupFinished ? { setupFinished: true as const } : {}),
       });
     }
   }
