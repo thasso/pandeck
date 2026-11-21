@@ -2704,7 +2704,12 @@ plus `jira_search_issues` and `jira_lookup` (Task-1439), four Slack read tools:
   string as it leaves, cut and with its ellipsis, raw and JSON-escaped, is
   checked again; one that still carries material becomes a fixed text, and a
   serialized answer that does keeps only each row's operation and outcome. No
-  string of its answer carries one (`upstreamText.ts`). `gateway/` holds no tool
+  string of its answer carries one (`upstreamText.ts`). Accepted limit: a
+  credential whose secret form equals, or is contained in, the answer's fixed
+  scaffold (the `[redacted]` placeholder, the JSON keys and structure, and the
+  fixed fallback texts) cannot be withheld from the answer. Provider-shaped
+  credentials (Atlassian API tokens, OAuth access tokens) cannot take that
+  shape and are unaffected. `gateway/` holds no tool
   code or package: it takes the tools as `EdgeTools` (`gateway/edgeTools.ts`,
   types only) through `startGateway`'s `tools`, and the vault process never
   loads them. Without them `/mcp` is an unknown path and the integration methods

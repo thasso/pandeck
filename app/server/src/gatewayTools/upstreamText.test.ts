@@ -171,3 +171,39 @@ test("F001-a: a text whose JSON escaping spells the token gives the fallback", (
   const escaped = { ...DIGITS, token: 'q\\"FAKE-JSON' };
   assert.equal(vettedText('a q"FAKE-JSON b', escaped, options), "FALLBACK");
 });
+
+// --- Task-1463 fix-3: an accepted limit, pinned (ADR-0005 D-W2, docs/workers.md) ---
+
+test("documented limit: a token that is the placeholder itself cannot be withheld, while a provider-shaped token is", () => {
+  const placeholderToken: AtlassianCredential = {
+    site: "acme.atlassian.net",
+    email: "me@x.test",
+    token: REDACTED,
+  };
+  // The fallback is shown only when it holds no secret, so "FALLBACK" stands in.
+  assert.equal(
+    vettedText(`x ${REDACTED} y`, placeholderToken, options),
+    "FALLBACK",
+  );
+  // Only a fallback that also holds the placeholder gives the placeholder alone.
+  assert.equal(
+    vettedText(`x ${REDACTED} y`, placeholderToken, {
+      max: 40,
+      fallback: `fallback ${REDACTED}`,
+    }),
+    REDACTED,
+  );
+  // A provider-shaped token takes no scaffold shape: it is redacted and absent.
+  const provider = `ATATT3xFfGF0${"Ab3_-".repeat(36)}`;
+  const providerToken: AtlassianCredential = {
+    site: "acme.atlassian.net",
+    email: "me@x.test",
+    token: provider,
+  };
+  const out = vettedText(`x ${REDACTED} ${provider} y`, providerToken, {
+    max: 200,
+    fallback: "FALLBACK",
+  });
+  assert.equal(out, `x ${REDACTED} ${REDACTED} y`);
+  assert.equal(out.includes(provider), false);
+});

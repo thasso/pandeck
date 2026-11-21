@@ -153,6 +153,10 @@ on the edge"):
     and every percent-decoding of a link. In a text each such span reads
     `[redacted]`, which a cut never splits; a key or link holding one is
     dropped. Each string is checked again as it leaves, after its cut.
+    Accepted limit (Task-1463 fix-3): a credential whose secret form equals,
+    or is contained in, that answer's fixed scaffold (the placeholder, the JSON
+    keys and structure, the fixed fallback texts) cannot be withheld from it.
+    Provider-shaped credentials cannot take that shape and are unaffected.
 - The edge's one write tool, `jira_mutate_issue` (Task-1463), writes in the call
   itself: the client asks the user to approve the call, and the edge applies the
   changes at once. It runs on its own 45 s deadline, inside the client's
