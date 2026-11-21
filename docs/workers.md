@@ -1536,7 +1536,9 @@ on its own ([deployment.md](deployment.md) "Credential gateway unit").
   under `DATA_DIR/credential-profiles/claude-default/claude`, where the store
   reads its transcripts. With the switch on it also leases `claude-default`. Its
   `credentialProfileId`, records, auth mode and account routing are unchanged.
-  The scrub drops every `ANTHROPIC_*`, `CLAUDE_*` (including a service-level
+  An install without `claude-default` (every fresh one) refuses such a session
+  before any child starts (`docs/account-routing.md`, "No account"). The scrub
+  drops every `ANTHROPIC_*`, `CLAUDE_*` (including a service-level
   `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_USE_BEDROCK`/`_VERTEX` and tunings such as
   `CLAUDE_CODE_AUTO_COMPACT_WINDOW`), `AWS_*` and `VERTEXAI_*` variable and
   `GOOGLE_APPLICATION_CREDENTIALS` (`claudeChildEnvironment.ts`).

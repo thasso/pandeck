@@ -45,6 +45,7 @@ import type {
 } from "./session/adapters/contract.ts";
 import type { PiDriver } from "./session/adapters/pi.ts";
 import type { ClaudeSdkMessage, ClaudeSdkSeam } from "./claudeSdk/sdkSeam.ts";
+import { seedLegacyDefaultAccounts } from "./test/legacyDefaultAccounts.ts";
 
 const { fakeDrivers, cardUpdates, fakeHub } = vi.hoisted(() => {
   const fakeDrivers = new Map<string, unknown>();
@@ -152,6 +153,9 @@ const { PEER_NOTICE_AGENT_ID } = await import("./delegationFailureNotice.ts");
 
 setHubForTests(fakeHub as never);
 let delivery: ReturnType<typeof installDeliveryTestScheduler>;
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
+
 beforeEach(() => {
   delivery = installDeliveryTestScheduler({
     live: (id) => fakeHub.getLiveById(id) as RuntimePromptDriver | undefined,
@@ -1650,8 +1654,6 @@ function bootInNewProcess(): { recovered: number; interrupted: number } {
       DATA_DIR,
       ASSISTANT_CWD: process.env.ASSISTANT_CWD ?? "",
       ASSISTANT_CONFIG: process.env.ASSISTANT_CONFIG ?? "",
-      ASSISTANT_LEGACY_PI_AGENT_DIR:
-        process.env.ASSISTANT_LEGACY_PI_AGENT_DIR ?? "",
       PTO_SRC: src,
     };
     for (const value of [
@@ -1660,12 +1662,11 @@ function bootInNewProcess(): { recovered: number; interrupted: number } {
       env.DATA_DIR,
       env.ASSISTANT_CWD,
       env.ASSISTANT_CONFIG,
-      env.ASSISTANT_LEGACY_PI_AGENT_DIR,
     ])
       assert.ok(value.startsWith(tmpdir()), `disposable: ${value}`);
     const script = `
 const assert = (await import("node:assert/strict")).default;
-for (const key of ["HOME", "TMPDIR", "DATA_DIR", "ASSISTANT_CWD", "ASSISTANT_CONFIG", "ASSISTANT_LEGACY_PI_AGENT_DIR"])
+for (const key of ["HOME", "TMPDIR", "DATA_DIR", "ASSISTANT_CWD", "ASSISTANT_CONFIG"])
   assert.ok(process.env[key]?.startsWith(${JSON.stringify(tmpdir())}), key);
 globalThis.fetch = async () => { throw new Error("external fetch denied"); };
 const src = process.env.PTO_SRC;
@@ -1875,7 +1876,7 @@ describe("across a real restart", () => {
 const assert = (await import("node:assert/strict")).default;
 const root = process.env.PTO_ROOT;
 assert.ok(root && root.startsWith(${JSON.stringify(tmpdir())}));
-for (const [key, dir] of [["HOME", "home"], ["ASSISTANT_CWD", "cwd"], ["DATA_DIR", "data"], ["ASSISTANT_LEGACY_PI_AGENT_DIR", "legacy"]])
+for (const [key, dir] of [["HOME", "home"], ["ASSISTANT_CWD", "cwd"], ["DATA_DIR", "data"]])
   assert.equal(process.env[key], root + "/" + dir);
 assert.equal(process.env.ASSISTANT_CONFIG, root + "/app.json");
 globalThis.fetch = async () => { throw new Error("external fetch denied"); };
@@ -1976,7 +1977,6 @@ if (mode === "first") {
           ASSISTANT_CWD: join(root, "cwd"),
           DATA_DIR: join(root, "data"),
           ASSISTANT_CONFIG: join(root, "app.json"),
-          ASSISTANT_LEGACY_PI_AGENT_DIR: join(root, "legacy"),
         },
       },
     );
@@ -1985,8 +1985,7 @@ if (mode === "first") {
   it("a stopped batch is not replayed or relabeled, a stranded one is a restart, and the backlog drains", () => {
     const root = mkdtempSync(join(tmpdir(), "pto-restart-"));
     try {
-      for (const dir of ["home", "cwd", "data", "legacy"])
-        mkdirSync(join(root, dir));
+      for (const dir of ["home", "cwd", "data"]) mkdirSync(join(root, dir));
       writeFileSync(
         join(root, "app.json"),
         JSON.stringify({ dataDir: join(root, "data") }),

@@ -152,7 +152,22 @@ test("deleting removes the transcript from that profile root", async () => {
   );
 });
 
-test("the default profile and a session with no account both use the default's DATA_DIR root, never ~/.claude", () => {
+test("without Default Claude, a session with no account has no store, no saved totals and no default directory", async () => {
+  const defaultDir = join(tmp, "data", "credential-profiles", "claude-default");
+  assert.throws(
+    () => claudeProfileSessionStore(undefined),
+    /No Claude account is set up/,
+  );
+  assert.equal(await lastSavedCostState(undefined, randomUUID()), undefined);
+  // An unbound session's delete sweep looks only in accounts that exist.
+  await removeClaudeSessionFromAllProfiles(randomUUID());
+  assert.equal(existsSync(defaultDir), false);
+});
+
+test("the default profile and a session with no account both use the default's DATA_DIR root, never ~/.claude", async () => {
+  await (
+    await import("../test/legacyDefaultAccounts.ts")
+  ).seedLegacyDefaultAccounts();
   const defaultRoot = join(
     tmp,
     "data",

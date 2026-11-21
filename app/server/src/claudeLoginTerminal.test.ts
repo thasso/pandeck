@@ -14,6 +14,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type { WebSocket } from "ws";
 import { afterAll, afterEach, beforeEach, describe, test, vi } from "vitest";
 import { loginStuckText } from "@assistant/shared";
+import { seedLegacyDefaultAccounts } from "./test/legacyDefaultAccounts.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "claude-login-terminal-test-"));
 const previousDataDir = process.env.DATA_DIR;
@@ -83,10 +84,11 @@ function childProcess(child: FakeChild): ChildProcessWithoutNullStreams {
   return child as unknown as ChildProcessWithoutNullStreams;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   rmSync(process.env.DATA_DIR!, { recursive: true, force: true });
   rmSync(process.env.HOME!, { recursive: true, force: true });
-  profiles.ensureDefaultPiProfile();
+  // An install that still has its protected default accounts.
+  await seedLegacyDefaultAccounts();
 });
 
 afterEach(() => {

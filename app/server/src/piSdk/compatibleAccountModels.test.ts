@@ -29,6 +29,7 @@ import {
   readOpenAiCompatibleEndpoint,
   writeOpenAiCompatibleEndpoint,
 } from "../openAiCompatibleAccounts.ts";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 /** Synthetic: never sent anywhere, only shows a built-in provider as available. */
 const ENV_KEY = "fixture-env-openai-key";
@@ -48,6 +49,9 @@ function endpointModels(...ids: string[]) {
 
 let models: typeof import("./models.ts");
 let second: string;
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 beforeAll(async () => {
   process.env.OPENAI_API_KEY = ENV_KEY;

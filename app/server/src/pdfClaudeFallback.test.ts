@@ -14,6 +14,7 @@ import {
   type ClaudeSdkSeam,
 } from "./claudeSdk/sdkSeam.ts";
 import { updateSettings } from "./settings.ts";
+import { seedLegacyDefaultAccounts } from "./test/legacyDefaultAccounts.ts";
 
 const CLAUDE_DEFAULTS = {
   provider: "claude-sdk",
@@ -59,6 +60,9 @@ function fakeSeam(
     },
   };
 }
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 describe("registerPdfClaudeFallback", () => {
   afterEach(() => {

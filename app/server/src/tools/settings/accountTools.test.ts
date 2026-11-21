@@ -20,6 +20,7 @@ import { getSettings } from "../../settings.ts";
 import { saveSettings } from "../../settingsService.ts";
 import "../../settingsInput.ts";
 import { settingsTools } from "./settingsTools.ts";
+import { seedLegacyDefaultAccounts } from "../../test/legacyDefaultAccounts.ts";
 
 const tool = (name: string) => settingsTools.find((t) => t.name === name)!;
 
@@ -49,6 +50,9 @@ async function create(name: string, provider = "claude"): Promise<Account> {
   })) as { created: Account };
   return created;
 }
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 beforeAll(() => setAgentHandoffDeliveryStoppedForTests(true));
 afterAll(() => setAgentHandoffDeliveryStoppedForTests(false));

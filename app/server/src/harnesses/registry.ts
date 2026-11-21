@@ -9,7 +9,6 @@ import { join } from "node:path";
 import { rm } from "node:fs/promises";
 import type { AgentType, Harness } from "@assistant/shared";
 import { claudeSdkStore } from "../claudeSdk/claudeSdkStore.ts";
-import { DEFAULT_CLAUDE_PROFILE_ID } from "../credentialProfiles.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import type { HarnessHost, LiveSession } from "../harness.ts";
 import { PiSessionDeletedError, piStore } from "../piSdk/piStore.ts";
@@ -122,16 +121,12 @@ const sessions: Record<Harness, HarnessSessions> = {
     storedWithoutRow: (id) => claudeSdkStore.exists(id),
     holdsOnDisk: (id) => claudeSdkStore.exists(id),
     setHeldElsewhere: (check) => claudeSdkStore.setHeldElsewhere(check),
-    // Rehydrated on the account its record names, else the default one, in
-    // the cwd of its own worktree check, acquired in the continuation that
-    // compared it.
+    // Rehydrated on the account its record names, else the protected default
+    // where the install has one, in the cwd of its own worktree check,
+    // acquired in the continuation that compared it.
     open: async (id) =>
       withCheckedCheckout(id, undefined, (checkout) =>
-        claudeSdkStore.acquire(
-          id,
-          { credentialProfileId: DEFAULT_CLAUDE_PROFILE_ID },
-          checkout,
-        ),
+        claudeSdkStore.acquire(id, {}, checkout),
       ),
     cwd: (id) => {
       const stat = statSync(join(CLAUDE_SDK_STORE_DIR, `${id}.json`), {

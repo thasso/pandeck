@@ -136,12 +136,13 @@ it safe.
    the run's bound credential profile is marked dirty and refreshed after a 30 s
    debounce, still respecting the min interval, but **only while a client is
    connected**. Legacy unbound sessions dirty the protected default their engine
-   reopens them on: `claude-default` for Claude or `default` for pi. This
-   fallback is for usage only; account health still requires an explicit
-   binding. With no client attached nothing is fetched for any provider; the
-   account stays dirty and the next page open pays for the refresh. The cache
-   itself therefore never does headless work (the auto-redeem sweep below is the
-   bounded, OpenAI-only exception), which is also why persisting it matters.
+   reopens them on: `claude-default` for Claude or `default` for pi, where the
+   install has it, else nothing. This fallback is for usage only; account health
+   still requires an explicit binding. With no client attached nothing is
+   fetched for any provider; the account stays dirty and the next page open pays
+   for the refresh. The cache itself therefore never does headless work (the
+   auto-redeem sweep below is the bounded, OpenAI-only exception), which is also
+   why persisting it matters.
 3. **Session end** needs no trigger: a session's last turn is already a run
    completion. `setSessionIdleHook` is deliberately **not** used — it is a
    superset (host commands included) and would double-fetch.

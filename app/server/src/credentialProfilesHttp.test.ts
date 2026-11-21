@@ -84,7 +84,6 @@ test("HTTP endpoint accounts CRUD, metadata, Test and origin edit persist separa
           ASSISTANT_TOKEN: token,
           ASSISTANT_HOST: "127.0.0.1",
           ASSISTANT_PORT: String(port),
-          ASSISTANT_LEGACY_PI_AGENT_DIR: join(tmp, "no-legacy"),
           ASSISTANT_BACKGROUND_FETCH: "0",
           ASSISTANT_BACKGROUND_PR_SYNC: "0",
         },
@@ -276,7 +275,6 @@ test("HTTP Clear the unfinished login: POST only, ok with the gateway off, refus
           ASSISTANT_TOKEN: token,
           ASSISTANT_HOST: "127.0.0.1",
           ASSISTANT_PORT: String(port),
-          ASSISTANT_LEGACY_PI_AGENT_DIR: join(tmp, "no-legacy"),
           ASSISTANT_BACKGROUND_FETCH: "0",
           ASSISTANT_BACKGROUND_PR_SYNC: "0",
         },
@@ -305,26 +303,44 @@ test("HTTP Clear the unfinished login: POST only, ok with the gateway off, refus
         reject(new Error(`Fixture app exited ${code}: ${output}`));
       });
     });
-    const request = async (path: string, method = "POST") => {
+    const request = async (path: string, method = "POST", body?: object) => {
       const response = await fetch(
         `http://127.0.0.1:${port}/api/credential-profiles${path}`,
         {
           method,
-          headers: { Authorization: `Bearer ${token}` },
+          headers: {
+            Authorization: `Bearer ${token}`,
+            ...(body ? { "Content-Type": "application/json" } : {}),
+          },
+          ...(body ? { body: JSON.stringify(body) } : {}),
           signal: AbortSignal.timeout(5000),
         },
       );
       return { status: response.status, body: await response.json() };
     };
-    assert.deepEqual(await request("/claude-default/login/clear"), {
+    // A first run has no account at all, and listing makes none.
+    assert.deepEqual(await request("", "GET"), {
+      status: 200,
+      body: { profiles: [] },
+    });
+    assert.deepEqual((await request("", "GET")).body, { profiles: [] });
+    const created = async (provider: string) =>
+      (
+        (await request("", "POST", { name: provider, provider })).body as {
+          profile: CredentialProfileSummary;
+        }
+      ).profile.id;
+    const claude = await created("claude");
+    const openai = await created("openai-codex");
+    assert.deepEqual(await request(`/${claude}/login/clear`), {
       status: 200,
       body: { ok: true },
     });
-    assert.deepEqual(await request("/default/login/clear"), {
+    assert.deepEqual(await request(`/${openai}/login/clear`), {
       status: 200,
       body: { ok: true },
     });
-    assert.deepEqual(await request("/claude-default/login/clear", "GET"), {
+    assert.deepEqual(await request(`/${claude}/login/clear`, "GET"), {
       status: 405,
       body: { error: "Method not allowed" },
     });
@@ -336,7 +352,10 @@ test("HTTP Clear the unfinished login: POST only, ok with the gateway off, refus
     assert.equal(listed.status, 200);
     const summaries = (listed.body as { profiles: CredentialProfileSummary[] })
       .profiles;
-    assert.ok(summaries.length > 0);
+    assert.deepEqual(
+      summaries.map((profile) => profile.id),
+      [claude, openai],
+    );
     assert.ok(summaries.every((profile) => profile.loginStuck === undefined));
   } finally {
     if (child) await stop(child);

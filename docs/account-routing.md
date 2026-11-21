@@ -57,6 +57,32 @@ it neither rolls a session back onto another account nor out of a disabled
 endpoint. A turn on a disabled endpoint account is refused, with "Enable it to
 continue this session", and the session stays bound to it.
 
+## No account
+
+An account exists only once the user adds one. A fresh install creates none: the
+registry starts empty and listing it writes nothing. An install from before this
+rule keeps its protected Default OpenAI (`default`) and Default Claude
+(`claude-default`) exactly as they were: logins, bindings and protection from
+rename and delete are unchanged, and nothing migrates or retires them.
+`legacyDefaultProfileId` (`credentialProfiles.ts`) answers whether this install
+has one. A session or record with no binding runs on it; nothing else falls back
+to a default id.
+
+Without an account of the kind a run needs, nothing runs unauthenticated, and no
+directory or record is made for a missing default:
+
+- Interactive creation and Automatic picks fail with "No enabled … account is
+  available"; helper and background runs refuse with "No account is available
+  for this background model" before any engine starts.
+- An unbound session's turn, fork or reopen refuses with `noAccountError` ("No …
+  account is set up"). Its interrupted-turn evidence and saved cost state read
+  nothing, and a finished run marks no account's usage.
+- The usage and reset-credit routes without a `profileId` use the first enabled
+  account of the kind, then the protected default, else refuse.
+- The pickers offer pi's built-in Codex catalog once any OpenAI account has a
+  login. Without Default OpenAI the global display runtime is in memory and
+  holds no credential; every run resolves on its own account's runtime.
+
 ## Health and login evidence
 
 `CredentialProfileSummary.health` is `AccountHealth`: state `ok`, `needs-login`,
@@ -84,21 +110,21 @@ Evidence rules (a gateway-served account's login evidence follows
 
 - Missing credentials derive `needs-login` with "Not connected." on Settings
   cards, independent of setup status and overriding observed `ok`.
-  Never-connected accounts, including unused default accounts, do not raise
-  app-wide alerts. An account whose credentials were previously present does
-  alert when they vanish, including through Connect, failure and cancellation.
-  The derived condition is never persisted or pushed; only its prior connection
-  history is durable. Health reads are pure lookups. Registry listing is the
-  single publication point: it reads credential presence, records connection
-  history and broadcasts only a changed alert projection. Runtime success never
-  establishes credential-presence history. Every health mutation ends with one
-  listing. File changes alone have no filesystem watch; the next listing clears
-  a derived alert when credentials reappear, even without a registry event.
-  Observed rejection remains until positive proof.
+  Never-connected accounts, including an older install's unused defaults, do not
+  raise app-wide alerts. An account whose credentials were previously present
+  does alert when they vanish, including through Connect, failure and
+  cancellation. The derived condition is never persisted or pushed; only its
+  prior connection history is durable. Health reads are pure lookups. Registry
+  listing is the single publication point: it reads credential presence, records
+  connection history and broadcasts only a changed alert projection. Runtime
+  success never establishes credential-presence history. Every health mutation
+  ends with one listing. File changes alone have no filesystem watch; the next
+  listing clears a derived alert when credentials reappear, even without a
+  registry event. Observed rejection remains until positive proof.
 - In direct local macOS mode, stored Claude OAuth can also be proved by the
   official CLI's `auth status --json` (`loggedIn: true`,
   `authMethod: claude.ai`). It runs with the account's isolated
-  `CLAUDE_CONFIG_DIR`, including Default Claude; it never imports the user's
+  `CLAUDE_CONFIG_DIR`, Default Claude's included; it never imports the user's
   normal home login. The bounded subprocess runs at boot, every 30 seconds and
   after every zero-exit login without a credential file, whatever the cached
   presence says. That last check never joins a probe already running, which may
@@ -407,10 +433,11 @@ scope still apply. Mark the result `no-eligible-account`. Needs-login accounts
 are the last resort even when their cached usage looks better or every model
 snapshot failed. Background automation alone may finally use that provider's
 protected default, even disabled, marked `disabled-default`; only the
-subscription kinds have one. Exclusions and enterprise constraints still apply
-to that fallback. Interactive creation with no enabled account fails clearly,
-including the no-enterprise-account case. The pick result carries the
-degradation; it never silently crosses provider or enterprise boundaries.
+subscription kinds have one, and only on an install that still has it ("No
+account"). Exclusions and enterprise constraints still apply to that fallback.
+Interactive creation with no enabled account fails clearly, including the
+no-enterprise-account case. The pick result carries the degradation; it never
+silently crosses provider or enterprise boundaries.
 
 New-session and settings-slot selectors default to Automatic. At creation,
 Automatic applies only when no account is already bound or explicitly selected.

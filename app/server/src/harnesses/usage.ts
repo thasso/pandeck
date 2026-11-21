@@ -10,10 +10,7 @@
  * never falling back to the account's own token or the CLI.
  */
 import type { Harness } from "@assistant/shared";
-import {
-  DEFAULT_CLAUDE_PROFILE_ID,
-  DEFAULT_OPENAI_PROFILE_ID,
-} from "../credentialProfiles.ts";
+import { legacyDefaultProfileId } from "../credentialProfiles.ts";
 import type {
   ClaudeUsageSnapshot,
   OpenAiResetRedeemResult,
@@ -30,16 +27,20 @@ import {
   type RedeemResetOptions,
 } from "../piSdk/openaiUsageQuery.ts";
 
-/** Usage-only attribution mirrors the account used to reopen legacy sessions. */
+/**
+ * Usage-only attribution mirrors the account used to reopen legacy sessions:
+ * an unbound session's is the protected default, where the install has one.
+ */
 export function usageProfileForSession(
   session: { harness: Harness; credentialProfileId?: string } | undefined,
 ): string | null {
   if (!session) return null;
   return (
     session.credentialProfileId ??
-    (session.harness === "claude-sdk"
-      ? DEFAULT_CLAUDE_PROFILE_ID
-      : DEFAULT_OPENAI_PROFILE_ID)
+    legacyDefaultProfileId(
+      session.harness === "claude-sdk" ? "claude" : "openai-codex",
+    ) ??
+    null
   );
 }
 

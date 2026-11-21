@@ -18,6 +18,7 @@ import { sessionStore } from "./db/sessionStore.ts";
 import * as list from "./harnesses/sessionList.ts";
 import { harnessRegistry } from "./harnesses/registry.ts";
 import { sessionListClient } from "./test/sessionListClient.ts";
+import { seedLegacyDefaultAccounts } from "./test/legacyDefaultAccounts.ts";
 
 let serial = 0;
 function seed(
@@ -48,6 +49,9 @@ function eventAt(sent: readonly ServerMessage[], id: string): number {
 }
 const typeAt = (sent: readonly ServerMessage[], type: ServerMessage["type"]) =>
   sent.findIndex((message) => message.type === type);
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 afterEach(async () => {
   vi.restoreAllMocks();

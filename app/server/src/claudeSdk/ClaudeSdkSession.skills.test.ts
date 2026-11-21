@@ -15,6 +15,7 @@ import type {
   ClaudeSdkSeam,
   ClaudeSdkUserMessage,
 } from "./sdkSeam.ts";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 const mocked = vi.hoisted(() => ({
   names: new Map<string, string[]>(),
@@ -37,6 +38,9 @@ updateSettings({
 });
 
 const sessions: InstanceType<typeof ClaudeSdkSession>[] = [];
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 afterEach(() => {
   for (const session of sessions.splice(0)) session.dispose();

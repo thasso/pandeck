@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { beforeEach, test, vi } from "vitest";
 import { reportAccountRunFailure } from "../accountHealth.ts";
-import { defaultClaudeProfileId } from "../credentialProfiles.ts";
+import { createCredentialProfile } from "../credentialProfiles.ts";
 import { setClaudeSdkOneShotSeam } from "../claudeSdk/oneShot.ts";
 import type { ClaudeSdkMessage } from "../claudeSdk/sdkSeam.ts";
 import { runOneShot, OneShotError } from "./oneShot.ts";
@@ -14,6 +14,12 @@ vi.mock("../accountHealth.ts", async (importOriginal) => ({
 }));
 
 beforeEach(() => vi.clearAllMocks());
+
+/** The Claude account the helper runs route to: the only one there is. */
+const claudeAccount = createCredentialProfile({
+  name: "Claude helper",
+  provider: "claude",
+}).id;
 
 for (const source of [
   "wrapper",
@@ -50,7 +56,7 @@ for (const source of [
   ])(
     `Claude one-shot ${source} preserves status $status: $text`,
     async (row) => {
-      const profileId = defaultClaudeProfileId();
+      const profileId = claudeAccount;
       setClaudeSdkOneShotSeam(async () => ({
         query() {
           return {

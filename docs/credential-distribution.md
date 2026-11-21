@@ -52,10 +52,10 @@ under `DATA_DIR/settings/`. They are runtime state, never bootstrap config.
 contracts in `authToken.ts` and `docs/notifications.md`.
 
 Model-provider credentials are separate. In local mode every Claude and OpenAI
-login lives under `DATA_DIR/credential-profiles/`, `claude-default` included;
-nothing is read from the service user's home directory. An OpenAI-compatible
-account's endpoint key lives only in its
-`credential-profiles/<id>/endpoint.json` (0600); the former
+login lives under `DATA_DIR/credential-profiles/`, in an account the user added;
+nothing is read from the service user's home directory. A fresh install has no
+account at all and creates none. An OpenAI-compatible account's endpoint key
+lives only in its `credential-profiles/<id>/endpoint.json` (0600); the former
 `settings/openai-compatible.json` is migrated there and deleted
 (`docs/settings.md` "OpenAI-compatible accounts"). It is write-only: Settings
 sends it in one `PATCH …/endpoint` and shows only `apiKeyConfigured`, no agent
@@ -75,7 +75,13 @@ remote account mirror.
 
 ### Default Claude
 
-`claude-default` uses an ordinary Claude runtime directory in
+Pandeck no longer creates `claude-default` (or the OpenAI `default`). An install
+that already has them keeps them, protected, logins and bound sessions
+unchanged; on an install without them a session with no recorded account has no
+account and is refused before any Claude child starts
+(`docs/account-routing.md`, "No account").
+
+Where it exists, `claude-default` uses an ordinary Claude runtime directory in
 `DATA_DIR/credential-profiles/claude-default/claude/` (0700), run with
 `CLAUDE_CONFIG_DIR` set there and inherited credential variables scrubbed. A
 Claude session with no recorded account runs as it, gateway on or off; its
@@ -99,8 +105,10 @@ backup.
 
 - **Selection.** Every non-deleted `claude-sdk` session row with a provider id
   bound to `claude-default` or to no account, in any scope, archived included
-  (`db/defaultClaudeTranscriptSelection.ts`). A unit is `<key>/<id>.jsonl` plus
-  its `<key>/<id>/` tree, copied under the same `<key>`. Nothing else: no
+  (`db/defaultClaudeTranscriptSelection.ts`). A first run that selects nothing,
+  as on every fresh install, records `done` without reading home at all, and
+  later boots never look again. A unit is `<key>/<id>.jsonl` plus its
+  `<key>/<id>/` tree, copied under the same `<key>`. Nothing else: no
   terminal-only transcript, named-account session, config or credential. A unit
   holding a link or other non-regular entry is skipped as unsupported, and so is
   one whose `projects/`, project, `<id>/` or inner directory is no longer the

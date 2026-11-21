@@ -30,6 +30,7 @@ import { claudeSdkStore } from "./claudeSdkStore.ts";
 import type { ClaudeQueryParams, ClaudeSdkSeam } from "./sdkSeam.ts";
 import { SESSION_HOOK_METHODS } from "../workerProtocol/sessionHookMethods.ts";
 import { sessionHookCallsServedForTests } from "../workers/sessionHookHost.ts";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 installClaudeStateBuilder(claudeSdkStore);
 
@@ -247,6 +248,9 @@ async function main(): Promise<void> {
   session.dispose();
   console.log("claude-sdk session mode test: PASS");
 }
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 test("carries the Build/Plan session mode into every turn and across restarts", async () => {
   try {

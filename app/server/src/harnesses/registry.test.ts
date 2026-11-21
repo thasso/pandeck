@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, afterEach, test, vi } from "vitest";
 import type { ServerMessage } from "@assistant/shared";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "harness-registry-test-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -57,6 +58,9 @@ function legacyPiTranscript(id: string): string {
   );
   return file;
 }
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 afterEach(() => vi.restoreAllMocks());

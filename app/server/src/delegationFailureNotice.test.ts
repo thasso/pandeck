@@ -99,6 +99,11 @@ const {
   sweepPeerPromptRetries,
   wakeForNotice,
 } = await import("./peerPrompt.ts");
+// An install that still has its protected defaults: an unbound Claude child
+// runs as Default Claude.
+await (
+  await import("./test/legacyDefaultAccounts.ts")
+).seedLegacyDefaultAccounts();
 const { sessionRuntime } = await import("./session/runtimeInstance.ts");
 const { promptRuntimeSession } = await import("./session/runtimePrompt.ts");
 const { setRunFailureHook, setSessionIdleHook, subscribeSessionRunCompleted } =
@@ -1675,7 +1680,7 @@ describe("a process that dies mid-failure", () => {
 const assert = (await import("node:assert/strict")).default;
 const root = process.env.DFN_ROOT;
 assert.ok(root && root.startsWith(${JSON.stringify(tmpdir())}));
-for (const [key, dir] of [["HOME", "home"], ["ASSISTANT_CWD", "cwd"], ["DATA_DIR", "data"], ["ASSISTANT_LEGACY_PI_AGENT_DIR", "legacy"]])
+for (const [key, dir] of [["HOME", "home"], ["ASSISTANT_CWD", "cwd"], ["DATA_DIR", "data"]])
   assert.equal(process.env[key], root + "/" + dir);
 assert.equal(process.env.ASSISTANT_CONFIG, root + "/app.json");
 globalThis.fetch = async () => { throw new Error("external fetch denied"); };
@@ -1695,6 +1700,7 @@ if (mode === "crash" && scenario === "done-lost") {
 const src = process.env.DFN_SRC;
 const { DATA_DIR } = await import(src + "config.ts");
 assert.equal(DATA_DIR, root + "/data");
+await (await import(src + "test/legacyDefaultAccounts.ts")).seedLegacyDefaultAccounts();
 const { sessionStore } = await import(src + "db/sessionStore.ts");
 const { peerPromptStore } = await import(src + "db/peerPromptStore.ts");
 const { delegationFailureNoticeStore: notices } = await import(src + "db/delegationFailureNoticeStore.ts");
@@ -1816,7 +1822,6 @@ if (mode === "crash") {
           ASSISTANT_CWD: join(root, "cwd"),
           DATA_DIR: join(root, "data"),
           ASSISTANT_CONFIG: join(root, "app.json"),
-          ASSISTANT_LEGACY_PI_AGENT_DIR: join(root, "legacy"),
         },
       },
     );
@@ -1835,8 +1840,7 @@ if (mode === "crash") {
   function scenario(name: string, rebootRefused = false): Boot {
     const root = mkdtempSync(join(tmpdir(), "dfn-death-"));
     try {
-      for (const dir of ["home", "cwd", "data", "legacy"])
-        mkdirSync(join(root, dir));
+      for (const dir of ["home", "cwd", "data"]) mkdirSync(join(root, dir));
       writeFileSync(
         join(root, "app.json"),
         JSON.stringify({ dataDir: join(root, "data") }),

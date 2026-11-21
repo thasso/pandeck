@@ -42,8 +42,9 @@ import {
 import { dirname, join } from "node:path";
 import {
   claudeConfigDir,
-  DEFAULT_CLAUDE_PROFILE_ID,
+  legacyDefaultProfileId,
   listCredentialProfiles,
+  noAccountError,
 } from "../credentialProfiles.ts";
 
 /** The SDK's `SessionKey`, minimally typed (we only key on these fields). */
@@ -100,7 +101,10 @@ function readEntries(path: string): StoreEntry[] | null {
  * nothing behind — but implement `listSubkeys` here if forks ever need it.
  */
 export function claudeProfileSessionStore(profileId: string | undefined) {
-  const root = claudeConfigDir(profileId ?? DEFAULT_CLAUDE_PROFILE_ID);
+  // An unbound session's store is the protected default's, where it exists.
+  const account = profileId ?? legacyDefaultProfileId("claude");
+  if (account === undefined) throw noAccountError("claude");
+  const root = claudeConfigDir(account);
   return {
     root,
     async load(key: SessionKeyLike): Promise<StoreEntry[] | null> {
@@ -226,8 +230,9 @@ export async function removeClaudeSessionFromAllProfiles(
 ): Promise<void> {
   if (!/^[a-z0-9][a-z0-9_-]*$/i.test(providerSessionId))
     throw new Error("The Claude session id cannot name a transcript.");
+  // The registry lists the protected default where the install still has it;
+  // no directory is made for one it does not.
   const ids = new Set([
-    DEFAULT_CLAUDE_PROFILE_ID,
     ...listCredentialProfiles()
       .filter((profile) => profile.provider === "claude")
       .map((profile) => profile.id),
@@ -299,10 +304,9 @@ export async function lastSavedCostState(
   profileId: string | undefined,
   providerSessionId: string,
 ): Promise<StoreEntry | undefined> {
-  const projects = join(
-    claudeConfigDir(profileId ?? DEFAULT_CLAUDE_PROFILE_ID),
-    "projects",
-  );
+  const account = profileId ?? legacyDefaultProfileId("claude");
+  if (account === undefined) return undefined;
+  const projects = join(claudeConfigDir(account), "projects");
   let keys: string[];
   try {
     keys = await readdir(projects);

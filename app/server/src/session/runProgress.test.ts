@@ -28,6 +28,7 @@ import type {
   ClaudeSdkMessage,
   ClaudeSdkSeam,
 } from "../claudeSdk/sdkSeam.ts";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "run-progress-test-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -57,6 +58,9 @@ assert.ok(
   DATA_DIR.startsWith(tmpdir()),
   "the data directory is a disposable temp directory",
 );
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 afterAll(() => {
   closeDb();

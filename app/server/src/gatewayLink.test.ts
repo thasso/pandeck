@@ -24,10 +24,13 @@ import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, test, vi } from "vitest";
+import { seedLegacyDefaultAccounts } from "./test/legacyDefaultAccounts.ts";
 
 const home = mkdtempSync(join(tmpdir(), "gateway-link-home-"));
 process.env.HOME = home;
 
+// An install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 const profiles = await import("./credentialProfiles.ts");
 const { CREDENTIAL_PROFILES_ROOT } =
   await import("./credentialProfilePaths.ts");

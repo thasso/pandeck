@@ -40,6 +40,7 @@ import {
 } from "./stateTopicKernel.ts";
 import { publishSessionRowsNow } from "./stateTopics.ts";
 import { sessionListClient } from "./test/sessionListClient.ts";
+import { seedLegacyDefaultAccounts } from "./test/legacyDefaultAccounts.ts";
 
 let serial = 0;
 function seed(label: string, messageCount = 2): string {
@@ -92,6 +93,9 @@ function clean(): void {
     [],
   );
 }
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 beforeEach(async () => {
   resetSessionListAuditBaselineForTests();

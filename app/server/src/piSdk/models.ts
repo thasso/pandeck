@@ -42,7 +42,7 @@ import {
   completeCredentialProfileLogin,
   credentialProfileById,
   credentialProfilesOfKind,
-  ensureDefaultPiProfile,
+  legacyDefaultProfileId,
   listCredentialProfiles,
   migrateOpenAiCompatibleSettingsToAccount,
   openAiProfileHasCredential,
@@ -85,8 +85,11 @@ registerBunOAuthFlows();
 // did. Task-1374 must keep both calls.
 migrateOpenAiCompatibleSettingsToAccount();
 normalizeCompatibleSettingsPins();
-const defaultPiProfile = ensureDefaultPiProfile();
-const defaultAgentDir = piAgentDir(defaultPiProfile.id);
+/**
+ * The protected default OpenAI account of an install created before defaults
+ * stopped being made; a fresh install has none (`docs/account-routing.md`).
+ */
+const legacyPiProfileId = legacyDefaultProfileId("openai-codex");
 function runtimeOptions(agentDir: string) {
   return {
     authPath: `${agentDir}/auth.json`,
@@ -121,13 +124,22 @@ function inMemoryRuntime(): Promise<ModelRuntime> {
 }
 
 // Every runtime that runs sessions or one-shots pairs a compatible key with
-// its origin before anyone holds it, whatever the gateway switch.
+// its origin before anyone holds it, whatever the gateway switch. The display
+// runtime is the protected default's where the install has one; otherwise it
+// is in memory, holding pi's built-in catalog and no credential, and nothing
+// runs on it.
 const modelRuntime = guardServerRuntime(
-  await ModelRuntime.create(serverRuntimeOptions(defaultAgentDir)),
+  legacyPiProfileId !== undefined
+    ? await ModelRuntime.create(
+        serverRuntimeOptions(piAgentDir(legacyPiProfileId)),
+      )
+    : await inMemoryRuntime(),
 );
-const profileRuntimes = new Map<string, Promise<ModelRuntime>>([
-  [defaultPiProfile.id, Promise.resolve(modelRuntime)],
-]);
+const profileRuntimes = new Map<string, Promise<ModelRuntime>>(
+  legacyPiProfileId !== undefined
+    ? [[legacyPiProfileId, Promise.resolve(modelRuntime)]]
+    : [],
+);
 /** What each compatible account's runtime has registered, by account id. */
 const compatibleRegistrations = new Map<string, string>();
 /**
@@ -195,7 +207,7 @@ function syncCompatibleRegistration(
  * its own provider, re-registered whenever its endpoint changed.
  */
 export function modelRuntimeForProfile(
-  profileId = defaultPiProfile.id,
+  profileId: string,
 ): Promise<ModelRuntime> {
   const profile = credentialProfileById(profileId);
   if (!profile || ACCOUNT_KINDS[profile.provider].harness !== "pi")
@@ -387,8 +399,9 @@ export function listModels(): ModelOption[] {
     ...listRegistryModels(
       modelRegistry,
       (provider) => !isOpenAiCompatibleModelProvider(provider),
-      openAiProfileHasCredential(defaultPiProfile.id) ||
-        remoteOpenAiAccountReady(),
+      credentialProfilesOfKind("openai-codex").some((profile) =>
+        openAiProfileHasCredential(profile.id),
+      ) || remoteOpenAiAccountReady(),
     ),
     ...listRegistryModels(compatibleCatalog, (provider) =>
       enabled.has(provider),
@@ -469,7 +482,7 @@ export async function refreshModels(): Promise<{
       .filter(
         (profile) =>
           profile.provider === "openai-codex" &&
-          profile.id !== defaultPiProfile.id,
+          profile.id !== legacyPiProfileId,
       )
       .map(async (profile) => {
         try {

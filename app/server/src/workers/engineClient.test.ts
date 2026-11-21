@@ -37,6 +37,7 @@ import {
   registerInProcessEngineFactory,
   writeAsInProcessWorkerForTests,
 } from "./inProcessWorker.ts";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 /**
  * The server's engine client over the in-process Worker, with a scripted
@@ -65,6 +66,9 @@ registerInProcessEngineFactory("scripted", async (_spec, engineHost) => {
     async dispose() {},
   };
 });
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 afterAll(async () => {
   const quiescent = inProcessWorkerQuiescentForTests();

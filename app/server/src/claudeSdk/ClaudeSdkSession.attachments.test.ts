@@ -20,6 +20,7 @@ import type {
   ClaudeSdkSeam,
   ClaudeSdkUserMessage,
 } from "./sdkSeam.ts";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 /** A minimal successful one-block turn. */
 function scriptedTurn(): ClaudeSdkMessage[] {
@@ -64,6 +65,9 @@ function scriptedTurn(): ClaudeSdkMessage[] {
     } as unknown as ClaudeSdkMessage,
   ];
 }
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 test("Claude SDK prompt threads attachments to the model and durable entry", async () => {
   let capturedPrompt: ClaudeQueryParams["prompt"] | undefined;

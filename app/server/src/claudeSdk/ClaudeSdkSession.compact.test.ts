@@ -21,6 +21,7 @@ import { ClaudeSdkSession } from "../test/claudeSdkSession.ts";
 import { SESSION_HOOK_METHODS } from "../workerProtocol/sessionHookMethods.ts";
 import { sessionHookCallsServedForTests } from "../workers/sessionHookHost.ts";
 import type { ClaudeSdkMessage, ClaudeSdkSeam } from "./sdkSeam.ts";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 const PROVIDER_SESSION = "11111111-2222-3333-4444-555555555555";
 
@@ -270,6 +271,9 @@ function askingNoSessionHooks(run: () => Promise<void>): () => Promise<void> {
     assert.deepEqual(served(), before, "no session-hook request");
   };
 }
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 test(
   "Claude manual compaction reports the boundary and renders one durable card",

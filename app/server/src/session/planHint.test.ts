@@ -25,6 +25,7 @@ import type {
   ClaudeSdkMessage,
   ClaudeSdkSeam,
 } from "../claudeSdk/sdkSeam.ts";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "plan-hint-test-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -45,6 +46,9 @@ const { updateSettings, getSettings } = await import("../settings.ts");
 // This suite covers the Plan hint, not memory: keep learning off so the
 // facade's post-turn observation never invokes the real processor.
 updateSettings({ memory: { ...getSettings().memory, learningMode: "off" } });
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 afterAll(() => {
   closeDb();

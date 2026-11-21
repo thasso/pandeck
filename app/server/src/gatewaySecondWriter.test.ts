@@ -18,6 +18,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, test, vi } from "vitest";
+import { seedLegacyDefaultAccounts } from "./test/legacyDefaultAccounts.ts";
 
 vi.mock("./config.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./config.ts")>();
@@ -198,6 +199,9 @@ const link = startGatewayLink({
   claudeTokenEndpoint: upstreams.tokenEndpoint,
   renewCodex: renewCodexCredential,
 });
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 beforeAll(async () => {
   assert.equal(await link.ready, true, lines.join("\n"));

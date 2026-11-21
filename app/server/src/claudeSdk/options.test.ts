@@ -701,10 +701,12 @@ test("a query's open spec is JSON, and composing it on its host gives today's op
     createCredentialProfile,
     claudeProfileEnvironment,
     claudeProfileRuntime,
-    ensureDefaultPiProfile,
   } = await import("../credentialProfiles.ts");
-  // The registry lives under the suite's temporary DATA_DIR.
-  ensureDefaultPiProfile();
+  // The registry lives under the suite's temporary DATA_DIR, as an install
+  // that still has its protected defaults.
+  await (
+    await import("../test/legacyDefaultAccounts.ts")
+  ).seedLegacyDefaultAccounts();
   const named = createCredentialProfile({
     name: "Claude spec",
     provider: "claude",

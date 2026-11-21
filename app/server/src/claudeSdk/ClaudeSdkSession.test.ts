@@ -37,6 +37,7 @@ import type {
   ClaudeSdkMessage,
   ClaudeSdkSeam,
 } from "./sdkSeam.ts";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 const TOOL_ID = "toolu_abc";
 const MSG_ID = "msg_123";
@@ -347,6 +348,9 @@ async function main(): Promise<void> {
 
   console.log("ClaudeSdkSession scripted-seam test: PASS");
 }
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 test("maps scripted Claude SDK turns", async () => {
   await main();

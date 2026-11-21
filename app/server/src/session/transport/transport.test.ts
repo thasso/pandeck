@@ -25,6 +25,7 @@ import type {
   ClaudeSdkMessage,
   ClaudeSdkSeam,
 } from "../../claudeSdk/sdkSeam.ts";
+import { seedLegacyDefaultAccounts } from "../../test/legacyDefaultAccounts.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "transport-test-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -36,6 +37,9 @@ const { SessionLogStore } = await import("../log/store.ts");
 const { ClaudeSdkSession } = await import("../../test/claudeSdkSession.ts");
 
 /* --------------------- 1. projection: folding + overlay ------------------ */
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
+
 test("projection: folding + overlay", () => {
   const entries: SessionEntry[] = [
     {

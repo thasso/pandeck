@@ -43,9 +43,6 @@ updateSettings({
   sessionNaming: { ...getSettings().sessionNaming, enabled: false },
   claudeSdk: { enabled: true },
 });
-profiles.listCredentialProfiles();
-profiles.setCredentialProfileEnabled(profiles.DEFAULT_CLAUDE_PROFILE_ID, false);
-profiles.setCredentialProfileEnabled(profiles.DEFAULT_OPENAI_PROFILE_ID, false);
 function account(provider: "openai-codex" | "claude") {
   const p = profiles.createCredentialProfile({
     provider,

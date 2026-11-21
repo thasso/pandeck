@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test, vi } from "vitest";
 import type { ServerMessage } from "@assistant/shared";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "worktree-merge-test-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -39,6 +40,9 @@ const { claudeSdkStore } = await import("../claudeSdk/claudeSdkStore.ts");
 const piModels = await import("../piSdk/models.ts");
 const { piStore } = await import("../piSdk/piStore.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 afterEach(() => vi.restoreAllMocks());
 

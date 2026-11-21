@@ -69,7 +69,8 @@ import { openRemotePiEngine } from "./remotePiEngine.ts";
 import { SessionHeldElsewhereError, type HarnessHost } from "../harness.ts";
 import {
   credentialProfileById,
-  DEFAULT_OPENAI_PROFILE_ID,
+  legacyDefaultProfileId,
+  noAccountError,
 } from "../credentialProfiles.ts";
 import { sessionSkills } from "../sessionSkills.ts";
 import { closeToolGroupSession } from "../mcp/toolGroups/registry.ts";
@@ -89,6 +90,17 @@ export class PiSessionDeletedError extends Error {
     super(`Session ${sessionId} was deleted while it was opening.`);
     this.name = "PiSessionDeletedError";
   }
+}
+
+/**
+ * The account a pi session with no binding runs on: the protected default an
+ * older install has. Without one the session has no account and is refused
+ * before any agent directory is made.
+ */
+function unboundPiProfileId(): string {
+  const id = legacyDefaultProfileId("openai-codex");
+  if (id === undefined) throw noAccountError("openai-codex");
+  return id;
 }
 
 const ENTERPRISE_REQUIRED =
@@ -244,7 +256,7 @@ class PiSessionStore {
   ): Promise<PiLiveSession> {
     const cwd = opts?.cwd ?? CWD;
     const credentialProfileId =
-      opts?.credentialProfileId ?? DEFAULT_OPENAI_PROFILE_ID;
+      opts?.credentialProfileId ?? unboundPiProfileId();
     // A freshly minted id has no record, so the requested mode is the mode.
     const mode = sessionModeOrDefault(opts?.mode);
     const started = await resolvePiEngineStart({
@@ -337,7 +349,7 @@ class PiSessionStore {
           )
         : undefined;
       const record = candidateId ? sessionStore.get(candidateId) : undefined;
-      const profileId = record?.credentialProfileId ?? "default";
+      const profileId = record?.credentialProfileId ?? unboundPiProfileId();
       // A durable server record decides the mode; an unrecorded session is Build.
       const mode = sessionModeOrDefault(record?.mode);
       // The stored start records; an id-less legacy file freezes after.
@@ -481,7 +493,8 @@ class PiSessionStore {
     if (!parentSessionId)
       throw new Error("Cannot fork: source session has no id.");
     const parentMeta = sessionStore.getIncludingDeleted(parentSessionId);
-    const credentialProfileId = parentMeta?.credentialProfileId ?? "default";
+    const credentialProfileId =
+      parentMeta?.credentialProfileId ?? unboundPiProfileId();
     const requiresEnterprise = sourceRequiresEnterprise([parentSessionId]);
     const ensureEnterpriseAccount = () => {
       if (

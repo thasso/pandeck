@@ -196,7 +196,8 @@ Four layers, each depending only on the ones below it:
      model id runs as (`claudeModelAlias`) and the curated ids. The usage port
      (`harnesses/usage.ts`) reads subscription usage per account kind and
      redeems OpenAI reset credits. It also resolves run-usage attribution,
-     including the protected default used to reopen a legacy unbound session.
+     including the protected default used to reopen a legacy unbound session on
+     an install that still has one.
    - `harnesses/boot.ts` is what the server's composition root (`index.ts`)
      starts in the engines: pi's tool binaries, its model provider sync, each
      account's model runtime, the OpenAI account login, and the one-time import

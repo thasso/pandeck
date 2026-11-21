@@ -77,6 +77,7 @@ import {
 } from "./sessionRetitlePending.ts";
 import { sessionHooksFor } from "./workers/inProcessWorker.ts";
 import { registerSessionHooks } from "./workers/sessionHookHost.ts";
+import { seedLegacyDefaultAccounts } from "./test/legacyDefaultAccounts.ts";
 
 let serial = 0;
 function seed(messageCount = 2): string {
@@ -141,6 +142,9 @@ async function check(
     );
   assert.ok(ids!.size > 0 || globals! > 0, `${label}: reported before return`);
 }
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
+
 afterEach(async () => {
   vi.restoreAllMocks();
   await hub.flushPendingBroadcastsForTests();

@@ -9,7 +9,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   claudeConfigDir,
-  DEFAULT_CLAUDE_PROFILE_ID,
+  legacyDefaultProfileId,
 } from "../credentialProfiles.ts";
 import {
   scanInterruptedTurn,
@@ -33,10 +33,15 @@ export function claudeInterruptedTurn(
   // The record is persisted with its resume id when a turn completes, so a
   // first turn cut short leaves none: the session would resume with no history.
   if (!meta?.providerSessionId) return { promptKept: false, modelSteps: 0 };
+  // An unbound session's transcript is the protected default's, on an install
+  // that has one; with no account there is no transcript to read.
+  const profileId =
+    boundProfileId ??
+    meta.credentialProfileId ??
+    legacyDefaultProfileId("claude");
+  if (profileId === undefined) return undefined;
   const path = transcriptPath(
-    claudeConfigDir(
-      boundProfileId ?? meta.credentialProfileId ?? DEFAULT_CLAUDE_PROFILE_ID,
-    ),
+    claudeConfigDir(profileId),
     meta.providerSessionId,
   );
   return path ? scanInterruptedTurn(path, since, claudeTurnLine) : undefined;

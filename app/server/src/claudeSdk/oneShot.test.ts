@@ -33,7 +33,12 @@ const account = createCredentialProfile({
   name: "One-shot fixture",
   provider: "claude",
 });
-const runClaudeSdkOneShot = (input: RunClaudeSdkOneShotInput) =>
+/** A run on the fixture's account unless the input names another. */
+const runClaudeSdkOneShot = (
+  input: Omit<RunClaudeSdkOneShotInput, "credentialProfileId"> & {
+    credentialProfileId?: string;
+  },
+) =>
   runClaudeSdkOneShotOnAccount({
     ...input,
     credentialProfileId: input.credentialProfileId ?? account.id,
@@ -454,9 +459,10 @@ test("AC8: with a server lease the child's only credential is the lease at the g
     DEFAULT_CLAUDE_PROFILE_ID,
     claudeConfigDir,
     claudeProfileEnvironment,
-    ensureDefaultPiProfile,
   } = await import("../credentialProfiles.ts");
-  ensureDefaultPiProfile();
+  await (
+    await import("../test/legacyDefaultAccounts.ts")
+  ).seedLegacyDefaultAccounts();
   const gateway = {
     baseUrl: "http://127.0.0.1:9",
     leaseToken: "fake-server-lease",
@@ -470,7 +476,8 @@ test("AC8: with a server lease the child's only credential is the lease at the g
   );
   Object.assign(process.env, inherited);
   const envOf = async (
-    input: Partial<RunClaudeSdkOneShotInput>,
+    input: Pick<RunClaudeSdkOneShotInput, "credentialProfileId"> &
+      Partial<RunClaudeSdkOneShotInput>,
   ): Promise<Record<string, string | undefined>> => {
     let captured: ClaudeQueryParams | undefined;
     setClaudeSdkOneShotSeam(() =>

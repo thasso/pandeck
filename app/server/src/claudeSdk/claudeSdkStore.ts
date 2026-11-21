@@ -33,7 +33,7 @@ import {
 import { SessionHeldElsewhereError, type HarnessHost } from "../harness.ts";
 import {
   credentialProfileById,
-  DEFAULT_CLAUDE_PROFILE_ID,
+  legacyDefaultProfileId,
 } from "../credentialProfiles.ts";
 import { sessionSkills } from "../sessionSkills.ts";
 import { freezeSessionAgent, sessionAgent } from "../agents/sessionAgent.ts";
@@ -194,6 +194,13 @@ class ClaudeSdkSessionStore {
       record?.additionalSystemPrompt ?? opts.additionalSystemPrompt;
     const cwdValue =
       worktreeCwdForSession(id, checkout) ?? record?.cwd ?? opts.cwd;
+    // An unbound session runs as the protected default where the install has
+    // one; without it the session has no account and its turns refuse.
+    const credentialProfileId =
+      sessionStore.get(id)?.credentialProfileId ??
+      record?.credentialProfileId ??
+      opts.credentialProfileId ??
+      legacyDefaultProfileId("claude");
     const session = new ClaudeSdkSession(id, {
       buildSessionState: this.requireStateBuilder(),
       seam: () => this.seam(),
@@ -229,11 +236,7 @@ class ClaudeSdkSessionStore {
       // The in_worktree edge is the durable cwd source of truth; the persisted
       // record cwd and the caller's cwd are fallbacks (e.g. pre-link creation).
       ...(cwdValue !== undefined ? { cwd: cwdValue } : {}),
-      credentialProfileId:
-        sessionStore.get(id)?.credentialProfileId ??
-        record?.credentialProfileId ??
-        opts.credentialProfileId ??
-        DEFAULT_CLAUDE_PROFILE_ID,
+      ...(credentialProfileId !== undefined ? { credentialProfileId } : {}),
       ...(record?.usage !== undefined ? { usage: record?.usage } : {}),
     });
     session.onChange = () => this.onChange(id);

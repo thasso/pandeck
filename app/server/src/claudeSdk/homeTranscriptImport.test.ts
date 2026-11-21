@@ -720,6 +720,46 @@ test("AC10(1): no home transcripts on a first run: done with zero counts and no 
   assert.equal(state(fx)?.aside, null);
 });
 
+test("AC10(0): nothing selected on a first run (a fresh install): done without reading home at all", async () => {
+  const fx = fixture();
+  // Checking home would refuse: the source is a file.
+  rmSync(fx.S, { recursive: true });
+  writeFileSync(fx.S, "file");
+  const lstat = vi.spyOn(fsp, "lstat");
+  const readdir = vi.spyOn(fsp, "readdir");
+  syncBuiltinESMExports();
+  try {
+    const result = await run(fx, { providerSessionIds: () => [] });
+    assert.deepEqual(result, {
+      outcome: "done",
+      sourceMissing: false,
+      aside: null,
+      counts: {
+        selected: 0,
+        copied: 0,
+        alreadyInstalled: 0,
+        missing: 0,
+        unsupported: 0,
+        invalid: 0,
+      },
+      bytes: 0,
+      preflight: "not-needed",
+    });
+    const home = (call: unknown[]) => String(call[0]).startsWith(fx.home);
+    assert.equal(lstat.mock.calls.some(home), false, "home was not stat'ed");
+    assert.equal(readdir.mock.calls.some(home), false, "home was not listed");
+    assert.equal(state(fx)?.phase, "done");
+    assert.equal(existsSync(join(fx.P, "claude", ASIDE)), false);
+    // Recorded: a later run never looks at home either.
+    assert.deepEqual(await run(fx, { providerSessionIds: () => IDS }), {
+      outcome: "already-done",
+    });
+  } finally {
+    vi.restoreAllMocks();
+    syncBuiltinESMExports();
+  }
+});
+
 test("AC10: a source that is not a directory refuses startup without a state", async () => {
   const fx = fixture();
   rmSync(fx.S, { recursive: true });
@@ -1318,6 +1358,9 @@ test("F004: the backup state, the set-aside and a durable copy all come before t
   });
   assert.equal(result.outcome, "done");
   assert.deepEqual(seen, [
+    // A first run only asks whether anything is selected before the boundary;
+    // the plan reads the selection again after it.
+    "plan:undefined:false",
     "state-backup",
     "set-aside",
     "state-copy",
@@ -1560,21 +1603,25 @@ for (const seeded of [true, false])
       if (seeded) seedOldDestination(fx);
       const old = seeded ? digest(fx.D) : undefined;
       const error = vi.spyOn(console, "error").mockImplementation(() => {});
-      const planned: string[] = [];
-      const result = await withFsFaults(faults(fx), () =>
-        run(fx, {
-          providerSessionIds: () => {
-            planned.push("plan");
-            return IDS;
-          },
-        }),
-      );
+      const readdir = vi.spyOn(fsp, "readdir");
+      syncBuiltinESMExports();
+      let result: HomeTranscriptImportResult;
+      let sourceListed: boolean;
+      try {
+        result = await withFsFaults(faults(fx), () => run(fx));
+        sourceListed = readdir.mock.calls.some(([path]) =>
+          String(path).startsWith(fx.S),
+        );
+      } finally {
+        readdir.mockRestore();
+        syncBuiltinESMExports();
+      }
       assert.deepEqual(result, {
         outcome: "refused",
         operation,
         reason: "EIO",
       });
-      assert.deepEqual(planned, [], "the source is never listed");
+      assert.equal(sourceListed, false, "the source is never listed");
       assert.equal(phaseOnDisk(fx), phase);
       const refusal = await homeTranscriptImportStartupRefusal(
         async () => result,

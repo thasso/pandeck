@@ -18,6 +18,7 @@ import { test } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "pi-fork-origin-test-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -97,6 +98,9 @@ function writeParent(id: string): string {
   );
   return file;
 }
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 test("the fork's recorded parent entry is OUR id, not pi's branch anchor", async () => {
   const parentId = "fork-origin-parent";

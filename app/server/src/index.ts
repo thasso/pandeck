@@ -85,6 +85,7 @@ import {
   credentialProfileSummaryById,
   defaultClaudeProfileId,
   defaultOpenAiProfileId,
+  noAccountError,
   deleteCredentialProfile,
   listCredentialProfiles,
   patchCredentialProfile,
@@ -1067,11 +1068,11 @@ async function handleRequest(
       // Served from the shared cache (`usageCache.ts`); `refresh=1` is the
       // Usage page's manual refresh, which bypasses freshness and writes
       // through so every open card sees the new numbers.
-      const snapshot = await readUsageSnapshot(
-        profileId || defaultClaudeProfileId(),
-        "claude",
-        { force: requestUrl.searchParams.get("refresh") === "1" },
-      );
+      const account = profileId || defaultClaudeProfileId();
+      if (!account) throw noAccountError("claude");
+      const snapshot = await readUsageSnapshot(account, "claude", {
+        force: requestUrl.searchParams.get("refresh") === "1",
+      });
       res.writeHead(200, corsJsonHeaders(req));
       res.end(JSON.stringify(snapshot));
     } catch (err) {
@@ -1094,11 +1095,11 @@ async function handleRequest(
         credentialProfileById(profileId)?.provider !== "openai-codex"
       )
         throw new Error("That is not an OpenAI credential profile.");
-      const snapshot = await readUsageSnapshot(
-        profileId || defaultOpenAiProfileId(),
-        "openai-codex",
-        { force: requestUrl.searchParams.get("refresh") === "1" },
-      );
+      const account = profileId || defaultOpenAiProfileId();
+      if (!account) throw noAccountError("openai-codex");
+      const snapshot = await readUsageSnapshot(account, "openai-codex", {
+        force: requestUrl.searchParams.get("refresh") === "1",
+      });
       res.writeHead(200, corsJsonHeaders(req));
       res.end(JSON.stringify(snapshot));
     } catch (err) {
@@ -1135,16 +1136,16 @@ async function handleRequest(
         throw new Error("That is not an OpenAI credential profile.");
       // `force` is the user's explicit "redeem anyway" from the confirm
       // dialog: it skips the applicability guard rather than 409-ing.
-      const result = await redeemOpenAiResetCredit(
-        profileId || defaultOpenAiProfileId(),
-        creditId,
-        { requireApplicable: body.force !== true },
-      );
+      const account = profileId || defaultOpenAiProfileId();
+      if (!account) throw noAccountError("openai-codex");
+      const result = await redeemOpenAiResetCredit(account, creditId, {
+        requireApplicable: body.force !== true,
+      });
       // A redeemed credit resets a window, so the cached percent is wrong the
       // moment this returns.
       revalidateUsage({
         force: true,
-        profileIds: [profileId || defaultOpenAiProfileId()],
+        profileIds: [account],
       });
       res.writeHead(200, corsJsonHeaders(req));
       res.end(JSON.stringify(result));

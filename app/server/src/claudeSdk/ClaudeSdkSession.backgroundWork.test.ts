@@ -10,6 +10,7 @@ import type {
   ClaudeSdkSeam,
   ClaudeSdkUserMessage,
 } from "./sdkSeam.ts";
+import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
 const dataDir = mkdtempSync(join(tmpdir(), "claude-background-test-"));
 process.env.DATA_DIR = dataDir;
@@ -36,6 +37,9 @@ const { sessionHookCallsServedForTests } =
   await import("../workers/sessionHookHost.ts");
 const { SESSION_HOOK_METHODS } =
   await import("../workerProtocol/sessionHookMethods.ts");
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 afterEach(() => {
   setHubForTests(undefined);

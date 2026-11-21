@@ -31,6 +31,7 @@ import {
   setAgentToolLibraryForTests,
 } from "./agentLibraryTools.ts";
 import { DEFAULT_WORKER_SIDE } from "../../workers/placement.ts";
+import { seedLegacyDefaultAccounts } from "../../test/legacyDefaultAccounts.ts";
 
 const { git } = checkoutGitOn(DEFAULT_WORKER_SIDE);
 
@@ -99,6 +100,9 @@ async function createApproved(): Promise<void> {
   const { card } = await resolveApproval(latestCard().id, "approved");
   assert.equal(card.status, "executed", card.resultSummary ?? card.error);
 }
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 beforeEach(async () => {
   run += 1;

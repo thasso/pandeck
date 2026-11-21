@@ -12,6 +12,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeEach, test, vi } from "vitest";
+import { seedLegacyDefaultAccounts } from "./test/legacyDefaultAccounts.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "first-send-agent-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -147,6 +148,9 @@ function makeConnection() {
   conn.view = () => {};
   return { conn, sent };
 }
+
+// Runs on an install that still has its protected default accounts.
+await seedLegacyDefaultAccounts();
 
 beforeEach(() => {
   acquired = [];
