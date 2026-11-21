@@ -3,6 +3,11 @@
  * (`operation: "sprint"`). Discovery (`jira_lookup kind=sprints`) lives in
  * `jiraSprintLookup.ts`, shared with the gateway edge.
  *
+ * Part of the shared mutation core (Task-1463): boundary-clean, so the edge
+ * may import it. Errors are typed (`jiraMutationErrors.ts`), a read's failure
+ * is described by the caller's `describeError`, and every request carries the
+ * caller's signal when there is one.
+ *
  * A sprint is not an issue. Its name, dates and goal live on the board's sprint
  * object (`/rest/agile/1.0/sprint/{id}`), so no issue edit can reach them. The
  * edit is Jira's PARTIAL update — only the changed properties are sent — and it
@@ -13,19 +18,20 @@ import type {
   JiraIssueMutationItemDisplay,
   JiraSprintChangeDisplay,
   JiraSprintField,
-} from "@assistant/shared";
-import { AtlassianHttpError } from "../../atlassian/atlassianFetch.ts";
+} from "@assistant/shared/jiraMutation";
+import { AtlassianHttpError } from "./atlassian/atlassianFetch.ts";
 import {
   jiraBaseUrl,
   jiraGet,
   jiraPost,
-  type JiraApiConfig,
-} from "../../jiraClient.ts";
+  type JiraConfig,
+} from "./jiraClient.ts";
+import { JiraMutationError, jiraWrite } from "./jiraMutationErrors.ts";
+import { signalTail } from "./jiraRead.ts";
 import {
   positiveInteger,
   type JiraSprintResponse,
-} from "../../jiraSprintLookup.ts";
-import { errorText } from "../../errors.ts";
+} from "./jiraSprintLookup.ts";
 
 export type JiraSprintItemInput = {
   sprintId?: number;
@@ -34,6 +40,13 @@ export type JiraSprintItemInput = {
   sprintEndDate?: string;
   sprintGoal?: string;
 };
+
+/** What staging and applying a sprint item need besides the config. */
+export interface JiraSprintDeps {
+  /** Carried by every request; an abort is never wrapped. */
+  signal?: AbortSignal | undefined;
+  describeError(err: unknown): string;
+}
 
 /** An offset is required so the instant is unambiguous whatever the server's zone. */
 const ISO_DATE_TIME_RE =
@@ -52,13 +65,14 @@ const FIELD_LABELS: Record<JiraSprintField, string> = {
  * difference and the approved write sends nothing else.
  */
 export async function buildJiraSprintItem(
-  config: JiraApiConfig,
+  config: JiraConfig,
   clientId: string,
   raw: JiraSprintItemInput,
+  deps: JiraSprintDeps,
 ): Promise<JiraIssueMutationItemDisplay> {
   const sprintId = positiveInteger(raw.sprintId);
   if (sprintId === null)
-    throw new Error(
+    throw new JiraMutationError(
       `sprint item ${clientId} requires sprintId; find it with jira_lookup kind=sprints.`,
     );
   if (
@@ -67,11 +81,11 @@ export async function buildJiraSprintItem(
     raw.sprintEndDate === undefined &&
     raw.sprintGoal === undefined
   )
-    throw new Error(
+    throw new JiraMutationError(
       `sprint item ${clientId} requires at least one of sprintName, sprintStartDate, sprintEndDate or sprintGoal.`,
     );
 
-  const sprint = await fetchSprint(config, sprintId);
+  const sprint = await fetchSprint(config, sprintId, deps);
   const name = sprint.name ?? `Sprint ${sprintId}`;
   const state = sprint.state ?? "unknown";
   const changes: JiraSprintChangeDisplay[] = [];
@@ -79,7 +93,9 @@ export async function buildJiraSprintItem(
   if (raw.sprintName !== undefined) {
     const next = raw.sprintName.trim();
     if (!next)
-      throw new Error(`sprint item ${clientId} sprintName cannot be empty.`);
+      throw new JiraMutationError(
+        `sprint item ${clientId} sprintName cannot be empty.`,
+      );
     if (next !== sprint.name)
       changes.push({ field: "name", from: sprint.name ?? null, to: next });
   }
@@ -105,18 +121,18 @@ export async function buildJiraSprintItem(
   }
 
   if (changes.length === 0)
-    throw new Error(
+    throw new JiraMutationError(
       `Sprint ${sprintId} "${name}" already has the requested values; there is nothing to change.`,
     );
   const datesChange = changes.some(
     (change) => change.field === "startDate" || change.field === "endDate",
   );
   if (datesChange && state === "closed")
-    throw new Error(
+    throw new JiraMutationError(
       `Sprint ${sprintId} "${name}" is closed; Jira does not change a closed sprint's dates.`,
     );
   if (datesChange && nextStart && nextEnd && nextEnd <= nextStart)
-    throw new Error(
+    throw new JiraMutationError(
       `sprint item ${clientId} would end the sprint (${nextEnd}) before it starts (${nextStart}).`,
     );
 
@@ -148,25 +164,29 @@ export async function buildJiraSprintItem(
  * result either way, so the card and summary state what Jira holds.
  */
 export async function executeJiraSprintItem(
-  config: JiraApiConfig,
+  config: JiraConfig,
   item: JiraIssueMutationItemDisplay,
+  deps: JiraSprintDeps,
 ): Promise<void> {
   const sprint = item.sprint;
-  if (!sprint) throw new Error("Missing sprint update.");
+  if (!sprint) throw new JiraMutationError("Missing sprint update.");
   // A re-executed card must not keep the previous run's outcome.
   delete item.warning;
   delete item.resultIssueUrl;
   const body: Record<string, string> = {};
   for (const change of sprint.changes) body[change.field] = change.to ?? "";
-  const updated = await jiraPost<JiraSprintResponse | undefined>(
-    config,
-    `/rest/agile/1.0/sprint/${sprint.sprintId}`,
-    body,
+  const updated = await jiraWrite(() =>
+    jiraPost<JiraSprintResponse | undefined>(
+      config,
+      `/rest/agile/1.0/sprint/${sprint.sprintId}`,
+      body,
+      ...signalTail(deps.signal),
+    ),
   );
   const observed =
     typeof updated?.id === "number"
       ? updated
-      : await fetchSprint(config, sprint.sprintId);
+      : await fetchSprint(config, sprint.sprintId, deps);
   sprint.result = {
     name: observed.name ?? sprint.name,
     startDate: normalizeJiraInstant(observed.startDate),
@@ -182,7 +202,8 @@ export async function executeJiraSprintItem(
         ? "; the sprint is closed, and Jira ignores date changes on a closed sprint"
         : "";
     const kept = `Jira kept the sprint's ${fields.join(", ")} unchanged${reason}.`;
-    if (ignored.length === sprint.changes.length) throw new Error(kept);
+    if (ignored.length === sprint.changes.length)
+      throw new JiraMutationError(kept);
     item.warning = kept;
   }
   item.resultIssueUrl = sprintIssuesUrl(config, sprint.sprintId);
@@ -224,22 +245,25 @@ export function jiraSprintResultText(
 }
 
 async function fetchSprint(
-  config: JiraApiConfig,
+  config: JiraConfig,
   sprintId: number,
+  deps: JiraSprintDeps,
 ): Promise<JiraSprintResponse> {
   try {
     return await jiraGet<JiraSprintResponse>(
       config,
       `/rest/agile/1.0/sprint/${sprintId}`,
+      ...signalTail(deps.signal),
     );
   } catch (err) {
+    if (deps.signal?.aborted) throw err;
     // By Jira's status, never by the message, which quotes Jira's body.
     if (
       err instanceof AtlassianHttpError &&
       (err.status === 403 || err.status === 404)
     )
-      throw new Error(
-        `Jira sprint ${sprintId} could not be read: ${errorText(err)} Find the sprint id with jira_lookup kind=sprints.`,
+      throw new JiraMutationError(
+        `Jira sprint ${sprintId} could not be read: ${deps.describeError(err)} Find the sprint id with jira_lookup kind=sprints.`,
       );
     throw err;
   }
@@ -259,7 +283,7 @@ function parseSprintDate(
       ? Date.parse(text)
       : Number.NaN;
   if (Number.isNaN(ms))
-    throw new Error(
+    throw new JiraMutationError(
       `sprint item ${clientId} ${field} must be a real ISO 8601 date-time with an offset, e.g. 2026-10-13T09:00:00+02:00; got "${value}".`,
     );
   return new Date(ms).toISOString();
@@ -296,6 +320,6 @@ function normalizeJiraInstant(value: string | undefined): string | null {
 }
 
 /** The sprint's issues in Jira's search: the one sprint view every site serves. */
-function sprintIssuesUrl(config: JiraApiConfig, sprintId: number): string {
+function sprintIssuesUrl(config: JiraConfig, sprintId: number): string {
   return `${jiraBaseUrl(config.jiraHost)}/issues/?jql=${encodeURIComponent(`sprint = ${sprintId}`)}`;
 }

@@ -26,7 +26,8 @@
     "./settingsRegistry": "./settingsRegistry.ts",
     "./zonedTime": "./zonedTime.ts",
     "./sessionTreeWorktrees": "./sessionTreeWorktrees.ts",
-    "./gatewayUi": "./gatewayUi.ts"
+    "./gatewayUi": "./gatewayUi.ts",
+    "./jiraMutation": "./jiraMutation.ts"
   },
   "types": "./protocol.ts",
   "scripts": {

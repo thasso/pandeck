@@ -1,8 +1,7 @@
 /**
  * `jira_lookup kind=sprints` (Task-1439): a board's sprints, or those of a
  * project's boards, shared by Pandeck's local tool and the gateway edge's
- * (`jiraRead.ts`). The approval-gated sprint edit stays in
- * `tools/jira/jiraSprint.ts`.
+ * (`jiraRead.ts`). The approval-gated sprint edit is `jiraSprint.ts`.
  */
 import { AtlassianHttpError } from "./atlassian/atlassianFetch.ts";
 import { jiraGet, type JiraConfig } from "./jiraClient.ts";

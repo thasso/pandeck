@@ -2724,6 +2724,26 @@ tools: `slack_search`, `slack_conversation_read`, `slack_thread_read` and
   part of Jira's body reaches the caller. Over OAuth, `jira_lookup kind=sprints`
   needs Jira Software scopes the gateway does not ask for yet, so Jira refuses
   it until they are added (Task-1439 D3).
+- **Jira mutation core** (Task-1463). The prepare (`jiraMutate.ts`) and apply
+  (`jiraMutateApply.ts`) halves of `jira_mutate_issue`, with `jiraRank.ts`,
+  `jiraSprint.ts`, `jiraPermissions.ts` and the typed errors in
+  `jiraMutationErrors.ts`, sit beside `tools/jira/`, which wraps them with its
+  settings, caches and approval card. The edge may import them; no edge tool
+  uses them yet. Server state arrives as injected deps: the field list, link
+  types, user names, `describeError`, `matchesHttpStatus` and apply's
+  `stopBefore`. The display types are the import-free
+  `@assistant/shared/jiraMutation` leaf, and the ADF converter brings the three
+  Markdown packages. A caller decides by type and status alone:
+  `JiraMutationError` is the core's own text, `JiraWriteHttpError` (an
+  `AtlassianHttpError`) a rejected write, and a failed read stays
+  `AtlassianHttpError`. A rank 207 takes the worst failed entry's status (5xx,
+  then 401, then 403, then the highest 4xx) and carries Jira's reasons only when
+  every failed entry is a 4xx other than 401/403. Every request carries the
+  caller's signal when there is one. An abort is recognised by the signal's
+  state, propagates as itself, never becomes a row or step error, and no request
+  follows it. Without a signal every call keeps the exact arguments the local
+  tool always sent; locally only user naming carries the tool call's signal, as
+  before.
 - **Slack reads** (Task-1454). The four tools run the same read path as the
   local ones (`slackRead.ts` with `slackMetadataCache.ts` beside `tools/slack/`,
   which wraps them) with the same schema and description objects, action key

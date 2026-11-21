@@ -54,6 +54,23 @@ export function withSignal(
   return signal ? { ...options, signal } : options;
 }
 
+/**
+ * The trailing `query, options` arguments of a call that has no query: none
+ * without a signal, so the call keeps its exact argument list.
+ */
+export function signalTail(
+  signal: AbortSignal | undefined,
+): [query?: undefined, options?: JiraCallOptions] {
+  return signal ? [undefined, { signal }] : [];
+}
+
+/** The trailing `options` argument: none without a signal. */
+export function signalOptions(
+  signal: AbortSignal | undefined,
+): [options?: JiraCallOptions] {
+  return signal ? [{ signal }] : [];
+}
+
 /** Throws before a next page or request once the call is aborted. */
 export function stopIfAborted(signal: AbortSignal | undefined): void {
   signal?.throwIfAborted();

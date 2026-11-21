@@ -200,35 +200,36 @@ persona toolsets.
   `jira_list_fields`/`jira_list_projects`/`jira_search_users`), and
   `jira_mutate_issue` — which stages a PENDING `ApprovalCard` via the shared
   `../../pendingApprovals.ts` subsystem (kind `jiraIssue`) and registers the
-  `jiraIssue` executor that applies the change on approval. Each item carries an
-  `operation`: `edit` (default — first-class summary/Markdown-description edits,
-  transitions, fields, links), `create` (projectKey + issueType + summary +
-  optional Markdown description/parent/known or advanced fields/linkChanges →
-  `resultIssueKey`; we never set the cost center, Jira automation does), or
-  `comment` (issue + Markdown commentBody). `jira/jiraMarkdown.ts` converts
-  CommonMark/GFM to native ADF blocks/marks; raw HTML is preserved as code,
-  images as linked alt text, and nested Markdown quotes are flattened into the
-  nearest outer quote because Jira rejects nested `blockquote` ADF. Before
-  approval, optional create fields are checked through expanded `createmeta`,
-  comments/native links through Jira's issue-scoped `mypermissions` using the
-  Jira permission keys `ADD_COMMENTS`/`LINK_ISSUES`, and first-class
-  summary/description edits through `editmeta`, so known permission/screen
-  failures are rejected before the user approves. Creates apply native links
-  after Jira returns the new key; if only that post-create link step fails, the
-  card is successful-with-warning and retains the created key instead of falsely
-  saying the whole create failed. The approval flow is harness-neutral,
-  persistent, and attention-surfaced (see the `pendingApprovals.ts` bullet in
-  `../CLAUDE.md`); it no longer uses pi custom entries or a pi-only accept path.
-  Read payloads are compact JSON with null/empty keys dropped and no static
-  `presentationGuidance`; the projects/users kinds and `jira_search_issues`
-  render web tables (`JiraToolCard`) when `render=true`. Issue links:
-  `jira_get_issue` always returns normalized `issueLinks`
-  (id/type/direction/relationship/other issue);
+  `jiraIssue` executor that applies the change on approval. Prepare and apply
+  live in the boundary-clean `../jiraMutate.ts` and `../jiraMutateApply.ts`
+  (Task-1463); `jiraTools.ts` wraps them. Each item carries an `operation`:
+  `edit` (default — first-class summary/Markdown-description edits, transitions,
+  fields, links), `create` (projectKey + issueType + summary + optional Markdown
+  description/parent/known or advanced fields/linkChanges → `resultIssueKey`; we
+  never set the cost center, Jira automation does), or `comment` (issue +
+  Markdown commentBody). `jira/jiraMarkdown.ts` converts CommonMark/GFM to
+  native ADF blocks/marks; raw HTML is preserved as code, images as linked alt
+  text, and nested Markdown quotes are flattened into the nearest outer quote
+  because Jira rejects nested `blockquote` ADF. Before approval, optional create
+  fields are checked through expanded `createmeta`, comments/native links
+  through Jira's issue-scoped `mypermissions` using the Jira permission keys
+  `ADD_COMMENTS`/`LINK_ISSUES`, and first-class summary/description edits
+  through `editmeta`, so known permission/screen failures are rejected before
+  the user approves. Creates apply native links after Jira returns the new key;
+  if only that post-create link step fails, the card is successful-with-warning
+  and retains the created key instead of falsely saying the whole create failed.
+  The approval flow is harness-neutral, persistent, and attention-surfaced (see
+  the `pendingApprovals.ts` bullet in `../CLAUDE.md`); it no longer uses pi
+  custom entries or a pi-only accept path. Read payloads are compact JSON with
+  null/empty keys dropped and no static `presentationGuidance`; the
+  projects/users kinds and `jira_search_issues` render web tables
+  (`JiraToolCard`) when `render=true`. Issue links: `jira_get_issue` always
+  returns normalized `issueLinks` (id/type/direction/relationship/other issue);
   `jira_lookup kind=issueLinkTypes` lists the site-global link types (cached
   per-host in `../jiraIssueLinkTypeCache.ts`, mirroring `../jiraFieldCache.ts`;
   link types are NOT per-project); and each `jira_mutate_issue` create/edit item
   accepts `linkChanges` (add/remove, executed via
-  `POST`/`DELETE /rest/api/3/issueLink`). `jira/jiraSprint.ts` backs
+  `POST`/`DELETE /rest/api/3/issueLink`). `../jiraSprint.ts` backs
   `jira_lookup kind=sprints` and the `sprint` operation, a partial
   `POST /rest/agile/1.0/sprint/{id}` of name, dates and goal that never changes
   the sprint's state.
