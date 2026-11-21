@@ -38,43 +38,121 @@ interface AtlassianOAuthCredential {
 export type AtlassianCredential =
   AtlassianTokenCredential | AtlassianOAuthCredential;
 
-/**
- * What the closed schema checker (`schema.ts`) understands. Readonly, so a
- * local tool's `as const` schema is the edge's schema too (Task-1439).
+/*
+ * What the closed schema checker (`schema.ts`) understands (Task-1439,
+ * Task-1463). Readonly, so a local tool's `as const` schema is the edge's
+ * schema too.
+ *
+ * The branches are mutually exclusive: each forbids, with an optional `never`
+ * member, every keyword another branch relies on. The opaque object forbids
+ * `properties`, `required` and `additionalProperties`; every branch with a
+ * `type` forbids `anyOf`; the string-or-null branch forbids `type`. Under
+ * `exactOptionalPropertyTypes` an optional `never` refuses an explicit
+ * `undefined` too, so this holds for a plain `as const` variable assigned
+ * later, not only for a literal. A `default` is allowed only on a root
+ * property. An unknown keyword (`oneOf`, `format`, …) is refused only by a
+ * literal's excess-property check (`{…} satisfies ObjectSchema`): ordinary
+ * assignment is not exact-object typing.
  */
-type PropertySchema =
-  | {
-      readonly type: "string";
-      readonly description?: string;
-      readonly pattern?: string;
-      readonly maxLength?: number;
-      readonly enum?: readonly string[];
-    }
-  | {
-      readonly type: "boolean";
-      readonly description?: string;
-      readonly default?: boolean;
-    }
-  | {
-      readonly type: "integer";
-      readonly description?: string;
-      readonly minimum?: number;
-      readonly maximum?: number;
-      readonly default?: number;
-    }
-  | { readonly type: "number"; readonly description?: string }
-  | {
-      readonly type: "array";
-      readonly description?: string;
-      readonly items: {
-        readonly type: "string";
-        readonly enum?: readonly string[];
-      };
-    };
+interface Doc {
+  readonly description?: string;
+}
+
+type StringProp = Doc & {
+  readonly type: "string";
+  readonly pattern?: string;
+  readonly maxLength?: number;
+  readonly enum?: readonly string[];
+  readonly anyOf?: never;
+};
+
+/** A string or `null`, written only as this exact `anyOf`. */
+type NullableStringProp = Doc & {
+  readonly anyOf: readonly [
+    { readonly type: "string" },
+    { readonly type: "null" },
+  ];
+  readonly type?: never;
+};
+
+type NumberProp = Doc & { readonly type: "number"; readonly anyOf?: never };
+
+type BooleanProp = Doc & { readonly type: "boolean"; readonly anyOf?: never };
+type RootBooleanProp = BooleanProp & { readonly default?: boolean };
+type NestedBooleanProp = BooleanProp & { readonly default?: never };
+
+type IntegerProp = Doc & {
+  readonly type: "integer";
+  readonly minimum?: number;
+  readonly maximum?: number;
+  readonly anyOf?: never;
+};
+type RootIntegerProp = IntegerProp & { readonly default?: number };
+type NestedIntegerProp = IntegerProp & { readonly default?: never };
+
+interface StringItem {
+  readonly type: "string";
+  readonly enum?: readonly string[];
+}
+
+type StringArrayProp = Doc & {
+  readonly type: "array";
+  readonly items: StringItem;
+  readonly minItems?: number;
+  readonly maxItems?: number;
+  readonly anyOf?: never;
+};
+
+type ObjectArrayProp = Doc & {
+  readonly type: "array";
+  readonly items: ClosedObjectProp;
+  readonly minItems?: number;
+  readonly maxItems?: number;
+  readonly anyOf?: never;
+};
+
+/** Any JSON object, passed to the tool as given and never descended into. */
+type OpaqueObjectProp = Doc & {
+  readonly type: "object";
+  readonly properties?: never;
+  readonly required?: never;
+  readonly additionalProperties?: never;
+  readonly anyOf?: never;
+};
+
+type ClosedObjectProp = Doc & {
+  readonly type: "object";
+  readonly properties: Readonly<Record<string, NestedProp>>;
+  readonly required?: readonly string[];
+  readonly additionalProperties: false;
+  readonly anyOf?: never;
+};
+
+type NestedProp =
+  | StringProp
+  | NullableStringProp
+  | NestedBooleanProp
+  | NestedIntegerProp
+  | NumberProp
+  | StringArrayProp
+  | ObjectArrayProp
+  | OpaqueObjectProp
+  | ClosedObjectProp;
+
+type RootProp =
+  | StringProp
+  | NullableStringProp
+  | RootBooleanProp
+  | RootIntegerProp
+  | NumberProp
+  | StringArrayProp
+  | ObjectArrayProp
+  | OpaqueObjectProp
+  | ClosedObjectProp;
 
 export interface ObjectSchema {
   type: "object";
-  properties: Readonly<Record<string, PropertySchema>>;
+  properties: Readonly<Record<string, RootProp>>;
   required?: readonly string[];
   additionalProperties: false;
 }
