@@ -118,6 +118,25 @@ Persona prompts are packaged assets and do not follow that directory: they load
 from the `config/prompts` beside the running app, or from
 `ASSISTANT_PROMPTS_DIR` (an absolute path) if you point it elsewhere.
 
+### First-run sandbox
+
+`pnpm run dev:sandbox` starts this checkout's dev server as a brand-new install,
+with none of your data: for working on first-run and onboarding, or trying a
+change without touching your own instance.
+
+- Server and UI start from an empty environment: only `PATH` is inherited, so no
+  token or integration secret from your shell reaches them.
+- `DATA_DIR`, `HOME`, the XDG directories and the agent's working directory all
+  live in one folder, `~/.local/state/pandeck-sandbox` by default (`--dir`).
+  Nothing reads your `~/.claude`, `~/.pi` or `assistant-data/`. On macOS, a
+  Claude sign-in still lands in your login Keychain, under its own entry for the
+  sandbox's profile.
+- Both listen on loopback only: the UI at http://127.0.0.1:5190 (`--web-port`),
+  which proxies to the server on 8890 (`--port`). From another machine, forward
+  the UI port, e.g. with the desktop app's port forwarding.
+- `--reset` deletes the folder first, for a fresh first run. The script only
+  ever uses or deletes a folder that is empty or that it created.
+
 ## Configuration
 
 Runtime state (sessions, settings, the project registry, Tasks, the Knowledge
