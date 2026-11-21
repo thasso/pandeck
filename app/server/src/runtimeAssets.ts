@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -81,20 +82,75 @@ const PACKAGED_PHOTON_WASM = runtimeAssetPath(
 );
 
 /**
- * The separately installed Claude CLI used by SDK subprocesses and login.
- * Undefined in a checkout so the SDK and login keep their normal development
- * lookup behavior.
+ * The platform packages that may carry the Agent SDK's native CLI, in the
+ * SDK's own lookup order: on Linux the libc this process runs on goes first.
  */
-export function packagedClaudeCliPath(): string | undefined {
+export function claudeCliPackageNames(
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+  musl: boolean = platform === "linux" && runsOnMusl(),
+): string[] {
+  const base = "@anthropic-ai/claude-agent-sdk";
+  if (platform !== "linux") return [`${base}-${platform}-${arch}`];
+  const glibc = `${base}-linux-${arch}`;
+  return musl ? [`${glibc}-musl`, glibc] : [glibc, `${glibc}-musl`];
+}
+
+function runsOnMusl(): boolean {
+  const report = process.report?.getReport() as
+    { header?: { glibcVersionRuntime?: string } } | undefined;
+  return report?.header !== undefined && !report.header.glibcVersionRuntime;
+}
+
+let sdkClaudeCli: string | undefined;
+
+/** The native CLI the installed Agent SDK ships for this platform. */
+function sdkClaudeCliPath(): string {
+  if (sdkClaudeCli) return sdkClaudeCli;
+  const candidates = claudeCliPackageNames();
+  const executable = process.platform === "win32" ? "claude.exe" : "claude";
+  try {
+    const sdkRequire = createRequire(
+      createRequire(import.meta.url).resolve("@anthropic-ai/claude-agent-sdk"),
+    );
+    for (const name of candidates) {
+      try {
+        const path = join(
+          dirname(sdkRequire.resolve(`${name}/package.json`)),
+          executable,
+        );
+        if (existsSync(path)) return (sdkClaudeCli = path);
+      } catch {
+        // Not installed for this platform; try the next candidate.
+      }
+    }
+  } catch {
+    // The SDK itself is missing; reported below like a missing binary.
+  }
+  throw new Error(
+    `The Claude CLI that comes with the Agent SDK is not installed (${candidates.join(" or ")}). ` +
+      "Reinstall the dependencies, or set ASSISTANT_CLAUDE_CLI_BIN to a Claude CLI.",
+  );
+}
+
+/**
+ * The one Claude CLI every Claude child runs: SDK sessions, helpers, usage,
+ * login and the sign-in check, so they never differ and never fall back to a
+ * `claude` the user installed. The explicit override wins, then the packaged
+ * runtime's copy, then the binary the installed Agent SDK ships. Throws, naming
+ * what is missing, rather than guessing.
+ */
+export function claudeCliPath(): string {
   if (configuredClaudeCli) return configuredClaudeCli;
-  return configuredRoot ? runtimeAssetPath("claude", "claude") : undefined;
+  if (configuredRoot) return runtimeAssetPath("claude", "claude");
+  return sdkClaudeCliPath();
 }
 
 /** SDK option fragment shared by interactive, helper, and usage queries. */
-export function packagedClaudeSdkOptions():
-  { pathToClaudeCodeExecutable: string } | Record<string, never> {
-  const path = packagedClaudeCliPath();
-  return path ? { pathToClaudeCodeExecutable: path } : {};
+export function claudeSdkExecutableOptions(): {
+  pathToClaudeCodeExecutable: string;
+} {
+  return { pathToClaudeCodeExecutable: claudeCliPath() };
 }
 
 /** Refuse a packaged boot before binding when an explicit runtime asset is missing. */

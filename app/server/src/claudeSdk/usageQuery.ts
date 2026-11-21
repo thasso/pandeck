@@ -9,7 +9,7 @@
  * abort/close it.
  */
 import { CWD } from "../config.ts";
-import { packagedClaudeSdkOptions } from "../runtimeAssets.ts";
+import { claudeSdkExecutableOptions } from "../runtimeAssets.ts";
 import {
   claudeProfileEnvironment,
   defaultClaudeProfileId,
@@ -72,7 +72,7 @@ function buildUsageQueryOptions(
   return {
     cwd: CWD,
     abortController,
-    ...packagedClaudeSdkOptions(),
+    ...claudeSdkExecutableOptions(),
     env: claudeProfileEnvironment(credentialProfileId),
     model: claudeSdkModelId("haiku"),
     tools: [],

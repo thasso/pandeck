@@ -37,7 +37,7 @@ import type { PromptConditions } from "../promptConditions.ts";
 import type { ClaudeSdkOptions } from "./sdkSeam.ts";
 import type { EngineGatewayAccess } from "../workerProtocol/engineMethods.ts";
 import { SKILLS_RUNTIME_DIR } from "../config.ts";
-import { packagedClaudeSdkOptions } from "../runtimeAssets.ts";
+import { claudeSdkExecutableOptions } from "../runtimeAssets.ts";
 import { skillSetHash } from "../skills/skillRuntimeMaterializer.ts";
 import {
   claudeChildEnvironment,
@@ -554,7 +554,7 @@ function claudeQuerySpec(
   // everything else.
   const options: ClaudeQuerySpecOptions = {
     cwd,
-    ...packagedClaudeSdkOptions(),
+    ...claudeSdkExecutableOptions(),
     includePartialMessages: true,
     strictMcpConfig: true,
     // The host-owned persona/tool policy is authoritative: bypass mode

@@ -152,6 +152,17 @@ reason. Lazy Photon and JSDOM loaders consume the captured paths rather than
 rereading the scrubbed environment. Starting the packaged bundle without
 `ASSISTANT_RUNTIME_DIR` fails immediately with a named packaged-server error.
 
+Every Claude child runs one CLI, resolved by `claudeCliPath()` in
+`runtimeAssets.ts`: SDK sessions, helper and usage queries, the profile login
+and the macOS sign-in check. It is the `ASSISTANT_CLAUDE_CLI_BIN` override if
+set, else the packaged runtime's `claude/claude`, else the native binary the
+installed Agent SDK ships for this platform (`claude-agent-sdk-<os>-<arch>`, on
+Linux the running libc's package first, as the SDK orders them). A checkout uses
+that binary too and never a `claude` on `PATH`, so login and sessions never run
+different versions. When none is installed the start fails, naming the packages
+it looked for. A NixOS host without nix-ld cannot run the SDK's binary and
+points `ASSISTANT_CLAUDE_CLI_BIN` at a Claude CLI it can run.
+
 `scripts/bun-bundle.mjs` owns the esbuild call and its plugins, so the install
 check bundles its runtime probe exactly as the builder bundles `server.js`.
 Every bundle it emits starts with Bun's pragma: `// @bun` for the ES modules
