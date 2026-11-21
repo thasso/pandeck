@@ -392,6 +392,13 @@ export interface AccountLoginAlert {
   provider: CredentialProfileProvider;
 }
 
+/**
+ * Whether the install is on its first run (`docs/onboarding.md`): `pending`
+ * until the server sees a usable account, then `complete` for good. The
+ * server owns it; the web shows the welcome screen only while it is `pending`.
+ */
+export type OnboardingState = "pending" | "complete";
+
 /** The credential gateway's state as app status (`gatewayStatus`). */
 export type GatewayStatusState = "ok" | "unreachable" | "incompatible";
 
@@ -617,6 +624,9 @@ export const DEFAULT_HELPER_MODEL = {
  * instead (`docs/onboarding.md`); an established install keeps this one.
  */
 export const DEFAULT_PERMANENT_ASSISTANT_NAME = "Personal Assistant";
+
+/** The name first run gives the Personal Assistant when none is saved. */
+export const FIRST_RUN_ASSISTANT_NAME = "Larry";
 
 /**
  * User preferences for the model picker. An overlay on the live model list:
@@ -8592,6 +8602,8 @@ export type ServerMessage =
       speechToText: SpeechToTextStatus;
       slashCommands: SlashCommandInfo[];
       contextInfo: ContextInfo | null;
+      /** The install's first-run state, with the snapshot it decides the shell for. */
+      onboarding: OnboardingState;
     }
   | { type: "state"; state: SessionState }
   /**
@@ -9070,6 +9082,8 @@ export type ServerMessage =
    * `incompatible` when it speaks another control major; else `ok`.
    */
   | { type: "gatewayStatus"; state: GatewayStatusState }
+  /** The install's first-run state changed (`pending` → `complete`, once). */
+  | { type: "onboarding"; state: OnboardingState }
   /** Invalidate account cards/previews without raising a login alert. */
   | { type: "accountHealthChanged" }
   /**

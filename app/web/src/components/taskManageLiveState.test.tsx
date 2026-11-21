@@ -102,6 +102,7 @@ const SESSION = {
 /** The server's hello: only after it does the app count as connected. */
 const READY = {
   type: "ready",
+  onboarding: "complete",
   serverBuild: { version: "0.0.0-test" },
   state: SESSION,
   models: [],

@@ -6,31 +6,8 @@ import type {
 import {
   ACCOUNT_KINDS,
   DEFAULT_PERMANENT_ASSISTANT_NAME,
+  FIRST_RUN_ASSISTANT_NAME,
 } from "@assistant/shared";
-
-/**
- * First run (`docs/onboarding.md`): the install has no USABLE account, so the
- * main pane welcomes the user and offers the first account instead of a New
- * Session screen that could not start anything.
- *
- * Usable means enabled, signed in (`ready`) and offering at least one model.
- * The model check is what makes a signed-in Claude account count only while
- * the Claude SDK integration is on: with it off the account offers nothing.
- * Health is deliberately not read: a login rejected at runtime is the
- * `AppStatus` alert's case, not a reason to take an established install back
- * to its first screen.
- */
-export function hasUsableAccount(
-  profiles: readonly CredentialProfileSummary[],
-  modelsByProfile: Readonly<Record<string, readonly ModelOption[]>>,
-): boolean {
-  return profiles.some(
-    (profile) =>
-      profile.enabled &&
-      profile.status === "ready" &&
-      (modelsByProfile[profile.id]?.length ?? 0) > 0,
-  );
-}
 
 /** The account kinds the first account card offers, in its order. */
 const FIRST_ACCOUNT_KINDS: readonly CredentialProfileProvider[] = [
@@ -101,29 +78,16 @@ export function firstAccountSteps(
   });
 }
 
-/** The name first run introduces, and saves, when none is saved yet. */
-const FIRST_RUN_ASSISTANT_NAME = "Larry";
-
 /**
- * The assistant's name as first run sees it: the saved one, or Larry when the
- * user has not saved one. Not saving a name reads as the default name, since
- * settings fill it in, so a name equal to the default counts as unsaved.
+ * The assistant's name as the welcome introduces it: the saved one, or Larry
+ * when none is saved. Settings fill an unsaved name in with the default, so a
+ * name equal to the default counts as unsaved; the server saves Larry when
+ * first run ends (`onboarding.ts`).
  */
 export function firstRunAssistantName(savedName: string): string {
   const name = savedName.trim();
   return name && name !== DEFAULT_PERMANENT_ASSISTANT_NAME
     ? name
-    : FIRST_RUN_ASSISTANT_NAME;
-}
-
-/**
- * The name to save once first run ends with a usable account, or null to
- * leave the saved one alone: only an unsaved name becomes Larry, and a name
- * the user chose is never overwritten.
- */
-export function firstRunNameToSave(savedName: string): string | null {
-  return firstRunAssistantName(savedName) === savedName.trim()
-    ? null
     : FIRST_RUN_ASSISTANT_NAME;
 }
 

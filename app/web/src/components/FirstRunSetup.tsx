@@ -26,8 +26,9 @@ function accountsChanged(): void {
  * (or the Claude SDK) on, or hand an endpoint to its Settings section.
  * @useWhen Hosting `FirstRunWelcome` in the main pane on first run.
  * @avoidWhen Anywhere an account already works: Settings owns those.
- * @intent A finished sign-in closes its dialog and re-reads the accounts, so
- * the shell returns on its own with no confirm step.
+ * @intent A finished sign-in closes its dialog and re-reads the accounts; the
+ * server ends first run when it sees the usable account, so the shell returns
+ * on its own with no confirm step.
  */
 export function FirstRunSetup({
   assistantName,
@@ -105,7 +106,12 @@ export function FirstRunSetup({
           if (step.profile) setLoginProfile(step.profile);
           return;
         case "enable-claude":
+          // The switch may already be on with this card's accounts read
+          // before it was: re-read as well. Turning it on re-reads again once
+          // the server confirms (`useAssistant`), and the server finishes
+          // first run itself once the account offers models.
           onEnableClaude();
+          accountsChanged();
           return;
         case "finish-endpoint":
           onNavigate(accountSettingsPath(step.kind));

@@ -142,7 +142,7 @@ export function FirstRunWelcome({
               const { description, label } = stepCopy(step);
               const busy = busyKind === step.kind;
               return (
-                <Item key={step.kind} variant="outline">
+                <Item key={step.kind} variant="outline" role="listitem">
                   <ItemMedia variant="icon">
                     <ProviderIcon
                       provider={step.kind}

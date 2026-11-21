@@ -194,6 +194,7 @@ describe("useAssistant message arrivals on their object", () => {
   });
   const readyMessage: ServerMessage = {
     type: "ready",
+    onboarding: "complete",
     serverBuild: { version: "0.0.0-test" },
     state: null,
     models: [],
@@ -1711,6 +1712,7 @@ describe("useAssistant task reducer", () => {
     state = apply(
       {
         type: "ready",
+        onboarding: "complete",
         serverBuild: { version: "0.0.0-test" },
         state: null,
         models: [],
@@ -2891,6 +2893,7 @@ describe("session-list freshness across a reconnect", () => {
     state = apply(
       {
         type: "ready",
+        onboarding: "complete",
         serverBuild: { version: "0.0.0-test" },
         state: null,
         models: [],

@@ -205,9 +205,7 @@ import {
   credentialProfileProjectionBlockReason,
   credentialProfileProjectionBlocksSend,
 } from "./lib/credentialProfileProjection.ts";
-import { hasUsableAccount } from "./lib/firstRun.ts";
 import { useCredentialProfileProjection } from "./hooks/useCredentialProfileProjection.ts";
-import { useFirstRunNaming } from "./hooks/useFirstRunNaming.ts";
 import {
   dataOf,
   errorOf,
@@ -906,32 +904,10 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   const credentialProfileModels =
     credentialProfileProjection?.modelsByProfile ??
     NO_CREDENTIAL_PROFILE_MODELS;
-  // First run (`docs/onboarding.md`): the accounts have answered and none is
-  // usable. Unknown (still loading, or failed) is never first run, so an
-  // established install cannot flash the welcome screen.
-  const accountsUsable =
-    credentialProfileProjection === undefined
-      ? undefined
-      : hasUsableAccount(credentialProfiles, credentialProfileModels);
-  const firstRun = accountsUsable === false;
-  // Finishing first run with no saved name saves "Larry"; a saved name stays.
-  useFirstRunNaming({
-    accountsUsable,
-    settingsLive: state.connected,
-    assistant: state.settings.permanentAssistant,
-    saveSettings: actions.updateSettings,
-  });
-  // The Claude SDK switch decides whether a Claude account offers models at
-  // all, and the projection does not hear about settings: re-read it when the
-  // switch flips (the first-run card turns it on after a Claude sign-in).
-  const claudeSdkEnabled = state.settings.claudeSdk.enabled;
-  const claudeSdkSeen = useRef(claudeSdkEnabled);
-  const reloadCredentialProfiles = credentialProfileFetch.reload;
-  useEffect(() => {
-    if (claudeSdkSeen.current === claudeSdkEnabled) return;
-    claudeSdkSeen.current = claudeSdkEnabled;
-    reloadCredentialProfiles();
-  }, [claudeSdkEnabled, reloadCredentialProfiles]);
+  // First run (`docs/onboarding.md`) is the server's call, made once per
+  // install: only a live `pending` shows it. Unknown (before `ready`, or a
+  // cached boot) never does, and the account projection only fills the card.
+  const firstRun = state.onboarding === "pending";
   // Settings configures agents as account/model combinations, so its pickers
   // list every enabled account's models rather than the default account's.
   const settingsAccountModels = useMemo(

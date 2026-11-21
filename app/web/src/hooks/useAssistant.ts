@@ -53,6 +53,7 @@ import {
   type PeerPromptCardOverrides,
 } from "../lib/peerPromptCardOverrides.ts";
 import type {
+  OnboardingState,
   AgentInfo,
   InboxPositionEntry,
   SettableSpawnOwnership,
@@ -902,6 +903,12 @@ export interface UIState {
   >["accounts"];
   /** The credential gateway's state; `ok` until the server says otherwise. */
   gatewayStatus: Extract<ServerMessage, { type: "gatewayStatus" }>["state"];
+  /**
+   * The install's first-run state as the LIVE server last said it
+   * (`docs/onboarding.md`); null until then, and never restored from the shell
+   * cache, so a cached boot can never show first run.
+   */
+  onboarding: OnboardingState | null;
   /** Compact title/route/existence metadata for resolved pa:// object links. */
   objectLinks: Record<string, PaObjectLinkResolution>;
 }
@@ -1062,6 +1069,7 @@ const emptyInitial: UIState = {
   reloading: null,
   accountLoginAlerts: [],
   gatewayStatus: "ok",
+  onboarding: null,
   objectLinks: {},
 };
 
@@ -5891,6 +5899,7 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
           hydrationSource: "live",
           shellCachedAt: null,
           connected: true,
+          onboarding: msg.onboarding,
           models: msg.models,
           agents: msg.agents,
           // The session list is the `sessions` subscription's snapshot.
@@ -6547,6 +6556,8 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       return { ...state, accountLoginAlerts: msg.accounts };
     case "gatewayStatus":
       return { ...state, gatewayStatus: msg.state };
+    case "onboarding":
+      return { ...state, onboarding: msg.state };
     case "devReload":
       return {
         ...state,
@@ -7302,6 +7313,8 @@ export function useAssistant({
     (isIsolated) => (isIsolated ? emptyInitial : createInitialState()),
   );
   const stateRef = useRef(state);
+  // The Claude SDK switch as the server last confirmed it; unknown until then.
+  const serverClaudeSdkRef = useRef<boolean | undefined>(undefined);
   stateRef.current = state;
   // Dev HUD: when the viewed transcript commits, and when that commit paints.
   // Only the first commit after a load's snapshot is recorded (`perfStats`).
@@ -7877,6 +7890,19 @@ export function useAssistant({
           ...(msg.error ? { error: msg.error } : {}),
         });
         return;
+      }
+      // The Claude SDK switch decides whether Claude accounts offer models. Once
+      // the SERVER reports it changed, the account projection is re-read as a
+      // new generation, never joined to a read that predates the change.
+      if (msg.type === "settings") {
+        const claudeSdk = msg.settings.claudeSdk?.enabled;
+        if (
+          claudeSdk !== undefined &&
+          claudeSdk !== serverClaudeSdkRef.current
+        ) {
+          serverClaudeSdkRef.current = claudeSdk;
+          window.dispatchEvent(new Event("credentialProfilesChanged"));
+        }
       }
       if (msg.type === "accountHealthChanged") {
         window.dispatchEvent(new Event("credentialProfilesChanged"));

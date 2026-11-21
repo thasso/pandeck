@@ -5,30 +5,49 @@ the normal app. A fresh install creates no accounts, so its account list is
 empty and nothing can start until the user connects one.
 
 This is step 2 of the onboarding design. A guided setup conversation with the
-Personal Assistant (its own setup prompt, server-side pending/complete markers,
-and model pinning for the assistant) is planned on top of it and does not exist
-yet.
+Personal Assistant (its own setup prompt and model pinning for the assistant) is
+planned on top of it and does not exist yet.
 
-## When it shows
+## The onboarding state
 
-The install is on **first run** while no account is usable. An account is usable
-when it is enabled, signed in (`status: "ready"`) and offers at least one model
-(`hasUsableAccount` in `app/web/src/lib/firstRun.ts`). The client derives this
-from the account projection it already loads (`/api/credential-profiles` with
-models); there is no onboarding endpoint and no stored marker.
+The server owns whether an install is on its first run
+(`app/server/src/onboarding.ts`). `DATA_DIR/onboarding.json` holds
+`{ "state": "pending" }` or `{ "state": "complete" }`, written atomically with
+mode 0600.
 
-- The model check is what makes a signed-in Claude account count only while
-  Settings → Claude SDK is on: with the integration off a Claude account offers
-  no models.
-- Account health is not read, on purpose. An enabled, signed-in account whose
-  login the provider later rejects (`needs-login`) keeps the normal shell and
-  the app status alert (`account-routing.md`); an established install is never
-  taken back to its first screen for it.
-- While the projection is loading or failed, the install is not on first run, so
-  an install with accounts never flashes the welcome screen.
+- **Decided once, at boot.** With no file, boot classifies the install before
+  anything it does can change the answer. It is fresh only when it has no app
+  settings file (`DATA_DIR/settings/app.json`), no session rows, no credential
+  profiles, and is not a gateway client (`ASSISTANT_GATEWAY_RELAY`), whose
+  accounts arrive from the remote gateway after boot. A fresh install is written
+  `pending`, anything else `complete`. Later boots read the file, so an
+  established install never sees first run and is never renamed. An unreadable
+  file reads as `complete`.
+- **`complete` is final.** Nothing moves an install back to `pending`.
+- **The server ends first run.** While `pending`, it checks for a usable account
+  wherever it learns accounts may have changed: an account created, enabled,
+  signed in, an endpoint saved or its models discovered
+  (`subscribeCredentialProfileChanges`), the Claude SDK switch saved, an account
+  listing, and boot. An account is usable when it is enabled, signed in
+  (`status: "ready"`) and offers at least one model. The model check is what
+  makes a Claude account count only while Settings → Claude SDK is on. Checks
+  never overlap, and once `complete` they cost nothing.
+- **Naming.** In the same step, when no Personal Assistant name is saved (none,
+  blank, or the default "Personal Assistant"), the server saves **Larry**. It is
+  a leaf write: the stored name is re-read and the rest of the section taken
+  from the current settings in the same synchronous step as the write, so a
+  value another writer saved is never replaced, and the normal settings effects
+  (rotating the Personal Assistant, announcing the change) run. A saved name is
+  never overwritten. An established install keeps "Personal Assistant".
+- **Account health is not read**, on purpose. An enabled, signed-in account
+  whose login the provider later rejects (`needs-login`) keeps the normal shell
+  and the app status alert (`account-routing.md`).
 
-As soon as the projection shows a usable account, the normal shell returns and
-New Session works as before.
+The `ready` snapshot carries `onboarding`, and the change to `complete` is
+broadcast once as `{ type: "onboarding", state }`. The browser keeps it as live
+state only: it is `null` until `ready` and never restored from the shell cache.
+The welcome screen shows only while it is `pending`. Unknown is never first run,
+and the account projection, cached or live, only fills the card's rows.
 
 ## The welcome screen
 
@@ -71,11 +90,14 @@ until the user renames it in Settings.
 Sign-in uses Settings' own login dialog (`AccountLoginDialog`): Claude's
 authorization link and code paste, or OpenAI's device code for a ChatGPT plan.
 Nothing about the sign-in enters the chat. When the login finishes the dialog
-closes by itself and the account list is re-read; there is no second confirm
-step. A Claude account runs only while Settings → Claude SDK is on, which is off
-by default, so a Claude sign-in finished from the card, or its Continue, turns
-that switch on. Cancelling closes the dialog and leaves the account for the row
-to continue later.
+closes by itself and the account list is re-read, and the server ends first run
+when it sees the account; there is no second confirm step. A Claude account runs
+only while Settings → Claude SDK is on, which is off by default, so a Claude
+sign-in finished from the card, or its Continue, turns that switch on. Once the
+server confirms the switch changed (its `settings` message), the browser reads
+the accounts again as a new request rather than joining one that started before
+it. Continue also re-reads at once, for a switch that was already on. Cancelling
+closes the dialog and leaves the account for the row to continue later.
 
 An endpoint is configured where it always is, in Settings → OpenAI-compatible
 endpoints: the card creates the account and opens that section. Settings' Close
@@ -84,12 +106,8 @@ every layout.
 
 ### The assistant's name
 
-An established install keeps its name: with none saved it stays "Personal
-Assistant" everywhere. First run names the assistant instead. When a page that
-showed first run sees an account become usable and no name is saved (none, or
-the default), it saves **Larry** as the Personal Assistant name through the
-normal settings write (`useFirstRunNaming`). A name the user saved is never
-overwritten.
+The greeting introduces the saved name as plain text, or **Larry** while none is
+saved; the server saves Larry when first run ends (above).
 
 ### The focused shell
 
@@ -108,7 +126,4 @@ screen.
 ## Wire
 
 The `ready` settings projection carries `permanentAssistant`, so the greeting
-names the assistant before Settings has ever been read, and the first-run save
-writes the whole section from the server's values rather than client defaults.
-The client re-reads the account projection when `claudeSdk.enabled` changes,
-because that switch decides whether Claude accounts offer models.
+names the assistant before Settings has ever been read.

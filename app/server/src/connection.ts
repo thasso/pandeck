@@ -96,6 +96,7 @@ import { hub } from "./hub.ts";
 import { sessionListHiddenProbe } from "./permanentAssistantVisibility.ts";
 import { sendAccountLoginAlertsTo } from "./accountHealth.ts";
 import { sendGatewayStatusTo } from "./gatewayStatus.ts";
+import { onboardingState } from "./onboarding.ts";
 import {
   isLiveSession,
   type HarnessDriver,
@@ -662,6 +663,7 @@ export class Connection implements Viewer {
       },
       slashCommands,
       contextInfo: viewing?.contextInfo() ?? null,
+      onboarding: onboardingState(),
     });
     if (initial.unavailable) this.send(initial.unavailable);
     hub.sendReloadStateTo(this);

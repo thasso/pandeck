@@ -1,10 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { CredentialProfileSummary, ModelOption } from "@assistant/shared";
+import type { CredentialProfileSummary } from "@assistant/shared";
 import {
   firstAccountSteps,
   firstRunAssistantName,
-  firstRunNameToSave,
-  hasUsableAccount,
   welcomeGreeting,
 } from "./firstRun.ts";
 
@@ -23,42 +21,6 @@ function account(
     ...patch,
   };
 }
-const model: ModelOption = {
-  provider: "claude-sdk",
-  id: "sonnet",
-  name: "Claude Sonnet",
-  reasoning: true,
-  contextWindow: 200_000,
-};
-
-describe("hasUsableAccount", () => {
-  it("is false for a fresh install with no accounts", () => {
-    expect(hasUsableAccount([], {})).toBe(false);
-  });
-
-  it("needs an enabled, signed-in account that offers a model", () => {
-    const claude = account({ id: "c", provider: "claude" });
-    expect(hasUsableAccount([claude], { c: [model] })).toBe(true);
-    expect(
-      hasUsableAccount([{ ...claude, enabled: false }], { c: [model] }),
-    ).toBe(false);
-    expect(
-      hasUsableAccount([{ ...claude, status: "connecting" }], { c: [model] }),
-    ).toBe(false);
-    // Signed in, but the Claude SDK integration is off: nothing to run.
-    expect(hasUsableAccount([claude], { c: [] })).toBe(false);
-  });
-
-  it("does not take an established install back to first run on a lost login", () => {
-    const openai = account({
-      id: "o",
-      provider: "openai-codex",
-      health: { state: "needs-login", since: 1 },
-    });
-    expect(hasUsableAccount([openai], { o: [model] })).toBe(true);
-  });
-});
-
 describe("firstAccountSteps", () => {
   it("offers to create each kind when nothing exists", () => {
     expect(firstAccountSteps([], {})).toEqual([
@@ -131,12 +93,5 @@ describe("first-run naming", () => {
     expect(firstRunAssistantName("")).toBe("Larry");
     expect(firstRunAssistantName("Personal Assistant")).toBe("Larry");
     expect(firstRunAssistantName(" Ada ")).toBe("Ada");
-  });
-
-  it("saves Larry only over an unsaved name, never over a chosen one", () => {
-    expect(firstRunNameToSave("Personal Assistant")).toBe("Larry");
-    expect(firstRunNameToSave("")).toBe("Larry");
-    expect(firstRunNameToSave("Ada")).toBeNull();
-    expect(firstRunNameToSave("Larry")).toBeNull();
   });
 });

@@ -58,6 +58,7 @@ const windowState: SessionCompactionWindow = {
 function readyMessage() {
   return {
     type: "ready",
+    onboarding: "complete",
     serverBuild: { version: "0.0.0-test" },
     state: {
       sessionId: "s1",
