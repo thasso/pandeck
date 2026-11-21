@@ -2,8 +2,8 @@
  * A test oracle for credential material in an edge answer (Task-1463 A1,
  * fix-1), written apart from `gatewayTools/upstreamText.ts` so a test never
  * checks the production predicate with itself. Every string of the answer,
- * object keys included, at any depth, must hold no full secret form and no
- * 16-character window of one.
+ * object keys included, at any depth, must hold no full secret form, no
+ * 16-character window of one, and no authorization marker (fix-2).
  */
 import assert from "node:assert/strict";
 
@@ -45,8 +45,36 @@ function stringsIn(value: unknown, out: string[] = []): string[] {
   return out;
 }
 
-/** The first secret form or 16-character window of one inside `text`. */
+/** The schemes that mark a credential when whitespace or a control follows. */
+const SCHEMES = ["bearer", "basic"];
+
+/** Whether `char` is whitespace or a C0, DEL or C1 control. */
+function isGap(char: string): boolean {
+  const code = char.codePointAt(0)!;
+  return char.trim() === "" || code < 0x20 || (code >= 0x7f && code <= 0x9f);
+}
+
+/** The first authorization marker in `text`: the header name, or a scheme word before a gap. */
+function markerIn(text: string): string | undefined {
+  const lower = text.toLowerCase();
+  if (lower.includes("authorization")) return "authorization";
+  for (const scheme of SCHEMES)
+    for (
+      let at = lower.indexOf(scheme);
+      at !== -1;
+      at = lower.indexOf(scheme, at + 1)
+    ) {
+      const next = text.charAt(at + scheme.length);
+      if (next !== "" && isGap(next))
+        return text.slice(at, at + scheme.length + 1);
+    }
+  return undefined;
+}
+
+/** The first secret form, 16-character window of one, or marker inside `text`. */
 function leakIn(text: string, forms: readonly string[]): string | undefined {
+  const marker = markerIn(text);
+  if (marker !== undefined) return marker;
   for (const form of forms) {
     if (form.length > 0 && text.includes(form)) return form;
     for (let at = 0; at + WINDOW <= form.length; at += 1) {
@@ -57,7 +85,7 @@ function leakIn(text: string, forms: readonly string[]): string | undefined {
   return undefined;
 }
 
-/** Whether `text` holds a secret form or a 16-character window of one. */
+/** Whether `text` holds a secret form, a 16-character window of one, or a marker. */
 export function carriesMaterial(text: string, credential: Credential): boolean {
   return leakIn(text, oracleForms(credential)) !== undefined;
 }

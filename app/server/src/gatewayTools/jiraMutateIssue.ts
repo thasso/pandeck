@@ -40,7 +40,7 @@ import {
   type ObjectSchema,
 } from "./descriptor.ts";
 import { edgeReadDeps } from "./jiraRead.ts";
-import { holdsSecret, vettedText } from "./upstreamText.ts";
+import { holdsSecret, REDACTED, vettedText } from "./upstreamText.ts";
 import { describeWriteFailure } from "./writeFailure.ts";
 
 /** The call's deadline: the measured 60 s client limit less 15 s. */
@@ -57,6 +57,9 @@ export const PREPARE_TOO_LONG =
 export const STOP_TEXT =
   "Not applied: the call ran out of time before this change; nothing was sent for it.";
 const NOTHING_WRITTEN = " Nothing was written to Jira.";
+/** Above any prepare refusal (D-W2 caps its own texts at 1,000). */
+const PREPARE_REFUSAL_MAX = 1_200;
+const PREPARE_REFUSAL_FALLBACK = `Jira refused the change.${NOTHING_WRITTEN}`;
 const ALL_FAILED_MAX = 2_000;
 const ALL_FAILED_FALLBACK = "Every Jira change failed.";
 
@@ -135,17 +138,10 @@ export interface ProjectedResult {
   items: ProjectedItem[];
 }
 
-/** Lone surrogates as U+FFFD, keeping the length. */
-function wellFormed(text: string): string {
-  return text.replace(
-    /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g,
-    "�",
-  );
-}
-
 /**
- * Caller-visible text: vetted for the secret, controls as spaces, cut to
- * `max`, lone surrogates replaced. Its JSON form is at most 2 × max + 2.
+ * Caller-visible text (`vettedText`): each secret piece as `[redacted]`,
+ * controls as spaces, lone surrogates replaced, cut to `max`, and the result
+ * itself checked. Its JSON form is at most 2 × max + 2.
  */
 function projectText(
   text: string,
@@ -153,7 +149,7 @@ function projectText(
   max: number,
   fallback: string,
 ): string {
-  return wellFormed(vettedText(text, credential, { max, fallback }));
+  return vettedText(text, credential, { max, fallback });
 }
 
 /** An identifier as Jira returned it, kept only whole, vetted and well-formed. */
@@ -209,15 +205,6 @@ function operationOf(item: JiraIssueMutationItemDisplay): Operation {
   return (OPERATIONS as readonly string[]).includes(operation)
     ? (operation as Operation)
     : "edit";
-}
-
-/** A vetted text cut further, never on half a surrogate pair. */
-function shorter(text: string | undefined, max: number): string | undefined {
-  if (text === undefined || text.length <= max) return text;
-  const cut = /[\ud800-\udbff]$/.test(text.slice(0, max - 1))
-    ? max - 2
-    : max - 1;
-  return `${text.slice(0, cut)}…`;
 }
 
 /**
@@ -288,7 +275,12 @@ export function projectMutationResult(
     );
   if (applied.warnings.length > WARNINGS_MAX)
     warnings.push(
-      `${applied.warnings.length - WARNINGS_MAX} more warning(s) omitted.`,
+      projectText(
+        `${applied.warnings.length - WARNINGS_MAX} more warning(s) omitted.`,
+        credential,
+        WARNING_MAX,
+        REDACTED,
+      ),
     );
   const result: ProjectedResult = {
     summary: projectText(
@@ -301,25 +293,64 @@ export function projectMutationResult(
     ...(warnings.length > 0 ? { warnings } : {}),
     items,
   };
-  return shrunk(result, applied.warnings.length, counts, budget);
+  const kept = shrunk(
+    result,
+    applied.warnings.length,
+    projectText(counts, credential, SUMMARY_MAX, REDACTED),
+    credential,
+    budget,
+  );
+  // The answer as it is sent: should joining its strings into JSON make a
+  // secret (fix-2), only the rows' outcomes remain.
+  if (!holdsSecret(JSON.stringify(kept), credential)) return kept;
+  return {
+    summary: REDACTED,
+    items: kept.items.map(({ operation, ok }) => ({
+      operation,
+      issueKey: null,
+      ok,
+    })),
+  };
 }
 
-/** The guard: each step only when the result is still over the budget. */
+/**
+ * The guard: each step only when the result is still over the budget. A text
+ * it cuts further is vetted again (`projectText`), so a cut never splits a
+ * placeholder or makes a secret.
+ */
 function shrunk(
   result: ProjectedResult,
   warningCount: number,
   counts: string,
+  credential: AtlassianCredential,
   budget: number,
 ): ProjectedResult {
   const over = (): boolean => JSON.stringify(result).length > budget;
   if (over() && result.warnings)
-    result.warnings = [`${warningCount} warning(s) omitted.`];
+    result.warnings = [
+      projectText(
+        `${warningCount} warning(s) omitted.`,
+        credential,
+        WARNING_MAX,
+        REDACTED,
+      ),
+    ];
   if (over())
     for (const item of result.items) {
-      const warning = shorter(item.warning, SHRUNK_TEXT_MAX);
-      const error = shorter(item.error, SHRUNK_TEXT_MAX);
-      if (warning !== undefined) item.warning = warning;
-      if (error !== undefined) item.error = error;
+      if (item.warning !== undefined)
+        item.warning = projectText(
+          item.warning,
+          credential,
+          SHRUNK_TEXT_MAX,
+          WARNING_WITHHELD,
+        );
+      if (item.error !== undefined)
+        item.error = projectText(
+          item.error,
+          credential,
+          SHRUNK_TEXT_MAX,
+          ITEM_ERROR_FALLBACK,
+        );
     }
   if (over()) result.summary = counts;
   if (over()) {
@@ -405,10 +436,14 @@ export const jiraMutateIssue: AtlassianToolDescriptor = {
       // By the prepare phase's own signals, the caller's first.
       if (ctx.signal.aborted) throw err;
       if (budget.signal.aborted) throw new ToolError(PREPARE_TOO_LONG);
+      // The joined text is what leaves, so it is what is vetted (fix-2).
       throw new ToolError(
-        wellFormed(
+        projectText(
           describeWriteFailure(err, credential, [prepareSignal]) +
             NOTHING_WRITTEN,
+          credential,
+          PREPARE_REFUSAL_MAX,
+          PREPARE_REFUSAL_FALLBACK,
         ),
       );
     } finally {

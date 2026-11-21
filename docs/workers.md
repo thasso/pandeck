@@ -2699,16 +2699,20 @@ plus `jira_search_issues` and `jira_lookup` (Task-1439), four Slack read tools:
   whole form of the call's secret. The write tool also treats any 16-character
   piece of a secret form, anywhere inside a string, as secret: in a text each
   marker, form or piece reads `[redacted]` so the agent sees that something was
-  removed, and a key or link holding one is dropped. No string of its answer
-  carries one (`upstreamText.ts`). `gateway/` holds no tool code or package: it
-  takes the tools as `EdgeTools` (`gateway/edgeTools.ts`, types only) through
-  `startGateway`'s `tools`, and the vault process never loads them. Without them
-  `/mcp` is an unknown path and the integration methods answer
-  `tools_unavailable`; the packaged entry wires none yet (D1). The closed schema
-  covers strings (`maxLength`, `pattern`, `enum`), booleans, integers with a
-  range, finite numbers, arrays of strings (with an item `enum`), closed nested
-  objects (`additionalProperties: false`) and arrays of them, `minItems` and
-  `maxItems` on arrays, a string or `null` (exactly
+  removed, and a key or link holding one is dropped. A cut never splits a
+  placeholder: a text cut through one, or past one, ends `[redacted]…`. The
+  string as it leaves, cut and with its ellipsis, raw and JSON-escaped, is
+  checked again; one that still carries material becomes a fixed text, and a
+  serialized answer that does keeps only each row's operation and outcome. No
+  string of its answer carries one (`upstreamText.ts`). `gateway/` holds no tool
+  code or package: it takes the tools as `EdgeTools` (`gateway/edgeTools.ts`,
+  types only) through `startGateway`'s `tools`, and the vault process never
+  loads them. Without them `/mcp` is an unknown path and the integration methods
+  answer `tools_unavailable`; the packaged entry wires none yet (D1). The closed
+  schema covers strings (`maxLength`, `pattern`, `enum`), booleans, integers
+  with a range, finite numbers, arrays of strings (with an item `enum`), closed
+  nested objects (`additionalProperties: false`) and arrays of them, `minItems`
+  and `maxItems` on arrays, a string or `null` (exactly
   `anyOf: [{type: "string"}, {type: "null"}]`), and an opaque `{type: "object"}`
   passed to the tool as given and never descended into (Task-1463). `default`
   applies only at the root. Its types (`descriptor.ts`) keep these branches

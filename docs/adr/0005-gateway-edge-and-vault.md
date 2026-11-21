@@ -151,7 +151,8 @@ on the edge"):
     answer carries credential material: an authorization marker, any form of the
     call's token, or any 16-character piece of one, checked on each raw value
     and every percent-decoding of a link. In a text each such span reads
-    `[redacted]`; a key or link holding one is dropped.
+    `[redacted]`, which a cut never splits; a key or link holding one is
+    dropped. Each string is checked again as it leaves, after its cut.
 - The edge's one write tool, `jira_mutate_issue` (Task-1463), writes in the call
   itself: the client asks the user to approve the call, and the edge applies the
   changes at once. It runs on its own 45 s deadline, inside the client's

@@ -78,11 +78,13 @@ async function projected(
 }
 
 function assertKept(
-  { result }: { result: ProjectedResult },
+  { result, text }: { result: ProjectedResult; text: string },
   url: string,
 ): void {
   assert.equal(result.url, url);
   assert.equal(result.items[0]!.url, url);
+  // A kept link, like every other string, carries no material (fix-2).
+  assertNoCredential(text, URI_TOKEN);
 }
 
 function assertOmitted(

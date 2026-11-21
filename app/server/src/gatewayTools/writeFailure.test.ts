@@ -67,6 +67,7 @@ function describe(err: unknown, credential = CREDENTIAL): string {
   const text = describeWriteFailure(err, credential);
   for (const forbidden of FORBIDDEN)
     assert.ok(!text.includes(forbidden), `${text} holds ${forbidden}`);
+  assertNoCredential(text, credential);
   return text;
 }
 
@@ -203,6 +204,7 @@ async function applyOne(item: JiraIssueMutationItemDisplay): Promise<string> {
   const error = item.error ?? "";
   for (const forbidden of FORBIDDEN)
     assert.ok(!error.includes(forbidden), `${error} holds ${forbidden}`);
+  assertNoCredential(error, CREDENTIAL);
   return error;
 }
 

@@ -8,6 +8,7 @@ import { test } from "vitest";
 import { FAKE_ACCESS } from "../test/atlassianFake.ts";
 import type { AtlassianCredential } from "./descriptor.ts";
 import {
+  REDACTED,
   cappedText,
   hasAuthMarker,
   holdsSecret,
@@ -97,4 +98,76 @@ test("D4's helpers: the auth marker alone, and the capped text without any secre
   assert.equal(hasAuthMarker("TOKEN-SENTINEL-0123"), false);
   assert.equal(cappedText("TOKEN-SENTINEL-0\u0000", 40), "TOKEN-SENTINEL-0 ");
   assert.equal(cappedText("x".repeat(50), 10), `${"x".repeat(9)}…`);
+});
+
+// --- fix-2 F001: the cut text is what is vetted, and it never hides a redaction ---
+
+const DIGITS: AtlassianCredential = {
+  site: "acme.atlassian.net",
+  email: "me@x.test",
+  token: "0123456789ABCDEFGHIJ",
+};
+
+test("F001-b: a cut that would split the placeholder keeps it whole and visible (the reviewer's [red… case)", () => {
+  const out = vettedText("x".repeat(495) + DIGITS.token, DIGITS, {
+    max: 500,
+    fallback: "F",
+  });
+  assert.equal(out, `${"x".repeat(489)}${REDACTED}…`);
+  assert.equal(out.length, 500);
+});
+
+test("F001-b: a cut that would drop the placeholder with the tail still ends [redacted]…", () => {
+  const out = vettedText(`${"x".repeat(499)}${DIGITS.token} tail`, DIGITS, {
+    max: 500,
+    fallback: "F",
+  });
+  assert.equal(out, `${"x".repeat(489)}${REDACTED}…`);
+  // A placeholder the shorter head would split is cut before, and shown once.
+  const near = vettedText(
+    `${"x".repeat(485)}${DIGITS.token}${"y".repeat(20)}${DIGITS.token}`,
+    DIGITS,
+    { max: 500, fallback: "F" },
+  );
+  assert.equal(near, `${"x".repeat(485)}${REDACTED}…`);
+  // A tail without a placeholder is cut as before.
+  assert.equal(
+    vettedText("x".repeat(600), DIGITS, { max: 500, fallback: "F" }),
+    `${"x".repeat(499)}…`,
+  );
+});
+
+test("F001-a: an ellipsis or cut that completes a non-ASCII or non-BMP token gives the fallback", () => {
+  const ellipsis = { ...DIGITS, token: "secret…" };
+  const max = { max: 40, fallback: "FALLBACK" };
+  // Cut after "secret": the ellipsis completes the token.
+  assert.equal(
+    vettedText(`${"x".repeat(33)}secret${"Z".repeat(10)}`, ellipsis, max),
+    "FALLBACK",
+  );
+  // The cut drops half a pair, and the ellipsis follows "secret".
+  assert.equal(
+    vettedText(`${"x".repeat(32)}secret😀${"Z".repeat(10)}`, ellipsis, max),
+    "FALLBACK",
+  );
+  // A non-BMP token the cut completes after a whole pair.
+  const astral = { ...DIGITS, token: "secret😀…" };
+  assert.equal(
+    vettedText(`${"x".repeat(31)}secret😀${"Z".repeat(10)}`, astral, max),
+    "FALLBACK",
+  );
+  // A fallback that holds the secret itself gives the placeholder alone.
+  assert.equal(
+    vettedText(`${"x".repeat(33)}secret${"Z".repeat(10)}`, ellipsis, {
+      max: 40,
+      fallback: "a secret… here",
+    }),
+    REDACTED,
+  );
+});
+
+test("F001-a: a text whose JSON escaping spells the token gives the fallback", () => {
+  // Shorter than a 16-character piece, so only the escaping spells it.
+  const escaped = { ...DIGITS, token: 'q\\"FAKE-JSON' };
+  assert.equal(vettedText('a q"FAKE-JSON b', escaped, options), "FALLBACK");
 });

@@ -104,7 +104,42 @@ function oauthCredential(accessToken: string): string {
   });
 }
 
-const host = () => createToolHost(EDGE_TOOLS, { log: () => {} });
+/**
+ * The tool host with the credential oracle on every answer (fix-2): each
+ * call's text or message is checked against the credential the call read,
+ * or `FAKE` when it read none.
+ */
+const host = () => {
+  const real = createToolHost(EDGE_TOOLS, { log: () => {} });
+  return {
+    async call(name: string, args: unknown, outer: ToolCaller) {
+      let read: string | undefined;
+      const answer = await real.call(name, args, {
+        ...outer,
+        credential: async (integration, signal) => {
+          const outcome = await outer.credential(integration, signal);
+          if (outcome.ok) read = outcome.credential;
+          return outcome;
+        },
+      });
+      assertNoCredential(
+        answer.ok ? answer.text : answer.message,
+        read === undefined ? FAKE : (JSON.parse(read) as object),
+      );
+      return answer;
+    },
+  };
+};
+
+/** `projectMutationResult` with the credential oracle on its result (fix-2). */
+function project(
+  ...args: Parameters<typeof projectMutationResult>
+): ProjectedResult {
+  const result = projectMutationResult(...args);
+  assertNoCredential(result, args[1]);
+  assertNoCredential(JSON.stringify(result), args[1]);
+  return result;
+}
 
 function mutate(items: unknown[], options: Parameters<typeof caller>[0] = {}) {
   return host().call("jira_mutate_issue", { items }, caller(options));
@@ -601,7 +636,7 @@ test("AC7 (a): a maximal result stays under the budget without shrinking, and ro
       warning: hostile(400),
     }),
   );
-  const result = projectMutationResult(
+  const result = project(
     {
       items,
       warnings: Array.from({ length: 25 }, () => hostile(300)),
@@ -632,7 +667,7 @@ test("AC7 (a): a maximal result stays under the budget without shrinking, and ro
 
 test("AC7 (b): invalid keys project as null; links off the site, too long or with unsafe characters are omitted", () => {
   const keys = [`${"A".repeat(60)}-12345`, "star-1", 'STAR-1"', "STAR-01", ""];
-  const result = projectMutationResult(
+  const result = project(
     {
       items: [
         ...keys.map((key) =>
@@ -692,7 +727,7 @@ test("AC7 (c): the shrink guard steps in order and keeps every row's outcome", (
     resultUrl: `https://${FAKE.site}/browse/STAR-1`,
   };
   const size = (result: ProjectedResult) => JSON.stringify(result).length;
-  const full = projectMutationResult(applied, FAKE);
+  const full = project(applied, FAKE);
   const outcomes = (result: ProjectedResult) =>
     result.items.map((row) => [
       row.operation,
@@ -701,25 +736,25 @@ test("AC7 (c): the shrink guard steps in order and keeps every row's outcome", (
       row.createdKey,
     ]);
 
-  const step1 = projectMutationResult(applied, FAKE, size(full) - 1);
+  const step1 = project(applied, FAKE, size(full) - 1);
   assert.deepEqual(step1.warnings, ["2 warning(s) omitted."]);
   assert.equal(step1.items[0]!.error!.length, 700);
   assert.equal(step1.summary.length, 3_000);
 
-  const step2 = projectMutationResult(applied, FAKE, size(step1) - 1);
+  const step2 = project(applied, FAKE, size(step1) - 1);
   assert.equal(step2.items[0]!.error!.length, 200);
   assert.equal(step2.items[0]!.warning!.length, 200);
   assert.equal(step2.summary.length, 3_000);
 
-  const step3 = projectMutationResult(applied, FAKE, size(step2) - 1);
+  const step3 = project(applied, FAKE, size(step2) - 1);
   assert.equal(step3.summary, "Applied 1 change(s); 2 failed.");
   assert.ok(step3.items.every((row) => row.url !== undefined));
 
-  const step4 = projectMutationResult(applied, FAKE, size(step3) - 1);
+  const step4 = project(applied, FAKE, size(step3) - 1);
   assert.equal(step4.url, undefined);
   assert.ok(step4.items.every((row) => row.url === undefined));
 
-  const floor = projectMutationResult(applied, FAKE, 1);
+  const floor = project(applied, FAKE, 1);
   assert.deepEqual(floor, step4);
   for (const shrunk of [step1, step2, step3, step4])
     assert.deepEqual(outcomes(shrunk), outcomes(full));
@@ -921,7 +956,11 @@ function mcpCall(options: { deadlineMs: number; lifecycleMs?: number }) {
         }),
     },
   );
-  return res.done;
+  // The oracle on the whole /mcp response body (fix-2).
+  return res.done.then((answer) => {
+    assertNoCredential(answer.body, FAKE);
+    return answer;
+  });
 }
 
 test("AC12: /mcp lets a write run past the host deadline plus margin; an explicit lifecycle bound still ends it", async () => {
@@ -1041,4 +1080,83 @@ test("F001: a prepare refusal naming a Jira transition that holds a piece of the
   assert.ok(answer.message.endsWith(" Nothing was written to Jira."));
   assert.equal(writesIn(seen).length, 0);
   assertNoCredential(answer.message, SLICED);
+});
+
+// --- fix-2 F001: the string that leaves is the string that is vetted ---
+
+test("F001-a: a summary whose cap would end in the whole non-ASCII token falls back to the counts (the reviewer's probe)", async () => {
+  const credential = { ...FAKE, token: "secret…" };
+  const prefix = "Applied 1 change(s) (created ";
+  const createdKey =
+    "K".repeat(3999 - prefix.length - 6) + "secret" + "Z".repeat(10);
+  stubJiraFetch((request) => fakeJiraAnswer(request, { createdKey }));
+  const answer = await mutate([OPERATIONS[3]![1]], {
+    credential: encodeAtlassianCredential(credential),
+  });
+  assert.ok(answer.ok, JSON.stringify(answer));
+  assert.deepEqual(JSON.parse(answer.text), {
+    summary: "Applied 1 change(s); 0 failed.",
+    items: [{ operation: "create", issueKey: null, ok: true }],
+  });
+  assertNoCredential(answer.text, credential);
+});
+
+test("F001-a: a prepare refusal and its ' Nothing was written' joined into a secret show it as [redacted]", async () => {
+  const credential = { ...FAKE, token: "QJOIN Nothing was" };
+  stubJiraFetch((request) =>
+    request.method === "GET" && request.path.endsWith("/transitions")
+      ? json({
+          transitions: [{ id: "41", name: "Move", to: { name: "QJOIN" } }],
+        })
+      : fakeJiraAnswer(request),
+  );
+  const answer = await mutate([{ issue: "STAR-1", transitionName: "Nope" }], {
+    credential: encodeAtlassianCredential(credential),
+  });
+  assert.deepEqual(answer, {
+    ok: false,
+    code: "tool_error",
+    message: `Requested transition is not available for STAR-1. Available transitions: 41:Move -> ${REDACTED} written to Jira.`,
+  });
+});
+
+test("F001-a/b: a shrink step's cut is vetted again: no secret made by its ellipsis, no placeholder split", () => {
+  const credential = { ...FAKE, token: "secret…" };
+  const applied = {
+    items: [
+      item({ error: "e".repeat(193) + "secret" + "Z".repeat(10) }),
+      item({
+        clientId: "item-2",
+        error: `${"f".repeat(195)}${credential.token} tail`,
+      }),
+    ],
+    warnings: ["first warning"],
+    succeeded: 0,
+    resultSummary: "s".repeat(3_000),
+  };
+  const size = (result: ProjectedResult) => JSON.stringify(result).length;
+  const full = project(applied, credential);
+  assert.equal(full.items[1]!.error, `${"f".repeat(195)}${REDACTED} tail`);
+  const step1 = project(applied, credential, size(full) - 1);
+  const step2 = project(applied, credential, size(step1) - 1);
+  assert.equal(step2.items[0]!.error, "The change failed.");
+  assert.equal(step2.items[1]!.error, `${"f".repeat(189)}${REDACTED}…`);
+});
+
+test("F001-a: strings that JSON joins into a secret leave only the rows' outcomes", () => {
+  const credential = { ...FAKE, token: 'END","warnings":["START' };
+  const result = project(
+    {
+      items: [item()],
+      warnings: ["START"],
+      succeeded: 1,
+      resultSummary: "END",
+      resultUrl: `https://${FAKE.site}/browse/STAR-1`,
+    },
+    credential,
+  );
+  assert.deepEqual(result, {
+    summary: REDACTED,
+    items: [{ operation: "edit", issueKey: null, ok: true }],
+  });
 });

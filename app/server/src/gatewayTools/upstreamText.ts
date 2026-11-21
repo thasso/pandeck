@@ -124,18 +124,69 @@ export function cappedText(text: string, max: number): string {
   return `${clean.slice(0, cut)}…`;
 }
 
+/** Lone surrogates as U+FFFD, keeping the length. */
+function wellFormed(text: string): string {
+  return text.replace(
+    /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g,
+    "\ufffd",
+  );
+}
+
+/** `text` cut at `at` or just before, never on half a surrogate pair. */
+function headOf(text: string, at: number): string {
+  return text.slice(
+    0,
+    /[\ud800-\udbff]$/.test(text.slice(0, at)) ? at - 1 : at,
+  );
+}
+
 /**
- * `text` for a caller of the write tool: controls as spaces, each span that
- * carries credential material as `REDACTED` (never silently removed), then
- * `cappedText`. Should the result still carry material (a placeholder joining
- * pieces into a new one), the fallback instead.
+ * `text` (already redacted) cut to `max` characters with an ellipsis, never
+ * through a `REDACTED` placeholder (Task-1463 fix-2). When the cut would split
+ * a placeholder or drop one with the tail, the text is cut earlier and ends
+ * `[redacted]…`, so a redaction never disappears from view.
+ */
+function cappedRedacted(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const at = max - 1;
+  // A placeholder the cut splits, or any in the tail it drops.
+  const split = text.lastIndexOf(REDACTED, at - 1);
+  const splits = split !== -1 && split + REDACTED.length > at;
+  if (!splits && !text.includes(REDACTED, at)) return `${headOf(text, at)}…`;
+  let head = headOf(text, Math.max(0, at - REDACTED.length));
+  // A placeholder the shorter head would split: cut before it.
+  const inside = text.lastIndexOf(REDACTED, head.length - 1);
+  if (inside !== -1 && inside + REDACTED.length > head.length)
+    head = head.slice(0, inside);
+  return `${head}${REDACTED}…`;
+}
+
+/** Whether a text, as given or as a JSON string, carries credential material. */
+function leaks(text: string, credential: AtlassianCredential): boolean {
+  return (
+    holdsSecret(text, credential) ||
+    holdsSecret(JSON.stringify(text), credential)
+  );
+}
+
+/**
+ * `text` for a caller of the write tool, in this order: controls as spaces;
+ * each span that carries credential material as `REDACTED`, never silently
+ * removed; lone surrogates as U+FFFD; cut to `max` (`cappedRedacted`). The
+ * string that results is what is checked (fix-2): should it still carry
+ * material, raw or JSON-escaped (a cut, an ellipsis or a placeholder joining
+ * characters into a secret), the fallback, and should that carry it too,
+ * `REDACTED` alone.
  */
 export function vettedText(
   text: string,
   credential: AtlassianCredential,
   options: { max: number; fallback: string },
 ): string {
-  const shown = redacted(withoutControls(text), credential);
-  if (holdsSecret(shown, credential)) return options.fallback;
-  return cappedText(shown, options.max);
+  const shown = cappedRedacted(
+    wellFormed(redacted(withoutControls(text), credential)),
+    options.max,
+  );
+  if (!leaks(shown, credential)) return shown;
+  return leaks(options.fallback, credential) ? REDACTED : options.fallback;
 }
