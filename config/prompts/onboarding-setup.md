@@ -17,7 +17,18 @@ Then go through these steps, one question at a time, and let the user skip any:
 2. **Models.** Show what `models_read` lists per account and ask which models
    the model picker should show. Hide or show them through `settings_update`
    (`models.hidden`) only after the user agrees, keeping your own model shown.
+3. **Git.** Check it with `git_setup_read`.
+4. **GitHub.** Ask whether to connect GitHub; if not, leave it off. If so, ask
+   for their GitHub username, share the link and scopes from
+   `github_pat_setup_link`, then ask for the token with `settings_request_input`
+   (`github.token`). Once it is saved, turn `github.enabled` on and test
+   `github` in one `settings_update`. Save the username as `github.defaultOwner`
+   only when the tested login matches it or the user confirms which is right.
+5. **Folders.** Show the Projects folder (`projectsRoot`) and, if Git is
+   installed, the worktree folder (`worktrees.root`) as `settings_read` returns
+   them. Ask about each separately; change one only to an absolute path the user
+   confirms.
 
-The settings and account tools load on demand: search for "settings" to load
-them. Once the steps are done, or the user says they are done or want to skip
-the rest, offer to finish, and call `onboarding_finish` when they agree.
+The tools named here load on demand: load them by name. Once the steps are done,
+or the user says they are done or want to skip the rest, offer to finish, and
+call `onboarding_finish` when they agree.

@@ -88,6 +88,36 @@ export type SettingValueSpec =
 
 export type SettingAccess = "value" | "readonly" | "secret" | "oauth";
 
+/**
+ * The classic GitHub token scopes Pandeck's GitHub features use, each with what
+ * it is for (`docs/github.md`). One list for the setup tool, the token card and
+ * the Settings page, so they never name different scopes.
+ */
+export const GITHUB_CLASSIC_PAT_SCOPES = [
+  {
+    scope: "repo",
+    purpose:
+      "repositories, issues, pull requests, code search and CI, private ones included; broad read and write access",
+  },
+  {
+    scope: "workflow",
+    purpose:
+      "merging a pull request that changes .github/workflows; not needed to read or re-run Actions",
+  },
+  {
+    scope: "read:packages",
+    purpose: "pulling private container images and packages from GitHub",
+  },
+  { scope: "notifications", purpose: "reading your GitHub notifications" },
+] as const;
+
+/**
+ * GitHub's new classic token form with those scopes preselected. A classic
+ * token belongs to whichever account is signed in to GitHub in the browser:
+ * the form takes no account, and the URL carries no token or username.
+ */
+export const GITHUB_CLASSIC_PAT_URL = `https://github.com/settings/tokens/new?description=Pandeck&scopes=${encodeURIComponent(GITHUB_CLASSIC_PAT_SCOPES.map((s) => s.scope).join(","))}`;
+
 export interface SettingDescriptor {
   path: string;
   section: SettingsSectionId;
@@ -106,6 +136,11 @@ export interface SettingDescriptor {
   clearWith?: string;
   /** `oauth`: the server route that starts the browser flow. */
   connectPath?: string;
+  /**
+   * `secret`: where the user creates the credential. The card asking for it
+   * shows this trusted link above its private field, whatever the agent wrote.
+   */
+  setupLink?: { url: string; label: string; hint: string };
   /** Refused by agent settings tools; the Settings UI may write it. Not a shell boundary. */
   uiOnly?: boolean;
   /** Units, or what an empty value means. */
@@ -181,6 +216,7 @@ function secret(
   label: string,
   configuredBy: string,
   clearWith: string,
+  setupLink?: SettingDescriptor["setupLink"],
 ): SettingDescriptor {
   return {
     path,
@@ -190,6 +226,7 @@ function secret(
     value: STRING,
     configuredBy,
     clearWith,
+    ...(setupLink ? { setupLink } : {}),
   };
 }
 
@@ -748,6 +785,11 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
     "Personal access token",
     "github.tokenConfigured",
     "clearToken",
+    {
+      url: GITHUB_CLASSIC_PAT_URL,
+      label: "Create a GitHub classic token",
+      hint: "GitHub opens with the access Pandeck uses already checked. Make sure it shows the account you mean, set an expiration, then paste the new token below.",
+    },
   ),
   setting("github.defaultOwner", "github", "Default owner", STRING),
   setting(

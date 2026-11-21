@@ -361,6 +361,27 @@ describe("first-run guided setup", () => {
     );
   });
 
+  test("walks through Git, GitHub and the folders with deferred tools", () => {
+    const setup = computePromptConditions("personal-assistant", {
+      guidedSetup: true,
+    });
+    const prompt = paPrompt(setup);
+    const developer = ["git_setup_read", "github_pat_setup_link"];
+    for (const name of developer) {
+      assert.match(prompt, new RegExp(`\`${name}\``));
+      assert.ok(
+        AGENT_TYPES["personal-assistant"]
+          .tools()
+          .some((tool) => tool.name === name),
+      );
+      assert.ok(!eagerToolNamesFor("personal-assistant", setup).has(name));
+    }
+    assert.match(prompt, /settings_request_input`\s+\(`github\.token`\)/);
+    assert.match(prompt, /`projectsRoot`[\s\S]*`worktrees\.root`/);
+    for (const name of developer)
+      assert.doesNotMatch(paPrompt(), new RegExp(name));
+  });
+
   test("the finish tool is eager only in the setup session", () => {
     const setup = computePromptConditions("personal-assistant", {
       guidedSetup: true,

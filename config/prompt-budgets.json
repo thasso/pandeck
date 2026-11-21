@@ -41,14 +41,14 @@
     },
     "personal-assistant": {
       "pi": {
-        "prompt": 7050,
+        "prompt": 7700,
         "eagerTools": 19400,
-        "firstRequest": 25950
+        "firstRequest": 26600
       },
       "claude": {
-        "prompt": 7050,
+        "prompt": 7700,
         "eagerTools": 11500,
-        "firstRequest": 17750
+        "firstRequest": 18400
       }
     },
     "workshop": {
@@ -624,6 +624,38 @@
       "task": "onboarding-3a",
       "date": "2026-11-21",
       "why": "carries the guided-setup section above (onboarding-setup.md) plus the setup session's eager onboarding_finish tool"
+    },
+    {
+      "budget": "personal-assistant.pi.prompt",
+      "from": 7050,
+      "to": 7700,
+      "task": "onboarding-3b",
+      "date": "2026-11-21",
+      "why": "guided setup gains its developer steps (onboarding step 3b, ~720 chars in onboarding-setup.md): check Git with git_setup_read, connect GitHub through the username, github_pat_setup_link and the private github.token card, then enable, test and save the default owner only from a confirmed login, and show the Projects and worktree folders before changing either; only the one setup session per install carries it, and the budget bounds the worst case"
+    },
+    {
+      "budget": "personal-assistant.pi.firstRequest",
+      "from": 25950,
+      "to": 26600,
+      "task": "onboarding-3b",
+      "date": "2026-11-21",
+      "why": "carries the guided-setup prompt raise above"
+    },
+    {
+      "budget": "personal-assistant.claude.prompt",
+      "from": 7050,
+      "to": 7700,
+      "task": "onboarding-3b",
+      "date": "2026-11-21",
+      "why": "guided setup gains its developer steps (onboarding step 3b, ~720 chars in onboarding-setup.md): check Git with git_setup_read, connect GitHub through the username, github_pat_setup_link and the private github.token card, then enable, test and save the default owner only from a confirmed login, and show the Projects and worktree folders before changing either; only the one setup session per install carries it, and the budget bounds the worst case"
+    },
+    {
+      "budget": "personal-assistant.claude.firstRequest",
+      "from": 17750,
+      "to": 18400,
+      "task": "onboarding-3b",
+      "date": "2026-11-21",
+      "why": "carries the guided-setup prompt raise above"
     }
   ]
 }

@@ -6,6 +6,10 @@ import type {
   ApprovalCard as ApprovalCardData,
   SettingsInputApprovalBody,
 } from "@assistant/shared";
+import {
+  GITHUB_CLASSIC_PAT_URL,
+  SETTINGS_REGISTRY,
+} from "@assistant/shared/settingsRegistry";
 import { ApprovalCard } from "./ApprovalCard.tsx";
 
 const accountsApi = vi.hoisted(() => ({
@@ -133,6 +137,45 @@ test("a secret is sent only with the decision and leaves the field", () => {
   expect(input.value).toBe("");
 });
 
+/** The trusted token link a card shows above its private field, if any. */
+function setupLink(): HTMLAnchorElement | null {
+  return container!.querySelector<HTMLAnchorElement>(
+    'a[href^="https://github.com/settings/tokens/new"]',
+  );
+}
+
+test("the GitHub token card links to the token form whatever the reason says", () => {
+  render(<ApprovalCard approval={card({})} onResolve={vi.fn()} />);
+  const link = setupLink();
+  expect(link?.href).toBe(GITHUB_CLASSIC_PAT_URL);
+  expect(link?.textContent).toContain("Create a GitHub classic token");
+  expect(link?.target).toBe("_blank");
+  expect(link?.rel).toContain("noopener");
+  // Above the private field.
+  const input = container!.querySelector('input[type="password"]')!;
+  expect(
+    link!.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+});
+
+test("only the GitHub token carries a setup link", () => {
+  expect(
+    SETTINGS_REGISTRY.filter((d) => d.setupLink).map((d) => d.path),
+  ).toEqual(["github.token"]);
+  render(
+    <ApprovalCard
+      approval={card({
+        path: "forgejo.token",
+        label: "Access token",
+        section: "forgejo",
+      })}
+      onResolve={vi.fn()}
+    />,
+  );
+  expect(container!.querySelector('input[type="password"]')).not.toBeNull();
+  expect(container!.querySelector("a")).toBeNull();
+});
+
 test("Save waits for a value", () => {
   const onResolve = vi.fn();
   render(<ApprovalCard approval={card({})} onResolve={onResolve} />);
@@ -236,6 +279,7 @@ test("a resolved card shows its outcome and no controls", () => {
   );
   expect(container!.textContent).toContain("Personal access token saved.");
   expect(container!.querySelector("input")).toBeNull();
+  expect(setupLink()).toBeNull();
   expect(buttonLabels()).toEqual([]);
 });
 

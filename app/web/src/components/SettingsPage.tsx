@@ -110,7 +110,10 @@ import { isValidTimezone } from "../lib/timezone.ts";
 import type { BuildInfo } from "@assistant/shared/buildInfo";
 import { serverHttpOrigin } from "../lib/serverOrigin.ts";
 import { startGoogleOAuth } from "../lib/googleOAuth.ts";
-import { settingBounds } from "@assistant/shared/settingsRegistry";
+import {
+  GITHUB_CLASSIC_PAT_URL,
+  settingBounds,
+} from "@assistant/shared/settingsRegistry";
 import { RegistrySettingFields } from "./RegistrySettingFields.tsx";
 import { VoiceSettings } from "./VoiceSettings.tsx";
 import {
@@ -3687,17 +3690,15 @@ function GithubSection({
       <p className="mt-1 text-sm text-muted-foreground">
         The GitHub agent tools read from GitHub using a{" "}
         <a
-          href="https://github.com/settings/tokens"
+          href={GITHUB_CLASSIC_PAT_URL}
           target="_blank"
           rel="noreferrer"
           className="underline"
         >
           classic personal access token
         </a>{" "}
-        (scopes <span className="font-mono">repo</span>,{" "}
-        <span className="font-mono">read:org</span>,{" "}
-        <span className="font-mono">notifications</span>). They enumerate and
-        search accessible repositories (including private org repositories),
+        (the link opens GitHub with the access it needs checked). They enumerate
+        and search accessible repositories (including private org repositories),
         search and read code, read issues and pull requests, list notifications,
         and summarize org activity. For a SAML-SSO org, authorize the token for
         that org (Configure SSO) or org calls fail. The token is stored
