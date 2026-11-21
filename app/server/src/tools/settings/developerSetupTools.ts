@@ -8,11 +8,15 @@ import {
   GITHUB_CLASSIC_PAT_SCOPES,
   GITHUB_CLASSIC_PAT_URL,
 } from "@assistant/shared/settingsRegistry";
+import { checkoutFilesOn } from "../../checkoutFileAccess.ts";
 import { CWD } from "../../config.ts";
 import { errorText } from "../../errors.ts";
 import { checkoutGitOn, GitCommandError } from "../../gitExec.ts";
 import { defineAgentTool, jsonResult } from "../../mcp/tool.ts";
-import { sessionCheckoutSide } from "../../workers/placement.ts";
+import {
+  sessionCheckoutSide,
+  type CheckoutSide,
+} from "../../workers/placement.ts";
 
 const MAX_VERSION_CHARS = 80;
 const MAX_IDENTITY_CHARS = 160;
@@ -21,6 +25,21 @@ function checkFailed(err: unknown): Error {
   return new Error(
     `Could not check Git (${errorText(err)}). Do not assume it is installed or configured.`,
   );
+}
+
+/**
+ * Whether `cwd` is a directory on `side`. A spawn's ENOENT means "no git" only
+ * then: Node reports a missing working directory with the same error.
+ */
+async function isDirectoryOn(side: CheckoutSide, cwd: string) {
+  try {
+    const entry = await checkoutFilesOn(side).inspect(cwd, cwd, {
+      follow: true,
+    });
+    return entry.kind === "directory";
+  } catch {
+    return false;
+  }
 }
 
 /** One global identity field: absent when unset (git exits 1), else its value. */
@@ -42,9 +61,8 @@ const gitSetupReadTool = defineAgentTool<Record<string, unknown>>({
     "Check whether Git is installed where your repositories and worktrees run, its version, and whether the global author name and email (user.name, user.email) are set. Read-only: call it before saying anything about Git, report what it returns, and never change the host's Git config yourself.",
   parameters: { type: "object", additionalProperties: false, properties: {} },
   async execute(_params, ctx) {
-    const { gitReadOnlyOptionalExit } = checkoutGitOn(
-      sessionCheckoutSide(ctx.session.sessionId),
-    );
+    const side = sessionCheckoutSide(ctx.session.sessionId);
+    const { gitReadOnlyOptionalExit } = checkoutGitOn(side);
     const cwd = ctx.session.cwd ?? CWD;
     const read = (args: string[]) =>
       gitReadOnlyOptionalExit(args, cwd, ctx.signal);
@@ -56,11 +74,16 @@ const gitSetupReadTool = defineAgentTool<Record<string, unknown>>({
         err instanceof GitCommandError &&
         err.failureKind === "execution" &&
         /\bENOENT\b/.test(err.message)
-      )
+      ) {
+        if (!(await isDirectoryOn(side, cwd)))
+          throw checkFailed(
+            `its working directory ${cwd} is missing or unreadable`,
+          );
         return jsonResult({
           git: "not_installed",
           note: "No git on the PATH there. Worktrees and commits need it.",
         });
+      }
       throw checkFailed(err);
     }
     if (version.code !== 0)

@@ -102,7 +102,7 @@ export const GITHUB_CLASSIC_PAT_SCOPES = [
   {
     scope: "workflow",
     purpose:
-      "merging a pull request that changes .github/workflows; not needed to read or re-run Actions",
+      "adding or updating .github/workflows files, as merging a pull request that changes them may need; not needed to read or re-run Actions",
   },
   {
     scope: "read:packages",

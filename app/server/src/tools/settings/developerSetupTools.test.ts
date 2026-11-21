@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { beforeEach, describe, test, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, beforeEach, describe, test, vi } from "vitest";
 import {
   GITHUB_CLASSIC_PAT_SCOPES,
   GITHUB_CLASSIC_PAT_URL,
@@ -10,27 +13,41 @@ import { developerSetupTools } from "./developerSetupTools.ts";
 type GitAnswer = GitResult | Error;
 const answers = new Map<string, GitAnswer>();
 const calls: Array<{ args: string[]; cwd: string }> = [];
+/** Run the real git on the real Worker instead of the scripted answers. */
+const git = vi.hoisted(() => ({ real: false }));
 
-vi.mock("../../gitExec.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../gitExec.ts")>()),
-  checkoutGitOn: () => ({
-    gitReadOnlyOptionalExit: async (args: string[], cwd: string) => {
-      calls.push({ args, cwd });
-      const answer = answers.get(args.join(" "));
-      if (!answer) throw new Error(`unexpected git ${args.join(" ")}`);
-      if (answer instanceof Error) throw answer;
-      return answer;
-    },
-  }),
-}));
+vi.mock("../../gitExec.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../gitExec.ts")>();
+  return {
+    ...actual,
+    checkoutGitOn: (side: Parameters<typeof actual.checkoutGitOn>[0]) =>
+      git.real
+        ? actual.checkoutGitOn(side)
+        : {
+            gitReadOnlyOptionalExit: async (args: string[], cwd: string) => {
+              calls.push({ args, cwd });
+              const answer = answers.get(args.join(" "));
+              if (!answer) throw new Error(`unexpected git ${args.join(" ")}`);
+              if (answer instanceof Error) throw answer;
+              return answer;
+            },
+          },
+  };
+});
 
-const ctx = {
-  toolCallId: "call-1",
-  session: { sessionId: "s-pa", cwd: "/home/u" },
-} as never;
+// The session's directory, real on the Worker: a spawn ENOENT there means
+// git is missing, not the directory.
+const sessionDir = mkdtempSync(join(tmpdir(), "git-setup-read-"));
+const missingDir = join(sessionDir, "gone");
+afterAll(() => rmSync(sessionDir, { recursive: true, force: true }));
+
+const ctxIn = (cwd: string) =>
+  ({ toolCallId: "call-1", session: { sessionId: "s-pa", cwd } }) as never;
+const ctx = ctxIn(sessionDir);
 const tool = (name: string) =>
   developerSetupTools.find((t) => t.name === name)!;
-const gitSetupRead = () => tool("git_setup_read").execute({}, ctx);
+const gitSetupRead = (cwd = sessionDir) =>
+  tool("git_setup_read").execute({}, ctxIn(cwd));
 
 const ok = (stdout: string): GitResult => ({ stdout, stderr: "", code: 0 });
 const unset: GitResult = { stdout: "", stderr: "", code: 1 };
@@ -41,6 +58,7 @@ const EMAIL = "config --global --get user.email";
 beforeEach(() => {
   answers.clear();
   calls.length = 0;
+  git.real = false;
 });
 
 describe("git_setup_read", () => {
@@ -59,7 +77,7 @@ describe("git_setup_read", () => {
       },
     });
     // Runs in the session's directory, and only ever reads.
-    assert.ok(calls.every((call) => call.cwd === "/home/u"));
+    assert.ok(calls.every((call) => call.cwd === sessionDir));
     assert.ok(
       calls.every(
         (call) =>
@@ -99,6 +117,23 @@ describe("git_setup_read", () => {
     const result = await gitSetupRead();
     assert.equal((result.details as { git: string }).git, "not_installed");
     assert.equal(calls.length, 1, "no identity read without git");
+
+    // The same ENOENT with no session directory proves nothing about git.
+    await assert.rejects(
+      gitSetupRead(missingDir),
+      /Could not check Git \(its working directory .*gone is missing or unreadable\)/,
+    );
+  });
+
+  test("an installed git in a missing directory is never reported as not installed", async () => {
+    git.real = true;
+    // Node answers a spawn in a missing cwd with `spawn git ENOENT` too.
+    await assert.rejects(
+      gitSetupRead(missingDir),
+      /Could not check Git \(its working directory/,
+    );
+    const found = await gitSetupRead(sessionDir);
+    assert.equal((found.details as { git: string }).git, "installed");
   });
 
   test("a check that could not run fails instead of guessing", async () => {

@@ -228,9 +228,12 @@ Two read-only tools in the same group serve the developer steps of guided setup
 
 - `git_setup_read`: whether `git` runs on the session's Worker (where its
   checkouts live), its version, and the global `user.name` and `user.email`. It
-  only runs `git --version` and `git config --global --get`. No git there is an
-  answer (`not_installed`); a check that could not run, or an identity that
-  could not be read, is an error.
+  only runs `git --version` and `git config --global --get`, in the session's
+  working directory. No git there is an answer (`not_installed`); a check that
+  could not run, or an identity that could not be read, is an error. Node
+  reports a spawn in a missing directory as ENOENT, the same as a missing `git`,
+  so ENOENT counts as `not_installed` only once the directory is confirmed on
+  that Worker; otherwise it is an error.
 - `github_pat_setup_link`: takes the user's GitHub username, refuses one that is
   not a valid GitHub login, and returns `GITHUB_CLASSIC_PAT_URL` with
   `GITHUB_CLASSIC_PAT_SCOPES` (each scope with what it is for). It never sees or

@@ -21,12 +21,12 @@ classic token form with them preselected:
 
 <https://github.com/settings/tokens/new?description=Pandeck&scopes=repo%2Cworkflow%2Cread%3Apackages%2Cnotifications>
 
-| Scope           | Why Pandeck asks for it                                                                                                                                                                                 |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `repo`          | Repositories, code search, issues, pull requests (create, review, merge), checks and Actions runs, private ones included. It is broad: read and write access to every repository the account can reach. |
-| `workflow`      | Merging a pull request that adds or changes a file under `.github/workflows/`. GitHub refuses that merge to a token without it. Reading and re-running Actions need only `repo`.                        |
-| `read:packages` | Pulling private GHCR images and private packages through the package proxy. The connection test reports whether the token has it.                                                                       |
-| `notifications` | Reading the user's notification inbox (`github_list_notifications`) and the signals built on it.                                                                                                        |
+| Scope           | Why Pandeck asks for it                                                                                                                                                                                                                                                                                                  |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `repo`          | Repositories, code search, issues, pull requests (create, review, merge), checks and Actions runs, private ones included. It is broad: read and write access to every repository the account can reach.                                                                                                                  |
+| `workflow`      | Adding or updating files under `.github/workflows/`, which a pull-request merge through this token does when the pull request changes them. Without it GitHub may refuse that merge (it allows a workflow file whose path and content already exist on another branch). Reading and re-running Actions need only `repo`. |
+| `read:packages` | Pulling private GHCR images and private packages through the package proxy. The connection test reports whether the token has it.                                                                                                                                                                                        |
+| `notifications` | Reading the user's notification inbox (`github_list_notifications`) and the signals built on it.                                                                                                                                                                                                                         |
 
 Nothing needs `read:org`, `admin:org`, `user`, `delete_repo` or any
 `write:packages`/`delete:packages` scope. Team review requests are read through
