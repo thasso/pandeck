@@ -143,10 +143,14 @@ turn's decision reflects a different (stale or unadvanced) one.
 ## Processing cadence, settings & safety ceilings
 
 Automatic learning modes: `off`, `adaptive` (default), `every-turn`
-(experimental). Loading is independently switchable. The adaptive scheduler
-(`memory/memoryScheduler.ts`) enqueues a bounded observation per completed
-eligible human turn, processes high-signal turns immediately, and batches the
-rest on a turn threshold / idle period / before rotation-compaction.
+(experimental). Loading (`memory.loadingEnabled`, default on) is independently
+switchable. A fresh install starts with both off: when guided setup begins, the
+server writes `loadingEnabled: false` and `learningMode: "off"` unless a memory
+setting was already saved, and setup's Memory step turns them back on only on
+the user's yes (`onboarding.md`). An established install keeps the defaults. The
+adaptive scheduler (`memory/memoryScheduler.ts`) enqueues a bounded observation
+per completed eligible human turn, processes high-signal turns immediately, and
+batches the rest on a turn threshold / idle period / before rotation-compaction.
 
 The bounded no-tool processor (`memory/memoryProcessor.ts`) runs a configurable
 cheap model through the pi/Claude one-shot seams, requires strict JSON

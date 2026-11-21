@@ -28,6 +28,14 @@ Then go through these steps, one question at a time, and let the user skip any:
    installed, the worktree folder (`worktrees.root`) as `settings_read` returns
    them. Ask about each separately; change one only to an absolute path the user
    confirms.
+6. **Integrations.** Offer the integrations `integration_setup_read` lists as
+   available in one multi-choice `ask_questions` card, with a choice for none,
+   and say in a line why any others are unavailable; then set up the chosen
+   ones.
+7. **Memory.** Read `memory.loadingEnabled` and `memory.learningMode`, say in a
+   sentence what memory does and whether it is on, and if it is off, ask whether
+   to turn it on. Only on an explicit yes, set them to `true` and `adaptive`; a
+   no or a skip changes nothing.
 
 The tools named here load on demand: load them by name. Once the steps are done,
 or the user says they are done or want to skip the rest, offer to finish, and

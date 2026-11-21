@@ -8,8 +8,7 @@ First run has three states: the welcome screen while no account works
 (`pending`), then a guided setup chat with the Personal Assistant (`setup`),
 then the normal app (`complete`). Guided setup covers the assistant's name, more
 accounts and the model picker (step 3a), then Git, GitHub and the Projects and
-worktree folders (step 3b); the other integrations and memory are planned as
-step 3c and do not exist yet.
+worktree folders (step 3b), then the other integrations and memory (step 3c).
 
 ## The onboarding state
 
@@ -44,12 +43,13 @@ mode 0600. It only moves forward: `pending → setup → complete`.
 - **Order into setup.** Leaving `pending` runs in an order where any failure
   leaves it `pending` for the next check to retry: pin the assistant's model
   (below; a no-op once it can run), name the assistant (below; a no-op once
-  named), retire a Personal Assistant conversation bound before setup (so the
-  next one carries the setup prompt), persist `setup`, take it in memory, then
-  broadcast it once. A pin or name that was saved but whose follow-up effects
-  failed counts as done and is neither redone nor undone. The pin goes first
-  because a leaf write carries the whole current section: written after the
-  name, the default model would be stored as if the user had chosen it.
+  named), turn memory off (below; a no-op once a memory setting is saved),
+  retire a Personal Assistant conversation bound before setup (so the next one
+  carries the setup prompt), persist `setup`, take it in memory, then broadcast
+  it once. A pin or name that was saved but whose follow-up effects failed
+  counts as done and is neither redone nor undone. The pin goes first because a
+  leaf write carries the whole current section: written after the name, the
+  default model would be stored as if the user had chosen it.
 - **Pinning the assistant's model.** When the saved Personal Assistant slot has
   no stored model, or one that no enabled, signed-in account can run, the server
   runs the assistant on the account it just found, as leaf writes of
@@ -68,6 +68,17 @@ mode 0600. It only moves forward: `pending → setup → complete`.
   saved is never replaced, and the normal settings effects (rotating the
   Personal Assistant, announcing the change) run. A saved name is never
   overwritten. An established install keeps "Personal Assistant".
+- **Memory starts off.** Memory's defaults leave it on (`agent-memory.md`),
+  which an established install keeps. On a fresh install it would feed every
+  turn to the paid memory processor before the user agreed, so when the settings
+  file holds neither `memory.loadingEnabled` nor `memory.learningMode` the
+  server writes `false` and `"off"` as leaf writes through the normal settings
+  path, the rest of the section keeping its defaults. A memory setting saved
+  before setup is the user's choice and stands. It runs here rather than at boot
+  because only here does a failure have a retry built in, and the settings
+  effects run in a server that is up; no turn can run before an account is
+  usable, so memory is off before the assistant's first turn. Established
+  installs and gateway clients never leave `complete`, so it never runs there.
 - **Account health is not read**, on purpose. An enabled, signed-in account
   whose login the provider later rejects (`needs-login`) keeps the normal shell
   and the app status alert (`account-routing.md`).
@@ -231,10 +242,11 @@ then, one question at a time and each skippable, more Claude or OpenAI accounts
 (`accounts_read`, `accounts_update`, `accounts_sign_in`; never a secret in chat;
 distinct names when two accounts share a provider) and which models the picker
 shows (`models_read`, then `settings_update` of `models.hidden` after the user
-agrees, keeping the assistant's own model shown); then the developer steps
-below; then it offers to finish and calls `onboarding_finish`. The settings
-tools, `git_setup_read` and `github_pat_setup_link` among them, stay deferred,
-and the section tells the assistant to load them by name: they are 9 tools in
+agrees, keeping the assistant's own model shown); then the developer steps,
+integrations and memory below; then it offers to finish and calls
+`onboarding_finish`. The settings tools, `git_setup_read`,
+`github_pat_setup_link` and `integration_setup_read` among them, stay deferred,
+and the section tells the assistant to load them by name: they are 10 tools in
 one group, more than a "settings" search loads at once. `onboarding_finish` is
 eager only in this session (`eagerWhen: "guidedSetup"`) and deferred in every
 other Personal Assistant session, where it refuses.
@@ -275,10 +287,46 @@ change rotates as always. A Claude session keeps the name it started with in its
 profile line, so the setup section tells the assistant to use a newly chosen
 name from then on.
 
+### Integrations and memory (3c)
+
+1. **Integrations.** `integration_setup_read` lists what can be set up from
+   chat: Forgejo, Jira, Confluence, Google, Slack, Tempo and web search. The
+   list is computed from the settings, not written into the prompt, because what
+   a deployment can offer differs: Jira and Confluence need the Atlassian site
+   the deployment configures, Google, Slack and Tempo an OAuth client only the
+   deployment holds (Tempo the Atlassian site too). One without it reports its
+   blocker, which the assistant explains rather than asking for a credential it
+   cannot use; `settings_request_input` refuses such a connection anyway. The
+   assistant offers the available ones in one multi-choice `ask_questions` card
+   with a choice for none. For each chosen one, in turn: the non-secret values
+   (`forgejo.baseUrl`, optionally `forgejo.defaultOwner`; `jira.atlassianEmail`)
+   through `settings_update`; the credential only through
+   `settings_request_input` (`forgejo.token`, `jira.atlassianToken`,
+   `brave.apiKey`; the `google.connection`, `slack.connection` and
+   `tempo.connection` OAuth cards); then one `settings_update` that turns the
+   switch on and runs the section's test. Values come first because moving
+   Forgejo to another host clears its token. Confluence has no credential of its
+   own: it signs in with Jira's and works only while Jira is on, so it is set up
+   after Jira, and the assistant asks before setting up Jira if the user chose
+   only Confluence. A service the user did not choose is never turned on. The
+   Jira and Brave cards link to where the credential is created (`setupLink`,
+   `settings.md`).
+
+   GitHub has its own step above. Context7 is not offered: it is a coding docs
+   lookup few users need, a one-key setup in Settings when they do. The browser
+   tools need no setup, only display preferences.
+
+2. **Memory.** Memory is off on a fresh install (above). The assistant reads
+   `memory.loadingEnabled` and `memory.learningMode`, says what memory does and
+   whether it is on, and if it is off asks whether to turn it on. Only an
+   explicit yes writes `true` and `adaptive`; a no or a skip changes nothing.
+   The two switch independently (`agent-memory.md`), so turning on loading alone
+   would not learn anything.
+
 ### Not yet built
 
-- **3c**: the other integrations (Forgejo, Jira/Confluence, Google, Slack,
-  Tempo, web search) and the Memory opt-in.
+- Task-1469 follow-ups: aligning setup with gateway client mode and pulling
+  configuration from a gateway.
 
 ## Wire
 

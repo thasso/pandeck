@@ -1,5 +1,5 @@
 {
-  "$comment": "Enforced budgets for what every session's FIRST request carries, in characters, per persona and harness. Policy, rationale and how to raise a budget live in docs/prompt-budgets.md. This file is the source of truth for the numbers: app/server/src/promptBudgets.ts never hard-codes one. A budget is a tripwire, not a target \u2014 raising one with a recorded reason is a normal move.",
+  "$comment": "Enforced budgets for what every session's FIRST request carries, in characters, per persona and harness. Policy, rationale and how to raise a budget live in docs/prompt-budgets.md. This file is the source of truth for the numbers: app/server/src/promptBudgets.ts never hard-codes one. A budget is a tripwire, not a target — raising one with a recorded reason is a normal move.",
   "unit": "characters",
   "measurement": {
     "cwdLabel": "/repo",
@@ -23,7 +23,7 @@
       "id": "firstRequest",
       "label": "first request",
       "sections": ["prompt", "tools"],
-      "covers": "the two above \u2014 what this persona costs before the user's first word."
+      "covers": "the two above — what this persona costs before the user's first word."
     }
   ],
   "budgets": {
@@ -41,14 +41,14 @@
     },
     "personal-assistant": {
       "pi": {
-        "prompt": 7700,
+        "prompt": 8250,
         "eagerTools": 19400,
-        "firstRequest": 26600
+        "firstRequest": 27150
       },
       "claude": {
-        "prompt": 7700,
+        "prompt": 8250,
         "eagerTools": 11500,
-        "firstRequest": 18400
+        "firstRequest": 18950
       }
     },
     "workshop": {
@@ -175,7 +175,7 @@
       "to": 4500,
       "task": 403,
       "date": "2026-08-19",
-      "why": "the coordinator persona was written as telegraphese to fit 1500 and had grown to 96% of it. v1.4 makes this role the run's standing judgement \u2014 asked after every assessment, routing fixers, reviewers and the verdict \u2014 so its rules are restated as prose that gives each one its reason, which is what an agent needs to apply a rule to a case the text did not anticipate. It also now says what the role cannot see and that being asked implies nothing about how the work fared."
+      "why": "the coordinator persona was written as telegraphese to fit 1500 and had grown to 96% of it. v1.4 makes this role the run's standing judgement — asked after every assessment, routing fixers, reviewers and the verdict — so its rules are restated as prose that gives each one its reason, which is what an agent needs to apply a rule to a case the text did not anticipate. It also now says what the role cannot see and that being asked implies nothing about how the work fared."
     },
     {
       "budget": "workflow-coordinator.claude.prompt",
@@ -207,7 +207,7 @@
       "to": 12200,
       "task": 595,
       "date": "2026-08-23",
-      "why": "the persona gains the peer-session loop: which runtimes an agent may start helpers on, that a spawned peer is an ordinary session with no watchdog or automatic report, and that the coordinator owns closure \u2014 chase a quiet child, route findings back, re-review until the exact target passes, never poll"
+      "why": "the persona gains the peer-session loop: which runtimes an agent may start helpers on, that a spawned peer is an ordinary session with no watchdog or automatic report, and that the coordinator owns closure — chase a quiet child, route findings back, re-review until the exact target passes, never poll"
     },
     {
       "budget": "developer.pi.firstRequest",
@@ -223,7 +223,7 @@
       "to": 5700,
       "task": 595,
       "date": "2026-08-23",
-      "why": "the persona gains the peer-session loop: which runtimes an agent may start helpers on, that a spawned peer is an ordinary session with no watchdog or automatic report, and that the coordinator owns closure \u2014 chase a quiet child, route findings back, re-review until the exact target passes, never poll"
+      "why": "the persona gains the peer-session loop: which runtimes an agent may start helpers on, that a spawned peer is an ordinary session with no watchdog or automatic report, and that the coordinator owns closure — chase a quiet child, route findings back, re-review until the exact target passes, never poll"
     },
     {
       "budget": "developer.claude.firstRequest",
@@ -295,7 +295,7 @@
       "to": 21000,
       "task": 673,
       "date": "2026-09-07",
-      "why": "the monitor tool now teaches the filter convention it has no parameter for: stdout is the event stream, never pipe raw logs, cover the failure signatures too. Without it an agent points monitor at a dev server and pays one turn per batch \u2014 31 turns in the session that prompted this \u2014 and background bash says plainly that it notifies once, at exit"
+      "why": "the monitor tool now teaches the filter convention it has no parameter for: stdout is the event stream, never pipe raw logs, cover the failure signatures too. Without it an agent points monitor at a dev server and pays one turn per batch — 31 turns in the session that prompted this — and background bash says plainly that it notifies once, at exit"
     },
     {
       "budget": "workshop.pi.firstRequest",
@@ -303,7 +303,7 @@
       "to": 33400,
       "task": 673,
       "date": "2026-09-07",
-      "why": "the monitor tool now teaches the filter convention it has no parameter for: stdout is the event stream, never pipe raw logs, cover the failure signatures too. Without it an agent points monitor at a dev server and pays one turn per batch \u2014 31 turns in the session that prompted this \u2014 and background bash says plainly that it notifies once, at exit"
+      "why": "the monitor tool now teaches the filter convention it has no parameter for: stdout is the event stream, never pipe raw logs, cover the failure signatures too. Without it an agent points monitor at a dev server and pays one turn per batch — 31 turns in the session that prompted this — and background bash says plainly that it notifies once, at exit"
     },
     {
       "budget": "developer.pi.eagerTools",
@@ -311,7 +311,7 @@
       "to": 20500,
       "task": 673,
       "date": "2026-09-07",
-      "why": "the monitor tool now teaches the filter convention it has no parameter for: stdout is the event stream, never pipe raw logs, cover the failure signatures too. Without it an agent points monitor at a dev server and pays one turn per batch \u2014 31 turns in the session that prompted this \u2014 and background bash says plainly that it notifies once, at exit"
+      "why": "the monitor tool now teaches the filter convention it has no parameter for: stdout is the event stream, never pipe raw logs, cover the failure signatures too. Without it an agent points monitor at a dev server and pays one turn per batch — 31 turns in the session that prompted this — and background bash says plainly that it notifies once, at exit"
     },
     {
       "budget": "developer.pi.firstRequest",
@@ -319,7 +319,7 @@
       "to": 33400,
       "task": 673,
       "date": "2026-09-07",
-      "why": "the monitor tool now teaches the filter convention it has no parameter for: stdout is the event stream, never pipe raw logs, cover the failure signatures too. Without it an agent points monitor at a dev server and pays one turn per batch \u2014 31 turns in the session that prompted this \u2014 and background bash says plainly that it notifies once, at exit"
+      "why": "the monitor tool now teaches the filter convention it has no parameter for: stdout is the event stream, never pipe raw logs, cover the failure signatures too. Without it an agent points monitor at a dev server and pays one turn per batch — 31 turns in the session that prompted this — and background bash says plainly that it notifies once, at exit"
     },
     {
       "budget": "personal-assistant.pi.prompt",
@@ -367,7 +367,7 @@
       "to": 6300,
       "task": "direct-file-viewers",
       "date": "2026-09-10",
-      "why": "the chat-files layer replacing chat-images: a file anywhere on the host is now SHOWN by linking where it sits (image inline, Markdown/HTML/text with a viewer, anything else a download), which needs the URL form plus what each kind renders as \u2014 the copy-to-session-artifacts step it replaces cost every such reply a tool call and a duplicated file"
+      "why": "the chat-files layer replacing chat-images: a file anywhere on the host is now SHOWN by linking where it sits (image inline, Markdown/HTML/text with a viewer, anything else a download), which needs the URL form plus what each kind renders as — the copy-to-session-artifacts step it replaces cost every such reply a tool call and a duplicated file"
     },
     {
       "budget": "assistant.pi.firstRequest",
@@ -383,7 +383,7 @@
       "to": 6300,
       "task": "direct-file-viewers",
       "date": "2026-09-10",
-      "why": "the chat-files layer replacing chat-images: a file anywhere on the host is now SHOWN by linking where it sits (image inline, Markdown/HTML/text with a viewer, anything else a download), which needs the URL form plus what each kind renders as \u2014 the copy-to-session-artifacts step it replaces cost every such reply a tool call and a duplicated file"
+      "why": "the chat-files layer replacing chat-images: a file anywhere on the host is now SHOWN by linking where it sits (image inline, Markdown/HTML/text with a viewer, anything else a download), which needs the URL form plus what each kind renders as — the copy-to-session-artifacts step it replaces cost every such reply a tool call and a duplicated file"
     },
     {
       "budget": "assistant.claude.firstRequest",
@@ -399,7 +399,7 @@
       "to": 5600,
       "task": "direct-file-viewers",
       "date": "2026-09-10",
-      "why": "the chat-files layer replacing chat-images: a file anywhere on the host is now SHOWN by linking where it sits (image inline, Markdown/HTML/text with a viewer, anything else a download), which needs the URL form plus what each kind renders as \u2014 the copy-to-session-artifacts step it replaces cost every such reply a tool call and a duplicated file"
+      "why": "the chat-files layer replacing chat-images: a file anywhere on the host is now SHOWN by linking where it sits (image inline, Markdown/HTML/text with a viewer, anything else a download), which needs the URL form plus what each kind renders as — the copy-to-session-artifacts step it replaces cost every such reply a tool call and a duplicated file"
     },
     {
       "budget": "personal-assistant.pi.firstRequest",
@@ -415,7 +415,7 @@
       "to": 5600,
       "task": "direct-file-viewers",
       "date": "2026-09-10",
-      "why": "the chat-files layer replacing chat-images: a file anywhere on the host is now SHOWN by linking where it sits (image inline, Markdown/HTML/text with a viewer, anything else a download), which needs the URL form plus what each kind renders as \u2014 the copy-to-session-artifacts step it replaces cost every such reply a tool call and a duplicated file"
+      "why": "the chat-files layer replacing chat-images: a file anywhere on the host is now SHOWN by linking where it sits (image inline, Markdown/HTML/text with a viewer, anything else a download), which needs the URL form plus what each kind renders as — the copy-to-session-artifacts step it replaces cost every such reply a tool call and a duplicated file"
     },
     {
       "budget": "personal-assistant.claude.firstRequest",
@@ -431,7 +431,7 @@
       "to": 13300,
       "task": "direct-file-viewers",
       "date": "2026-09-10",
-      "why": "the chat-files layer replacing chat-images: a file anywhere on the host is now SHOWN by linking where it sits (image inline, Markdown/HTML/text with a viewer, anything else a download), which needs the URL form plus what each kind renders as \u2014 the copy-to-session-artifacts step it replaces cost every such reply a tool call and a duplicated file"
+      "why": "the chat-files layer replacing chat-images: a file anywhere on the host is now SHOWN by linking where it sits (image inline, Markdown/HTML/text with a viewer, anything else a download), which needs the URL form plus what each kind renders as — the copy-to-session-artifacts step it replaces cost every such reply a tool call and a duplicated file"
     },
     {
       "budget": "workshop.pi.firstRequest",
@@ -447,7 +447,7 @@
       "to": 6800,
       "task": "direct-file-viewers",
       "date": "2026-09-10",
-      "why": "the chat-files layer replacing chat-images: a file anywhere on the host is now SHOWN by linking where it sits (image inline, Markdown/HTML/text with a viewer, anything else a download), which needs the URL form plus what each kind renders as \u2014 the copy-to-session-artifacts step it replaces cost every such reply a tool call and a duplicated file"
+      "why": "the chat-files layer replacing chat-images: a file anywhere on the host is now SHOWN by linking where it sits (image inline, Markdown/HTML/text with a viewer, anything else a download), which needs the URL form plus what each kind renders as — the copy-to-session-artifacts step it replaces cost every such reply a tool call and a duplicated file"
     },
     {
       "budget": "workshop.claude.firstRequest",
@@ -463,7 +463,7 @@
       "to": 13300,
       "task": "direct-file-viewers",
       "date": "2026-09-10",
-      "why": "the chat-files layer replacing chat-images: a file anywhere on the host is now SHOWN by linking where it sits (image inline, Markdown/HTML/text with a viewer, anything else a download), which needs the URL form plus what each kind renders as \u2014 the copy-to-session-artifacts step it replaces cost every such reply a tool call and a duplicated file"
+      "why": "the chat-files layer replacing chat-images: a file anywhere on the host is now SHOWN by linking where it sits (image inline, Markdown/HTML/text with a viewer, anything else a download), which needs the URL form plus what each kind renders as — the copy-to-session-artifacts step it replaces cost every such reply a tool call and a duplicated file"
     },
     {
       "budget": "developer.pi.firstRequest",
@@ -479,7 +479,7 @@
       "to": 7100,
       "task": "direct-file-viewers",
       "date": "2026-09-10",
-      "why": "the chat-files layer replacing chat-images: a file anywhere on the host is now SHOWN by linking where it sits (image inline, Markdown/HTML/text with a viewer, anything else a download), which needs the URL form plus what each kind renders as \u2014 the copy-to-session-artifacts step it replaces cost every such reply a tool call and a duplicated file"
+      "why": "the chat-files layer replacing chat-images: a file anywhere on the host is now SHOWN by linking where it sits (image inline, Markdown/HTML/text with a viewer, anything else a download), which needs the URL form plus what each kind renders as — the copy-to-session-artifacts step it replaces cost every such reply a tool call and a duplicated file"
     },
     {
       "budget": "developer.claude.firstRequest",
@@ -655,6 +655,38 @@
       "to": 18400,
       "task": "onboarding-3b",
       "date": "2026-11-21",
+      "why": "carries the guided-setup prompt raise above"
+    },
+    {
+      "budget": "personal-assistant.pi.prompt",
+      "from": 7700,
+      "to": 8250,
+      "task": "onboarding-3c",
+      "date": "2026-11-22",
+      "why": "guided setup gains its last steps (onboarding step 3c, ~510 chars in onboarding-setup.md): offer the integrations integration_setup_read reports available in one multi-choice card and say why the rest are not, then read the two memory switches, say whether memory is on and, if it is off, turn it on only on an explicit yes; the per-integration rules live in the deferred tool, so only the one setup session per install carries this, and the budget bounds the worst case"
+    },
+    {
+      "budget": "personal-assistant.pi.firstRequest",
+      "from": 26600,
+      "to": 27150,
+      "task": "onboarding-3c",
+      "date": "2026-11-22",
+      "why": "carries the guided-setup prompt raise above"
+    },
+    {
+      "budget": "personal-assistant.claude.prompt",
+      "from": 7700,
+      "to": 8250,
+      "task": "onboarding-3c",
+      "date": "2026-11-22",
+      "why": "guided setup gains its last steps (onboarding step 3c, ~510 chars in onboarding-setup.md): offer the integrations integration_setup_read reports available in one multi-choice card and say why the rest are not, then read the two memory switches, say whether memory is on and, if it is off, turn it on only on an explicit yes; the per-integration rules live in the deferred tool, so only the one setup session per install carries this, and the budget bounds the worst case"
+    },
+    {
+      "budget": "personal-assistant.claude.firstRequest",
+      "from": 18400,
+      "to": 18950,
+      "task": "onboarding-3c",
+      "date": "2026-11-22",
       "why": "carries the guided-setup prompt raise above"
     }
   ]

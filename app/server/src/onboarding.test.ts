@@ -239,6 +239,36 @@ describe("beginning guided setup", () => {
     assert.equal(assistant.additionalInstructions, "Be brief.");
   });
 
+  test("turns memory off before the setup conversation exists", async () => {
+    initOnboarding(() => FRESH);
+    const defaults = getSettings().memory;
+    assert.equal(defaults.loadingEnabled, true);
+    assert.equal(defaults.learningMode, "adaptive");
+    await checkOnboarding(probe(undefined));
+    assert.equal(readStoredAppSettings().memory, undefined);
+    await checkOnboarding(probe(CLAUDE));
+    assert.equal(onboardingState(), "setup");
+    const stored = readStoredAppSettings().memory;
+    assert.equal(stored?.loadingEnabled, false);
+    assert.equal(stored?.learningMode, "off");
+    // Every other memory setting keeps its default.
+    assert.deepEqual(getSettings().memory, {
+      ...defaults,
+      loadingEnabled: false,
+      learningMode: "off",
+    });
+  });
+
+  test("a memory setting saved before setup stands", async () => {
+    initOnboarding(() => FRESH);
+    await saveSettings({ memory: { ...getSettings().memory, maxCards: 4 } });
+    await checkOnboarding(probe(CLAUDE));
+    assert.equal(onboardingState(), "setup");
+    assert.equal(getSettings().memory.loadingEnabled, true);
+    assert.equal(getSettings().memory.learningMode, "adaptive");
+    assert.equal(getSettings().memory.maxCards, 4);
+  });
+
   test("overlapping checks begin setup once", async () => {
     initOnboarding(() => FRESH);
     let release!: () => void;
@@ -476,9 +506,23 @@ describe("established installs", () => {
     await checkOnboarding(probe(CLAUDE));
     assert.equal(await finishOnboarding(), "complete");
     assert.equal(readStoredAppSettings().permanentAssistant, undefined);
+    assert.equal(readStoredAppSettings().memory, undefined);
+    assert.equal(getSettings().memory.loadingEnabled, true);
+    assert.equal(getSettings().memory.learningMode, "adaptive");
     assert.equal(rotate.mock.calls.length, 0);
     assert.equal(broadcasts.length, 0);
     assert.equal(onboardingState(), "complete");
+  });
+
+  test("a gateway client is never set up and keeps memory as it is", async () => {
+    assert.equal(
+      initOnboarding(() => ({ ...FRESH, gatewayClient: true })),
+      "complete",
+    );
+    await checkOnboarding(probe(CLAUDE));
+    assert.equal(existsSync(APP_SETTINGS_PATH), false);
+    assert.equal(getSettings().memory.loadingEnabled, true);
+    assert.equal(broadcasts.length, 0);
   });
 
   test("an unknown state in the file reads as complete", () => {
@@ -515,9 +559,11 @@ describe("storage failures", () => {
       state: "pending",
     });
     assert.equal(broadcasts.length, 0);
-    // Named and pinned already; the retry changes neither, it only moves on.
+    // Named, pinned and memory off already; the retry changes none of it, it
+    // only moves on.
     assert.equal(readStoredAppSettings().permanentAssistant?.name, "Larry");
     assert.equal(readStoredAppSettings().permanentAssistant?.modelId, "opus");
+    assert.equal(readStoredAppSettings().memory?.loadingEnabled, false);
 
     rmSync(STATE_TMP, { recursive: true });
     await checkOnboarding(probe(OPENAI, () => true));
@@ -537,8 +583,12 @@ describe("storage failures", () => {
     });
     assert.equal(broadcasts.length, 0);
 
+    assert.equal(readStoredAppSettings().memory, undefined);
+
     rmSync(SETTINGS_TMP, { recursive: true });
     await checkOnboarding(probe(CLAUDE));
+    assert.equal(readStoredAppSettings().memory?.loadingEnabled, false);
+    assert.equal(readStoredAppSettings().memory?.learningMode, "off");
     assert.equal(readStoredAppSettings().permanentAssistant?.name, "Larry");
     assert.equal(readStoredAppSettings().permanentAssistant?.modelId, "opus");
     assert.equal(onboardingState(), "setup");

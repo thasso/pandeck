@@ -13,8 +13,10 @@
  * While `pending`, the server moves to `setup` itself the moment it sees a
  * usable account (enabled, signed in, offering a model). In the same step it
  * runs the Personal Assistant on that account when its model slot cannot run,
- * and names it "Larry" when no name is saved. `setup` lasts until the user (or
- * the assistant, on their word) finishes the guided setup conversation.
+ * names it "Larry" when no name is saved, and turns memory off unless a memory
+ * setting was saved, so the setup conversation's Memory step is an opt-in.
+ * `setup` lasts until the user (or the assistant, on their word) finishes the
+ * guided setup conversation.
  */
 import {
   existsSync,
@@ -190,6 +192,51 @@ async function nameAssistantIfUnsaved(): Promise<boolean> {
     );
   }
   return true;
+}
+
+/** Memory as a first run starts it: nothing loaded, nothing learned. */
+const MEMORY_OFF = { loadingEnabled: false, learningMode: "off" } as const;
+
+/**
+ * Turn memory off on a fresh install, as leaf writes of `memory.loadingEnabled`
+ * and `memory.learningMode` that run the normal settings effects. The defaults
+ * leave it on, which suits an established install but would have a brand-new
+ * user's turns feed the paid memory processor before they agreed to it.
+ *
+ * Only when the settings file holds neither: a saved memory setting is the
+ * user's choice and stands, and once this has written, a retry is a no-op.
+ * Check and write are one synchronous step, as in {@link nameAssistantIfUnsaved}.
+ */
+async function turnMemoryOffIfUnchosen(): Promise<void> {
+  const { saveSettings, settingsPatchForWrites } =
+    await import("./settingsService.ts");
+  // Synchronous from here until the write has landed.
+  const stored = () => readStoredAppSettings().memory;
+  if (
+    stored()?.loadingEnabled !== undefined ||
+    stored()?.learningMode !== undefined
+  )
+    return;
+  const written = saveSettings(
+    settingsPatchForWrites([
+      { path: "memory.loadingEnabled", value: MEMORY_OFF.loadingEnabled },
+      { path: "memory.learningMode", value: MEMORY_OFF.learningMode },
+    ]),
+  );
+  try {
+    await written;
+  } catch (err) {
+    // As with the name: a write that landed counts as done.
+    const now = stored();
+    if (
+      now?.loadingEnabled !== MEMORY_OFF.loadingEnabled ||
+      now?.learningMode !== MEMORY_OFF.learningMode
+    )
+      throw err;
+    console.warn(
+      `[onboarding] turned memory off, but its follow-up failed: ${errorText(err)}`,
+    );
+  }
 }
 
 /** An account that can run something now, with the models it offers. */
@@ -368,7 +415,8 @@ async function pinAssistantIfUnrunnable(
  * Leave the pending state for guided setup, in an order where any failure
  * leaves it `pending` and the next check retries: run the assistant on the
  * account when its slot cannot run (a no-op once it can), name it (a no-op
- * once named), retire a Personal Assistant conversation started before setup
+ * once named), turn memory off (a no-op once any memory setting is saved),
+ * retire a Personal Assistant conversation started before setup
  * so the next one carries the setup prompt, persist `setup`, then take it in
  * memory and tell the browsers, once.
  *
@@ -382,6 +430,7 @@ async function beginSetup(
   if (state !== "pending") return;
   await pinAssistantIfUnrunnable(account, probe);
   await nameAssistantIfUnsaved();
+  await turnMemoryOffIfUnchosen();
   const { permanentAssistantStore } =
     await import("./db/permanentAssistantStore.ts");
   if (permanentAssistantStore.sessionId()) {

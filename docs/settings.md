@@ -41,9 +41,11 @@ are refused on every agent settings-tool path. Secrets stay out of its context
   `settings_read` reports it as read-only and `settingsPatchForWrites` refuses
   an agent write.
 - `setupLink`: a `secret`'s trusted creation link (`url`, `label`, `hint`),
-  shown on the card that asks for it (below). Only `github.token` has one: the
-  classic token form from `GITHUB_CLASSIC_PAT_URL`, with
-  `GITHUB_CLASSIC_PAT_SCOPES` preselected (`github.md`).
+  shown on the card that asks for it (below). `github.token` links the classic
+  token form from `GITHUB_CLASSIC_PAT_URL`, with `GITHUB_CLASSIC_PAT_SCOPES`
+  preselected (`github.md`); `jira.atlassianToken` links Atlassian's API token
+  page, and `brave.apiKey` the Brave Search API page. Forgejo's token page
+  depends on the instance, so `forgejo.token` has none.
 
 A section with nothing in the registry, or that shows something the registry
 does not hold, says what and where in `SETTINGS_OUTSIDE_REGISTRY`: Claude and
@@ -223,8 +225,8 @@ group (`app/server/src/tools/settings/settingsTools.ts`):
   `credentialsCleared`, with a note to ask the user again through
   `settings_request_input`.
 
-Two read-only tools in the same group serve the developer steps of guided setup
-(`onboarding.md`) and any later GitHub setup:
+Three read-only tools in the same group serve guided setup (`onboarding.md`) and
+any later setup of the same things:
 
 - `git_setup_read`: whether `git` runs on the session's Worker (where its
   checkouts live), its version, and the global `user.name` and `user.email`. It
@@ -238,11 +240,21 @@ Two read-only tools in the same group serve the developer steps of guided setup
   not a valid GitHub login, and returns `GITHUB_CLASSIC_PAT_URL` with
   `GITHUB_CLASSIC_PAT_SCOPES` (each scope with what it is for). It never sees or
   asks for the token.
+- `integration_setup_read`: the optional integrations that can be set up from
+  chat (`CHAT_INTEGRATIONS` in `tools/settings/integrationSetupTools.ts`:
+  Forgejo, Jira, Confluence, Google, Slack, Tempo and web search), each with
+  whether it is on and its credential set, read from `getSettings()`. One whose
+  deployment lacks what it needs (the Atlassian site `jira.jiraHost`, the
+  Confluence site, an OAuth client's `oauthClientConfigured`) reports
+  `available: false` with that blocker. An available one lists its setup as
+  setting paths: the values to ask for, the credential for
+  `settings_request_input`, the switch to turn on, the section to test, and for
+  Confluence the integration whose sign-in it uses (Jira).
 
 `settings_update`, `settings_request_input`, `accounts_update` and
 `accounts_sign_in` are `local` side effects, so Plan mode keeps only
-`settings_read`, `accounts_read`, `models_read`, `git_setup_read` and
-`github_pat_setup_link`.
+`settings_read`, `accounts_read`, `models_read`, `git_setup_read`,
+`github_pat_setup_link` and `integration_setup_read`.
 
 Both tools hold four guarantees the schema alone cannot give, since neither
 harness enforces it before `execute`:
