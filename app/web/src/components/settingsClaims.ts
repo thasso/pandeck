@@ -159,6 +159,8 @@ export const RENDERED_SETTING_PATHS: readonly string[] = [
   "confluence.enabled",
   "confluence.confluenceHost",
   "confluence.credentialsAvailable",
+  // Client mode says the connection is the gateway's.
+  "confluence.credentialStore",
   // tempo
   "tempo.enabled",
   "tempo.apiBaseUrl",

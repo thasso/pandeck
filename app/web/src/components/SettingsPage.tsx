@@ -2925,6 +2925,7 @@ function JiraCard({
  * Confluence has no credential fields of its own: it authenticates as the Jira
  * integration's Atlassian account. The card therefore states that dependency
  * and links the work to Settings → Jira instead of asking for a second token.
+ * In client mode that account is the gateway's Atlassian connection.
  */
 function ConfluenceCard({
   settings,
@@ -2938,6 +2939,8 @@ function ConfluenceCard({
   onTest: () => void;
 }) {
   const confluence = settings.confluence;
+  // Client mode (Task-1439): the reads run on the gateway's Atlassian connection.
+  const gateway = confluence.credentialStore === "gateway";
   const [enabled, setEnabled] = useState(confluence.enabled);
 
   useEffect(() => {
@@ -2957,8 +2960,10 @@ function ConfluenceCard({
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-sm font-semibold">Confluence</h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        Confluence is the same Atlassian site as Jira and uses the email and API
-        token saved there. The host is set by the deployment.
+        {gateway
+          ? "Uses the gateway's Atlassian connection (Settings → Jira)."
+          : "Confluence is the same Atlassian site as Jira and uses the email and API token saved there."}{" "}
+        The host is set by the deployment.
       </p>
       <SettingsCard className="mt-6">
         <PreferenceToggle
@@ -2974,8 +2979,9 @@ function ConfluenceCard({
         {!confluence.credentialsAvailable && (
           <Alert variant="warning" role="note">
             <AlertDescription>
-              No Atlassian credentials yet. Enable Jira and save an email and
-              API token under Settings → Jira; Confluence shares them.
+              {gateway
+                ? "No Atlassian connection on the gateway yet. Connect Atlassian under Settings → Jira."
+                : "No Atlassian credentials yet. Enable Jira and save an email and API token under Settings → Jira; Confluence shares them."}
             </AlertDescription>
           </Alert>
         )}

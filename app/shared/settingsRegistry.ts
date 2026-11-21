@@ -715,6 +715,12 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
     "Atlassian credentials available",
     "Confluence signs in with the Jira credentials.",
   ),
+  readonly(
+    "confluence.credentialStore",
+    "confluence",
+    "Credential store",
+    "The credential gateway in client mode; absent otherwise.",
+  ),
   setting("tempo.enabled", "tempo", "Tempo", BOOLEAN),
   setting("tempo.apiBaseUrl", "tempo", "Tempo API base URL", STRING, {
     hint: "Moving to another host disconnects Tempo.",

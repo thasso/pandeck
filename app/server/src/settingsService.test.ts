@@ -48,13 +48,14 @@ function valueAt(root: unknown, path: string): unknown {
 
 /**
  * Current settings with every optional field filled in, since defaults leave
- * them out. Account pins are the slots' only optional field and
- * `listSettingsModelSlots` is tested to list every slot.
+ * them out: the slots' account pins (`listSettingsModelSlots` is tested to
+ * list every slot) and Confluence's client-mode `credentialStore`.
  */
 function populatedSettings(): AppSettings {
   const settings = structuredClone(getSettings());
   for (const { slot } of listSettingsModelSlots(settings))
     slot.credentialProfileId = "cp_fixture";
+  settings.confluence.credentialStore = "gateway";
   return settings;
 }
 

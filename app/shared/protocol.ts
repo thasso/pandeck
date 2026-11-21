@@ -1262,8 +1262,17 @@ export interface ConfluenceSettings {
   enabled: boolean;
   /** Atlassian host serving Confluence; static deployment config, shown read-only. */
   confluenceHost: string;
-  /** Whether the Jira integration supplies usable Atlassian credentials. */
+  /**
+   * Locally: whether the Jira integration supplies a usable Atlassian
+   * credential. Client mode: whether a credential is stored on the gateway,
+   * as its last Atlassian status said (not verified).
+   */
   credentialsAvailable: boolean;
+  /**
+   * Client mode only: Confluence's agent tools run on the credential gateway
+   * with its Atlassian connection. Absent outside client mode.
+   */
+  credentialStore?: "gateway";
 }
 
 /** Patch sent by the settings UI. Confluence owns only its enable switch. */
