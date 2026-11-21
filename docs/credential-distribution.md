@@ -105,16 +105,18 @@ backup.
 
 - **Selection.** Every non-deleted `claude-sdk` session row with a provider id
   bound to `claude-default` or to no account, in any scope, archived included
-  (`db/defaultClaudeTranscriptSelection.ts`). A first run that selects nothing,
-  as on every fresh install, records `done` without reading home at all, and
-  later boots never look again. A unit is `<key>/<id>.jsonl` plus its
-  `<key>/<id>/` tree, copied under the same `<key>`. Nothing else: no
-  terminal-only transcript, named-account session, config or credential. A unit
-  holding a link or other non-regular entry is skipped as unsupported, and so is
-  one whose `projects/`, project, `<id>/` or inner directory is no longer the
-  same real directory when it is copied or once its files are staged. That check
-  sees a directory replaced at either moment, not one replaced and restored
-  between them.
+  (`db/defaultClaudeTranscriptSelection.ts`). An install without a
+  `claude-default` record (every fresh one) has no session that can run as it,
+  so the import does nothing there: it reads neither home nor
+  `credential-profiles/` and writes no state. With the record, a first run that
+  selects nothing records `done` without reading home, and later boots never
+  look again. A unit is `<key>/<id>.jsonl` plus its `<key>/<id>/` tree, copied
+  under the same `<key>`. Nothing else: no terminal-only transcript,
+  named-account session, config or credential. A unit holding a link or other
+  non-regular entry is skipped as unsupported, and so is one whose `projects/`,
+  project, `<id>/` or inner directory is no longer the same real directory when
+  it is copied or once its files are staged. That check sees a directory
+  replaced at either moment, not one replaced and restored between them.
 - **Work files** in `credential-profiles/claude-default/home-import/`:
   `state.json` (phase `backup`, `copy`, then `done`, replaced atomically with
   fsync), `manifest.jsonl` (one fsynced line per unit: provider id, project key,

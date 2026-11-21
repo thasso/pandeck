@@ -321,8 +321,9 @@ protected **Default OpenAI** (`default`) and **Default Claude**
 (`claude-default`) accounts, logins and bound sessions unchanged. On the first
 boot after the move to isolated Claude profiles, the server copies Pandeck's own
 Default Claude transcripts from `~/.claude/projects` once, so old sessions still
-resume; home is left untouched, and a fresh install with nothing to copy never
-reads it (`docs/credential-distribution.md`).
+resume; home is left untouched, and a fresh install, which has no Default
+Claude, never reads it or writes anything for it
+(`docs/credential-distribution.md`).
 
 Settings → Claude SDK can connect or reconnect any Claude profile from a desktop
 or phone: it streams the official bundled `claude auth login --claudeai`

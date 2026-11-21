@@ -400,8 +400,68 @@ test("AC6: copies exactly the selected units, byte-identical and private, and no
   assert.equal(existsSync(join(fx.W, "staging")), false);
 });
 
+test("a fresh install (no Default Claude) skips the boot import: home untouched, nothing under credential-profiles/", async () => {
+  const fx = fixture();
+  const { CREDENTIAL_PROFILES_ROOT } =
+    await import("../credentialProfilePaths.ts");
+  assert.equal(
+    existsSync(join(CREDENTIAL_PROFILES_ROOT, "profiles.json")),
+    false,
+    "a fresh registry",
+  );
+  // A session bound to nothing would be selected, and home has its transcript.
+  sessionStore.upsert({
+    id: "imp-fresh-unbound",
+    scope: "user",
+    harness: "claude-sdk",
+    agentType: "developer",
+    providerSessionId: U1,
+  });
+  const previousHome = process.env.HOME;
+  process.env.HOME = fx.home;
+  const readdir = vi.spyOn(fsp, "readdir");
+  const lstat = vi.spyOn(fsp, "lstat");
+  syncBuiltinESMExports();
+  try {
+    const before = homeSnapshot(fx.home);
+    // The boot's own entrypoint, with the app's paths.
+    assert.equal(await homeTranscriptImportStartupRefusal(), undefined);
+    assert.deepEqual(await importDefaultClaudeHomeTranscripts(), {
+      outcome: "no-default-account",
+    });
+    const touched = [...readdir.mock.calls, ...lstat.mock.calls].map(([path]) =>
+      String(path),
+    );
+    assert.deepEqual(homeSnapshot(fx.home), before, "home is untouched");
+    assert.deepEqual(
+      touched.filter(
+        (path) =>
+          path.startsWith(fx.home) || path.startsWith(CREDENTIAL_PROFILES_ROOT),
+      ),
+      [],
+      "neither home nor credential-profiles/ was read",
+    );
+    for (const id of ["claude-default", "default"])
+      assert.equal(
+        existsSync(join(CREDENTIAL_PROFILES_ROOT, id)),
+        false,
+        `no ${id} entry`,
+      );
+  } finally {
+    readdir.mockRestore();
+    lstat.mockRestore();
+    syncBuiltinESMExports();
+    process.env.HOME = previousHome;
+    sessionStore.markDeleted("imp-fresh-unbound");
+  }
+});
+
 test("AC6: by default it reads the selection, home and destination the app uses", async () => {
   const fx = fixture();
+  // An install that still has Default Claude.
+  await (
+    await import("../test/legacyDefaultAccounts.ts")
+  ).seedLegacyDefaultAccounts();
   const previousHome = process.env.HOME;
   process.env.HOME = fx.home;
   const rows: Array<[string, string, Record<string, unknown>]> = [

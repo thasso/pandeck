@@ -8,9 +8,10 @@
  * - **Selection.** Every non-deleted `claude-sdk` row bound to the default or
  *   to nothing, in any scope (`db/defaultClaudeTranscriptSelection.ts`). For
  *   each, `<key>/<id>.jsonl` and its `<key>/<id>/` tree, under the same `<key>`.
- *   Nothing else: no config, no credential, no terminal-only transcript. A
- *   first run that selects nothing (every fresh install) records `done`
- *   without reading home at all.
+ *   Nothing else: no config, no credential, no terminal-only transcript. An
+ *   install without a Default Claude record (every fresh one) skips the
+ *   import entirely, writing nothing; a first run with the record that
+ *   selects nothing records `done` without reading home.
  * - **Home is read-only and the backup.** Nothing under home is written,
  *   renamed, chmodded or deleted. Once the state records `done`, home is never
  *   read again.
@@ -52,7 +53,10 @@ import {
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { DATA_DIR } from "../config.ts";
 import { credentialProfileRoot } from "../credentialProfilePaths.ts";
-import { DEFAULT_CLAUDE_PROFILE_ID } from "../credentialProfiles.ts";
+import {
+  DEFAULT_CLAUDE_PROFILE_ID,
+  legacyDefaultProfileId,
+} from "../credentialProfiles.ts";
 import { defaultClaudeProviderSessionIds } from "../db/defaultClaudeTranscriptSelection.ts";
 import { userHomeDir } from "../userHome.ts";
 
@@ -109,6 +113,11 @@ interface HomeTranscriptImportCounts {
 
 export type HomeTranscriptImportResult =
   | { outcome: "already-done" }
+  /**
+   * The install has no Default Claude (every fresh one): nothing of its own
+   * is in home and there is nowhere to put it, so nothing is read or written.
+   */
+  | { outcome: "no-default-account" }
   | {
       outcome: "done";
       sourceMissing: boolean;
@@ -256,6 +265,15 @@ async function runImport(
   const step = (operation: string) => {
     progress.operation = operation;
   };
+  // 0. Without Default Claude no session can run as it (an unbound one is
+  // refused), so there is nothing to import, now or later. Neither home nor
+  // `credential-profiles/` is touched, and no state is kept: the check is
+  // one registry read per boot. An explicit profile root is a test's.
+  if (
+    options.profileRoot === undefined &&
+    legacyDefaultProfileId("claude") === undefined
+  )
+    return { outcome: "no-default-account" };
   const now = options.now ?? Date.now;
   const afterStep = options.afterStep ?? (() => {});
   const io = options.manifestIo ?? fileManifestIo;
@@ -308,8 +326,7 @@ async function runImport(
   const records = await repairManifest(manifestPath, io);
   afterStep("manifest-repaired");
 
-  // 4. Nothing selected on a first run (a fresh install has no session that
-  // ran as the default): done, without reading home at all. A selection that
+  // 4. Nothing selected on a first run: done, without reading home at all. A selection that
   // fails here is left to the plan, after the boundary, as before.
   const selection = options.providerSessionIds ?? selectedIds;
   if (state === undefined && nothingSelected(selection)) {
