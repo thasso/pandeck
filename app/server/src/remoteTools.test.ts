@@ -1,10 +1,12 @@
 /**
  * Client mode's gateway tool set (Task-1398): what a listing may add, the
  * per-boot state the catalog's remote group and the gate read, and the pi
- * open's wait for the first listing.
+ * open's wait for the first listing. Confluence (Task-1439 P3) accepts only
+ * its three reads.
  */
 import assert from "node:assert/strict";
 import { afterEach, test, vi } from "vitest";
+import { updateConfluenceSettings } from "./confluenceSettings.ts";
 import { GatewayUnavailableError } from "./gatewayLink.ts";
 import { subscribeIntegrationToolChanges } from "./integrationToolChanges.ts";
 import { updateJiraSettings } from "./jiraSettings.ts";
@@ -30,6 +32,13 @@ import {
   slackUnreadParamsSchema,
 } from "./slackRead.ts";
 import { updateSlackSettings } from "./slackSettings.ts";
+import {
+  confluenceDownloadAttachmentTool,
+  confluenceGetPageTool,
+  confluenceLookupTool,
+  confluenceMutatePageTool,
+  confluenceSearchTool,
+} from "./tools/confluence/confluenceTools.ts";
 
 /** `jira_get_issue` as the edge lists it (`gatewayTools/jiraGetIssue.ts`). */
 const JIRA_GET_ISSUE = {
@@ -91,6 +100,31 @@ const SLACK_READS = [
   effect: "read",
   actionKey: "slack:read",
 }));
+
+/**
+ * A Confluence tool as the edge lists it: the edge serves Pandeck's own
+ * names, descriptions and schemas (`gatewayTools/confluence*.ts`).
+ */
+const confluenceListed = (
+  local: { name: string; description: string; parameters: unknown },
+  overrides: Record<string, unknown> = {},
+) => ({
+  name: local.name,
+  description: local.description,
+  inputSchema: local.parameters,
+  effect: "read",
+  actionKey: "confluence:read",
+  ...overrides,
+});
+
+const CONFLUENCE_READS = [
+  confluenceSearchTool,
+  confluenceGetPageTool,
+  confluenceLookupTool,
+].map((local) => confluenceListed(local));
+
+/** Valid in every respect but its name: Confluence admits only its reads. */
+const CONFLUENCE_DOWNLOAD = confluenceListed(confluenceDownloadAttachmentTool);
 
 const tool = (overrides: Record<string, unknown>) => ({
   ...JIRA_GET_ISSUE,
@@ -157,6 +191,78 @@ test("each product's tools follow its own Settings toggle", async () => {
   await updateJiraSettings({ enabled: false });
 });
 
+test("Confluence accepts only its three reads", () => {
+  install();
+  const listing = [
+    ...CONFLUENCE_READS,
+    CONFLUENCE_DOWNLOAD,
+    // A write, properly declared: dropped by the read-only rule too.
+    confluenceListed(confluenceMutatePageTool, {
+      effect: "write",
+      actionKey: "confluence:write",
+    }),
+    confluenceListed(confluenceSearchTool, { name: "confluence_other" }),
+  ];
+  const accepted = acceptRemoteTools(listing);
+  assert.deepEqual(
+    accepted,
+    CONFLUENCE_READS.map((read) => ({ ...read, product: "confluence" })),
+  );
+  applyListing(accepted);
+  assert.deepEqual(
+    knownRemoteTools("confluence").map((t) => t.name),
+    ["confluence_search", "confluence_get_page", "confluence_lookup"],
+  );
+});
+
+test("the refused download entry is otherwise valid: under an admitted name it is accepted", () => {
+  // Its own listing, so the duplicate-name rule plays no part.
+  const swapped = { ...CONFLUENCE_DOWNLOAD, name: "confluence_lookup" };
+  assert.deepEqual(acceptRemoteTools([swapped]), [
+    { ...swapped, product: "confluence" },
+  ]);
+});
+
+test("Jira and Slack keep no name list: any bounded read of theirs is accepted", () => {
+  assert.deepEqual(
+    acceptRemoteTools([
+      tool({ name: "jira_unlisted_read" }),
+      { ...SLACK_READS[0]!, name: "slack_unlisted_read" },
+    ]).map((t) => [t.name, t.product]),
+    [
+      ["jira_unlisted_read", "jira"],
+      ["slack_unlisted_read", "slack"],
+    ],
+  );
+});
+
+test("Confluence's tools follow Settings → Confluence, not Jira's toggle", async () => {
+  install();
+  applyListing(acceptRemoteTools([JIRA_GET_ISSUE, ...CONFLUENCE_READS]));
+  try {
+    updateConfluenceSettings({ enabled: false });
+    await updateJiraSettings({ enabled: true });
+    assert.equal(remoteToolDispatchable("confluence_search"), false);
+    assert.equal(remoteToolDispatchable("jira_get_issue"), true);
+    assert.equal(remoteToolGate("confluence"), false);
+    assert.equal(remoteToolGate("jira"), true);
+
+    updateConfluenceSettings({ enabled: true });
+    await updateJiraSettings({ enabled: false });
+    for (const name of [
+      "confluence_search",
+      "confluence_get_page",
+      "confluence_lookup",
+    ])
+      assert.equal(remoteToolDispatchable(name), true, name);
+    assert.equal(remoteToolDispatchable("jira_get_issue"), false);
+    assert.equal(remoteToolGate("confluence"), true);
+    assert.equal(remoteToolGate("jira"), false);
+  } finally {
+    updateConfluenceSettings({ enabled: false });
+  }
+});
+
 test("only bounded read tools of a mapped product are accepted", () => {
   const rejected = [
     tool({ name: "jira_write", effect: "write" }),
@@ -170,8 +276,9 @@ test("only bounded read tools of a mapped product are accepted", () => {
     tool({ name: "jira_array", inputSchema: { type: "array" } }),
     tool({ name: "jira_list", inputSchema: [] }),
     // Unmapped products stay out, however the prefix is spelled.
-    tool({ name: "confluence_page", actionKey: "confluence:read" }),
+    tool({ name: "tempo_worklogs", actionKey: "tempo:read" }),
     tool({ name: "inherited_read", actionKey: "constructor:read" }),
+    tool({ name: "confluence_upper", actionKey: "Confluence:read" }),
     tool({ name: "slack_upper", actionKey: "Slack:read" }),
     tool({ name: "slack_write", actionKey: "slack:read", effect: "write" }),
     tool({ name: "jira_no_key", actionKey: undefined }),

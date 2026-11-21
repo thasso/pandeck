@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, test } from "vitest";
 import type { AgentType } from "@assistant/shared";
-import type { AgentTool } from "../mcp/tool.ts";
+import type { AgentTool, ToolCallContext } from "../mcp/tool.ts";
 import {
   agentToolsFor,
   assistantIntegrationTools,
@@ -10,6 +10,7 @@ import {
   modeGatedActiveToolNames,
   toolGroupsFor,
 } from "./catalog.ts";
+import { updateConfluenceSettings } from "../confluenceSettings.ts";
 import { updateJiraSettings } from "../jiraSettings.ts";
 import { updateSlackSettings } from "../slackSettings.ts";
 import {
@@ -847,5 +848,135 @@ describe("client mode: the gateway's Slack tools (Task-1455)", () => {
     assert.ok(active("assistant").has("slack_search"));
     markDisconnected();
     assert.ok(!active("assistant").has("slack_search"));
+  });
+});
+
+describe("client mode: the gateway's Confluence reads (Task-1439)", () => {
+  const CONFLUENCE_READS = [
+    "confluence_search",
+    "confluence_get_page",
+    "confluence_lookup",
+  ];
+  const listed = (name: string, overrides: Record<string, unknown> = {}) => ({
+    name,
+    description: `${name} on the gateway.`,
+    inputSchema: { type: "object", properties: {} },
+    effect: "read",
+    actionKey: name.startsWith("confluence_") ? "confluence:read" : "jira:read",
+    ...overrides,
+  });
+  /** The reads plus what Confluence never admits, each validly declared. */
+  const LISTING = [
+    ...CONFLUENCE_READS.map((name) => listed(name)),
+    listed("confluence_download_attachment"),
+    listed("confluence_mutate_page", {
+      effect: "write",
+      actionKey: "confluence:write",
+    }),
+    listed("confluence_other"),
+  ];
+  const calls: string[] = [];
+  let uninstall: () => void = () => {};
+  afterEach(() => {
+    uninstall();
+    calls.length = 0;
+    updateConfluenceSettings({ enabled: false });
+  });
+
+  const clientMode = (listing: unknown[]) => {
+    uninstall = installRemoteToolPort({
+      call: (name) => {
+        calls.push(name);
+        return Promise.resolve({ ok: true, text: "from the gateway" });
+      },
+    });
+    applyListing(acceptRemoteTools(listing));
+  };
+  const active = (agentType: AgentType) => {
+    const tools = agentToolsFor(agentType);
+    return integrationGatedActiveToolNames(
+      agentType,
+      tools,
+      new Set(tools.map((tool) => tool.name)),
+    );
+  };
+
+  test("the gateway group replaces the local Confluence group and holds exactly the three reads", async () => {
+    const local = new Map(
+      PERSONAS.map((p) => [p, agentToolsFor(p).map((t) => t.name)]),
+    );
+    clientMode(LISTING);
+    for (const persona of PERSONAS) {
+      const groups = toolGroupsFor(persona);
+      assert.equal(
+        groups.find((g) => g.id === "confluence"),
+        undefined,
+        persona,
+      );
+      const group = groups.find((g) => g.id === "gateway-confluence");
+      assert.ok(group, persona);
+      assert.equal(group.loading, "deferred");
+      assert.equal(group.family, "integration");
+      assert.equal(group.gate, "gatewayConfluence");
+      assert.deepEqual(
+        group.tools.map((t) => [t.name, t.sideEffects, t.description]),
+        CONFLUENCE_READS.map((name) => [
+          name,
+          "none",
+          `${name} on the gateway.`,
+        ]),
+      );
+      const names = agentToolsFor(persona).map((t) => t.name);
+      for (const name of CONFLUENCE_READS)
+        assert.equal(names.filter((n) => n === name).length, 1, name);
+      for (const name of [
+        "confluence_download_attachment",
+        "confluence_mutate_page",
+        "confluence_other",
+      ])
+        assert.ok(!names.includes(name), `${persona} ${name}`);
+      // Plan keeps the reads.
+      const plan = modeGatedActiveToolNames(
+        "plan",
+        agentToolsFor(persona),
+        new Set(names),
+      );
+      for (const name of CONFLUENCE_READS) assert.ok(plan.has(name), name);
+    }
+    // The group's tools are the gateway's: a call goes to the port.
+    updateConfluenceSettings({ enabled: true });
+    const search = toolGroupsFor("assistant")
+      .find((g) => g.id === "gateway-confluence")!
+      .tools.find((t) => t.name === "confluence_search")!;
+    assert.deepEqual(
+      await search.execute({ query: "x" }, {} as ToolCallContext),
+      { content: [{ type: "text", text: "from the gateway" }] },
+    );
+    assert.deepEqual(calls, ["confluence_search"]);
+
+    uninstall();
+    // Outside client mode the catalog is as before.
+    for (const persona of PERSONAS)
+      assert.deepEqual(
+        agentToolsFor(persona).map((t) => t.name),
+        local.get(persona),
+      );
+  });
+
+  test("connection and the Confluence toggle gate the group; the Jira toggle does not", async () => {
+    clientMode([...LISTING, listed("jira_get_issue")]);
+    await updateJiraSettings({ enabled: true });
+    updateConfluenceSettings({ enabled: false });
+    assert.ok(!active("assistant").has("confluence_search"));
+    assert.ok(active("assistant").has("jira_get_issue"));
+
+    updateConfluenceSettings({ enabled: true });
+    await updateJiraSettings({ enabled: false });
+    for (const name of CONFLUENCE_READS)
+      assert.ok(active("assistant").has(name), name);
+    assert.ok(!active("assistant").has("jira_get_issue"));
+
+    markDisconnected();
+    assert.ok(!active("assistant").has("confluence_search"));
   });
 });

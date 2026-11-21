@@ -624,16 +624,30 @@ function commonToolGroups(agentType: AgentType): UnclassifiedToolGroup[] {
           gate: "jira",
           tools: assistantJiraTools,
         },
-    {
-      id: "confluence",
-      label: "Confluence",
-      description:
-        "Confluence pages: CQL search, read a page as Markdown, space/tree/label discovery, attachment downloads, and approval-gated page and attachment writes.",
-      loading: "deferred",
-      family: "integration",
-      gate: "confluence",
-      tools: assistantConfluenceTools,
-    },
+    // Client mode: Confluence's reads run on the gateway, which lists them.
+    remoteToolPort()
+      ? {
+          id: "gateway-confluence",
+          label: "Confluence (gateway)",
+          description:
+            "Confluence pages read through the user's credential gateway with the user's own Atlassian account: CQL search, a page as Markdown, space/tree/label discovery.",
+          searchHint: "confluence wiki page space cql atlassian gateway",
+          loading: "deferred",
+          family: "integration",
+          gate: "gatewayConfluence",
+          tools: remoteToolsFor("confluence"),
+          remote: true,
+        }
+      : {
+          id: "confluence",
+          label: "Confluence",
+          description:
+            "Confluence pages: CQL search, read a page as Markdown, space/tree/label discovery, attachment downloads, and approval-gated page and attachment writes.",
+          loading: "deferred",
+          family: "integration",
+          gate: "confluence",
+          tools: assistantConfluenceTools,
+        },
     {
       id: "tempo",
       label: "Tempo",

@@ -427,7 +427,7 @@ test("a normal Settings save of the raw browser MCP switch reaches a live develo
   }
 });
 
-test("client mode: the gateway's Jira and Slack tools are in a pi universe, gated by connection and their toggles, and refused before dispatch once disconnected", async () => {
+test("client mode: the gateway's Jira, Slack and Confluence tools are in a pi universe, gated by connection and their toggles, and refused before dispatch once disconnected", async () => {
   const calls: string[] = [];
   const uninstall = remoteTools.installRemoteToolPort({
     call: (name) => {
@@ -442,9 +442,17 @@ test("client mode: the gateway's Jira and Slack tools are in a pi universe, gate
     effect: "read",
     actionKey: "slack:read",
   };
+  const confluenceSearch = {
+    name: "confluence_search",
+    description: "Search Confluence pages.",
+    inputSchema: { type: "object", properties: {} },
+    effect: "read",
+    actionKey: "confluence:read",
+  };
   try {
     await updateJiraSettings({ enabled: true });
     await saveSettings({ slack: { enabled: true } });
+    await saveSettings({ confluence: { enabled: true } });
     remoteTools.applyListing(
       remoteTools.acceptRemoteTools([
         {
@@ -455,6 +463,7 @@ test("client mode: the gateway's Jira and Slack tools are in a pi universe, gate
           actionKey: "jira:read",
         },
         slackSearch,
+        confluenceSearch,
       ]),
     );
     const live = await piStore.acquireNew("assistant", await chosen(), "off", {
@@ -485,6 +494,21 @@ test("client mode: the gateway's Jira and Slack tools are in a pi universe, gate
     await saveSettings({ slack: { enabled: true } });
     await vi.waitFor(() => assert.equal(active(engine, "slack_search"), true));
 
+    // Confluence's reads follow Settings → Confluence (Task-1439).
+    assert.equal(usable(engine, "confluence_search"), true);
+    await load(engine, "confluence_search");
+    assert.equal(active(engine, "confluence_search"), true);
+    await saveSettings({ confluence: { enabled: false } });
+    await vi.waitFor(() =>
+      assert.equal(usable(engine, "confluence_search"), false),
+    );
+    assert.equal(active(engine, "confluence_search"), false);
+    assert.equal(usable(engine, "jira_get_issue"), true);
+    await saveSettings({ confluence: { enabled: true } });
+    await vi.waitFor(() =>
+      assert.equal(active(engine, "confluence_search"), true),
+    );
+
     // The relay drops: the gate goes off, and a retained call never dispatches.
     remoteTools.markDisconnected();
     await vi.waitFor(() =>
@@ -492,6 +516,7 @@ test("client mode: the gateway's Jira and Slack tools are in a pi universe, gate
     );
     assert.equal(active(engine, "jira_get_issue"), false);
     assert.equal(active(engine, "slack_search"), false);
+    assert.equal(active(engine, "confluence_search"), false);
     await call();
     assert.deepEqual(calls, ["jira_get_issue"]);
 
@@ -513,5 +538,6 @@ test("client mode: the gateway's Jira and Slack tools are in a pi universe, gate
   } finally {
     uninstall();
     await saveSettings({ slack: { enabled: false } });
+    await saveSettings({ confluence: { enabled: false } });
   }
 });

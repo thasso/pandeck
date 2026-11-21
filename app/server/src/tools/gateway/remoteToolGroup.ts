@@ -1,7 +1,7 @@
 /**
  * The catalog's gateway tools in client mode (Task-1398): one `AgentTool`
- * per read tool of a mapped product (Jira, Slack) the gateway listed this
- * boot (`remoteTools.ts`). A call goes from this server to the gateway as
+ * per read tool of a mapped product (Jira, Slack, Confluence) the gateway
+ * listed this boot (`remoteTools.ts`). A call goes from this server to the gateway as
  * `tools.call`; the gateway runs it with the user's own credential.
  *
  * A name stays for the boot, so a pi engine that registered it keeps a
@@ -28,6 +28,8 @@ const UNREACHABLE = "The credential gateway is unreachable; try again shortly.";
 const DISABLED: Record<RemoteProduct, string> = {
   jira: "Jira tools are disabled. Enable them in Settings → Jira.",
   slack: "Slack tools are disabled. Enable them in Settings → Slack.",
+  confluence:
+    "Confluence tools are disabled. Enable them in Settings → Confluence.",
 };
 const MESSAGE_MAX = 500;
 

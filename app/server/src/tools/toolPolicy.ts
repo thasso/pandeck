@@ -27,6 +27,8 @@ export interface IntegrationToolGates {
   gatewayJira: boolean;
   /** Confluence pages; authenticates with the Jira integration's Atlassian credentials. */
   confluence: boolean;
+  /** Client mode: the gateway is connected and Confluence is turned on. */
+  gatewayConfluence: boolean;
   tempo: boolean;
   google: boolean;
   slack: boolean;
@@ -48,6 +50,7 @@ export function currentIntegrationToolGates(): IntegrationToolGates {
     jira: getJiraSettings().enabled,
     gatewayJira: remoteToolGate("jira"),
     confluence: getConfluenceSettings().enabled,
+    gatewayConfluence: remoteToolGate("confluence"),
     tempo: getTempoSettings().enabled,
     google: getGoogleSettings().enabled,
     slack: slack.enabled,
