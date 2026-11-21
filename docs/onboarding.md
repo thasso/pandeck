@@ -87,7 +87,7 @@ mode 0600. It only moves forward: `pending → setup → complete`.
     of any persona loads memory, no observation is captured, a queued one is
     dropped rather than processed, and maintenance runs no consolidation. That
     covers the moment before the write lands, the transition into setup, and a
-    saved "on" until the user is asked.
+    saved "on" until setup begins.
 
   Established installs and gateway clients are `complete` from their first boot,
   so neither part ever applies there.
