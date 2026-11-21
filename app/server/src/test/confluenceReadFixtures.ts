@@ -72,6 +72,12 @@ const LONG_TEXT = Array.from(
   (_, index) => `Sentence ${index + 1} of the long page body.`,
 ).join(" ");
 
+/**
+ * A body of exactly 70,000 characters (the edge's ceiling test, D5): longer
+ * than the edge's 60,000-character result limit, within local `maxChars`.
+ */
+export const HUGE_TEXT = `${"Huge page body ".repeat(4_666)}final word`;
+
 interface FixturePage {
   title: string;
   spaceId: string;
@@ -117,6 +123,14 @@ const PAGES: Record<string, FixturePage> = {
     version: 12,
     webui: "/wiki/spaces/ENG/pages/104/Long+page",
     adf: adf(paragraph(LONG_TEXT)),
+  },
+  "106": {
+    title: "Huge page",
+    spaceId: "900",
+    parentId: "101",
+    version: 2,
+    webui: "/spaces/ENG/pages/106/Huge+page",
+    adf: adf(paragraph(HUGE_TEXT)),
   },
 };
 

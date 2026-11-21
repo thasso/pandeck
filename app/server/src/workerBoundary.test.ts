@@ -655,16 +655,22 @@ test("the gateway's edge reaches the vault only through its port", () => {
 
 /**
  * The edge's tools (Task-1397, Task-1439, Task-1454): beyond `node:`,
- * themselves and the MCP SDK, only the shared Jira client, the shared Jira
- * and Slack read modules and their helpers, a closed set; never a tool under
- * `tools/`, settings, a cache file, approvals or `@assistant/shared` beyond
- * the import-free `zonedTime` leaf. They import nothing from `gateway/`,
+ * themselves and the MCP SDK, only the shared Jira client, the shared Jira,
+ * Confluence and Slack read modules and their helpers, a closed set; never a
+ * tool under `tools/`, settings, a cache file, approvals or
+ * `@assistant/shared` beyond the import-free `zonedTime` leaf. The Confluence
+ * client brings Turndown (the storage fallback) and, by a type-only import,
+ * the Markdown parser packages. They import nothing from `gateway/`,
  * which reaches them only through `EdgeTools`, and only the edge's entry
  * loads them, so the vault process never does.
  */
 const GATEWAY_TOOLS_ALLOWED = new Set([
+  "atlassian/adfFromMarkdown.ts",
   "atlassian/adfToMarkdown.ts",
   "atlassian/atlassianFetch.ts",
+  "atlassian/confluenceClient.ts",
+  "atlassian/storageToMarkdown.ts",
+  "confluenceRead.ts",
   "httpRetry.ts",
   "jiraClient.ts",
   "jiraFields.ts",
@@ -676,9 +682,20 @@ const GATEWAY_TOOLS_ALLOWED = new Set([
   "slackRead.ts",
   "slackUrls.ts",
   "@assistant/shared/zonedTime",
+  "mdast-util-from-markdown",
+  "mdast-util-gfm",
+  "micromark-extension-gfm",
+  "turndown",
 ]);
 /** Allowed specifiers outside this package: scanned on their own below. */
 const GATEWAY_TOOLS_SHARED = new Set(["@assistant/shared/zonedTime"]);
+/** Allowed third-party packages: targets only, not scanned. */
+const GATEWAY_TOOLS_PACKAGES = new Set([
+  "mdast-util-from-markdown",
+  "mdast-util-gfm",
+  "micromark-extension-gfm",
+  "turndown",
+]);
 
 test("only the edge's entry loads its tools, and they reach no server state", () => {
   assert.deepEqual(
@@ -701,7 +718,8 @@ test("only the edge's entry loads its tools, and they reach no server state", ()
         `${module} imports ${target}`,
       );
   for (const module of GATEWAY_TOOLS_ALLOWED) {
-    if (GATEWAY_TOOLS_SHARED.has(module)) continue;
+    if (GATEWAY_TOOLS_SHARED.has(module) || GATEWAY_TOOLS_PACKAGES.has(module))
+      continue;
     const scan = scans.get(module);
     assert.ok(scan, `the scan found ${module}`);
     for (const target of scan.imports)
