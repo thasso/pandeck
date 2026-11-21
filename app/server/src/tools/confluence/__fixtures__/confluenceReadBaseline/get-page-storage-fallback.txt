@@ -1,0 +1,19 @@
+{
+  "confluenceHost": "acme.atlassian.net",
+  "page": {
+    "id": "102",
+    "title": "Legacy runbook",
+    "status": "current",
+    "url": "https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=102",
+    "spaceKey": "ENG",
+    "spaceName": "Engineering",
+    "parentId": null,
+    "version": 3,
+    "updatedAt": "2026-03-04T05:06:07.000Z",
+    "bodySource": "storage",
+    "lossyNodes": [],
+    "truncated": false,
+    "charCount": 144,
+    "markdown": "## Old runbook\n\nRestart the **legacy** worker with `svc restart`.\n\n*   Check the queue\n*   Check the [status page](https://status.example.test/)"
+  }
+}
