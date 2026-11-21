@@ -95,15 +95,46 @@ export interface SlackPreset {
   userScopes: string[];
 }
 
-/** Asked for when the file names no `atlassian.scopes`. */
+/**
+ * Asked for when the file names no `atlassian.scopes` (Task-1439 P1). The
+ * Atlassian app must hold every scope here. Changing this list makes each user
+ * sign in with Atlassian again; existing grants keep their old scopes until
+ * then. The granted list must fit the vault's 2,048-character bound.
+ */
 const DEFAULT_ATLASSIAN_SCOPES: readonly string[] = [
+  // Classic scopes: Jira and Confluence v1 and v2 reads, writes and search.
   "read:jira-work",
   "write:jira-work",
   "read:jira-user",
-  "read:servicedesk-request",
-  "write:servicedesk-request",
   "read:confluence-content.all",
   "write:confluence-content",
+  "search:confluence",
+  "read:confluence-space.summary",
+  "read:confluence-content.summary",
+  "readonly:content.attachment:confluence",
+  "write:confluence-file",
+  // Granular Jira Software: boards, sprints, epics and rank.
+  "read:board-scope:jira-software",
+  "read:project:jira",
+  "read:sprint:jira-software",
+  "read:epic:jira-software",
+  "read:issue-details:jira",
+  "read:board-scope.admin:jira-software",
+  "write:issue:jira-software",
+  "write:sprint:jira-software",
+  // Granular Confluence: pages, spaces, comments, attachments and labels.
+  "read:page:confluence",
+  "read:space:confluence",
+  "read:comment:confluence",
+  "read:attachment:confluence",
+  "write:page:confluence",
+  "write:comment:confluence",
+  "read:label:confluence",
+  "read:hierarchical-content:confluence",
+  // Deletes: trash-only page and attachment deletes. Removing these two lines
+  // (in this list and in config.test.ts) gives the 27-entry core list.
+  "delete:page:confluence",
+  "delete:attachment:confluence",
   "offline_access",
 ];
 
