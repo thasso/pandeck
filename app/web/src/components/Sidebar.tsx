@@ -142,9 +142,9 @@ interface Props {
   assistantLabel: string;
   assistantUnread?: boolean;
   /**
-   * First run (`docs/onboarding.md`): nothing can run yet, so the nav bar
-   * offers only New Session (which shows the welcome screen) and Settings.
-   * The saved slot order is untouched.
+   * First run and its guided setup (`docs/onboarding.md`): the nav bar offers
+   * only New Session (which shows the welcome screen, or leads back to the
+   * setup chat) and Settings. The saved slot order is untouched.
    */
   firstRunNav?: boolean;
   /** Mobile (single-pane) layout: the sidebar renders as a full-screen overlay. */

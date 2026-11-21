@@ -110,3 +110,16 @@ export function welcomeGreeting(savedName: string): string {
     "To reply at all, I need an AI account to run on. Connect one below: sign in with Claude or OpenAI (ChatGPT), or use an OpenAI-compatible endpoint. Sign-in happens outside this chat, and you can add or switch accounts later in Settings.",
   ].join("\n\n");
 }
+
+/**
+ * The app-authored greeting above the guided setup chat (`docs/onboarding.md`).
+ * The setup prompt tells the assistant the user has seen it, so the user's
+ * first message answers its question. Never stored, never generated.
+ */
+export function setupGreeting(savedName: string): string {
+  const name = markdownPlain(firstRunAssistantName(savedName));
+  return [
+    "Your account is connected, so I can reply now. Let’s set up a few basics together; you can skip any of them, or finish whenever you like.",
+    `First, my name: I’m ${name}. Should I keep it, or would you like to call me something else?`,
+  ].join("\n\n");
+}

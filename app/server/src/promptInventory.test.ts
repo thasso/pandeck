@@ -41,7 +41,7 @@ const AGENT_TYPE_LIST = Object.keys(AGENT_TYPES) as AgentType[];
  */
 const CONDITIONAL_LAYER_IDS: Record<AgentType, string[]> = {
   assistant: ["integration:slack", "integration:google"],
-  "personal-assistant": ["integration:tempo"],
+  "personal-assistant": ["integration:tempo", "onboarding:setup"],
   workshop: [],
   developer: [],
   "workflow-coordinator": [],

@@ -4,16 +4,19 @@ What a new install shows before it can run anything, and how it hands over to
 the normal app. A fresh install creates no accounts, so its account list is
 empty and nothing can start until the user connects one.
 
-This is step 2 of the onboarding design. A guided setup conversation with the
-Personal Assistant (its own setup prompt and model pinning for the assistant) is
-planned on top of it and does not exist yet.
+First run has three states: the welcome screen while no account works
+(`pending`), then a guided setup chat with the Personal Assistant (`setup`),
+then the normal app (`complete`). Guided setup covers the assistant's name, more
+accounts and the model picker today (step 3a); Git and GitHub, folders,
+integrations and memory are planned as later steps (3b, 3c) and do not exist
+yet.
 
 ## The onboarding state
 
 The server owns whether an install is on its first run
 (`app/server/src/onboarding.ts`). `DATA_DIR/onboarding.json` holds
-`{ "state": "pending" }` or `{ "state": "complete" }`, written atomically with
-mode 0600.
+`{ "state": "pending" }`, `"setup"` or `"complete"`, written atomically with
+mode 0600. It only moves forward: `pending → setup → complete`.
 
 - **Decided once, at boot.** With no file, boot classifies the install before
   anything it does can change the answer. It is fresh only when it has no app
@@ -21,26 +24,43 @@ mode 0600.
   profiles, and is not a gateway client (`ASSISTANT_GATEWAY_RELAY`), whose
   accounts arrive from the remote gateway after boot. A fresh install is written
   `pending`, anything else `complete`. Later boots read the file, so an
-  established install never sees first run and is never renamed. An unreadable
-  file reads as `complete`.
+  established install never sees first run and is never renamed or re-pinned. A
+  file holding `setup` reads back as `setup`, so a reload or restart returns to
+  the setup chat. An unreadable file, or an unknown state, reads as `complete`.
 - **Boot never fails over the marker.** If the decision cannot be read or
   persisted (no space, read-only disk, a blocked path), the server warns and
   treats the install as `complete` in memory for this boot: no welcome, no
   naming. A later boot decides again.
-- **`complete` is final.** Nothing moves an install back to `pending`.
-- **The server ends first run.** While `pending`, it checks for a usable account
+- **`complete` is final.** Nothing moves an install back to `pending` or
+  `setup`.
+- **The server begins setup.** While `pending`, it checks for a usable account
   wherever it learns accounts may have changed: an account created, enabled,
   signed in, an endpoint saved or its models discovered
   (`subscribeCredentialProfileChanges`), the Claude SDK switch saved, an account
   listing, and boot. An account is usable when it is enabled, signed in
   (`status: "ready"`) and offers at least one model. The model check is what
   makes a Claude account count only while Settings → Claude SDK is on. Checks
-  never overlap, and once `complete` they cost nothing.
-- **Finishing order.** Finishing runs in an order where any failure leaves first
-  run `pending` for the next check to retry: name the assistant (below; a no-op
-  once named), persist `complete`, take it in memory, then broadcast it once. A
-  name that was saved but whose follow-up effects failed counts as named and is
-  neither redone nor undone.
+  never overlap, and once past `pending` they cost nothing.
+- **Order into setup.** Leaving `pending` runs in an order where any failure
+  leaves it `pending` for the next check to retry: pin the assistant's model
+  (below; a no-op once it can run), name the assistant (below; a no-op once
+  named), retire a Personal Assistant conversation bound before setup (so the
+  next one carries the setup prompt), persist `setup`, take it in memory, then
+  broadcast it once. A pin or name that was saved but whose follow-up effects
+  failed counts as done and is neither redone nor undone. The pin goes first
+  because a leaf write carries the whole current section: written after the
+  name, the default model would be stored as if the user had chosen it.
+- **Pinning the assistant's model.** When the saved Personal Assistant slot has
+  no stored model, or one that no enabled, signed-in account can run, the server
+  runs the assistant on the account it just found, as leaf writes of
+  `permanentAssistant.provider`, `modelId`, `thinkingLevel` and
+  `credentialProfileId`: Claude's `opus` alias at medium thinking; on OpenAI the
+  default helper model (`DEFAULT_HELPER_MODEL`) when the account offers it, else
+  its first Codex model; on an OpenAI-compatible endpoint its first model. The
+  latter two start at high thinking, clamped to what the model supports. A
+  stored slot that can run is never touched. The runnability check is async, so
+  the write re-reads the slot in its synchronous step and leaves a model another
+  writer saved meanwhile in place. The normal settings effects run.
 - **Naming.** When no Personal Assistant name is saved (none, blank, or the
   default "Personal Assistant"), the server saves **Larry**. It is a leaf write:
   the stored name is re-read and the rest of the section taken from the current
@@ -52,11 +72,23 @@ mode 0600.
   whose login the provider later rejects (`needs-login`) keeps the normal shell
   and the app status alert (`account-routing.md`).
 
-The `ready` snapshot carries `onboarding`, and the change to `complete` is
-broadcast once as `{ type: "onboarding", state }`. The browser keeps it as live
-state only: it is `null` until `ready` and never restored from the shell cache.
-The welcome screen shows only while it is `pending`. Unknown is never first run,
-and the account projection, cached or live, only fills the card's rows.
+- **Finishing setup.** `finishOnboarding()` ends `setup`. Two things call it:
+  the setup screen's **Finish setup** button (`POST /api/onboarding/finish`,
+  answering `{ state }`), and the assistant's `onboarding_finish` tool when the
+  user says they are done or want to skip the rest. It rotates the Personal
+  Assistant first, so the next conversation carries no setup instructions (the
+  setup conversation stays on disk, like any rotated one), then persists
+  `complete`, takes it in memory and broadcasts it once. A failure leaves
+  `setup` and reports it; finishing again retries. Overlapping calls share one
+  run. Outside `setup` it changes nothing: the route answers the current state,
+  the tool refuses.
+
+The `ready` snapshot carries `onboarding`, and each change is broadcast once as
+`{ type: "onboarding", state }`. The browser keeps it as live state only: it is
+`null` until `ready` and never restored from the shell cache. The welcome screen
+shows only while it is `pending`, the setup screen only while it is `setup`.
+Unknown is never first run, and the account projection, cached or live, only
+fills the card's rows.
 
 ## The welcome screen
 
@@ -116,7 +148,7 @@ every layout.
 ### The assistant's name
 
 The greeting introduces the saved name as plain text, or **Larry** while none is
-saved; the server saves Larry when first run ends (above).
+saved; the server saves Larry when setup begins (above).
 
 ### The focused shell
 
@@ -132,7 +164,74 @@ and Settings, without changing the saved slot order (`Sidebar`'s `firstRunNav`).
 So on a phone, Back from Settings leads to a nav bar that returns to the welcome
 screen.
 
+## Guided setup
+
+When the state becomes `setup`, the browser opens `/assistant`, the Personal
+Assistant's chat, wherever the account was finished (the welcome screen or
+Settings). While `setup` lasts, the New Session routes lead back to it,
+replacing their history entry so Back does not bounce.
+
+### The setup screen
+
+- The same focused shell as the welcome screen (`focusedShell` in `App.tsx`): no
+  side panels, desktop top bar or edge-back. The sidebar's reduced nav (New
+  Session and Settings) applies too.
+- A compact header headed **Welcome to Pandeck** with **Finish setup**
+  (`components/GuidedSetup.tsx`, `GuidedSetupHeader`). The button shows busy
+  while the request runs; a failure shows under the header and setup stays.
+  Success needs nothing local: the server's broadcast removes the header and
+  brings back the normal shell around the same chat.
+- An app-authored greeting (`GuidedSetupGreeting`, text from `setupGreeting` in
+  `lib/firstRun.ts`), rendered with the shared `AssistantMessage`, that says the
+  account is connected and asks whether to keep the assistant's name or choose
+  another. It is never stored and never generated. Before the first message it
+  stands in for the transcript; afterwards it sits above the first durable row
+  (`MessageList`'s `intro`, shown once the transcript reaches its start). It
+  shows on every load while `setup` lasts.
+- The real composer, enabled.
+
+### The setup conversation
+
+A Personal Assistant session created while the state is `setup` freezes the
+`guidedSetup` prompt condition (`promptConditions.ts`; the acquisition passes it
+as evidence). Like every condition it is decided once, at session start, so a
+session started before setup never gains it and the setup session keeps it until
+it is rotated. Unlike the others it fails closed: a stored record without the
+key, or a caller with no conditions, gets no setup section and no eager finish
+tool.
+
+That session carries `config/prompts/onboarding-setup.md`: the app already
+greeted the user and asked about the name, so their first message answers it;
+then, one question at a time and each skippable, more Claude or OpenAI accounts
+(`accounts_read`, `accounts_update`, `accounts_sign_in`; never a secret in chat;
+distinct names when two accounts share a provider) and which models the picker
+shows (`models_read`, then `settings_update` of `models.hidden` after the user
+agrees, keeping the assistant's own model shown); then it offers to finish and
+calls `onboarding_finish`. The settings tools stay deferred; `onboarding_finish`
+is eager only in this session (`eagerWhen: "guidedSetup"`) and deferred in every
+other Personal Assistant session, where it refuses.
+
+`models_read` lists each enabled, signed-in account's models with their
+`provider:modelId` key and whether the picker shows them, plus the assistant's
+own model key; an account whose models cannot be listed says so instead.
+
+A rename during `setup` does not rotate the assistant: it would wipe the live
+setup chat (`assistantChangeRotates` in `settingsService.ts`, which both the
+rotation effect and `settings_update`'s restart note use). Any other profile
+change rotates as always. A Claude session keeps the name it started with in its
+profile line, so the setup section tells the assistant to use a newly chosen
+name from then on.
+
+### Not yet built
+
+- **3b**: Git and GitHub (host Git check, GitHub token through a private card),
+  and the Projects and Worktrees folders.
+- **3c**: the other integrations (Forgejo, Jira/Confluence, Google, Slack,
+  Tempo, web search) and the Memory opt-in.
+
 ## Wire
 
 The `ready` settings projection carries `permanentAssistant`, so the greeting
-names the assistant before Settings has ever been read.
+names the assistant before Settings has ever been read. `OnboardingState` is
+`"pending" | "setup" | "complete"`, carried on `ready` and the `onboarding`
+broadcast.

@@ -94,7 +94,11 @@ import {
   subscribeCredentialProfileChanges,
   testOpenAiCompatibleProfile,
 } from "./credentialProfiles.ts";
-import { checkOnboarding, initOnboarding } from "./onboarding.ts";
+import {
+  checkOnboarding,
+  finishOnboarding,
+  initOnboarding,
+} from "./onboarding.ts";
 import { APP_SETTINGS_PATH } from "./appSettingsFile.ts";
 import {
   markUsageProfileDirty,
@@ -838,6 +842,29 @@ async function handleRequest(
     );
     res.writeHead(200, corsJsonHeaders(req));
     res.end(JSON.stringify(response));
+    return;
+  }
+
+  // The setup screen's Finish setup (`docs/onboarding.md`); outside guided
+  // setup it changes nothing and answers the current state.
+  if (requestUrl.pathname === "/api/onboarding/finish") {
+    if (req.method !== "POST") {
+      res.writeHead(405, corsJsonHeaders(req));
+      res.end(JSON.stringify({ error: "Method not allowed" }));
+      return;
+    }
+    try {
+      const state = await finishOnboarding();
+      res.writeHead(200, corsJsonHeaders(req));
+      res.end(JSON.stringify({ state }));
+    } catch (err) {
+      res.writeHead(500, corsJsonHeaders(req));
+      res.end(
+        JSON.stringify({
+          error: `Setup could not finish: ${errorText(err)}`,
+        }),
+      );
+    }
     return;
   }
 

@@ -129,6 +129,7 @@ import {
 import { usePrefs } from "./hooks/usePrefs.ts";
 import { useLocationHash } from "./hooks/useLocationHash.ts";
 import { workflowRunPath } from "./lib/workflowRunRoutes.ts";
+import { finishOnboarding } from "./lib/onboarding.ts";
 import {
   backgroundTasksPath,
   initiativePath,
@@ -477,6 +478,17 @@ const SettingsPage = lazy(() =>
 const FirstRunSetup = lazy(() =>
   import("./components/FirstRunSetup.tsx").then((module) => ({
     default: module.FirstRunSetup,
+  })),
+);
+// Likewise only the guided setup that follows it (`docs/onboarding.md`).
+const GuidedSetupGreeting = lazy(() =>
+  import("./components/GuidedSetup.tsx").then((module) => ({
+    default: module.GuidedSetupGreeting,
+  })),
+);
+const GuidedSetupHeader = lazy(() =>
+  import("./components/GuidedSetup.tsx").then((module) => ({
+    default: module.GuidedSetupHeader,
   })),
 );
 const TaskManagementPage = lazy(() =>
@@ -908,6 +920,9 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   // install: only a live `pending` shows it. Unknown (before `ready`, or a
   // cached boot) never does, and the account projection only fills the card.
   const firstRun = state.onboarding === "pending";
+  // Guided setup follows it: the Personal Assistant's chat, focused, until
+  // the user (or the assistant on their word) finishes it.
+  const guidedSetup = state.onboarding === "setup";
   // Settings configures agents as account/model combinations, so its pickers
   // list every enabled account's models rather than the default account's.
   const settingsAccountModels = useMemo(
@@ -4111,6 +4126,33 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   // The first-run welcome stands in for the New Session screen and focuses the
   // shell on it: no side panels, top bar or edge-back while it shows.
   const welcomeScreen = firstRun && isNewChatRoute;
+  // Guided setup is the Personal Assistant's chat in the same focused shell.
+  const setupScreen = guidedSetup && route.name === "permanentAssistant";
+  const focusedShell = welcomeScreen || setupScreen;
+  // Setup begins where the welcome screen was (or wherever the account was
+  // finished, Settings included) and lives at the assistant: New Session leads
+  // back to it while setup lasts, replacing the redirecting entry.
+  const onboardingSeen = useRef(state.onboarding);
+  useEffect(() => {
+    const before = onboardingSeen.current;
+    onboardingSeen.current = state.onboarding;
+    if (state.onboarding !== "setup") return;
+    if (isNewChatRoute) navigate(PERMANENT_ASSISTANT_PATH, { replace: true });
+    else if (before === "pending" && route.name !== "permanentAssistant")
+      navigate(PERMANENT_ASSISTANT_PATH);
+  }, [state.onboarding, isNewChatRoute, route.name, navigate]);
+  // The app's greeting above the setup transcript; stable while the name is,
+  // so the transcript does not redraw for it.
+  const setupAssistantName = state.settings.permanentAssistant.name;
+  const setupGreeting = useMemo(
+    () =>
+      setupScreen ? (
+        <Suspense fallback={null}>
+          <GuidedSetupGreeting assistantName={setupAssistantName} />
+        </Suspense>
+      ) : undefined,
+    [setupScreen, setupAssistantName],
+  );
   // The account Automatic would land on for the staged model, as the server's
   // router sees it now (`previewAutomaticAccount`). Refetched when the model,
   // effort, enterprise requirement, accounts or their usage change.
@@ -4356,7 +4398,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   // created, and the row carries the identity the transcript never states plus
   // the bootstrap's progress.
   const chatHeaderHidden =
-    welcomeScreen || (route.name === "new" && !sessionShell.bootstrapping);
+    focusedShell || (route.name === "new" && !sessionShell.bootstrapping);
   const displaySessionTitle =
     route.name === "permanentAssistant"
       ? state.settings.permanentAssistant.name || "Personal Assistant"
@@ -6268,6 +6310,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
           : undefined,
       }}
       transcript={{
+        intro: setupGreeting,
         runProgress: shownOptimisticSession ? null : state.runProgress,
         changedFiles: workspaceChangedFiles,
         paObjectReferences,
@@ -6287,7 +6330,13 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       // No horizontal padding here: the quick-start rows own their own inset so
       // they can scroll edge-to-edge instead of being clipped by a page gutter.
       emptySurface={
-        welcomeScreen ? (
+        setupScreen ? (
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+            <div className="mx-auto w-full max-w-3xl px-4 py-6">
+              {setupGreeting}
+            </div>
+          </div>
+        ) : welcomeScreen ? (
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
             <Suspense
               fallback={<LazySurfaceFallback label="Opening welcome…" />}
@@ -6401,7 +6450,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
           assistantLabel={
             state.settings.permanentAssistant.name || "Personal Assistant"
           }
-          firstRunNav={firstRun}
+          firstRunNav={firstRun || guidedSetup}
           onArchive={archiveSession}
           onSettleSession={settleSession}
           onDismissSessionFailure={dismissSessionFailure}
@@ -7154,11 +7203,11 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                   // panel toggles never existed there, so the bar had nothing left to hold
                   // (ui-shell.md, Small Screens). On wide layouts it survives as the home of
                   // the two pane toggles, which have nowhere better yet.
-                  // The first-run welcome omits the top bar, both panels and
-                  // edge-back without touching the saved layout preferences:
-                  // it is the only thing the install can do yet.
+                  // The first-run welcome and guided setup omit the top bar,
+                  // both panels and edge-back without touching the saved
+                  // layout preferences: they are all the install does yet.
                   header={
-                    mobileLayout || welcomeScreen ? undefined : (
+                    mobileLayout || focusedShell ? undefined : (
                       <Topbar
                         prefs={prefs}
                         updatePrefs={update}
@@ -7178,7 +7227,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                     )
                   }
                   left={
-                    welcomeScreen
+                    focusedShell
                       ? undefined
                       : {
                           open: sidebarPanelOpen,
@@ -7194,7 +7243,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                         }
                   }
                   right={
-                    welcomeScreen
+                    focusedShell
                       ? undefined
                       : {
                           open: inspectorOpen,
@@ -7235,7 +7284,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                           ),
                         }
                   }
-                  edgeBack={welcomeScreen ? undefined : edgeBack}
+                  edgeBack={focusedShell ? undefined : edgeBack}
                 >
                   {routeDocumentTarget ? (
                     <DocumentNavigationMarker
@@ -7657,6 +7706,11 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                     </Suspense>
                   ) : (
                     <>
+                      {setupScreen ? (
+                        <Suspense fallback={null}>
+                          <GuidedSetupHeader onFinish={finishOnboarding} />
+                        </Suspense>
+                      ) : null}
                       {chatHeaderHidden ? null : (
                         <PageHeader
                           back={screenBack}

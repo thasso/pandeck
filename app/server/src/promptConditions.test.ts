@@ -62,6 +62,7 @@ describe("session-start prompt conditions", () => {
       knowledgeBase: true,
       projectRegistryPointer: true,
       memoryWrite: true,
+      guidedSetup: false,
     });
 
     // Everything the session could observe later changes: the gates go off and
@@ -312,6 +313,76 @@ describe("session-start prompt conditions", () => {
       knowledgeBase: true,
       projectRegistryPointer: true,
       memoryWrite: true,
+      // The one key that fails closed: every record from before it existed
+      // belongs to a session that is not running guided setup.
+      guidedSetup: false,
     });
+  });
+});
+
+describe("first-run guided setup", () => {
+  const SETUP_SECTION = /## First-run guided setup/;
+  const paPrompt = (conditions?: PromptConditions) =>
+    AGENT_TYPES["personal-assistant"].systemPrompt(
+      conditions ? { conditions } : {},
+    );
+
+  test("only the Personal Assistant created during setup carries it", () => {
+    const setup = computePromptConditions("personal-assistant", {
+      guidedSetup: true,
+    });
+    const ordinary = computePromptConditions("personal-assistant", {});
+    assert.equal(setup.guidedSetup, true);
+    assert.equal(ordinary.guidedSetup, false);
+    assert.equal(
+      computePromptConditions("assistant", { guidedSetup: true }).guidedSetup,
+      false,
+      "no other persona runs setup",
+    );
+    assert.match(paPrompt(setup), SETUP_SECTION);
+    assert.doesNotMatch(paPrompt(ordinary), SETUP_SECTION);
+  });
+
+  test("an unconditioned caller never gets setup instructions", () => {
+    assert.doesNotMatch(paPrompt(), SETUP_SECTION);
+  });
+
+  test("is frozen with the session like every other condition", () => {
+    const id = nextSessionId();
+    const frozen = sessionPromptConditions(id, "personal-assistant", {
+      guidedSetup: true,
+    });
+    assert.equal(frozen.guidedSetup, true);
+    assert.equal(
+      sessionPromptConditions(id, "personal-assistant", {
+        guidedSetup: false,
+      }).guidedSetup,
+      true,
+    );
+  });
+
+  test("the finish tool is eager only in the setup session", () => {
+    const setup = computePromptConditions("personal-assistant", {
+      guidedSetup: true,
+    });
+    const ordinary = computePromptConditions("personal-assistant", {});
+    assert.ok(
+      eagerToolNamesFor("personal-assistant", setup).has("onboarding_finish"),
+    );
+    assert.ok(
+      !eagerToolNamesFor("personal-assistant", ordinary).has(
+        "onboarding_finish",
+      ),
+    );
+    assert.ok(
+      AGENT_TYPES["personal-assistant"]
+        .tools()
+        .some((tool) => tool.name === "onboarding_finish"),
+    );
+    assert.ok(
+      !AGENT_TYPES.assistant
+        .tools()
+        .some((tool) => tool.name === "onboarding_finish"),
+    );
   });
 });

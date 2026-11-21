@@ -418,6 +418,7 @@ test("the opener builds from the spec's start records and writes none of them", 
     knowledgeBase: true,
     projectRegistryPointer: true,
     memoryWrite: false,
+    guidedSetup: false,
   };
   const { engine, info } = await openPiEngine(
     {

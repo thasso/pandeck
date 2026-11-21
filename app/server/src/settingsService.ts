@@ -34,6 +34,7 @@ import {
 import { testGithubSettings, updateGithubSettings } from "./githubSettings.ts";
 import { testGoogleSettings, updateGoogleSettings } from "./googleSettings.ts";
 import { notifyIntegrationToolsChanged } from "./integrationToolChanges.ts";
+import { onboardingState } from "./onboarding.ts";
 import { testJiraSettings, updateJiraSettings } from "./jiraSettings.ts";
 import { getSettings, updateSettings } from "./settings.ts";
 import { testSlackSettings, updateSlackSettings } from "./slackSettings.ts";
@@ -147,7 +148,7 @@ export function onSettingsChanged(
 }
 
 /** The profile fields whose change starts the Personal Assistant afresh. */
-export const ASSISTANT_PROFILE_FIELDS = [
+const ASSISTANT_PROFILE_FIELDS = [
   "name",
   "provider",
   "modelId",
@@ -155,6 +156,25 @@ export const ASSISTANT_PROFILE_FIELDS = [
   "additionalInstructions",
   "workingDirectory",
 ] as const;
+
+/**
+ * Whether a profile change starts the Personal Assistant afresh: any change to
+ * {@link ASSISTANT_PROFILE_FIELDS}, except a rename during first-run guided
+ * setup, which asks for the name first and must not wipe its own live
+ * conversation (`docs/onboarding.md`).
+ */
+export function assistantChangeRotates(
+  before: AppSettings["permanentAssistant"],
+  after: AppSettings["permanentAssistant"],
+): boolean {
+  const changed = ASSISTANT_PROFILE_FIELDS.filter(
+    (field) => before[field] !== after[field],
+  );
+  if (changed.length === 0) return false;
+  return !(
+    onboardingState() === "setup" && changed.every((field) => field === "name")
+  );
+}
 
 /**
  * Persist `patch`, run what each written section needs, then tell every
@@ -237,10 +257,10 @@ async function settingsWritten(
   const wrote = (key: keyof AppSettings) => sections.includes(key);
   if (assistantBefore && wrote("permanentAssistant"))
     await effect("restarting the Personal Assistant", async () => {
-      const after = getSettings().permanentAssistant;
       if (
-        !ASSISTANT_PROFILE_FIELDS.some(
-          (field) => assistantBefore[field] !== after[field],
+        !assistantChangeRotates(
+          assistantBefore,
+          getSettings().permanentAssistant,
         )
       )
         return;

@@ -573,6 +573,7 @@ describe("tool catalog", () => {
         "settings_update",
         "settings_request_input",
         "accounts_read",
+        "models_read",
         "accounts_update",
         "accounts_sign_in",
       ],
@@ -630,7 +631,8 @@ describe("tool catalog", () => {
     const permanent = agentToolsFor("personal-assistant")
       .map((tool) => tool.name)
       .sort();
-    // The Personal Assistant also gets settings, coding-start and Initiative tools.
+    // The Personal Assistant also gets settings, guided-setup, coding-start and
+    // Initiative tools.
     assert.deepEqual(
       permanent,
       [
@@ -639,8 +641,10 @@ describe("tool catalog", () => {
         "settings_update",
         "settings_request_input",
         "accounts_read",
+        "models_read",
         "accounts_update",
         "accounts_sign_in",
+        "onboarding_finish",
         "worktree_create",
         "worktree_status",
         "initiative_read",

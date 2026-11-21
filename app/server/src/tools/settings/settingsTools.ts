@@ -26,6 +26,7 @@ import {
   listCredentialProfilesWithUsage,
 } from "../../credentialProfileUsage.ts";
 import { errorText } from "../../errors.ts";
+import { modelsForAccount } from "../../harnesses/models.ts";
 import { defineAgentTool, jsonResult } from "../../mcp/tool.ts";
 import {
   approvalCardReference,
@@ -35,7 +36,7 @@ import { redactSecrets, redactSecretsDeep } from "../../secretRedaction.ts";
 import { settingIsSet, watchSignInCards } from "../../settingsInput.ts";
 import { getSettings } from "../../settings.ts";
 import {
-  ASSISTANT_PROFILE_FIELDS,
+  assistantChangeRotates,
   saveSettings,
   settingsPatchForWrites,
   TESTABLE_SETTINGS_SECTIONS,
@@ -338,10 +339,9 @@ const settingsUpdateTool = defineAgentTool<SettingsUpdateParams>({
           jsonResult(redactSecretsDeep({ saved, tests: results })),
         );
       }
-      const restartsAssistant = ASSISTANT_PROFILE_FIELDS.some(
-        (field) =>
-          before.permanentAssistant[field] !==
-          settings.permanentAssistant[field],
+      const restartsAssistant = assistantChangeRotates(
+        before.permanentAssistant,
+        settings.permanentAssistant,
       );
       return {
         ...(saved.length > 0 ? { saved } : {}),
@@ -507,6 +507,45 @@ const accountsReadTool = defineAgentTool<Record<string, unknown>>({
       if (!isRecord(raw)) throw new Error("Arguments must be an object.");
       rejectUnknownKeys(raw, [], "accounts_read");
       return { accounts: listCredentialProfilesWithUsage().map(accountEntry) };
+    }),
+});
+
+const modelsReadTool = defineAgentTool<Record<string, unknown>>({
+  name: "models_read",
+  label: "Read Models",
+  description:
+    "List the models each enabled, signed-in account offers, each with its provider:modelId key and whether the model picker shows it, plus the Personal Assistant's own model key. models.hidden (settings_update) holds the hidden keys and is written whole. An account whose models cannot be listed says so; never guess its model ids.",
+  parameters: { type: "object", additionalProperties: false, properties: {} },
+  execute: (raw) =>
+    scrubbed(async () => {
+      if (!isRecord(raw)) throw new Error("Arguments must be an object.");
+      rejectUnknownKeys(raw, [], "models_read");
+      const settings = getSettings();
+      const hidden = new Set(settings.models.hidden);
+      const accounts = listCredentialProfilesWithUsage().filter(
+        (profile) => profile.enabled && profile.status === "ready",
+      );
+      return {
+        assistantModel: `${settings.permanentAssistant.provider}:${settings.permanentAssistant.modelId}`,
+        accounts: await Promise.all(
+          accounts.map(async (profile) => {
+            const models = await modelsForAccount(profile).catch(() => null);
+            return {
+              id: profile.id,
+              name: profile.name,
+              provider: profile.provider,
+              ...(models === null
+                ? { modelsUnavailable: true }
+                : {
+                    models: models.map((model) => {
+                      const key = `${model.provider}:${model.id}`;
+                      return { key, name: model.name, shown: !hidden.has(key) };
+                    }),
+                  }),
+            };
+          }),
+        ),
+      };
     }),
 });
 
@@ -677,6 +716,7 @@ export const settingsTools = [
   settingsUpdateTool,
   settingsRequestInputTool,
   accountsReadTool,
+  modelsReadTool,
   accountsUpdateTool,
   accountsSignInTool,
 ];

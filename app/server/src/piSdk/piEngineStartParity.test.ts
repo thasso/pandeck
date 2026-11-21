@@ -145,6 +145,7 @@ const NO_EVIDENCE: PromptConditions = {
   knowledgeBase,
   projectRegistryPointer: true,
   memoryWrite: false,
+  guidedSetup: false,
 };
 
 /** Distinct from anything computed here, so a recomputation shows. */
@@ -156,6 +157,7 @@ const PARENT_CONDITIONS: PromptConditions = {
   knowledgeBase: !knowledgeBase,
   projectRegistryPointer: false,
   memoryWrite: false,
+  guidedSetup: false,
 };
 const REOPEN_CONDITIONS: PromptConditions = {
   ...PARENT_CONDITIONS,
