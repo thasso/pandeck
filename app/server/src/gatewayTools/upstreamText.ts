@@ -1,13 +1,15 @@
 /**
  * Upstream text an edge caller may see (Task-1439 D4, Task-1463 D-W2,
- * ADR-0005): the checks that keep the call's credential out of it. Jira's own
- * reasons for a rejected search (`jiraSearchIssues.ts`) and the write tool's
- * texts, identifiers and links (`writeFailure.ts`, `jiraMutateIssue.ts`) pass
- * only through here.
+ * ADR-0005): the checks that keep the call's credential out of it.
  *
- * A text that holds any form of the secret, or an auth marker, is dropped
- * whole for a fixed fallback: redacting would leave a partial secret across a
- * cut or an overlap.
+ * D4, Jira's own reasons for a rejected search (`jiraSearchIssues.ts`), checks
+ * for an auth marker or a whole secret form (`hasAuthMarker`, `secretForms`).
+ * The write tool's texts, identifiers and links (`writeFailure.ts`,
+ * `jiraMutateIssue.ts`) pass the stricter `holdsSecret`, which also refuses
+ * any 16-character piece of a secret form anywhere in the text.
+ *
+ * A text that fails is dropped whole for a fixed fallback: redacting would
+ * leave a partial secret across a cut or an overlap.
  */
 import type { AtlassianCredential } from "./descriptor.ts";
 
@@ -18,7 +20,7 @@ import type { AtlassianCredential } from "./descriptor.ts";
  * controls are sanitized.
  */
 const AUTH_MARKER = /authorization|(?:bearer|basic)[\s\p{Cc}]/iu;
-/** A fragment this long that sits inside a secret form counts as secret. */
+/** A piece of a secret form this long counts as the secret (A1). */
 const MIN_SECRET_FRAGMENT = 16;
 
 /** C0 and C1 control characters (DEL included) as spaces. */
@@ -42,29 +44,52 @@ export function secretForms(credential: AtlassianCredential): string[] {
   );
 }
 
+/** Whether `value` holds a word that marks a header or scheme. */
+export function hasAuthMarker(value: string): boolean {
+  return AUTH_MARKER.test(value);
+}
+
 /**
- * Whether `value`, whole and untransformed, holds the call's secret: an auth
- * marker in it or in its control-stripped form, any secret form inside it, or
- * a fragment of 16 or more characters that sits inside a secret form.
+ * Whether `value` carries credential material (Task-1463 A1, D-W2): an auth
+ * marker, any secret form, or any piece of 16 or more characters of one,
+ * anywhere in it or in its control-stripped form.
  */
 export function holdsSecret(
   value: string,
   credential: AtlassianCredential,
 ): boolean {
-  if (AUTH_MARKER.test(value) || AUTH_MARKER.test(withoutControls(value)))
-    return true;
   const secrets = secretForms(credential);
-  return secrets.some(
-    (secret) =>
-      value.includes(secret) ||
-      (value.length >= MIN_SECRET_FRAGMENT && secret.includes(value)),
-  );
+  const pieces = new Set<string>();
+  for (const secret of secrets)
+    for (let at = 0; at + MIN_SECRET_FRAGMENT <= secret.length; at += 1)
+      pieces.add(secret.slice(at, at + MIN_SECRET_FRAGMENT));
+  for (const form of [value, withoutControls(value)]) {
+    if (AUTH_MARKER.test(form)) return true;
+    // A secret shorter than a piece counts whole.
+    if (secrets.some((secret) => form.includes(secret))) return true;
+    for (let at = 0; at + MIN_SECRET_FRAGMENT <= form.length; at += 1)
+      if (pieces.has(form.slice(at, at + MIN_SECRET_FRAGMENT))) return true;
+  }
+  return false;
 }
 
 /**
- * `text` for a caller: the fallback when it holds the secret (checked on the
- * whole raw text first), else with controls as spaces and cut to `max`
- * characters, never on half a surrogate pair, an ellipsis marking a cut.
+ * `text` with controls as spaces, cut to `max` characters, never on half a
+ * surrogate pair, an ellipsis marking a cut.
+ */
+export function cappedText(text: string, max: number): string {
+  const clean = withoutControls(text);
+  if (clean.length <= max) return clean;
+  const cut = /[\ud800-\udbff]$/.test(clean.slice(0, max - 1))
+    ? max - 2
+    : max - 1;
+  return `${clean.slice(0, cut)}…`;
+}
+
+/**
+ * `text` for a caller of the write tool: the fallback when it carries
+ * credential material (`holdsSecret`, checked on the whole raw text first),
+ * else `cappedText`.
  */
 export function vettedText(
   text: string,
@@ -72,10 +97,5 @@ export function vettedText(
   options: { max: number; fallback: string },
 ): string {
   if (holdsSecret(text, credential)) return options.fallback;
-  const clean = withoutControls(text);
-  if (clean.length <= options.max) return clean;
-  const cut = /[\ud800-\udbff]$/.test(clean.slice(0, options.max - 1))
-    ? options.max - 2
-    : options.max - 1;
-  return `${clean.slice(0, cut)}…`;
+  return cappedText(text, options.max);
 }

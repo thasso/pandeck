@@ -11,6 +11,11 @@
 import assert from "node:assert/strict";
 import { afterEach, test, vi } from "vitest";
 import type { JiraIssueMutationItemDisplay } from "@assistant/shared/jiraMutation";
+import {
+  assertNoCredential,
+  carriesMaterial,
+  oracleForms,
+} from "../test/credentialOracle.ts";
 import { stubJiraFetch } from "../test/jiraEdgeFetch.ts";
 import { fakeJiraAnswer } from "../test/jiraMutateFetch.ts";
 import { encodeAtlassianCredential } from "./atlassian.ts";
@@ -18,7 +23,6 @@ import type { AtlassianTokenCredential } from "./descriptor.ts";
 import { createToolHost } from "./host.ts";
 import type { ProjectedResult } from "./jiraMutateIssue.ts";
 import { EDGE_TOOLS } from "./tools.ts";
-import { holdsSecret, secretForms } from "./upstreamText.ts";
 
 const link = vi.hoisted(() => ({ url: "" }));
 
@@ -87,8 +91,7 @@ function assertOmitted(
 ): void {
   assert.equal(result.url, undefined);
   assert.equal(result.items[0]!.url, undefined);
-  for (const form of secretForms(credential)) assert.ok(!text.includes(form));
-  assert.ok(!holdsSecret(text, credential));
+  assertNoCredential(text, credential);
 }
 
 /** `value` and its once- and twice-encoded forms, each differing from the last. */
@@ -111,7 +114,7 @@ test("A1 (iii): a link holding the API token raw, encoded once or twice, is omit
 });
 
 test("A1 (v): a link holding the padded or unpadded Basic value, raw or encoded, is omitted", async () => {
-  const [padded, unpadded] = secretForms(URI_TOKEN).slice(1);
+  const [padded, unpadded] = oracleForms(URI_TOKEN).slice(1);
   assert.ok(padded!.endsWith("=") && padded!.includes("+"), padded);
   assert.equal(unpadded, padded!.replace(/=+$/, ""));
   for (const basic of [padded!, unpadded!])
@@ -123,14 +126,16 @@ test("A1: a secret only an intermediate decoding shows omits the link, though th
   const credential: AtlassianTokenCredential = {
     site: SITE,
     email: "me@x.test",
-    token: "SECRET%41-TOKEN-VALUE-0001",
+    // Every 16-character piece spans a "%", so neither the raw form (where
+    // each "%" reads "%25") nor the decoded one (no "%") holds a piece.
+    token: "SECRET%41TOKEN%42VALUE%430001",
   };
-  const url = `${BROWSE}SECRET%2541-TOKEN-VALUE-0001`;
+  const url = `${BROWSE}SECRET%2541TOKEN%2542VALUE%25430001`;
   const intermediate = decodeURIComponent(url);
   const final = decodeURIComponent(intermediate);
   assert.equal(decodeURIComponent(final), final, "the final form is stable");
-  assert.ok(!holdsSecret(url, credential), "the raw form is clean");
-  assert.ok(!holdsSecret(final, credential), "the final form is clean");
+  assert.ok(!carriesMaterial(url, credential), "the raw form is clean");
+  assert.ok(!carriesMaterial(final, credential), "the final form is clean");
   assert.ok(intermediate.includes(credential.token));
   assertOmitted(await projected(url, credential), credential);
   // The same link under another credential is kept: only the secret omits it.

@@ -26,6 +26,7 @@ import {
 } from "../jiraMutate.ts";
 import { applyJiraMutationItems } from "../jiraMutateApply.ts";
 import { FAKE_CLOUD_ID } from "../test/atlassianFake.ts";
+import { assertNoCredential } from "../test/credentialOracle.ts";
 import {
   json,
   pendingUntilAbort,
@@ -52,7 +53,6 @@ import {
   type ProjectedResult,
 } from "./jiraMutateIssue.ts";
 import { EDGE_TOOLS } from "./tools.ts";
-import { holdsSecret, secretForms } from "./upstreamText.ts";
 
 const FAKE: AtlassianTokenCredential = {
   site: "acme.atlassian.net",
@@ -111,28 +111,7 @@ function mutate(items: unknown[], options: Parameters<typeof caller>[0] = {}) {
 
 /** Every string in `text`'s JSON, keys included, is free of `credential`'s secret. */
 function assertNoSecret(text: string, credential: AtlassianCredential): void {
-  for (const form of secretForms(credential))
-    assert.ok(!text.includes(form), "the serialized text holds a secret form");
-  const visit = (value: unknown): void => {
-    if (typeof value === "string")
-      assert.ok(
-        !holdsSecret(value, credential),
-        `a string holds the secret: ${value.slice(0, 80)}`,
-      );
-    else if (Array.isArray(value)) value.forEach(visit);
-    else if (value && typeof value === "object")
-      for (const [key, entry] of Object.entries(value)) {
-        visit(key);
-        visit(entry);
-      }
-  };
-  let parsed: unknown = text;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    // A plain failure text: checked as one string.
-  }
-  visit(parsed);
+  assertNoCredential(text, credential);
 }
 
 const shapeOf = (seen: SeenJiraRequest[]) =>
@@ -976,4 +955,85 @@ test("AC12: /mcp lets a write run past the host deadline plus margin; an explici
     endedAt !== undefined && endedAt >= 2_000 && endedAt <= 2_250,
     String(endedAt),
   );
+});
+
+// --- fix-1 F001: no composed string carries a piece of the credential ---
+
+/** A token whose 16-character piece `SLICE` Jira can echo back. */
+const SLICED = { ...FAKE, token: "zzSLICEKEY-1234567890zz" };
+const SLICE = "SLICEKEY-1234567";
+const slicedCaller = () => ({
+  credential: encodeAtlassianCredential(SLICED),
+});
+
+test("F001: a created key that is a piece of the token stays out of the summary too (the reviewer's scenario)", async () => {
+  stubJiraFetch((request) => fakeJiraAnswer(request, { createdKey: SLICE }));
+  const answer = await mutate([OPERATIONS[3]![1]], slicedCaller());
+  assert.ok(answer.ok);
+  assert.deepEqual(JSON.parse(answer.text), {
+    summary: "Applied 1 change(s); 0 failed.",
+    items: [{ operation: "create", issueKey: null, ok: true }],
+  });
+  assertNoCredential(answer.text, SLICED);
+});
+
+test("F001: a write's 400 reason holding a piece of the token shows the status alone", async () => {
+  stubJiraFetch((request) =>
+    request.method === "PUT"
+      ? json({ errorMessages: [`Summary is invalid near ${SLICE} here`] }, 400)
+      : fakeJiraAnswer(request),
+  );
+  const answer = await mutate([EDIT], slicedCaller());
+  assert.deepEqual(answer, {
+    ok: false,
+    code: "tool_error",
+    message: "All 1 Jira change(s) failed: Jira refused the change (HTTP 400).",
+  });
+  assertNoCredential(answer.message, SLICED);
+});
+
+test("F001: a created issue's link warning holding a piece of the token keeps only the status", async () => {
+  stubJiraFetch((request) =>
+    request.path === "/rest/api/3/issueLink"
+      ? json({ errorMessages: [`Link refused for ${SLICE}`] }, 400)
+      : fakeJiraAnswer(request),
+  );
+  const answer = await mutate(
+    [
+      {
+        ...OPERATIONS[3]![1],
+        linkChanges: [
+          { op: "add", type: "Blocks", direction: "outward", issue: "STAR-2" },
+        ],
+      },
+    ],
+    slicedCaller(),
+  );
+  assert.ok(answer.ok, JSON.stringify(answer));
+  const result = JSON.parse(answer.text) as ProjectedResult;
+  assert.equal(result.items[0]!.createdKey, "STAR-200");
+  assert.ok(result.items[0]!.warning?.startsWith("Issue created, but "));
+  assert.ok(result.items[0]!.warning?.includes("(HTTP 400)"));
+  assertNoCredential(answer.text, SLICED);
+});
+
+test("F001: a prepare refusal naming a Jira transition that holds a piece of the token falls back", async () => {
+  const seen = stubJiraFetch((request) =>
+    request.method === "GET" && request.path.endsWith("/transitions")
+      ? json({
+          transitions: [{ id: "41", name: `Move ${SLICE}`, to: { name: "X" } }],
+        })
+      : fakeJiraAnswer(request),
+  );
+  const answer = await mutate(
+    [{ issue: "STAR-1", transitionName: "Nope" }],
+    slicedCaller(),
+  );
+  assert.deepEqual(answer, {
+    ok: false,
+    code: "tool_error",
+    message: "Jira refused the change. Nothing was written to Jira.",
+  });
+  assert.equal(writesIn(seen).length, 0);
+  assertNoCredential(answer.message, SLICED);
 });

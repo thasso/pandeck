@@ -8,6 +8,8 @@ import { test } from "vitest";
 import { FAKE_ACCESS } from "../test/atlassianFake.ts";
 import type { AtlassianCredential } from "./descriptor.ts";
 import {
+  cappedText,
+  hasAuthMarker,
   holdsSecret,
   secretForms,
   vettedText,
@@ -65,4 +67,27 @@ test("vettedText falls back on a secret, strips controls and cuts without splitt
   assert.ok(cut.length <= 40);
   assert.equal(cut, `${"x".repeat(38)}…`);
   assert.equal(vettedText("short", TOKEN, options), "short");
+});
+
+test("holdsSecret finds a 16-character piece of any form anywhere inside a text (Task-1463 fix-1 F001)", () => {
+  const unpadded = BASIC.replace(/=+$/, "");
+  for (const value of [
+    "near TOKEN-SENTINEL-0 here",
+    `created ${"FAKE-TOKEN-SENTINEL-0123456789".slice(10, 26)}!`,
+    `x ${BASIC.slice(5, 21)} y`,
+    `x ${unpadded.slice(-16)}`,
+    "near TOKEN-SENTINEL\u0001-0 here".replace("\u0001", ""),
+  ])
+    assert.equal(holdsSecret(value, TOKEN), true, value);
+  assert.equal(holdsSecret(`a ${FAKE_ACCESS.slice(2, 18)} b`, OAUTH), true);
+  // 15 characters of a piece, or a piece broken by a control, pass.
+  assert.equal(holdsSecret("near TOKEN-SENTINEL- here", TOKEN), false);
+  assert.equal(holdsSecret("near TOKEN-SENT\u0001INEL-0 here", TOKEN), false);
+});
+
+test("D4's helpers: the auth marker alone, and the capped text without any secret check", () => {
+  assert.equal(hasAuthMarker("Bearer\tx"), true);
+  assert.equal(hasAuthMarker("TOKEN-SENTINEL-0123"), false);
+  assert.equal(cappedText("TOKEN-SENTINEL-0\u0000", 40), "TOKEN-SENTINEL-0 ");
+  assert.equal(cappedText("x".repeat(50), 10), `${"x".repeat(9)}…`);
 });

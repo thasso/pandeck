@@ -23,7 +23,7 @@ import {
   type ToolDescriptor,
 } from "./descriptor.ts";
 import { edgeReadDeps, jiraReadFailure } from "./jiraRead.ts";
-import { holdsSecret, vettedText } from "./upstreamText.ts";
+import { cappedText, hasAuthMarker, secretForms } from "./upstreamText.ts";
 
 const SEARCH_REFUSED =
   "Jira refused the search (HTTP 400); check the JQL, and resolve project, user and field names with jira_lookup.";
@@ -33,9 +33,10 @@ const MAX_TEXT = 500;
 /**
  * What a search Jira rejects answers. Jira's reasons pass only when none of
  * them, whole and unsanitized, holds a form of the credential or an auth
- * marker (`holdsSecret`); otherwise, or without reasons, the fixed text.
- * Falling back rather than redacting leaves no partial secret across a cut or
- * an overlap.
+ * marker; otherwise, or without reasons, the fixed text. Falling back rather
+ * than redacting leaves no partial secret across a cut or an overlap. This is
+ * D4 exactly; the write tool's stricter check (`holdsSecret`) is not applied
+ * here.
  */
 function searchRefusedText(
   reasons: readonly string[] | undefined,
@@ -43,12 +44,14 @@ function searchRefusedText(
 ): string {
   const shown = (reasons ?? []).filter((reason) => reason.trim() !== "");
   if (shown.length === 0) return SEARCH_REFUSED;
-  if (shown.some((reason) => holdsSecret(reason, credential)))
-    return SEARCH_REFUSED;
-  return vettedText(REASONS_PREFIX + shown.join("; "), credential, {
-    max: MAX_TEXT,
-    fallback: SEARCH_REFUSED,
-  });
+  const secrets = secretForms(credential);
+  const unsafe = shown.some(
+    (reason) =>
+      hasAuthMarker(reason) ||
+      secrets.some((secret) => reason.includes(secret)),
+  );
+  if (unsafe) return SEARCH_REFUSED;
+  return cappedText(REASONS_PREFIX + shown.join("; "), MAX_TEXT);
 }
 
 export const jiraSearchIssues: ToolDescriptor = {

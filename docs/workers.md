@@ -2695,17 +2695,18 @@ plus `jira_search_issues` and `jira_lookup` (Task-1439), four Slack read tools:
   edge-owned `ToolError` text reaches a caller; any other error's message is
   dropped unlogged. The two exceptions are Jira's own reasons for a rejected
   `jira_search_issues` (D4) and `jira_mutate_issue`'s vetted texts (D-W2), both
-  below and in ADR-0005. The shared vetting (`upstreamText.ts`) drops a text
-  holding an authorization marker, any form of the call's secret, or a
-  16-character or longer piece of one. `gateway/` holds no tool code or package:
-  it takes the tools as `EdgeTools` (`gateway/edgeTools.ts`, types only) through
-  `startGateway`'s `tools`, and the vault process never loads them. Without them
-  `/mcp` is an unknown path and the integration methods answer
-  `tools_unavailable`; the packaged entry wires none yet (D1). The closed schema
-  covers strings (`maxLength`, `pattern`, `enum`), booleans, integers with a
-  range, finite numbers, arrays of strings (with an item `enum`), closed nested
-  objects (`additionalProperties: false`) and arrays of them, `minItems` and
-  `maxItems` on arrays, a string or `null` (exactly
+  below and in ADR-0005. Both drop a text holding an authorization marker or any
+  whole form of the call's secret. The write tool also drops any text, key or
+  link holding a 16-character piece of a secret form anywhere inside it, so no
+  string of its answer carries one (`upstreamText.ts`). `gateway/` holds no tool
+  code or package: it takes the tools as `EdgeTools` (`gateway/edgeTools.ts`,
+  types only) through `startGateway`'s `tools`, and the vault process never
+  loads them. Without them `/mcp` is an unknown path and the integration methods
+  answer `tools_unavailable`; the packaged entry wires none yet (D1). The closed
+  schema covers strings (`maxLength`, `pattern`, `enum`), booleans, integers
+  with a range, finite numbers, arrays of strings (with an item `enum`), closed
+  nested objects (`additionalProperties: false`) and arrays of them, `minItems`
+  and `maxItems` on arrays, a string or `null` (exactly
   `anyOf: [{type: "string"}, {type: "null"}]`), and an opaque `{type: "object"}`
   passed to the tool as given and never descended into (Task-1463). `default`
   applies only at the root. Its types (`descriptor.ts`) keep these branches

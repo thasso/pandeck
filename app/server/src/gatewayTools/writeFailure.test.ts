@@ -17,6 +17,7 @@ import {
   JiraWriteHttpError,
 } from "../jiraMutationErrors.ts";
 import { JiraReadRefusal } from "../jiraRead.ts";
+import { assertNoCredential } from "../test/credentialOracle.ts";
 import { json, stubJiraFetch } from "../test/jiraEdgeFetch.ts";
 import { jiraConfigOf } from "./atlassian.ts";
 import { FAKE_ACCESS } from "../test/atlassianFake.ts";
@@ -271,4 +272,17 @@ test("wrapped: a rank 207 shows a 4xx entry's reasons, the remedy for 401/403, t
       `Ranking STAR-2 before STAR-1 failed: ${inner}. No rank operation was applied.`,
     );
   }
+});
+
+test("a piece of the token inside a longer text drops it: rule 2's own text and rule 4's reasons (Task-1463 fix-1 F001)", () => {
+  const piece = TOKEN.slice(5, 21);
+  const own = describe(
+    new JiraMutationError(`Transition "Move ${piece}" is not available.`),
+  );
+  assert.equal(own, "Jira refused the change.");
+  const reasons = describe(
+    writeError(400, ["field x is required", `invalid near ${piece} here`]),
+  );
+  assert.equal(reasons, "Jira refused the change (HTTP 400).");
+  for (const text of [own, reasons]) assertNoCredential(text, CREDENTIAL);
 });

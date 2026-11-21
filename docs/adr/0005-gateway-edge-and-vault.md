@@ -139,16 +139,18 @@ on the edge"):
   refused.
 - The gateway hands tools typed credential outcomes and never builds a tool
   error; only fixed, edge-owned tool texts reach a caller. Two exceptions, each
-  never with credential material (any form of the call's token, a fragment of
-  one or an authorization marker drops the text for a fixed one), sanitized and
-  capped, and each reaching only that user's caller:
+  sanitized and capped and reaching only that user's caller:
   - Task-1439 D4 (amended 2026-11-19): Jira's own `errorMessages` and `errors`
-    reasons for a `jira_search_issues` HTTP 400. They may quote the user's JQL,
-    field names or a URL Jira chose to mention.
+    reasons for a `jira_search_issues` HTTP 400, never with credential material
+    (any form of the call's token or an authorization marker drops all of them
+    for the fixed text). They may quote the user's JQL, field names or a URL
+    Jira chose to mention.
   - Task-1463 D-W2 (2026-11-21): for `jira_mutate_issue`, the mutation core's
     own texts and Jira's reasons for a rejected write (a 4xx other than 401 and
-    403), plus the issue keys and browse links Jira answered, each vetted on its
-    raw value and every percent-decoding.
+    403), plus the issue keys and browse links Jira answered. No string of its
+    answer carries credential material: an authorization marker, any form of the
+    call's token, or any 16-character piece of one, checked on each raw value
+    and every percent-decoding of a link, drops it for a fixed text.
 - The edge's one write tool, `jira_mutate_issue` (Task-1463), writes in the call
   itself: the client asks the user to approve the call, and the edge applies the
   changes at once. It runs on its own 45 s deadline, inside the client's
