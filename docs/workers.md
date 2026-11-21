@@ -2722,8 +2722,9 @@ tools: `slack_search`, `slack_conversation_read`, `slack_thread_read` and
   JQL, and resolve project, user and field names with jira_lookup." Control
   characters become spaces and the text is capped at 500 characters. No other
   part of Jira's body reaches the caller. Over OAuth, `jira_lookup kind=sprints`
-  needs Jira Software scopes the gateway does not ask for yet, so Jira refuses
-  it until they are added (Task-1439 D3).
+  needs the Jira Software scopes in the default list (Task-1439 P1), so it works
+  for a grant made after the user signs in with Atlassian again; a grant from
+  before that keeps being refused.
 - **Slack reads** (Task-1454). The four tools run the same read path as the
   local ones (`slackRead.ts` with `slackMetadataCache.ts` beside `tools/slack/`,
   which wraps them) with the same schema and description objects, action key
@@ -3012,12 +3013,28 @@ not offer Slack).
   Credentials). `atlassian.scopes` overrides the scopes asked for: a list of at
   most 64, each 1-128 printable characters without spaces, duplicates dropped,
   refused with a fixed text naming only the field. Without it the gateway asks
-  for `read:jira-work`, `write:jira-work`, `read:jira-user`,
-  `read:servicedesk-request`, `write:servicedesk-request`,
-  `read:confluence-content.all` and `write:confluence-content`; either way it
+  for the Atlassian track's full list (Task-1439 P1), by group: classic
+  `read:jira-work`, `write:jira-work`, `read:jira-user`,
+  `read:confluence-content.all`, `write:confluence-content`,
+  `search:confluence`, `read:confluence-space.summary`,
+  `read:confluence-content.summary`, `readonly:content.attachment:confluence`
+  and `write:confluence-file`; granular Jira Software
+  `read:board-scope:jira-software`, `read:project:jira`,
+  `read:sprint:jira-software`, `read:epic:jira-software`,
+  `read:issue-details:jira`, `read:board-scope.admin:jira-software`,
+  `write:issue:jira-software` and `write:sprint:jira-software`; granular
+  Confluence `read:page:confluence`, `read:space:confluence`,
+  `read:comment:confluence`, `read:attachment:confluence`,
+  `write:page:confluence`, `write:comment:confluence`, `read:label:confluence`,
+  `read:hierarchical-content:confluence` and the two deletes,
+  `delete:page:confluence` and `delete:attachment:confluence`. Either way it
   adds `offline_access`, so the vault gets a refresh token. The Atlassian app
   needs the callback `<publicOrigin>/auth/atlassian/callback` and every scope
-  asked for. An optional
+  asked for. Changing the default makes each user sign in with Atlassian again
+  once: until then a user keeps the grant made earlier, and a tool that needs a
+  newer scope answers "Atlassian rejected the credential; sign in with Atlassian
+  again on the gateway's page." The granted list must fit the vault's
+  2,048-character bound (`MAX_SCOPE_CHARS`), or the connect fails. An optional
   `"slack": {"clientId": "<Slack app's client id>", "teamId": "T…", "userScopes": […]}`
   (Task-1453) turns on "Sign in with Slack" with `clientId` ("Slack sign-in"
   below); without it nothing Slack shows, whatever else the section holds. The
