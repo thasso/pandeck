@@ -38,7 +38,7 @@ export interface CredentialPairing {
  * auth.
  *
  * The lookup and the start of pi's own resolution happen in one synchronous
- * step. pi 1.5.0 captures the provider and its configured key in that same
+ * step. pi 1.6.0 captures the provider and its configured key in that same
  * step (`model-runtime.js` `getAuth`, pi-ai `models.js` `getAuth`), so the
  * pairing checked is the registration whose key is resolved, whatever is
  * registered while it resolves.

@@ -43,7 +43,7 @@
       "pi": {
         "prompt": 5600,
         "eagerTools": 19000,
-        "firstRequest": 24100
+        "firstRequest": 24250
       },
       "claude": {
         "prompt": 5600,
@@ -584,6 +584,14 @@
       "task": 1442,
       "date": "2026-11-19",
       "why": "carries the persona growth above (complete peer briefs, replacesUnread, no acknowledgements)"
+    },
+    {
+      "budget": "personal-assistant.pi.firstRequest",
+      "from": 24100,
+      "to": 24250,
+      "task": 1465,
+      "date": "2026-11-20",
+      "why": "pi 1.6.0 rewrites its built-in find and grep glob descriptions to say patterns are relative to the search directory and that a pattern without a slash matches file names at any depth (+119 characters)"
     }
   ]
 }

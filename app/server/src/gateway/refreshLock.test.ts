@@ -1,6 +1,6 @@
 /**
  * AC4: the CLI's two refresh locks, taken, waited on, kept alive and
- * released as CLI 2.1.316 does, in a temp config dir.
+ * released as CLI 2.1.329 does, in a temp config dir.
  */
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
