@@ -1,0 +1,10 @@
+{
+  "confluenceHost": "acme.atlassian.net",
+  "cql": "type = \"page\" AND title ~ \"nothing matches\" order by lastmodified desc",
+  "start": 0,
+  "resultCount": 0,
+  "totalSize": 0,
+  "nextStart": null,
+  "presentationGuidance": "Read a chosen page with confluence_get_page before summarizing it; an excerpt is not the page. Cite pages with the returned url.",
+  "results": []
+}

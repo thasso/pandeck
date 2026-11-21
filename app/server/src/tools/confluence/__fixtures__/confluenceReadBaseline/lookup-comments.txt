@@ -1,0 +1,43 @@
+{
+  "kind": "comments",
+  "pageId": "101",
+  "count": 3,
+  "nextCursor": "fc2",
+  "comments": [
+    {
+      "id": "c1",
+      "authorId": "acct-a",
+      "version": 1,
+      "markdown": "Does the canary step need approval?",
+      "replies": [
+        {
+          "id": "c11",
+          "authorId": "acct-b",
+          "version": 1,
+          "markdown": "Yes, from the on\\-call lead\\."
+        },
+        {
+          "id": "c12",
+          "authorId": "acct-a",
+          "version": 1,
+          "markdown": "Thanks\\."
+        }
+      ],
+      "moreReplies": "rp2"
+    },
+    {
+      "id": "c2",
+      "authorId": "acct-b",
+      "version": 1,
+      "markdown": "Updated the registry name\\.",
+      "moreReplies": null
+    },
+    {
+      "id": "c3",
+      "authorId": null,
+      "version": 2,
+      "markdown": null,
+      "moreReplies": null
+    }
+  ]
+}

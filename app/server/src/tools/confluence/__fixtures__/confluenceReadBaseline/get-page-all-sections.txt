@@ -1,0 +1,97 @@
+{
+  "confluenceHost": "acme.atlassian.net",
+  "page": {
+    "id": "101",
+    "title": "Runbook",
+    "status": "current",
+    "url": "https://acme.atlassian.net/wiki/spaces/ENG/pages/101/Runbook",
+    "spaceKey": "ENG",
+    "spaceName": "Engineering",
+    "parentId": "100",
+    "version": 7,
+    "updatedAt": "2026-03-04T05:06:07.000Z",
+    "bodySource": "atlas_doc_format",
+    "lossyNodes": [
+      "extension",
+      "panel"
+    ],
+    "truncated": false,
+    "charCount": 199,
+    "markdown": "## Deploy steps\n\nRoll the canary first, then the fleet\\.\n\n- Build the image\n- Push to the registry\n\n```sh\nmake deploy ENV=canary\n```\n\n[macro: toc]\n\n> **Info**\n>\n> Ask in \\#ops before a fleet deploy\\.",
+    "comments": [
+      {
+        "id": "c1",
+        "authorId": "acct-a",
+        "version": 1,
+        "markdown": "Does the canary step need approval?",
+        "replies": [
+          {
+            "id": "c11",
+            "authorId": "acct-b",
+            "version": 1,
+            "markdown": "Yes, from the on\\-call lead\\."
+          },
+          {
+            "id": "c12",
+            "authorId": "acct-a",
+            "version": 1,
+            "markdown": "Thanks\\."
+          }
+        ],
+        "moreReplies": "rp2"
+      },
+      {
+        "id": "c2",
+        "authorId": "acct-b",
+        "version": 1,
+        "markdown": "Updated the registry name\\.",
+        "moreReplies": null
+      },
+      {
+        "id": "c3",
+        "authorId": null,
+        "version": 2,
+        "markdown": null,
+        "moreReplies": null
+      }
+    ],
+    "moreComments": "fc2",
+    "labels": [
+      "runbook",
+      "ops"
+    ],
+    "moreLabels": "lbl2",
+    "children": [
+      {
+        "id": "104",
+        "title": "Long page",
+        "url": "https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=104"
+      },
+      {
+        "id": "105",
+        "title": "Rollback",
+        "url": "https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=105"
+      }
+    ],
+    "moreChildren": null,
+    "attachments": [
+      {
+        "id": "att501",
+        "title": "diagram.png",
+        "mediaType": "image/png",
+        "fileSize": 2048,
+        "version": 2,
+        "downloadUrl": "https://acme.atlassian.net/wiki/download/attachments/101/diagram.png?version=2&api=v2"
+      },
+      {
+        "id": "att502",
+        "title": "notes.txt",
+        "mediaType": "text/plain",
+        "fileSize": null,
+        "version": null,
+        "downloadUrl": "https://acme.atlassian.net/wiki/download/attachments/101/notes.txt"
+      }
+    ],
+    "moreAttachments": "att2"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "kind": "pageTree",
+  "confluenceHost": "acme.atlassian.net",
+  "count": 2,
+  "nextCursor": null,
+  "pages": [
+    {
+      "id": "104",
+      "title": "Long page",
+      "status": "draft",
+      "parentId": "101",
+      "url": "https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=104"
+    },
+    {
+      "id": "105",
+      "title": "Rollback",
+      "status": "current",
+      "parentId": "101",
+      "url": "https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=105"
+    }
+  ]
+}

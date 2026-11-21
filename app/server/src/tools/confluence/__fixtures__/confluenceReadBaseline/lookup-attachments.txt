@@ -1,0 +1,24 @@
+{
+  "kind": "attachments",
+  "pageId": "101",
+  "count": 2,
+  "nextCursor": "att2",
+  "attachments": [
+    {
+      "id": "att501",
+      "title": "diagram.png",
+      "mediaType": "image/png",
+      "fileSize": 2048,
+      "version": 2,
+      "downloadUrl": "https://acme.atlassian.net/wiki/download/attachments/101/diagram.png?version=2&api=v2"
+    },
+    {
+      "id": "att502",
+      "title": "notes.txt",
+      "mediaType": "text/plain",
+      "fileSize": null,
+      "version": null,
+      "downloadUrl": "https://acme.atlassian.net/wiki/download/attachments/101/notes.txt"
+    }
+  ]
+}

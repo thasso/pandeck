@@ -1,0 +1,20 @@
+{
+  "kind": "replies",
+  "commentId": "c1",
+  "count": 2,
+  "nextCursor": "rp2",
+  "replies": [
+    {
+      "id": "c11",
+      "authorId": "acct-b",
+      "version": 1,
+      "markdown": "Yes, from the on\\-call lead\\."
+    },
+    {
+      "id": "c12",
+      "authorId": "acct-a",
+      "version": 1,
+      "markdown": "Thanks\\."
+    }
+  ]
+}

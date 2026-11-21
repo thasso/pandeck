@@ -1,0 +1,29 @@
+{
+  "confluenceHost": "acme.atlassian.net",
+  "cql": "type = \"page\" AND space in (\"ENG\", \"OPS\") AND text ~ \"deploy\" AND lastmodified >= \"2026-01-01\" order by lastmodified desc",
+  "start": 0,
+  "resultCount": 2,
+  "totalSize": 5,
+  "nextStart": 2,
+  "presentationGuidance": "Read a chosen page with confluence_get_page before summarizing it; an excerpt is not the page. Cite pages with the returned url.",
+  "results": [
+    {
+      "id": "101",
+      "type": "page",
+      "title": "Runbook",
+      "space": "Engineering",
+      "lastModified": "2026-03-04T05:06:07.000Z",
+      "url": "https://acme.atlassian.net/wiki/spaces/ENG/pages/101/Runbook",
+      "excerpt": "Roll the canary first, then deploy …"
+    },
+    {
+      "id": "205",
+      "type": "page",
+      "title": "",
+      "space": null,
+      "lastModified": "2026-02-01T00:00:00.000Z",
+      "url": "https://acme.atlassian.net/wiki/spaces/OPS/pages/205",
+      "excerpt": null
+    }
+  ]
+}

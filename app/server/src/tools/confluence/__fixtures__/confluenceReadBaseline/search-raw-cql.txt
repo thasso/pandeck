@@ -1,0 +1,20 @@
+{
+  "confluenceHost": "acme.atlassian.net",
+  "cql": "id = 101",
+  "start": 0,
+  "resultCount": 1,
+  "totalSize": 1,
+  "nextStart": null,
+  "presentationGuidance": "Read a chosen page with confluence_get_page before summarizing it; an excerpt is not the page. Cite pages with the returned url.",
+  "results": [
+    {
+      "id": "101",
+      "type": "page",
+      "title": "Runbook",
+      "space": "Engineering",
+      "lastModified": "2026-03-04T05:06:07.000Z",
+      "url": "https://acme.atlassian.net/wiki/spaces/ENG/pages/101/Runbook",
+      "excerpt": "Roll the canary first"
+    }
+  ]
+}

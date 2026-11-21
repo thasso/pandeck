@@ -1,0 +1,24 @@
+{
+  "kind": "spaces",
+  "confluenceHost": "acme.atlassian.net",
+  "count": 2,
+  "nextCursor": "spc/page=2",
+  "spaces": [
+    {
+      "id": "900",
+      "key": "ENG",
+      "name": "Engineering",
+      "type": "global",
+      "status": "current",
+      "url": "https://acme.atlassian.net/wiki/spaces/ENG"
+    },
+    {
+      "id": "902",
+      "key": "~acct",
+      "name": "Personal space of an engineer",
+      "type": "personal",
+      "status": "current",
+      "url": null
+    }
+  ]
+}
