@@ -37,7 +37,7 @@ interface AtlassianBearerConfig {
 }
 
 /** What the calls below take: an API token (Basic) or an access token (Bearer). */
-type AtlassianConfig = AtlassianApiConfig | AtlassianBearerConfig;
+export type AtlassianConfig = AtlassianApiConfig | AtlassianBearerConfig;
 
 /** Which product a call belongs to; only shapes error text and settings hints. */
 export type AtlassianProduct = "Jira" | "Confluence";
