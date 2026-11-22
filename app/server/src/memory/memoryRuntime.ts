@@ -15,7 +15,7 @@ import type {
   MemoryLoadBatch,
   MemoryLoadDeliveryState,
 } from "@assistant/shared";
-import { getSettings } from "../settings.ts";
+import { memorySettingsInEffect } from "./memoryGate.ts";
 import { userTimeZone } from "../userProfile.ts";
 import { resolveSessionProject } from "../sessionProjectContext.ts";
 import { withDbTransaction } from "../db/index.ts";
@@ -104,7 +104,7 @@ export function decideMemoryDeliveryForPrompt(
   driver: DriverLike,
   cleanText: string,
 ): MemoryDeliveryDecision {
-  const settings = getSettings().memory;
+  const settings = memorySettingsInEffect();
   const nowMs = clock();
   // Uses the shared resolver so Task-derived project context (not just a
   // standalone session→project link) scopes memory selection (Task 94).

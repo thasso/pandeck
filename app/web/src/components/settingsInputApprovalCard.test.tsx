@@ -158,10 +158,10 @@ test("the GitHub token card links to the token form whatever the reason says", (
   ).toBeTruthy();
 });
 
-test("only the GitHub token carries a setup link", () => {
+test("a secret without a setup link shows only its field", () => {
   expect(
     SETTINGS_REGISTRY.filter((d) => d.setupLink).map((d) => d.path),
-  ).toEqual(["github.token"]);
+  ).toEqual(["jira.atlassianToken", "github.token", "brave.apiKey"]);
   render(
     <ApprovalCard
       approval={card({
@@ -174,6 +174,24 @@ test("only the GitHub token carries a setup link", () => {
   );
   expect(container!.querySelector('input[type="password"]')).not.toBeNull();
   expect(container!.querySelector("a")).toBeNull();
+});
+
+test("the Atlassian token card links to Atlassian's token page", () => {
+  render(
+    <ApprovalCard
+      approval={card({
+        path: "jira.atlassianToken",
+        label: "Atlassian API token",
+        section: "jira",
+      })}
+      onResolve={vi.fn()}
+    />,
+  );
+  const link = container!.querySelector<HTMLAnchorElement>("a");
+  expect(link?.href).toBe(
+    "https://id.atlassian.com/manage-profile/security/api-tokens",
+  );
+  expect(link?.textContent).toContain("Create an Atlassian API token");
 });
 
 test("Save waits for a value", () => {

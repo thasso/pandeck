@@ -23,6 +23,7 @@ const {
   initOnboarding,
   initialOnboardingState,
   onboardingState,
+  persistFirstRunMemoryOptOut,
   setOnboardingBroadcaster,
 } = await import("./onboarding.ts");
 type UsableAccount = import("./onboarding.ts").UsableAccount;
@@ -34,6 +35,13 @@ const { saveSettings } = await import("./settingsService.ts");
 // effects can load it); load it first so the test's listener is the last one.
 await import("./hub.ts");
 const pa = await import("./permanentAssistant.ts");
+const memoryProcessor = await import("./memory/memoryProcessor.ts");
+const { memoryScheduler } = await import("./memory/memoryScheduler.ts");
+const { memoryObservationStore } =
+  await import("./db/memoryObservationStore.ts");
+const { sessionStore } = await import("./db/sessionStore.ts");
+const { permanentAssistantStore } =
+  await import("./db/permanentAssistantStore.ts");
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
@@ -237,6 +245,141 @@ describe("beginning guided setup", () => {
     const assistant = getSettings().permanentAssistant;
     assert.equal(assistant.name, "Larry");
     assert.equal(assistant.additionalInstructions, "Be brief.");
+  });
+
+  test("boot turns memory off on a fresh install only", async () => {
+    const defaults = getSettings().memory;
+    assert.equal(defaults.loadingEnabled, true);
+    assert.equal(defaults.learningMode, "adaptive");
+    assert.equal(defaults.maintenanceEnabled, true);
+    initOnboarding(() => FRESH);
+    await persistFirstRunMemoryOptOut();
+    assert.equal(onboardingState(), "pending");
+    assert.deepEqual(
+      [
+        readStoredAppSettings().memory?.loadingEnabled,
+        readStoredAppSettings().memory?.learningMode,
+        readStoredAppSettings().memory?.maintenanceEnabled,
+      ],
+      [false, "off", false],
+    );
+    // Every other memory setting keeps its default.
+    assert.deepEqual(getSettings().memory, {
+      ...defaults,
+      loadingEnabled: false,
+      learningMode: "off",
+      maintenanceEnabled: false,
+    });
+
+    rmSync(STATE_PATH);
+    rmSync(APP_SETTINGS_PATH);
+    initOnboarding(() => ({ ...FRESH, sessions: true }));
+    await persistFirstRunMemoryOptOut();
+    assert.equal(existsSync(APP_SETTINGS_PATH), false);
+  });
+
+  test("a check retries the opt-out, and setup waits for it", async () => {
+    initOnboarding(() => FRESH);
+    block(SETTINGS_TMP);
+    await persistFirstRunMemoryOptOut(); // never throws
+    await checkOnboarding(probe(CLAUDE));
+    assert.equal(onboardingState(), "pending");
+    assert.equal(readStoredAppSettings().memory, undefined);
+
+    rmSync(SETTINGS_TMP, { recursive: true });
+    await checkOnboarding(probe(undefined));
+    assert.equal(onboardingState(), "pending");
+    assert.equal(readStoredAppSettings().memory?.learningMode, "off");
+    await checkOnboarding(probe(CLAUDE));
+    assert.equal(onboardingState(), "setup");
+    assert.equal(readStoredAppSettings().memory?.maintenanceEnabled, false);
+  });
+
+  describe("with the real rotation", () => {
+    const PREVIOUS = "pa-before-setup";
+    let processorCalls = 0;
+    beforeEach(() => {
+      rotate.mockRestore();
+      processorCalls = 0;
+      memoryProcessor.setMemoryProcessorRunnerForTests({
+        run: async () => {
+          processorCalls += 1;
+          return { text: JSON.stringify({ operations: [] }) };
+        },
+      });
+      sessionStore.upsert({
+        id: PREVIOUS,
+        harness: "pi",
+        agentType: "personal-assistant",
+        requiresEnterprise: false,
+      });
+      permanentAssistantStore.setSessionId(PREVIOUS);
+      memoryObservationStore.enqueue({
+        sessionId: PREVIOUS,
+        userTurnId: `turn-${Math.random()}`,
+        persona: "personal-assistant",
+        humanText: "Remember that I prefer short answers.",
+        sourceTimestampMs: Date.now(),
+        timezone: "UTC",
+        highSignal: true,
+        createdAt: Date.now(),
+      });
+    });
+    afterEach(() => {
+      memoryProcessor.resetMemoryProcessorRunnerForTests();
+      permanentAssistantStore.clearSessionId();
+    });
+
+    test("beginning setup sends no observation to the processor", async () => {
+      initOnboarding(() => FRESH);
+      await checkOnboarding(probe(CLAUDE));
+      assert.equal(onboardingState(), "setup");
+      // The pin and the name rotated the assistant, flushing its queue.
+      assert.equal(permanentAssistantStore.sessionId(), undefined);
+      assert.equal(processorCalls, 0);
+      assert.equal(memoryObservationStore.pendingCountForSession(PREVIOUS), 0);
+    });
+
+    test("memory saved on stays off until setup begins", async () => {
+      initOnboarding(() => FRESH);
+      // Saved on, e.g. from Settings: the user's choice, which the opt-out
+      // keeps. While pending, the gate still holds memory off.
+      await saveSettings({ memory: { ...getSettings().memory } });
+      await checkOnboarding(probe(CLAUDE));
+      assert.equal(onboardingState(), "setup");
+      assert.equal(processorCalls, 0);
+      assert.equal(getSettings().memory.learningMode, "adaptive");
+
+      // Past pending, the stored settings apply: the same flush processes.
+      sessionStore.upsert({
+        id: "pa-in-setup",
+        harness: "pi",
+        agentType: "personal-assistant",
+        requiresEnterprise: false,
+      });
+      memoryObservationStore.enqueue({
+        sessionId: "pa-in-setup",
+        userTurnId: "turn-in-setup",
+        persona: "personal-assistant",
+        humanText: "Remember that I prefer short answers.",
+        sourceTimestampMs: Date.now(),
+        timezone: "UTC",
+        highSignal: true,
+        createdAt: Date.now(),
+      });
+      await memoryScheduler.flushBeforeReset("pa-in-setup");
+      assert.equal(processorCalls, 1);
+    });
+  });
+
+  test("a memory setting saved before setup stands", async () => {
+    initOnboarding(() => FRESH);
+    await saveSettings({ memory: { ...getSettings().memory, maxCards: 4 } });
+    await checkOnboarding(probe(CLAUDE));
+    assert.equal(onboardingState(), "setup");
+    assert.equal(getSettings().memory.loadingEnabled, true);
+    assert.equal(getSettings().memory.learningMode, "adaptive");
+    assert.equal(getSettings().memory.maxCards, 4);
   });
 
   test("overlapping checks begin setup once", async () => {
@@ -476,9 +619,23 @@ describe("established installs", () => {
     await checkOnboarding(probe(CLAUDE));
     assert.equal(await finishOnboarding(), "complete");
     assert.equal(readStoredAppSettings().permanentAssistant, undefined);
+    assert.equal(readStoredAppSettings().memory, undefined);
+    assert.equal(getSettings().memory.loadingEnabled, true);
+    assert.equal(getSettings().memory.learningMode, "adaptive");
     assert.equal(rotate.mock.calls.length, 0);
     assert.equal(broadcasts.length, 0);
     assert.equal(onboardingState(), "complete");
+  });
+
+  test("a gateway client is never set up and keeps memory as it is", async () => {
+    assert.equal(
+      initOnboarding(() => ({ ...FRESH, gatewayClient: true })),
+      "complete",
+    );
+    await checkOnboarding(probe(CLAUDE));
+    assert.equal(existsSync(APP_SETTINGS_PATH), false);
+    assert.equal(getSettings().memory.loadingEnabled, true);
+    assert.equal(broadcasts.length, 0);
   });
 
   test("an unknown state in the file reads as complete", () => {
@@ -515,9 +672,11 @@ describe("storage failures", () => {
       state: "pending",
     });
     assert.equal(broadcasts.length, 0);
-    // Named and pinned already; the retry changes neither, it only moves on.
+    // Named, pinned and memory off already; the retry changes none of it, it
+    // only moves on.
     assert.equal(readStoredAppSettings().permanentAssistant?.name, "Larry");
     assert.equal(readStoredAppSettings().permanentAssistant?.modelId, "opus");
+    assert.equal(readStoredAppSettings().memory?.loadingEnabled, false);
 
     rmSync(STATE_TMP, { recursive: true });
     await checkOnboarding(probe(OPENAI, () => true));
@@ -537,8 +696,12 @@ describe("storage failures", () => {
     });
     assert.equal(broadcasts.length, 0);
 
+    assert.equal(readStoredAppSettings().memory, undefined);
+
     rmSync(SETTINGS_TMP, { recursive: true });
     await checkOnboarding(probe(CLAUDE));
+    assert.equal(readStoredAppSettings().memory?.loadingEnabled, false);
+    assert.equal(readStoredAppSettings().memory?.learningMode, "off");
     assert.equal(readStoredAppSettings().permanentAssistant?.name, "Larry");
     assert.equal(readStoredAppSettings().permanentAssistant?.modelId, "opus");
     assert.equal(onboardingState(), "setup");

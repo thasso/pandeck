@@ -578,6 +578,7 @@ describe("tool catalog", () => {
         "accounts_sign_in",
         "git_setup_read",
         "github_pat_setup_link",
+        "integration_setup_read",
       ],
     );
     for (const persona of [
@@ -591,7 +592,8 @@ describe("tool catalog", () => {
           (tool) =>
             tool.name.startsWith("settings_") ||
             tool.name === "git_setup_read" ||
-            tool.name === "github_pat_setup_link",
+            tool.name === "github_pat_setup_link" ||
+            tool.name === "integration_setup_read",
         ),
         `${persona} must not expose settings tools`,
       );
@@ -651,6 +653,7 @@ describe("tool catalog", () => {
         "accounts_sign_in",
         "git_setup_read",
         "github_pat_setup_link",
+        "integration_setup_read",
         "onboarding_finish",
         "worktree_create",
         "worktree_status",

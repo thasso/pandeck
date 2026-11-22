@@ -726,6 +726,11 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
     "Atlassian API token",
     "jira.atlassianTokenConfigured",
     "clearAtlassianToken",
+    {
+      url: "https://id.atlassian.com/manage-profile/security/api-tokens",
+      label: "Create an Atlassian API token",
+      hint: "Sign in with the Atlassian account you use for Jira, create a token, then paste it below.",
+    },
   ),
   readonly(
     "jira.jiraHost",
@@ -817,6 +822,11 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
     "Brave API key",
     "brave.apiKeyConfigured",
     "clearApiKey",
+    {
+      url: "https://brave.com/search/api/",
+      label: "Get a Brave Search API key",
+      hint: "Sign up for the Brave Search API, create a key in its dashboard, then paste it below.",
+    },
   ),
   setting("context7.enabled", "context7", "Context7", BOOLEAN),
   secret(

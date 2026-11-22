@@ -143,10 +143,30 @@ turn's decision reflects a different (stale or unadvanced) one.
 ## Processing cadence, settings & safety ceilings
 
 Automatic learning modes: `off`, `adaptive` (default), `every-turn`
-(experimental). Loading is independently switchable. The adaptive scheduler
-(`memory/memoryScheduler.ts`) enqueues a bounded observation per completed
-eligible human turn, processes high-signal turns immediately, and batches the
-rest on a turn threshold / idle period / before rotation-compaction.
+(experimental). Loading (`memory.loadingEnabled`, default on) and maintenance
+(`memory.maintenanceEnabled`, default on) are independently switchable. The
+adaptive scheduler (`memory/memoryScheduler.ts`) enqueues a bounded observation
+per completed eligible human turn, processes high-signal turns immediately, and
+batches the rest on a turn threshold / idle period / before rotation-compaction.
+
+With learning `off`, nothing reaches the processor from the queue: no new
+observation is enqueued, and a flush of observations queued before learning was
+turned off (rotation, compaction, any other trigger) drops them instead of
+processing them, since the user declined learning. This holds on every install.
+Maintenance is its own switch: model consolidation runs while
+`maintenanceEnabled` is on, whatever the learning mode. Model-free expiry runs
+on every maintenance tick regardless of the switch, so a windowed card lapses
+even with maintenance off.
+
+**First run.** A fresh install starts with memory off, an established one keeps
+the defaults (`onboarding.md`). From the boot that classifies an install as
+first run, the server persists `loadingEnabled: false`, `learningMode: "off"`
+and `maintenanceEnabled: false` (each only when the settings file does not hold
+it), and the memory gate (`memory/memoryGate.ts`, `memorySettingsInEffect`)
+treats all three as off while onboarding is `pending`, whatever is stored. Every
+reader of these switches (delivery, capture, flushes, maintenance) reads them
+through the gate. Guided setup's Memory step turns all three back on only on the
+user's explicit yes.
 
 The bounded no-tool processor (`memory/memoryProcessor.ts`) runs a configurable
 cheap model through the pi/Claude one-shot seams, requires strict JSON

@@ -382,6 +382,26 @@ describe("first-run guided setup", () => {
       assert.doesNotMatch(paPrompt(), new RegExp(name));
   });
 
+  test("offers integrations and memory, after the folders", () => {
+    const setup = computePromptConditions("personal-assistant", {
+      guidedSetup: true,
+    });
+    const prompt = paPrompt(setup);
+    const name = "integration_setup_read";
+    assert.match(prompt, new RegExp(`\`${name}\`[\\s\\S]*\`ask_questions\``));
+    assert.ok(
+      AGENT_TYPES["personal-assistant"]
+        .tools()
+        .some((tool) => tool.name === name),
+    );
+    assert.ok(!eagerToolNamesFor("personal-assistant", setup).has(name));
+    assert.doesNotMatch(paPrompt(), new RegExp(name));
+    assert.match(
+      prompt,
+      /`worktrees\.root`[\s\S]*`integration_setup_read`[\s\S]*`memory\.loadingEnabled`[\s\S]*`memory\.learningMode`[\s\S]*`onboarding_finish`/,
+    );
+  });
+
   test("the finish tool is eager only in the setup session", () => {
     const setup = computePromptConditions("personal-assistant", {
       guidedSetup: true,
