@@ -161,6 +161,8 @@ export interface ConfluenceAttachmentResponse {
   comment?: string;
   downloadLink?: string;
   version?: { number?: number };
+  /** Checked only before a delete (`requireCurrentForDelete`). */
+  status?: unknown;
   _links?: { download?: string };
 }
 

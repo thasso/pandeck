@@ -41,6 +41,7 @@ import {
 import {
   ConfluenceMutationError,
   confluenceWrite,
+  requireCurrentForDelete,
   signalOptions,
   signalTail,
   stopIfAborted,
@@ -192,11 +193,15 @@ async function executeComment(
  * A missing `baseVersion` is a refusal, not a skipped check: an unverifiable
  * write to somebody's wiki page is exactly what the approval was meant to
  * prevent.
+ *
+ * `requireCurrent` (a delete only) also refuses, after the version check, a
+ * page the read does not report as exactly `current`.
  */
 async function readVerifiedPage(
   config: ConfluenceConfig,
   item: ConfluencePageMutationItemDisplay,
   signal: AbortSignal | undefined,
+  options: { requireCurrent?: boolean } = {},
 ): Promise<{ page: ConfluencePageResponse; version: number }> {
   if (typeof item.baseVersion !== "number")
     throw new ConfluenceMutationError(
@@ -217,14 +222,18 @@ async function readVerifiedPage(
     throw new ConfluenceMutationError(
       `Page ${item.pageId} changed since this proposal was prepared (version ${item.baseVersion} → ${version}). Re-read it and propose the change again.`,
     );
+  if (options.requireCurrent)
+    requireCurrentForDelete(page.status, `Page ${item.pageId}`);
   return { page, version };
 }
 
 /**
- * Delete an approved page. The version is verified first; Confluence's v2
- * DELETE takes no version precondition, so an edit landing between that check
- * and this call is a race the API cannot close — the check narrows the window
- * from the whole approval wait to a single round trip.
+ * Delete an approved page. The version is verified first, then that the page
+ * is still `current` (so a replayed approval never sends a second DELETE for
+ * a page it already trashed). Confluence's v2 DELETE takes no version
+ * precondition, so a change landing between that check and this call is a
+ * race the API cannot close — the check narrows the window from the whole
+ * approval wait to a single round trip.
  */
 async function executeDelete(
   config: ConfluenceConfig,
@@ -232,7 +241,7 @@ async function executeDelete(
   deps: ConfluenceApplyDeps,
 ): Promise<void> {
   const { signal } = deps;
-  await readVerifiedPage(config, item, signal);
+  await readVerifiedPage(config, item, signal, { requireCurrent: true });
   await confluenceWrite(
     () =>
       confluenceDelete(

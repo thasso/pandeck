@@ -1,7 +1,8 @@
 /**
  * Typed errors of the shared Confluence mutation core (`confluenceMutate.ts`,
  * `confluenceMutateApply.ts`, `confluenceAttachmentChange.ts`, Task-1463),
- * and the signal helpers every request of it goes through. A caller decides
+ * its delete guard, and the signal helpers every request of it goes through.
+ * A caller decides
  * what to show by type and status alone, never by parsing a message: the
  * local tool shows every message as it always did, while the gateway's edge
  * must not repeat raw upstream text.
@@ -24,6 +25,32 @@ export class ConfluenceMutationError extends Error {}
  * read stays a plain `AtlassianHttpError`.
  */
 export class ConfluenceWriteHttpError extends AtlassianHttpError {}
+
+/**
+ * The trash-only rule's delete guard: a page or attachment delete goes ahead
+ * only when the read that verified it reported `status` exactly `"current"`.
+ * Anything else, a missing status included, refuses, because a read that says
+ * nothing about state proves nothing. Delete paths only; every other operation
+ * ignores status.
+ *
+ * This is proof from the verification read, not a conditional DELETE: a change
+ * made elsewhere between that read and the DELETE is not caught here.
+ *
+ * @param subject How the refusal names the resource: `Page <id>` or the file name.
+ */
+export function requireCurrentForDelete(
+  status: unknown,
+  subject: string,
+): void {
+  if (status === "current") return;
+  const shown =
+    typeof status === "string" && /^[a-z_]{1,20}$/.test(status)
+      ? status
+      : "unknown";
+  throw new ConfluenceMutationError(
+    `${subject} is not confirmed current (status ${shown}); nothing was deleted.`,
+  );
+}
 
 /** Runs one write request, retyping Confluence's rejection as `ConfluenceWriteHttpError`. */
 export async function confluenceWrite<T>(

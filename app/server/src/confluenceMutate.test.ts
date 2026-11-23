@@ -30,6 +30,8 @@ vi.mock("./atlassian/atlassianFetch.ts", async (importActual) => ({
             },
           },
         };
+      if (method === "GET" && path === "/wiki/api/v2/attachments/att1")
+        return { id: "att1", status: "current", version: { number: 2 } };
       return {};
     },
   ),
@@ -114,14 +116,80 @@ describe("apply without a signal keeps every call's exact arguments (AC5a)", () 
   });
 });
 
+const MOVED_MODULES = [
+  "confluenceMutate.ts",
+  "confluenceMutateApply.ts",
+  "confluenceAttachmentChange.ts",
+  "confluenceMutationErrors.ts",
+  "../../shared/confluenceMutation.ts",
+];
+const sourceOf = (module: string) =>
+  readFileSync(new URL(module, import.meta.url), "utf8");
+
 describe("the moved modules throw only typed errors (AC4)", () => {
-  test.each([
-    "confluenceMutate.ts",
-    "confluenceMutateApply.ts",
-    "confluenceAttachmentChange.ts",
-    "confluenceMutationErrors.ts",
-  ])("%s contains no `new Error(`", (module) => {
-    const source = readFileSync(new URL(module, import.meta.url), "utf8");
-    expect(source).not.toContain("new Error(");
+  test.each(MOVED_MODULES)("%s contains no `new Error(`", (module) => {
+    expect(sourceOf(module)).not.toContain("new Error(");
   });
+});
+
+describe("trash only (AC7)", () => {
+  test("each delete hands the transport the exact path, no body and no query", async () => {
+    fetchMock.mockClear();
+    await applyConfluenceMutationItems(
+      config,
+      [
+        {
+          clientId: "cfl_0",
+          operation: "delete",
+          pageId: "123",
+          baseVersion: 7,
+        },
+        {
+          clientId: "cfl_1",
+          operation: "deleteAttachment",
+          pageId: "123",
+          attachment: {
+            fileName: "diagram.png",
+            existingId: "att1",
+            baseVersion: 2,
+            mediaType: "image/png",
+            size: 4,
+          },
+        },
+      ],
+      { describeError: errorText },
+    );
+    expect(fetchMock.mock.calls.filter((call) => call[2] === "DELETE")).toEqual(
+      [
+        [
+          config,
+          "Confluence",
+          "DELETE",
+          "/wiki/api/v2/pages/123",
+          undefined,
+          undefined,
+        ],
+        [
+          config,
+          "Confluence",
+          "DELETE",
+          "/wiki/api/v2/attachments/att1",
+          undefined,
+          undefined,
+        ],
+      ],
+    );
+  });
+
+  // Secondary to the request tests (B4): no operation, flag or parameter for
+  // a permanent delete or for addressing the trash.
+  test.each(MOVED_MODULES)(
+    "%s names no purge and no trashed status",
+    (module) => {
+      const source = sourceOf(module);
+      expect(source).not.toMatch(/purge/i);
+      expect(source).not.toContain("status=trashed");
+      expect(source).not.toContain('"trashed"');
+    },
+  );
 });

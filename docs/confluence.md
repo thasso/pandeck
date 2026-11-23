@@ -8,15 +8,15 @@ account email and API token that `jiraSettings.ts` stores.
 
 ## At a glance
 
-|                          |                                                                                          |
-| ------------------------ | ---------------------------------------------------------------------------------------- |
-| Auth model               | Atlassian Basic auth, borrowed from the Jira integration                                 |
-| Runtime settings file    | `DATA_DIR/settings/confluence.json` (only `enabled`)                                     |
-| Static deployment config | `confluenceHost` (`config.ts`, defaults to `jiraHost`)                                   |
-| Tool gate                | `confluence`                                                                             |
-| Owning modules           | `app/server/src/confluenceSettings.ts`, `app/server/src/atlassian/`, `tools/confluence/` |
-| Agent tools              | 5: search, get_page, lookup, download_attachment, mutate_page (`confluence_` prefix)     |
-| Approval kind            | `confluencePage`                                                                         |
+|                          |                                                                                                                                                                                                                                                                   |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Auth model               | Atlassian Basic auth, borrowed from the Jira integration                                                                                                                                                                                                          |
+| Runtime settings file    | `DATA_DIR/settings/confluence.json` (only `enabled`)                                                                                                                                                                                                              |
+| Static deployment config | `confluenceHost` (`config.ts`, defaults to `jiraHost`)                                                                                                                                                                                                            |
+| Tool gate                | `confluence`                                                                                                                                                                                                                                                      |
+| Owning modules           | `app/server/src/confluenceSettings.ts`, `app/server/src/atlassian/`, `app/server/src/confluenceRead.ts`, `app/server/src/confluenceMutate*.ts`, `app/server/src/confluenceAttachmentChange.ts`, `app/server/src/confluenceMutationErrors.ts`, `tools/confluence/` |
+| Agent tools              | 5: search, get_page, lookup, download_attachment, mutate_page (`confluence_` prefix)                                                                                                                                                                              |
+| Approval kind            | `confluencePage`                                                                                                                                                                                                                                                  |
 
 ## Credentials come from Jira
 
@@ -151,6 +151,31 @@ Three properties make that guard total rather than best-effort:
   card persisted before that staging rule existed fails instead of writing
   unverified.
 
+## Deletes go to the trash, once
+
+`confluence_mutate_page` never deletes permanently. The only content DELETEs are
+`DELETE /wiki/api/v2/pages/{id}` and `DELETE /wiki/api/v2/attachments/{id}`,
+each with no query string, and the only other DELETE removes a label (v1). No
+module has an operation, flag or parameter for a permanent delete.
+
+A `delete` or `deleteAttachment` goes ahead only when the deleted resource is
+reported with `status` exactly `current`. The check runs on reads the tool
+already makes: the page or attachment read at staging, and the verify read at
+execution, after its version check. Anything else refuses, a missing status
+included, because a read that says nothing about state proves nothing. The
+refusals are "Page <id> is not confirmed current (status <s>); nothing was
+deleted." and "<file name> is not confirmed current (status <s>); nothing was
+deleted.", where `<s>` is the status only when it matches `^[a-z_]{1,20}$` and
+`unknown` otherwise. So replaying an approved delete sends no second DELETE: the
+second verify read finds the item trashed, without a status, or gone (404).
+Every other operation ignores status.
+
+`requireCurrentForDelete` in `app/server/src/confluenceMutationErrors.ts`
+enforces this; `confluenceMutate.ts`, `confluenceMutateApply.ts` and
+`confluenceAttachmentChange.ts` call it from their delete paths only. It is
+proof from the read, not a conditional DELETE: as with the version check, a
+change made elsewhere between the read and the DELETE is not caught.
+
 ## Tool surface
 
 - **`confluence_search`** — CQL search. Named filters (`text`, `title`,
@@ -185,11 +210,21 @@ same payload compact, with fixed error texts and a 60,000-character result
 ceiling: `docs/workers.md` "Tools on the edge". All three schemas refuse unknown
 arguments.
 
+`confluence_mutate_page`'s prepare and apply live beside `tools/confluence/` in
+modules the edge may import but no edge tool uses yet: `confluenceMutate.ts`
+(schema, description, prepare), `confluenceMutateApply.ts` (apply),
+`confluenceAttachmentChange.ts` (attachment staging and apply) and
+`confluenceMutationErrors.ts` (typed errors, signal helpers and the delete
+guard). The local tool wraps them with its settings, the session attachment
+store and the approval card. `docs/workers.md` "Tools on the edge" lists their
+seams.
+
 ## Attachments
 
-Attachment writes live in `tools/confluence/confluenceAttachments.ts` and ride
-the same `confluencePage` approval as page writes, with an `attachment` object
-on the item.
+Attachment writes live in `app/server/src/confluenceAttachmentChange.ts` and
+ride the same `confluencePage` approval as page writes, with an `attachment`
+object on the item. `tools/confluence/confluenceAttachments.ts` keeps the
+session attachment store side: freezing an upload's bytes and reading them back.
 
 - **`uploadAttachment`** takes its bytes from `sourceAttachmentId` (a session
   attachment) or `sourcePath` (an absolute host path). The file name defaults to
@@ -199,7 +234,8 @@ on the item.
   `…/child/attachment/{id}/data`, both multipart (`atlassianFetch` sends a
   `FormData` body with `X-Atlassian-Token: no-check`).
 - **`deleteAttachment`** moves one attachment to the trash through
-  `DELETE /wiki/api/v2/attachments/{id}`.
+  `DELETE /wiki/api/v2/attachments/{id}`, only when it is reported `current`
+  ("Deletes go to the trash, once").
 
 **What uploads is what was approved.** Staging copies a host file into the
 session attachment store and records the copy's id and SHA-256 on the item. A

@@ -97,6 +97,12 @@ vi.mock("../../atlassian/atlassianFetch.ts", async (importActual) => ({
 
 /** The page's one attachment; `attachmentVersion` moves it like another uploader would. */
 let attachmentVersion = 2;
+/**
+ * Task-1463 B1: a delete goes ahead only when its verification read reports
+ * `status: "current"`, so the delete test sets it. Every other read keeps no
+ * status, which also shows the guard did not spread to uploads.
+ */
+let attachmentStatus: string | undefined;
 function attachmentResponse() {
   return {
     id: "att1",
@@ -105,6 +111,7 @@ function attachmentResponse() {
     mediaType: "image/png",
     fileSize: 4,
     version: { number: attachmentVersion },
+    ...(attachmentStatus === undefined ? {} : { status: attachmentStatus }),
     downloadLink: "/download/attachments/123/diagram.png?version=2&api=v2",
   };
 }
@@ -1106,18 +1113,23 @@ describe("confluence_mutate_page attachments", () => {
   });
 
   test("a delete verifies the version and trashes the attachment", async () => {
-    const { sessionId, items } = await stage([
-      { operation: "deleteAttachment", page: "123", fileName: "diagram.png" },
-    ]);
-    expect(items[0]).toMatchObject({ pageId: "123", title: "Runbook" });
-    fetchMock.mockClear();
-    await resolveApproval(
-      approvalsForSession(sessionId).at(-1)!.id,
-      "approved",
-    );
-    expect(writes("DELETE")).toEqual([
-      { path: "/wiki/api/v2/attachments/att1", body: undefined },
-    ]);
+    attachmentStatus = "current";
+    try {
+      const { sessionId, items } = await stage([
+        { operation: "deleteAttachment", page: "123", fileName: "diagram.png" },
+      ]);
+      expect(items[0]).toMatchObject({ pageId: "123", title: "Runbook" });
+      fetchMock.mockClear();
+      await resolveApproval(
+        approvalsForSession(sessionId).at(-1)!.id,
+        "approved",
+      );
+      expect(writes("DELETE")).toEqual([
+        { path: "/wiki/api/v2/attachments/att1", body: undefined },
+      ]);
+    } finally {
+      attachmentStatus = undefined;
+    }
   });
 
   test("the size cap applies to bytes read, not to a stale recorded size", async () => {

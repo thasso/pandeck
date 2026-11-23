@@ -10,6 +10,9 @@
  * session attachment store (`tools/confluence/confluenceAttachments.ts`). A
  * caller without them gets a refusal, and nothing is sent for that item.
  *
+ * A delete moves the attachment to the trash, and only one that both staging's
+ * read and apply's verify read report as `current` (`requireCurrentForDelete`).
+ *
  * Two guarantees follow from an attachment carrying bytes:
  *
  * - What uploads is exactly what was approved: `freezeUpload` pins the bytes
@@ -41,6 +44,7 @@ import {
 import {
   ConfluenceMutationError,
   confluenceWrite,
+  requireCurrentForDelete,
   signalTail,
 } from "./confluenceMutationErrors.ts";
 
@@ -190,6 +194,7 @@ export async function stageAttachmentChange(
         `Page ${pageId} has no attachment named "${fileName}".`,
       );
     const title = existing.title ?? fileName ?? "";
+    requireCurrentForDelete(existing.status, title);
     return {
       page,
       attachment: {
@@ -283,7 +288,9 @@ export async function executeAttachmentChange(
       "This attachment proposal names no page or file.",
     );
   if (item.operation === "deleteAttachment") {
-    const id = await verifiedExistingId(config, attachment, signal);
+    const id = await verifiedExistingId(config, attachment, signal, {
+      requireCurrent: true,
+    });
     await confluenceWrite(
       () =>
         confluenceDelete(
@@ -342,20 +349,29 @@ export async function executeAttachmentChange(
   item.resultPageUrl = item.pageUrl ?? null;
 }
 
+/**
+ * Re-read the attachment an approval targets and prove its version has not
+ * moved. `requireCurrent` (a delete only) also refuses, after the version
+ * check, an attachment the read does not report as exactly `current`.
+ */
 async function verifiedExistingId(
   config: ConfluenceConfig,
   attachment: ConfluenceAttachmentMutationDisplay,
   signal: AbortSignal | undefined,
+  options: { requireCurrent?: boolean } = {},
 ): Promise<string> {
   const id = attachment.existingId;
   if (!id || typeof attachment.baseVersion !== "number")
     throw new ConfluenceMutationError(
       `This proposal for ${attachment.fileName} recorded no attachment version, so it cannot be applied safely. Propose it again.`,
     );
-  const current = versionOf(await fetchAttachment(config, id, signal));
+  const record = await fetchAttachment(config, id, signal);
+  const current = versionOf(record);
   if (current !== attachment.baseVersion)
     throw new ConfluenceMutationError(
       `${attachment.fileName} changed since this proposal was prepared (version ${attachment.baseVersion} → ${current ?? "unknown"}). Re-read it and propose the change again.`,
     );
+  if (options.requireCurrent)
+    requireCurrentForDelete(record.status, attachment.fileName);
   return id;
 }

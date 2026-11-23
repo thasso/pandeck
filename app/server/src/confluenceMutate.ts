@@ -31,6 +31,7 @@ import {
 } from "./confluenceAttachmentChange.ts";
 import {
   ConfluenceMutationError,
+  requireCurrentForDelete,
   stopIfAborted,
 } from "./confluenceMutationErrors.ts";
 import {
@@ -321,6 +322,7 @@ export async function buildConfluenceMutationItems(
       continue;
     }
     if (operation === "delete") {
+      requireCurrentForDelete(page.status, `Page ${pageId}`);
       items.push(base);
       warnings.push(
         `${page.title || pageId} would be moved to the trash, along with its comments`,

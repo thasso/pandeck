@@ -2856,6 +2856,35 @@ tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
   lower `maxResults`. `includeComments` costs one request per comment within the
   host's 30 s, so a slow site with many comments can time out; the same lower
   limits are the remedy.
+- **Confluence mutation core** (Task-1463 P5a). The edge may import these
+  modules, but no edge tool uses them yet. They are the prepare
+  (`confluenceMutate.ts`) and apply (`confluenceMutateApply.ts`) halves of
+  `confluence_mutate_page`, with `confluenceAttachmentChange.ts` for the
+  attachment operations and the typed errors and signal helpers in
+  `confluenceMutationErrors.ts`. They sit beside `tools/confluence/`, which
+  wraps them with its settings, session attachment store and approval card.
+  Server state arrives as injected deps: `freezeUpload` at prepare;
+  `stagedBytes`, `describeError` and `stopBefore` at apply. Without
+  `freezeUpload` or `stagedBytes`, an upload is refused before any request for
+  it. The display types are the import-free
+  `@assistant/shared/confluenceMutation` leaf. The core takes
+  `ConfluenceConfig`, so an API token with Basic or the OAuth view with Bearer
+  works alike. A caller decides by type and status alone:
+  `ConfluenceMutationError` is the core's own text, `ConfluenceWriteHttpError`
+  (an `AtlassianHttpError`) a rejected write, and a failed read stays
+  `AtlassianHttpError` or `ConfluenceReadRefusal`. Signals and cancellation
+  follow the Jira core: every request carries the caller's signal when there is
+  one, and an abort is rethrown unchanged. Without a signal, every call keeps
+  the exact arguments the local tool always sent. Deletes are trash only: the
+  only content DELETEs are `DELETE /wiki/api/v2/pages/{id}` and
+  `DELETE /wiki/api/v2/attachments/{id}`, with no query string, and the only
+  other DELETE is the v1 label removal. A `delete` or `deleteAttachment` goes
+  ahead only when the read that verifies it, at prepare and again at apply,
+  reports `status` exactly `current` (`requireCurrentForDelete`), so replaying
+  an approved delete sends no second DELETE. That check is proof from the read,
+  not a conditional DELETE. A change made elsewhere between the read and the
+  DELETE is still not caught: `docs/confluence.md` "Deletes go to the trash,
+  once".
 - **Slack reads** (Task-1454). The four tools run the same read path as the
   local ones (`slackRead.ts` with `slackMetadataCache.ts` beside `tools/slack/`,
   which wraps them) with the same schema and description objects, action key
