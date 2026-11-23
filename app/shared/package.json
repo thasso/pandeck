@@ -27,7 +27,8 @@
     "./zonedTime": "./zonedTime.ts",
     "./sessionTreeWorktrees": "./sessionTreeWorktrees.ts",
     "./gatewayUi": "./gatewayUi.ts",
-    "./jiraMutation": "./jiraMutation.ts"
+    "./jiraMutation": "./jiraMutation.ts",
+    "./confluenceMutation": "./confluenceMutation.ts"
   },
   "types": "./protocol.ts",
   "scripts": {

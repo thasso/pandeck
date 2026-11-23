@@ -20,13 +20,13 @@ import { adfToMarkdown } from "./adfToMarkdown.ts";
 import { storageToMarkdown } from "./storageToMarkdown.ts";
 import type { AdfNode } from "./adfFromMarkdown.ts";
 
-/** An API-token config: what the write helpers take. */
+/** An API-token config: what the local tools and downloads take. */
 export type ConfluenceApiConfig = AtlassianApiConfig;
 
 /**
  * An API token (Basic, to the site) or an OAuth access token (Bearer, to
- * `api.atlassian.com`): what the read helpers take, so the gateway edge can
- * read with either kind of the user's Atlassian credential.
+ * `api.atlassian.com`): what the read and write helpers take, so the gateway
+ * edge can use either kind of the user's Atlassian credential.
  */
 export type ConfluenceConfig = AtlassianConfig;
 
@@ -78,7 +78,7 @@ export async function confluenceGet<T>(
 }
 
 export async function confluencePost<T>(
-  config: ConfluenceApiConfig,
+  config: ConfluenceConfig,
   path: string,
   body: unknown,
   query?: AtlassianQuery,
@@ -95,19 +95,49 @@ export async function confluencePost<T>(
   );
 }
 
+/**
+ * `options` reach the transport only when given: without them the call keeps
+ * the exact argument list the local tool always sent.
+ */
 export async function confluencePut<T>(
-  config: ConfluenceApiConfig,
+  config: ConfluenceConfig,
   path: string,
   body: unknown,
+  query?: AtlassianQuery,
+  options?: AtlassianCallOptions,
 ): Promise<T> {
+  if (options)
+    return atlassianFetch<T>(
+      config,
+      "Confluence",
+      "PUT",
+      path,
+      body,
+      query,
+      options,
+    );
+  if (query)
+    return atlassianFetch<T>(config, "Confluence", "PUT", path, body, query);
   return atlassianFetch<T>(config, "Confluence", "PUT", path, body);
 }
 
+/** As {@link confluencePut}: `options` are forwarded only when given. */
 export async function confluenceDelete<T>(
-  config: ConfluenceApiConfig,
+  config: ConfluenceConfig,
   path: string,
   query?: AtlassianQuery,
+  options?: AtlassianCallOptions,
 ): Promise<T> {
+  if (options)
+    return atlassianFetch<T>(
+      config,
+      "Confluence",
+      "DELETE",
+      path,
+      undefined,
+      query,
+      options,
+    );
   return atlassianFetch<T>(
     config,
     "Confluence",

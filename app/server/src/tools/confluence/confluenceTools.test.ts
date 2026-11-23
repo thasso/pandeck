@@ -97,6 +97,12 @@ vi.mock("../../atlassian/atlassianFetch.ts", async (importActual) => ({
 
 /** The page's one attachment; `attachmentVersion` moves it like another uploader would. */
 let attachmentVersion = 2;
+/**
+ * Task-1463 B1: a delete goes ahead only when its verification read reports
+ * `status: "current"`, so the delete test sets it. Every other read keeps no
+ * status, which also shows the guard did not spread to uploads.
+ */
+let attachmentStatus: string | undefined;
 function attachmentResponse() {
   return {
     id: "att1",
@@ -105,6 +111,7 @@ function attachmentResponse() {
     mediaType: "image/png",
     fileSize: 4,
     version: { number: attachmentVersion },
+    ...(attachmentStatus === undefined ? {} : { status: attachmentStatus }),
     downloadLink: "/download/attachments/123/diagram.png?version=2&api=v2",
   };
 }
@@ -203,8 +210,8 @@ const {
   confluenceLookupTool,
   confluenceMutatePageTool,
   confluenceSearchTool,
-  spliceAdf,
 } = await import("./confluenceTools.ts");
+const { spliceAdf } = await import("../../confluenceMutateApply.ts");
 const { buildSearchCql, normalizePageInput } =
   await import("../../confluenceRead.ts");
 const {
@@ -865,6 +872,39 @@ describe("confluence_mutate_page execution", () => {
     expect(writes("PUT")).toEqual([]);
     expect(writes("POST")).toEqual([]);
   });
+
+  // Task-1463 P5a: the local executor applies without a signal, so every
+  // request keeps the arguments it always had (PUT 5, DELETE 6, no options
+  // object anywhere naming a signal).
+  test("the local executor applies without a signal, keeping every call's arguments", async () => {
+    const { sessionId } = await stage([
+      {
+        operation: "edit",
+        page: "123",
+        body: "Added line",
+        addLabels: ["new"],
+        removeLabels: ["old"],
+      },
+    ]);
+    fetchMock.mockClear();
+    await resolveApproval(
+      approvalsForSession(sessionId).at(-1)!.id,
+      "approved",
+    );
+    const calls = fetchMock.mock.calls;
+    const byMethod = (method: string) =>
+      calls.filter((call) => call[2] === method);
+    expect(byMethod("PUT").map((call) => call.length)).toEqual([5]);
+    expect(byMethod("DELETE").map((call) => call.length)).toEqual([6]);
+    expect(byMethod("POST")).toHaveLength(1);
+    for (const call of calls)
+      expect(
+        call.some(
+          (arg) => typeof arg === "object" && arg !== null && "signal" in arg,
+        ),
+        `${call[2]} ${String(call[3])}`,
+      ).toBe(false);
+  });
 });
 
 describe("legacy storage pages", () => {
@@ -1106,18 +1146,23 @@ describe("confluence_mutate_page attachments", () => {
   });
 
   test("a delete verifies the version and trashes the attachment", async () => {
-    const { sessionId, items } = await stage([
-      { operation: "deleteAttachment", page: "123", fileName: "diagram.png" },
-    ]);
-    expect(items[0]).toMatchObject({ pageId: "123", title: "Runbook" });
-    fetchMock.mockClear();
-    await resolveApproval(
-      approvalsForSession(sessionId).at(-1)!.id,
-      "approved",
-    );
-    expect(writes("DELETE")).toEqual([
-      { path: "/wiki/api/v2/attachments/att1", body: undefined },
-    ]);
+    attachmentStatus = "current";
+    try {
+      const { sessionId, items } = await stage([
+        { operation: "deleteAttachment", page: "123", fileName: "diagram.png" },
+      ]);
+      expect(items[0]).toMatchObject({ pageId: "123", title: "Runbook" });
+      fetchMock.mockClear();
+      await resolveApproval(
+        approvalsForSession(sessionId).at(-1)!.id,
+        "approved",
+      );
+      expect(writes("DELETE")).toEqual([
+        { path: "/wiki/api/v2/attachments/att1", body: undefined },
+      ]);
+    } finally {
+      attachmentStatus = undefined;
+    }
   });
 
   test("the size cap applies to bytes read, not to a stale recorded size", async () => {
