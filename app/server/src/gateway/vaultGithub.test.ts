@@ -808,6 +808,30 @@ for (const [change, answer, overrides, revokes] of [
     noSecretsIn(lines);
   });
 
+// F005: expiry is checked again where delivery is decided.
+test("github.token: a token that expires while the proof's listing is held is dropped: unavailable, not cached, the next call mints anew", async () => {
+  let clock = Math.floor(Date.now() / 1000) * 1000;
+  const { v, lines } = await tokenVault({ now: () => clock });
+  github.script.mint = github.mintWith({
+    expires_at: githubTime(clock + 2_000),
+    repositories: undefined,
+  });
+  const held = github.hold("installationRepos");
+  const asking = v.githubToken("u1", REPO);
+  await held.arrived;
+  clock += 5_000;
+  held.release();
+  assert.deepEqual(await asking, UNAVAILABLE);
+  assert.equal(count("revoke"), 0, "proven, then stale: dropped");
+  assert.ok(lines.some((line) => line.endsWith("proven token dropped")));
+  delete github.script.mint;
+  const next = await v.githubToken("u1", REPO);
+  assert.equal(next.ok, true);
+  assert.equal(count("mint"), 2, "the expired token was not cached");
+  assert.notEqual((next as { token: string }).token, github.minted[0]);
+  noSecretsIn(lines);
+});
+
 test("github.token: after an identity switch the cached token is not handed to the new identity", async () => {
   const { v } = await tokenVault();
   assert.equal((await v.githubToken("u1", REPO)).ok, true);

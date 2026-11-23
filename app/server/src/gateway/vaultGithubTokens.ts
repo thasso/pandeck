@@ -14,9 +14,9 @@
  * 5. The App's JWT (reused until a minute before its expiry), the
  *    installation (cached per rid for an hour), the mint, and the proof. A
  *    token that fails the proof is revoked if it is one at all (F13).
- * 6. Before answering, the generation must still hold, the budget be unspent
- *    and the vault open; else the proven token is dropped, neither cached nor
- *    revoked. Only then is it cached.
+ * 6. Before answering, the generation must still hold, the budget be unspent,
+ *    the vault open and the token unexpired; else the proven token is
+ *    dropped, neither cached nor revoked. Only then is it cached.
  *
  * The fence is checked after the user check and the installation lookup,
  * before their outcome is read, so a check against a record that has since
@@ -210,7 +210,9 @@ export function createGithubTokens(deps: GithubTokenDeps): GithubTokens {
       }
       return UNAVAILABLE;
     }
-    if (!answerable()) {
+    // The proof's listing is awaited after its expiry check: a token that ran
+    // out meanwhile is proven but stale, so it is dropped like any stale one.
+    if (!answerable() || proof.expiresAt <= deps.now()) {
       deps.log(`github.token ${dirId}: proven token dropped`);
       return UNAVAILABLE;
     }
