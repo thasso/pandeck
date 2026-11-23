@@ -60,11 +60,14 @@
  * - `tools.apply {name, site, items}` (1.1) runs the approved items, every
  *   refusal before any write, and answers `{ok: true, results, effects,
  *   trimmed?}`, one result record per item, or `{ok: false, code, message,
- *   effects, itemEffects?}`. `effects` (`none` or `possible`) says whether
- *   any write request left the edge; `itemEffects` says it per item once the
- *   items passed their check. A `cancel` starts no further item and never
- *   aborts a running request. At most `APPLY_ANSWER_MAX_BYTES`: the edge
- *   never sends a larger answer, and the client refuses one.
+ *   effects, itemEffects?, results?, trimmed?}`. `effects` (`none` or
+ *   `possible`) says whether any write request left the edge; `itemEffects`
+ *   says it per item once the items passed their check; a failure after the
+ *   apply started keeps the records its working copy shows. A root `none`
+ *   with any `possible` record or item is undecodable. A `cancel` starts no
+ *   further item and never aborts a running request. At most
+ *   `APPLY_ANSWER_MAX_BYTES`: the edge never sends a larger answer, and the
+ *   client refuses one.
  *
  * Gateway → client: `accounts.changed {accounts}`, the full list after any
  * change, and `logins.event {loginId, accountId, event}`, each answered `{}`.
@@ -563,20 +566,32 @@ export function decodePrepareAnswer(payload: Payload): PrepareAnswer {
 /**
  * A `tools.apply` answer, on the client: shallow. The client checks each
  * record with the product's result contract. A failure's effects read
- * `possible` unless the edge said `none`.
+ * `possible` unless the edge said `none`; its `itemEffects` and `results`
+ * stay only when well formed. A root `none` beside a `possible` record or
+ * item is undecodable (P6a v03 "Nonblocking precision"): the edge never
+ * sends one.
  */
 export function decodeApplyAnswer(payload: Payload): ApplyAnswer {
   withinCap(payload, APPLY_ANSWER_MAX_BYTES, "apply answer");
   const answer = record(payload.json);
   if (answer?.ok === false) {
     const items = answer.itemEffects;
-    return {
+    const itemEffects =
+      Array.isArray(items) && items.length <= PHASE_ITEMS_MAX
+        ? items.map(effectsOf)
+        : undefined;
+    const results = records(answer.results);
+    const failure: ApplyAnswer = {
       ...toolFailure(answer),
       effects: effectsOf(answer.effects),
-      ...(Array.isArray(items) && items.length <= PHASE_ITEMS_MAX
-        ? { itemEffects: items.map(effectsOf) }
-        : {}),
+      ...(itemEffects ? { itemEffects } : {}),
+      ...(results ? { results } : {}),
+      ...(results && answer.trimmed === true ? { trimmed: true as const } : {}),
     };
+    return consistent(failure, [
+      ...(itemEffects ?? []),
+      ...(results ?? []).map((result) => result.effects),
+    ]);
   }
   const results = records(answer?.results);
   if (
@@ -586,10 +601,20 @@ export function decodeApplyAnswer(payload: Payload): ApplyAnswer {
     (answer.trimmed !== undefined && answer.trimmed !== true)
   )
     malformed("apply answer");
-  return {
-    ok: true,
-    results,
-    effects: answer.effects,
-    ...(answer.trimmed ? { trimmed: true as const } : {}),
-  };
+  return consistent(
+    {
+      ok: true,
+      results,
+      effects: answer.effects,
+      ...(answer.trimmed ? { trimmed: true as const } : {}),
+    },
+    results.map((result) => result.effects),
+  );
+}
+
+/** `answer`, unless its root says `none` while a record or item says `possible`. */
+function consistent(answer: ApplyAnswer, parts: unknown[]): ApplyAnswer {
+  if (answer.effects === "none" && parts.includes("possible"))
+    malformed("apply answer (its effects disagree)");
+  return answer;
 }

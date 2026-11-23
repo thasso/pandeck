@@ -20,11 +20,14 @@ import {
   type Effects,
 } from "../mutationResultCodec.ts";
 import { assertNoCredential } from "../test/credentialOracle.ts";
+import { encodeAtlassianCredential } from "./atlassian.ts";
 import { confluenceOutcomeOf } from "./confluenceMutatePage.ts";
 import type { ApplyContext, AtlassianTokenCredential } from "./descriptor.ts";
-import { jiraOutcomeOf } from "./jiraMutateIssue.ts";
+import { createToolHost } from "./host.ts";
+import { jiraMutateIssue, jiraOutcomeOf } from "./jiraMutateIssue.ts";
 import { vettingFor } from "./mutationResultVetting.ts";
 import {
+  INTERRUPTED,
   PREPARE_ANSWER_MAX_BYTES,
   PROPOSAL_INVALID,
   PROPOSAL_TOO_LARGE,
@@ -32,6 +35,7 @@ import {
   RESULT_MAX_BYTES,
   RESULT_TOO_LARGE,
   RESULT_WITHHELD,
+  STOPPED,
   applyAnswerWithinCap,
   createWriteLedger,
   prepareAnswerWithinCap,
@@ -49,6 +53,8 @@ const FAKE: AtlassianTokenCredential = {
   token: "FAKE-TOKEN-SENTINEL-0123456789",
 };
 const SITE_URL = `https://${FAKE.site}/browse/STAR-1`;
+/** A token JSON escaping changes, with no 16-character piece it leaves alone. */
+const QUOTED: AtlassianTokenCredential = { ...FAKE, token: 'ABC"DEF\\GHI' };
 
 describe("the effects ledger", () => {
   test("marks the current item before its write; a write outside an item marks the root alone", () => {
@@ -85,10 +91,12 @@ describe("the effects ledger", () => {
 
 interface FakeItem {
   clientId: string;
+  error?: string;
 }
 interface FakeRecord {
   effects: Effects;
   text?: string;
+  error?: string;
 }
 
 /**
@@ -100,6 +108,8 @@ function fakeProduct(options: {
   outcome?: (record: FakeRecord) => FakeRecord;
   shrink?: ApplyProduct<null, FakeItem, FakeRecord>["shrink"];
   writeOutside?: boolean;
+  /** The item whose write is followed by an unexpected exception. */
+  throwAt?: number;
 }): ApplyProduct<null, FakeItem, FakeRecord> {
   return {
     configOf: () => null,
@@ -110,6 +120,10 @@ function fakeProduct(options: {
       items.forEach((_item, index) => {
         deps.startItem(index);
         if (deps.stopBefore() === undefined && index !== 1) deps.beforeWrite();
+        if (index === options.throwAt) {
+          deps.beforeWrite();
+          throw new Error("unexpected");
+        }
       });
       return Promise.resolve();
     },
@@ -117,15 +131,16 @@ function fakeProduct(options: {
     record: (applied, _sent, _vet, effects) => ({
       effects,
       text: options.text(Number(applied.clientId)),
+      ...(applied.error !== undefined ? { error: applied.error } : {}),
     }),
     shrink: options.shrink ?? (() => false),
     outcomeOf: options.outcome ?? (({ effects }) => ({ effects })),
   };
 }
 
-function context(): ApplyContext {
+function context(credential = FAKE): ApplyContext {
   return {
-    credential: () => Promise.resolve(FAKE),
+    credential: () => Promise.resolve(credential),
     signal: new AbortController().signal,
     cancel: new AbortController().signal,
     deadlineAt: Date.now() + 45_000,
@@ -189,7 +204,45 @@ describe("the prepare answer as sent", () => {
   });
 });
 
+test("F003: a proposal string or key holding a token JSON escaping changes is withheld whole", async () => {
+  const ctx = {
+    credential: () => Promise.resolve(QUOTED),
+    signal: new AbortController().signal,
+    deadlineAt: Date.now() + 30_000,
+  };
+  for (const item of [
+    { clientId: QUOTED.token },
+    { clientId: "0", nested: [{ deep: `x ${QUOTED.token} y` }] },
+    { clientId: "0", [QUOTED.token]: true },
+  ]) {
+    // The serialized answer holds only the escaped token.
+    expect(JSON.stringify(item)).not.toContain(QUOTED.token);
+    await expect(
+      runPrepare(ctx, fakePrepare([item as FakeItem])),
+    ).rejects.toMatchObject({ message: PROPOSAL_WITHHELD });
+  }
+});
+
 describe("the apply answer as sent", () => {
+  test("F003: a record string holding a token JSON escaping changes degrades", async () => {
+    const answer = await runApply(
+      context(QUOTED),
+      fakeProduct({ text: () => `x ${QUOTED.token} y` }),
+      THREE,
+    );
+    expect(answer).toEqual({
+      ok: true,
+      effects: "possible",
+      trimmed: true,
+      results: [
+        { effects: "possible" },
+        { effects: "none" },
+        { effects: "possible" },
+      ],
+    });
+    assertNoCredential(JSON.stringify(answer), QUOTED);
+  });
+
   test("clean records are sent whole, each with its ledger effects", async () => {
     const answer = await runApply(
       context(),
@@ -294,6 +347,120 @@ function answerOfBytes(bytes: number): ApplyAnswer {
     "é".repeat(Math.floor(pad / 2)) + "a".repeat(pad % 2);
   return answer;
 }
+
+describe("F004: a failure after the apply started keeps its records", () => {
+  /** The real host, whose Jira apply runs `product` instead. */
+  const hostWith = (product: ApplyProduct<null, FakeItem, FakeRecord>) =>
+    createToolHost(
+      [
+        {
+          ...jiraMutateIssue,
+          phases: {
+            ...jiraMutateIssue.phases!,
+            apply: (request, ctx) => runApply(ctx, product, request),
+          },
+        },
+      ],
+      { log: () => {} },
+    );
+  const caller = {
+    clientId: "client-1",
+    credential: () =>
+      Promise.resolve({
+        ok: true as const,
+        credential: encodeAtlassianCredential(FAKE),
+      }),
+  };
+
+  test("an unexpected exception mid-batch: finished items as left, the one running interrupted, the rest not started", async () => {
+    const answer = await hostWith(
+      fakeProduct({ text: (index) => `row ${index}`, throwAt: 1 }),
+    ).apply("jira_mutate_issue", THREE, caller);
+    expect(answer).toMatchObject({
+      ok: false,
+      code: "failed",
+      effects: "possible",
+      itemEffects: ["possible", "possible", "none"],
+      results: [
+        { effects: "possible", text: "row 0" },
+        { effects: "possible", text: "row 1", error: INTERRUPTED },
+        { effects: "none", text: "row 2", error: STOPPED },
+      ],
+    });
+  });
+
+  test("the projection's records go through the same check: a secret degrades them, code and message kept", async () => {
+    const ledger = createWriteLedger();
+    await expect(
+      runApply(
+        { ...context(), ledger },
+        fakeProduct({ text: () => FAKE.token, throwAt: 0 }),
+        THREE,
+      ),
+    ).rejects.toThrow("unexpected");
+    const answer = ledger.failed({
+      ok: false,
+      code: "timeout",
+      message: "late",
+    });
+    expect(answer).toEqual({
+      ok: false,
+      code: "timeout",
+      message: "late",
+      effects: "possible",
+      itemEffects: ["possible", "none", "none"],
+      trimmed: true,
+      results: [
+        { effects: "possible" },
+        { effects: "none" },
+        { effects: "none" },
+      ],
+    });
+    assertNoCredential(JSON.stringify(answer), FAKE);
+  });
+
+  test("before the apply began, or should the projection throw, the effects alone", () => {
+    const ledger = createWriteLedger();
+    const failure = {
+      ok: false as const,
+      code: "failed" as const,
+      message: "x",
+    };
+    expect(ledger.failed(failure)).toEqual({ ...failure, effects: "none" });
+    ledger.begin(2);
+    ledger.hooks.startItem(0);
+    ledger.hooks.beforeWrite();
+    ledger.project(() => {
+      throw new Error("projection");
+    });
+    expect(ledger.failed(failure)).toEqual({
+      ...failure,
+      effects: "possible",
+      itemEffects: ["possible", "none"],
+    });
+  });
+
+  test("an over-cap failure with records drops them, keeping its effects", () => {
+    const failure: ApplyAnswer = {
+      ok: false,
+      code: "timeout",
+      message: "late",
+      effects: "possible",
+      itemEffects: ["possible", "none"],
+      results: [
+        { effects: "possible", text: "x".repeat(RESULT_MAX_BYTES) },
+        { effects: "none" },
+      ] as FakeRecord[],
+    };
+    expect(applyAnswerWithinCap(failure, () => {})).toEqual({
+      ok: false,
+      code: "failed",
+      message: RESULT_TOO_LARGE,
+      effects: "possible",
+      itemEffects: ["possible", "none"],
+    });
+  });
+});
 
 describe("the final byte guards", () => {
   test("an apply answer at the cap leaves as it is; one byte over becomes RESULT_TOO_LARGE with its effects", () => {

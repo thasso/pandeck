@@ -17,12 +17,15 @@
  * aborts only at `WRITE_DEADLINE_MS`: a cancel never aborts a running
  * request, it makes `stopBefore` answer `STOPPED`, so no further item starts
  * (P6-O1). The ledger certifies effects: an item is `possible` once one of
- * its writes was handed to `fetch`, whatever Atlassian then answered.
+ * its writes was handed to `fetch`, whatever Atlassian then answered. A
+ * failure after the apply began (the deadline, an unexpected exception)
+ * answers the working copy's records through the ledger (`ledger.failed`).
  *
  * The answer's budget (P6-F3): the product's shrink stages while the answer
- * is over `RESULT_MAX_BYTES`, then the check of the answer as sent (degraded
- * records, then a fixed failure, each keeping every effects entry), then the
- * host's final byte guard, which never lets an over-cap answer leave.
+ * is over `RESULT_MAX_BYTES`, then the check of the answer as sent, each
+ * string included (degraded records, then no records, each keeping every
+ * effects entry), then the host's final byte guard, which never lets an
+ * over-cap answer leave.
  */
 import { PROPOSAL_MAX_BYTES, jsonBytes } from "../mutationCheckRules.ts";
 import {
@@ -69,6 +72,9 @@ export const ITEMS_INVALID =
   "The approved items are not a valid proposal for this tool; nothing was written.";
 export const STOPPED =
   "Not applied: the request ended before this change started.";
+/** The item a failure interrupted, in the failure's projected results. */
+export const INTERRUPTED =
+  "The request ended while this change was running; check the site before asking again.";
 export const RESULT_TOO_LARGE =
   "The gateway's result was too large to return; check the site before asking again.";
 /** Prepare built items its own check refuses: an edge fault, not the caller's. */
@@ -114,11 +120,19 @@ interface ApplyRecord {
 
 /**
  * `tools.apply`'s answer. A failure keeps the ledger's root `effects`, and
- * `itemEffects`, each item's in order, once the ledger began.
+ * `itemEffects`, each item's in order, once the ledger began. A failure
+ * after the apply started (a deadline, an unexpected exception) also carries
+ * `results` projected from the working copy (P6a v02 AC14), unless they
+ * cannot be sent; the root is `possible` whenever a record is.
  */
 export type ApplyAnswer =
   | { ok: true; results: ApplyRecord[]; effects: Effects; trimmed?: true }
-  | (Failure & { effects: Effects; itemEffects?: Effects[] });
+  | (Failure & {
+      effects: Effects;
+      itemEffects?: Effects[];
+      results?: ApplyRecord[];
+      trimmed?: true;
+    });
 
 /**
  * One apply's effects ledger (P6-F4). The shared applies call its hooks
@@ -135,12 +149,24 @@ export interface WriteLedger {
   root(): Effects;
   /** Each item's effects in order, once begun. */
   items(): Effects[] | undefined;
+  /** The item started last; -1 before the first. */
+  current(): number;
+  /** `runApply`'s projection of its working copy, set once the apply began. */
+  project(projector: (failure: Failure) => ApplyAnswer): void;
+  /**
+   * The answer for a failure that ended the call: the projection's, else
+   * (before the apply began, or should the projection throw) the effects
+   * alone.
+   */
+  failed(failure: Failure): ApplyAnswer;
 }
 
 export function createWriteLedger(): WriteLedger {
   let marks: Effects[] | undefined;
   let current = -1;
   let wrote = false;
+  let projected: ((failure: Failure) => ApplyAnswer) | undefined;
+  const root = (): Effects => (wrote ? "possible" : "none");
   return {
     hooks: {
       startItem(index) {
@@ -156,8 +182,25 @@ export function createWriteLedger(): WriteLedger {
       marks = Array.from({ length: count }, (): Effects => "none");
     },
     item: (index) => marks?.[index] ?? "none",
-    root: () => (wrote ? "possible" : "none"),
+    root,
     items: () => (marks ? [...marks] : undefined),
+    current: () => current,
+    project(projector) {
+      projected = projector;
+    },
+    failed(failure) {
+      if (projected)
+        try {
+          return projected(failure);
+        } catch {
+          // The effects alone, below.
+        }
+      return {
+        ...failure,
+        effects: root(),
+        ...(marks ? { itemEffects: [...marks] } : {}),
+      };
+    },
   };
 }
 
@@ -183,10 +226,15 @@ interface ApplyDeps extends Required<
   stopBefore: () => string | undefined;
 }
 
+/** What the runner reads of an item the shared apply wrote onto. */
+interface AppliedItem {
+  error?: string;
+}
+
 /** A product's apply phase and its result contract. */
 export interface ApplyProduct<
   Config,
-  Item,
+  Item extends AppliedItem,
   Rec extends ApplyRecord,
 > extends Pick<WriteProduct<Config>, "configOf" | "isAllFailed"> {
   check(items: unknown): items is Item[];
@@ -263,14 +311,18 @@ export async function runPrepare<Config, Item>(
     items: prepared.items,
     warnings: preparedWarnings(prepared.warnings, credential),
   };
-  // The answer as sent, and as the frame escapes it once more.
-  if (carriesSecret(JSON.stringify(proposal), credential))
+  // Every string as parsed, the answer as sent, and as the frame escapes it.
+  if (carriesSecret(proposal, credential))
     throw new ToolError(PROPOSAL_WITHHELD);
   return proposal;
 }
 
 /** Runs one `tools.apply` after its gates. */
-export async function runApply<Config, Item, Rec extends ApplyRecord>(
+export async function runApply<
+  Config,
+  Item extends AppliedItem,
+  Rec extends ApplyRecord,
+>(
   ctx: ApplyContext,
   product: ApplyProduct<Config, Item, Rec>,
   request: ApplyRequest,
@@ -287,6 +339,18 @@ export async function runApply<Config, Item, Rec extends ApplyRecord>(
 
   const { ledger } = ctx;
   ledger.begin(working.length);
+  // A failure from here on answers the working copy as it stands (AC14):
+  // the items before the one started last as the apply left them, that one
+  // interrupted unless it has its own error, the rest not started.
+  ledger.project((failure) => {
+    const current = ledger.current();
+    const snapshot = structuredClone(working).map((item, index) =>
+      index < current || item.error !== undefined
+        ? item
+        : { ...item, error: index === current ? INTERRUPTED : STOPPED },
+    );
+    return answered(product, credential, ledger, sent, snapshot, failure);
+  });
   const stopAt = ctx.deadlineAt - STOP_CUTOFF_MS;
   try {
     await product.apply(config, credential, working, {
@@ -298,40 +362,66 @@ export async function runApply<Config, Item, Rec extends ApplyRecord>(
       },
     });
   } catch (err) {
-    // Every item failed: still records, each with its own error.
+    // Every item failed: still records, each with its own error. Anything
+    // else reaches the host, which answers `ledger.failed`.
     if (ctx.signal.aborted || !product.isAllFailed(err)) throw err;
   }
+  return answered(product, credential, ledger, sent, working);
+}
 
+/**
+ * The answer with one record per item of `applied`: a success, or `failure`
+ * with its results. Records keep the ledger's effects; the product's shrink
+ * stages run while the answer is over `RESULT_MAX_BYTES`; then the check of
+ * the answer as sent, each string included: degraded records, else no
+ * records at all (a success becomes `RESULT_WITHHELD`). The host's final
+ * byte guard comes after.
+ */
+function answered<Config, Item extends AppliedItem, Rec extends ApplyRecord>(
+  product: ApplyProduct<Config, Item, Rec>,
+  credential: AtlassianCredential,
+  ledger: WriteLedger,
+  sent: readonly Item[],
+  applied: readonly Item[],
+  failure?: Failure,
+): ApplyAnswer {
   const vet = product.vetting(credential);
-  const records = working.map((item, index) =>
+  const records = applied.map((item, index) =>
     product.record(item, sent[index]!, vet, ledger.item(index)),
   );
   const effects = ledger.root();
-  const answerOf = (shown: Rec[], trimmed: boolean): ApplyAnswer => ({
-    ok: true,
-    results: shown,
-    effects,
-    ...(trimmed ? { trimmed: true } : {}),
-  });
+  const itemEffects = records.map((record) => record.effects);
+  const answerOf = (shown: Rec[], trimmed: boolean): ApplyAnswer => {
+    const kept = {
+      results: shown,
+      ...(trimmed ? { trimmed: true as const } : {}),
+    };
+    return failure
+      ? { ...failure, effects, itemEffects, ...kept }
+      : { ok: true, effects, ...kept };
+  };
   // Measured with `trimmed`, as the answer would leave once a stage ran.
   const fits = () =>
     (jsonBytes(answerOf(records, true)) ?? Infinity) <= RESULT_MAX_BYTES;
   const trimmed = product.shrink(records, fits, vet);
+  const outcomes = () => answerOf(records.map(product.outcomeOf), true);
   try {
-    return sentResult(
-      answerOf(records, trimmed),
+    const full = answerOf(records, trimmed);
+    // Each string as it is (F003), then the answer as joined and escaped.
+    const shown = sentResult(
+      carriesSecret(full, credential) ? outcomes() : full,
       credential,
-      () => answerOf(records.map(product.outcomeOf), true),
+      outcomes,
       RESULT_WITHHELD,
     );
+    if (carriesSecret(shown, credential)) throw new ToolError(RESULT_WITHHELD);
+    return shown;
   } catch (err) {
     if (!(err instanceof ToolError)) throw err;
     return {
-      ok: false,
-      code: "failed",
-      message: err.message,
+      ...(failure ?? { ok: false, code: "failed", message: err.message }),
       effects,
-      itemEffects: records.map((record) => record.effects),
+      itemEffects,
     };
   }
 }

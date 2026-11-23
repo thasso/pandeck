@@ -317,27 +317,25 @@ export function createToolHost(
         signal,
       );
     } catch (err) {
-      // Whatever ended the call, the ledger says what may have been written.
-      const itemEffects = ledger.items();
-      const effects = {
-        effects: ledger.root(),
-        ...(itemEffects ? { itemEffects } : {}),
-      };
+      // Whatever ended the call, the ledger says what may have been written
+      // and, once the apply began, what the working copy shows (AC14).
       if (signal.aborted)
-        return {
+        return ledger.failed({
           ok: false,
           code: "timeout",
           message: failureText(tool, "timeout"),
-          ...effects,
-        };
+        });
       if (err instanceof ToolError)
-        return { ok: false, code: err.code, message: err.message, ...effects };
-      return {
+        return ledger.failed({
+          ok: false,
+          code: err.code,
+          message: err.message,
+        });
+      return ledger.failed({
         ok: false,
         code: "failed",
         message: failureText(tool, "failed"),
-        ...effects,
-      };
+      });
     } finally {
       clearTimeout(timer);
     }

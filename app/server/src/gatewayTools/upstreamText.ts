@@ -65,19 +65,32 @@ export function holdsSecret(
 }
 
 /**
- * Whether `value`, or its form escaped once more as a JSON string, holds a
- * secret form or a piece of 16 or more characters of one (Task-1463 P6a).
- * Unlike {@link holdsSecret}, an auth marker alone does not count: this
- * checks card data the user reviews, such as a page body that says "basic
- * setup", not upstream error text.
+ * Whether the JSON `value` carries a secret form or a piece of 16 or more
+ * characters of one (Task-1463 P6a): in any string or key of it as parsed
+ * (fix-m2-1 F003: JSON escaping hides a secret holding `"` or `\` from its
+ * serialized form), or in that serialized form and its form escaped once
+ * more, where joined strings could make one. Unlike {@link holdsSecret}, an
+ * auth marker alone does not count: this checks card data the user reviews,
+ * such as a page body that says "basic setup", not upstream error text.
  */
 export function carriesSecret(
-  value: string,
+  value: unknown,
   credential: AtlassianCredential,
 ): boolean {
-  return [value, JSON.stringify(value)].some(
-    (form) => secretSpans(form, credential, false).length > 0,
-  );
+  const serialized = JSON.stringify(value) ?? "";
+  const texts = [serialized, JSON.stringify(serialized)];
+  const pending: unknown[] = [value];
+  while (pending.length > 0) {
+    const next = pending.pop();
+    if (typeof next === "string") texts.push(next);
+    else if (Array.isArray(next)) pending.push(...next);
+    else if (next !== null && typeof next === "object")
+      for (const [key, entry] of Object.entries(next)) {
+        texts.push(key);
+        pending.push(entry);
+      }
+  }
+  return texts.some((text) => secretSpans(text, credential, false).length > 0);
 }
 
 /**

@@ -69,10 +69,18 @@ export interface ApplyRequest {
   items: unknown[];
 }
 
-/** `tools.apply`'s answer: one result record per item, or a failure. */
+/**
+ * `tools.apply`'s answer: one result record per item, or a failure; one
+ * after the apply started keeps the records its working copy shows.
+ */
 export type ApplyAnswer =
   | { ok: true; results: object[]; effects: Effects; trimmed?: true }
-  | (ToolFailure & { effects: Effects; itemEffects?: Effects[] });
+  | (ToolFailure & {
+      effects: Effects;
+      itemEffects?: Effects[];
+      results?: object[];
+      trimmed?: true;
+    });
 
 export type IntegrationCheck =
   | { ok: true; displayName?: string; accountId?: string }

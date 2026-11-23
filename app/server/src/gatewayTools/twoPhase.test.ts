@@ -55,8 +55,10 @@ import type { AtlassianTokenCredential } from "./descriptor.ts";
 import { createToolHost, type ToolCaller } from "./host.ts";
 import { edgeTools } from "./tools.ts";
 import {
+  INTERRUPTED,
   ITEMS_INVALID,
   PROPOSAL_TOO_LARGE,
+  PROPOSAL_WITHHELD,
   SITE_CHANGED,
   STOPPED,
   TWO_PHASE_ONLY,
@@ -372,6 +374,75 @@ describe("tools.prepare", () => {
     }
   });
 
+  test("F003: a token JSON escaping changes, echoed in upstream text, is withheld whole", async () => {
+    for (const token of [
+      'ABC"DEF\\GHI',
+      'aaaaaaaaaaaaaaa"bbbbbbbbbbbbbbb\\cccccccccccccc"',
+    ]) {
+      const credential = { ...FAKE, token };
+      stubJiraFetch((request) =>
+        request.method === "GET" && request.path === "/rest/api/3/issue/STAR-1"
+          ? json({
+              id: "10001",
+              key: "STAR-1",
+              fields: {
+                summary: token,
+                description: null,
+                status: { name: "Open" },
+                labels: [],
+                components: [],
+                project: { key: "STAR" },
+                issuetype: { name: "Story", hierarchyLevel: 0 },
+              },
+            })
+          : fakeJiraAnswer(request),
+      );
+      const answer = await host().host.prepare(
+        JIRA,
+        { items: [EDIT] },
+        client({ credential: encodeAtlassianCredential(credential) }).caller,
+      );
+      expect(answer).toEqual({
+        ok: false,
+        code: "tool_error",
+        message: PROPOSAL_WITHHELD,
+      });
+      assertClean(answer, credential);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("F003 sibling: /mcp's one call vets each string itself, so the same token never reaches its answer", async () => {
+    const credential = { ...FAKE, token: 'ABC"DEF\\GHI' };
+    const seen = stubJiraFetch((request) =>
+      isWrite(request)
+        ? json({ errorMessages: [`Bad ${credential.token}`] }, 400)
+        : request.method === "GET" &&
+            request.path === "/rest/api/3/issue/STAR-1"
+          ? json({
+              id: "10001",
+              key: "STAR-1",
+              fields: {
+                summary: credential.token,
+                description: null,
+                status: { name: "Open" },
+                labels: [],
+                components: [],
+                project: { key: "STAR" },
+                issuetype: { name: "Story", hierarchyLevel: 0 },
+              },
+            })
+          : fakeJiraAnswer(request),
+    );
+    const answer = await host().host.call(
+      JIRA,
+      { items: [EDIT] },
+      client({ credential: encodeAtlassianCredential(credential) }).caller,
+    );
+    expect(seen.filter(isWrite)).toHaveLength(1);
+    assertClean(answer, credential);
+  });
+
   test("a prepare read that hangs ends at PREPARE_DEADLINE_MS; a cancel ends it as cancelled", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     stubJiraFetch((request) => pendingUntilAbort(request));
@@ -566,8 +637,64 @@ describe("tools.apply results and effects", () => {
       message: WRITE_TIMEOUT,
       effects: "possible",
       itemEffects: ["possible", "none"],
+      results: [
+        { effects: "possible", error: INTERRUPTED },
+        { effects: "none", error: STOPPED },
+      ],
     });
     expect(seen.filter(isWrite)).toHaveLength(1);
+  });
+
+  test("F004: a deadline after a finished create keeps its record; the in-flight comment is possible", async () => {
+    const items = await preparedJira([CREATE, COMMENT]);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const seen = stubJiraFetch((request) =>
+      request.method === "POST" && request.path.endsWith("/comment")
+        ? pendingUntilAbort(request)
+        : fakeJiraAnswer(request),
+    );
+    const pending = host().host.apply(
+      JIRA,
+      { site: FAKE.site, items: structuredClone(items) },
+      client().caller,
+    );
+    await vi.advanceTimersByTimeAsync(45_000);
+    const answer = await pending;
+    expect(
+      seen
+        .filter(isWrite)
+        .map((request) => `${request.method} ${request.path}`),
+    ).toEqual([
+      "POST /rest/api/3/issue",
+      "POST /rest/api/3/issue/STAR-1/comment",
+    ]);
+    expect(answer).toMatchObject({
+      ok: false,
+      code: "timeout",
+      message: WRITE_TIMEOUT,
+      effects: "possible",
+      itemEffects: ["possible", "possible"],
+    });
+    const records = (
+      answer.ok ? [] : (answer.results ?? [])
+    ) as JiraResultRecord[];
+    expect(records).toHaveLength(2);
+    expect(records[0]).toMatchObject({
+      effects: "possible",
+      resultIssueKey: "STAR-200",
+      createdIssueKey: "STAR-200",
+      resultIssueUrl: "https://acme.atlassian.net/browse/STAR-200",
+    });
+    expect(records[0]!.error).toBeUndefined();
+    expect(records[1]).toEqual({ effects: "possible", error: INTERRUPTED });
+    // The client half: each record passes its contract and merges.
+    const cards = structuredClone(items);
+    records.forEach((record, index) => {
+      expect(checkJiraResult(record, items[index]!, FAKE.site)).toBe(true);
+      mergeJiraResult(cards[index]!, record, false);
+    });
+    expect(cards[0]).toMatchObject({ issueKey: "STAR-200" });
+    assertClean(answer);
   });
 
   test("O1: a cancel during item 1's first link request lets item 1 finish and stops item 2", async () => {

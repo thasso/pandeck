@@ -134,9 +134,10 @@ describe("the client's answer decoders", () => {
 
   test("an apply answer: the records as sent, or a failure whose effects read possible unless none", () => {
     const results = [{ effects: "possible", resultIssueKey: "STAR-1" }];
+    const unwritten = [{ effects: "none", error: "Not applied" }];
     for (const json of [
       { ok: true, results, effects: "possible" },
-      { ok: true, results, effects: "none", trimmed: true },
+      { ok: true, results: unwritten, effects: "none", trimmed: true },
     ])
       expect(decodeApplyAnswer({ json })).toEqual(json);
     expect(
@@ -172,6 +173,8 @@ describe("the client's answer decoders", () => {
     for (const json of [
       { ok: true, results, effects: "maybe" },
       { ok: true, results },
+      // The root never says none beside a possible record (v03).
+      { ok: true, results, effects: "none" },
       { ok: true, results, effects: "none", trimmed: false },
       { ok: true, results: [1], effects: "none" },
       {
@@ -183,6 +186,51 @@ describe("the client's answer decoders", () => {
       "text",
     ])
       expect(() => decodeApplyAnswer({ json })).toThrow(/malformed/);
+  });
+
+  test("a failure after the apply started: its records, trimmed and item effects, when well formed", () => {
+    const results = [
+      { effects: "possible", resultIssueKey: "STAR-200" },
+      { effects: "possible", error: "interrupted" },
+    ];
+    const failure = {
+      ok: false,
+      code: "timeout",
+      message: "late",
+      effects: "possible",
+      itemEffects: ["possible", "possible"],
+    };
+    expect(decodeApplyAnswer({ json: { ...failure, results } })).toEqual({
+      ...failure,
+      results,
+    });
+    expect(
+      decodeApplyAnswer({ json: { ...failure, results, trimmed: true } }),
+    ).toEqual({ ...failure, results, trimmed: true });
+    // Records that are not records are left out; the failure stays.
+    for (const bad of ["x", [1], Array.from({ length: 11 }, () => ({}))])
+      expect(
+        decodeApplyAnswer({
+          json: { ...failure, results: bad, trimmed: true },
+        }),
+      ).toEqual(failure);
+    // A root none beside a possible record or item is undecodable.
+    for (const json of [
+      { ...failure, effects: "none", results },
+      { ...failure, effects: "none", itemEffects: ["none", "possible"] },
+      { ...failure, effects: "none", itemEffects: ["bogus"] },
+    ])
+      expect(() => decodeApplyAnswer({ json })).toThrow(/effects disagree/);
+    expect(
+      decodeApplyAnswer({
+        json: {
+          ...failure,
+          effects: "none",
+          itemEffects: ["none"],
+          results: [{ effects: "none" }],
+        },
+      }),
+    ).toMatchObject({ effects: "none", results: [{ effects: "none" }] });
   });
 
   test("an answer over its cap is refused, whatever its shape", () => {
