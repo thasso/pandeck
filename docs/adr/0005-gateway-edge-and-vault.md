@@ -170,7 +170,11 @@ on the edge"):
     credential whose secret form equals, or is contained in, that answer's fixed
     scaffold (the placeholder, the JSON keys and structure, the fixed fallback
     texts) cannot be withheld from it. Provider-shaped credentials cannot take
-    that shape and are unaffected.
+    that shape and are unaffected. The exception also covers
+    `confluence_mutate_page` and both tools' gateway client 1.1 `tools.prepare`
+    and `tools.apply` answers (Task-1463 P6a): the result records' texts,
+    identifiers and links pass the same vetting, and a prepare answer holding
+    any secret form is refused whole.
 - The edge's one write tool, `jira_mutate_issue` (Task-1463), writes in the call
   itself: the client asks the user to approve the call, and the edge applies the
   changes at once. It runs on its own 45 s deadline, inside the client's
@@ -180,7 +184,9 @@ on the edge"):
   kept only as a hash; it never forwards and spends no lease.
 - Gateway client 1.0's `tools.list` and `tools.call` (Task-1398) are the second
   adapter over the same host: Pandeck's server lists the tools and calls them
-  for its agents, so approvals can later wrap write tools there (G5).
+  for its agents, so approvals can later wrap write tools there (G5). Gateway
+  client 1.1 (Task-1463 P6a) refuses a write tool in `tools.call` and runs it as
+  `tools.prepare`, then `tools.apply` after the user's approval.
 
 The API token reaches the edge in plaintext per call. That is accepted for the
 pilot (M22). OAuth (G12) replaces it where an Atlassian OAuth client is
