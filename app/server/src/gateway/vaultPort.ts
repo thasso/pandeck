@@ -4,7 +4,7 @@
  * (renewal, credential reads, the writer lane and the login holds) only
  * through `VaultPort`, and the vault reads the edge only through
  * `VaultInputs`. The tiers run in one process (`vault.ts`) or apart, the edge
- * reaching a vault process over `gateway-vault/1.2` (`remoteVault.ts`,
+ * reaching a vault process over `gateway-vault/1.3` (`remoteVault.ts`,
  * `vaultServer.ts`). This module holds types only, so neither tier's code
  * crosses it (`workerBoundary.test.ts`).
  */
@@ -38,9 +38,10 @@ export interface VaultPort {
   /**
    * A user's integration credential (Task-1397): an opaque JSON string the
    * vault stores, sealed when it has recipients. The vault parses only the
-   * OAuth records it writes itself (Atlassian, Task-1411; Slack, Task-1452):
-   * for those a get answers the access view, refreshing first when due. A
-   * Slack credential is only ever such a record: a put of one is refused.
+   * OAuth records it writes itself (Atlassian, Task-1411; Slack, Task-1452;
+   * GitHub, Task-1444): for those a get answers the access view, refreshing
+   * first when due. A Slack or GitHub credential is only ever such a record:
+   * a put of one is refused.
    * None of these rejects; a remote vault bounds each call.
    */
   integrationPut(
@@ -59,7 +60,7 @@ export interface VaultPort {
   ): Promise<IntegrationWrite>;
   /**
    * Turns an authorization code into the user's sealed OAuth record
-   * (Task-1411, Task-1452), with the vault's own OAuth client: the exchange,
+   * (Task-1411, Task-1452, Task-1444), with the vault's own OAuth client: the exchange,
    * the site or workspace check and the write all run in the record's lane,
    * and a caller that stops waiting cancels none of it.
    */
@@ -71,13 +72,14 @@ export interface VaultPort {
 }
 
 /** The integrations whose credentials the vault keeps. */
-export type Integration = "atlassian" | "slack";
+export type Integration = "atlassian" | "slack" | "github";
 
 /**
  * A get's answer. For an OAuth record `credential` is the access view, never
  * the refresh token: JSON `{kind: "atlassian-oauth", site, cloudId,
- * accessToken, expiresAt}` or `{kind: "slack-oauth", teamId, teamName?,
- * workspaceHost, userId, scope, accessToken, expiresAt}`. `rejected` is the
+ * accessToken, expiresAt}`, `{kind: "slack-oauth", teamId, teamName?,
+ * workspaceHost, userId, scope, accessToken, expiresAt}` or `{kind:
+ * "github-oauth", login, accessToken, expiresAt}`. `rejected` is the
  * provider refusing its refresh.
  */
 export type IntegrationRecord =
@@ -101,6 +103,7 @@ export interface IntegrationConnectRequests {
     /** The deployment's workspace (team id); without it any is taken. */
     team?: string | undefined;
   };
+  github: { code: string; redirectUri: string };
 }
 
 /**
@@ -118,7 +121,8 @@ export type ConnectFailure =
 
 /**
  * A connect's answer, by integration: Atlassian's chosen site and its cloud
- * id, Slack's workspace (`team` naming another one is `mismatch`), or why not.
+ * id, Slack's workspace (`team` naming another one is `mismatch`), the
+ * GitHub user's login, or why not.
  */
 interface IntegrationConnects {
   atlassian:
@@ -129,6 +133,7 @@ interface IntegrationConnects {
     | { ok: true; teamId: string; teamName?: string }
     | { ok: false; team: "mismatch" }
     | ConnectFailure;
+  github: { ok: true; login: string } | ConnectFailure;
 }
 
 export type IntegrationConnect<I extends Integration> = IntegrationConnects[I];

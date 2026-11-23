@@ -536,13 +536,16 @@ const GATEWAY_VAULT = [
   // Atlassian's token endpoint and site list, from the vault only (Task-1411).
   "vaultAtlassian",
   "vaultControl",
+  // The GitHub App's OAuth, identity and read installation tokens, from the
+  // vault only (Task-1444).
+  "vaultGithub",
   // The one HTTPS call the vault's OAuth clients make (Task-1452).
   "vaultHttps",
   // Users' integration credentials (Task-1397), sealed like token files, and
   // their OAuth records' lanes, refresh and stop (Task-1411, Task-1452).
   "vaultIntegrations",
   "vaultLogins",
-  // The vault in its own process, serving gateway-vault/1.2.
+  // The vault in its own process, serving gateway-vault/1.3.
   "vaultServer",
   // Slack's OAuth and auth.test endpoints, from the vault only (Task-1452).
   "vaultSlack",
@@ -566,7 +569,7 @@ const GATEWAY_EDGE = [
   "machinePool",
   // The token routes' machine rules: floors, mode, listed templates (Task-1430).
   "machinePaths",
-  // The edge's VaultPort over gateway-vault/1.2.
+  // The edge's VaultPort over gateway-vault/1.3.
   "remoteVault",
   // Client-scoped relay identity and observation ingest (Task-1430 PR2a).
   "relayDedup",

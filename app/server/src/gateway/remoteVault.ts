@@ -1,5 +1,5 @@
 /**
- * The edge's `VaultPort` over `gateway-vault/1.2` (plan Task-1394,
+ * The edge's `VaultPort` over `gateway-vault/1.3` (plan Task-1394,
  * `vaultMethods.ts`): a vault in its own process, dialed over mutual TLS
  * with each side's self-signed certificate pinned. The edge then holds no
  * refresh token. It dials at once and again with backoff whenever the link
@@ -33,6 +33,7 @@ import {
   accountTokenFile,
   isAtlassianSite,
   isCloudId,
+  isGithubLogin,
   isSlackTeamId,
   isSlackTeamName,
   isPinnedPeer,
@@ -514,6 +515,15 @@ export function createRemoteVault(
       if (a.team === "mismatch") return { ok: false, team: "mismatch" };
       return connectFailure(a) ?? { ok: false, unavailable: true };
     },
+    github: (body) => {
+      const a = connectAnswer(body);
+      if (!a) return { ok: false, unavailable: true };
+      if (a.ok === true)
+        return isGithubLogin(a.login)
+          ? { ok: true, login: a.login }
+          : { ok: false, unavailable: true };
+      return connectFailure(a) ?? { ok: false, unavailable: true };
+    },
   };
   const written = (): IntegrationWrite => ({ ok: true });
   /** Each integration's connect over the link. */
@@ -547,6 +557,13 @@ export function createRemoteVault(
           ...(team !== undefined ? { team } : {}),
         },
         decodeConnect.slack,
+        INTEGRATION_CONNECT_TIMEOUT_MS,
+      ),
+    github: (userId, { code, redirectUri }) =>
+      integrationCall(
+        VAULT_METHODS.integrationConnect,
+        { userId, integration: "github", code, redirectUri },
+        decodeConnect.github,
         INTEGRATION_CONNECT_TIMEOUT_MS,
       ),
   };

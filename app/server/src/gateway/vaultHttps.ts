@@ -1,7 +1,7 @@
 /**
- * The vault's one way to call an OAuth provider (Task-1411, Task-1452): a
- * bounded HTTPS request to a host from a closed set, with that host as TLS
- * name and `Host`. A test overrides where to connect, the CA and the
+ * The vault's one way to call an OAuth provider (Task-1411, Task-1452,
+ * Task-1444): a bounded HTTPS request to a host from a closed set, with that
+ * host as TLS name and `Host`. A test overrides where to connect, the CA and the
  * deadline (`VaultEndpoint`), never the host, so neither a code, a refresh
  * token, a client secret nor an access token can go anywhere else. Redirects
  * are not followed: a 3xx is `unreachable`, as is a network error, the
@@ -11,8 +11,13 @@
 import https from "node:https";
 import type { TokenEndpoint } from "./claudeRenewal.ts";
 
-/** The hosts the vault's OAuth clients reach; nothing else. */
-type VaultHost = "auth.atlassian.com" | "api.atlassian.com" | "slack.com";
+/** The hosts the vault's OAuth and GitHub App clients reach; nothing else. */
+type VaultHost =
+  | "auth.atlassian.com"
+  | "api.atlassian.com"
+  | "slack.com"
+  | "github.com"
+  | "api.github.com";
 
 /** Each call's deadline, connect to last byte. */
 const VAULT_HTTP_TIMEOUT_MS = 8_000;
@@ -54,7 +59,8 @@ export function isToken(value: unknown): value is string {
 export function vaultCall(
   host: VaultHost,
   request: {
-    method: "GET" | "POST";
+    /** `DELETE` only revokes a GitHub token the vault cannot hand on. */
+    method: "GET" | "POST" | "DELETE";
     path: string;
     headers: Record<string, string | number>;
     body?: string;

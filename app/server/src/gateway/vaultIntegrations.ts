@@ -1,7 +1,8 @@
 /**
- * The vault's integration credentials (Task-1397, Task-1411): one record per
- * user and integration at `<stateDir>/accounts/<int-…>/integration.json`
- * (0600, by temp file and rename), the directory named by `integrationDirId`.
+ * The vault's integration credentials (Task-1397, Task-1411, Task-1452,
+ * Task-1444): one record per user and integration at
+ * `<stateDir>/accounts/<int-…>/integration.json` (0600, by temp file and
+ * rename), the directory named by `integrationDirId`.
  * A sealing vault seals it right after each write (`written`) and deletes its
  * record on clear (`discarded`); the sweep, unlock and reseal cover it like a
  * token file (`sealedStore.ts`).
@@ -22,10 +23,19 @@
  *   connect checks the workspace preset and `auth.test`; a refresh must hand
  *   back a new refresh token (`vaultSlack.ts`), else nothing is written or
  *   cached and the get answers unavailable. A put for Slack is refused.
+ * - GitHub (Task-1444): `{kind: "github-oauth", v: 1, login, githubUserId,
+ *   refreshToken, refreshExpiresAt}`, access view `{kind, login,
+ *   accessToken, expiresAt}`. A connect reads the identity from `GET /user`;
+ *   a refresh must hand back a new refresh token (`vaultGithub.ts`), as for
+ *   Slack. A put for GitHub is refused.
  *
  * Only these records are parsed; a record of another provider's kind, or a
  * non-record under Slack, is malformed. The access token lives only in
  * memory, so the first get after a restart refreshes.
+ *
+ * Each record has a generation, in memory only, which a connect, a clear and
+ * a refused refresh bump: whatever was checked against one identity is void
+ * once it moved (`github.token`, `vaultGithub.ts`).
  *
  * Every write to a record (put, clear, connect, refresh) runs in its lane,
  * one at a time and in order. A refresh is single-flight per record, re-reads
@@ -59,10 +69,18 @@ import {
   type AtlassianEndpoint,
 } from "./vaultAtlassian.ts";
 import {
+  exchangeGithubCode,
+  githubUser,
+  isGithubId,
+  refreshGithub,
+  type GithubEndpoint,
+} from "./vaultGithub.ts";
+import {
   INTEGRATION_FILE,
   integrationDirId,
   isAtlassianSite,
   isCloudId,
+  isGithubLogin,
   isSlackTeamId,
 } from "./vaultMethods.ts";
 import type {
@@ -86,7 +104,12 @@ import {
 const REFRESH_MARGIN_MS = 5 * 60_000;
 const ATLASSIAN_KIND = "atlassian-oauth";
 const SLACK_KIND = "slack-oauth";
-const OAUTH_KINDS: ReadonlySet<unknown> = new Set([ATLASSIAN_KIND, SLACK_KIND]);
+const GITHUB_KIND = "github-oauth";
+const OAUTH_KINDS: ReadonlySet<unknown> = new Set([
+  ATLASSIAN_KIND,
+  SLACK_KIND,
+  GITHUB_KIND,
+]);
 
 export interface VaultIntegrationOptions {
   /** Without one the vault keeps no integration credential. */
@@ -100,6 +123,8 @@ export interface VaultIntegrationOptions {
   atlassianEndpoint?: AtlassianEndpoint | undefined;
   /** Test seam: where Slack is reached (`vaultSlack.ts`). */
   slackEndpoint?: SlackEndpoint | undefined;
+  /** Test seam: where GitHub is reached (`vaultGithub.ts`). */
+  githubEndpoint?: GithubEndpoint | undefined;
 }
 
 export interface VaultIntegrations extends Pick<
@@ -137,7 +162,17 @@ interface SlackRecord {
   scope: string;
 }
 
-type OAuthRecord = AtlassianRecord | SlackRecord;
+interface GithubRecord {
+  kind: typeof GITHUB_KIND;
+  v: 1;
+  login: string;
+  githubUserId: number;
+  refreshToken: string;
+  /** Epoch milliseconds. */
+  refreshExpiresAt: number;
+}
+
+type OAuthRecord = AtlassianRecord | SlackRecord | GithubRecord;
 
 /**
  * Each integration's OAuth record kind, and whether an edge's API token
@@ -149,6 +184,7 @@ const PROVIDERS: Record<
 > = {
   atlassian: { kind: ATLASSIAN_KIND, tokenRecords: true },
   slack: { kind: SLACK_KIND, tokenRecords: false },
+  github: { kind: GITHUB_KIND, tokenRecords: false },
 };
 
 /** The in-memory half of an OAuth record. */
@@ -223,6 +259,28 @@ function slackRecordOf(
     : undefined;
 }
 
+function githubRecordOf(
+  fields: Record<string, unknown>,
+): GithubRecord | undefined {
+  const { v, login, githubUserId, refreshToken, refreshExpiresAt } = fields;
+  return v === 1 &&
+    isGithubLogin(login) &&
+    isGithubId(githubUserId) &&
+    typeof refreshToken === "string" &&
+    refreshToken.length > 0 &&
+    typeof refreshExpiresAt === "number" &&
+    Number.isFinite(refreshExpiresAt)
+    ? {
+        kind: GITHUB_KIND,
+        v: 1,
+        login,
+        githubUserId,
+        refreshToken,
+        refreshExpiresAt,
+      }
+    : undefined;
+}
+
 /** `text`'s JSON object, if it is one. */
 function fieldsOf(text: string): Record<string, unknown> | undefined {
   try {
@@ -255,7 +313,9 @@ function oauthRecordOf(
   const record =
     provider.kind === ATLASSIAN_KIND
       ? atlassianRecordOf(fields!)
-      : slackRecordOf(fields!);
+      : provider.kind === SLACK_KIND
+        ? slackRecordOf(fields!)
+        : githubRecordOf(fields!);
   return record ?? "malformed";
 }
 
@@ -265,16 +325,18 @@ function viewCredential(view: AccessView): IntegrationRecord {
   const fields =
     record.kind === ATLASSIAN_KIND
       ? { kind: record.kind, site: record.site, cloudId: record.cloudId }
-      : {
-          kind: record.kind,
-          teamId: record.teamId,
-          ...(record.teamName !== undefined
-            ? { teamName: record.teamName }
-            : {}),
-          workspaceHost: record.workspaceHost,
-          userId: record.userId,
-          scope: record.scope,
-        };
+      : record.kind === GITHUB_KIND
+        ? { kind: record.kind, login: record.login }
+        : {
+            kind: record.kind,
+            teamId: record.teamId,
+            ...(record.teamName !== undefined
+              ? { teamName: record.teamName }
+              : {}),
+            workspaceHost: record.workspaceHost,
+            userId: record.userId,
+            scope: record.scope,
+          };
   return {
     ok: true,
     credential: JSON.stringify({
@@ -303,6 +365,12 @@ export function createVaultIntegrations(
   const cache = new Map<string, AccessView>();
   /** Each record's refresh in flight, queued or running. */
   const refreshing = new Map<string, Promise<IntegrationRecord>>();
+  /** Each record's generation; never reused, so a dropped entry is safe. */
+  const generations = new Map<string, number>();
+  let lastGeneration = 0;
+  const bump = (dirId: string): void => {
+    generations.set(dirId, ++lastGeneration);
+  };
 
   const pump = (dirId: string, lane: Lane): void => {
     if (lane.running) return;
@@ -459,6 +527,46 @@ export function createVaultIntegrations(
     };
   };
 
+  const refreshGithubRecord = async (
+    dirId: string,
+    stored: GithubRecord,
+  ): Promise<Refreshed> => {
+    const client = options.clients?.github;
+    if (!client) {
+      log(`integration ${dirId}: no GitHub OAuth client to refresh with`);
+      return { kind: "unavailable" };
+    }
+    const issuedAt = now();
+    const result = await refreshGithub(
+      client,
+      stored.refreshToken,
+      options.githubEndpoint,
+    );
+    if (result.kind === "rejected") {
+      log(`integration ${dirId}: GitHub rejected the refresh`);
+      return { kind: "rejected" };
+    }
+    if (result.kind === "unreachable") {
+      log(`integration ${dirId}: refresh failed (${result.code})`);
+      return { kind: "unavailable" };
+    }
+    if (result.kind === "unusable") {
+      // GitHub has likely consumed the stored token; never kept as a success.
+      log(`integration ${dirId}: GitHub refresh answer unusable`);
+      return { kind: "unavailable" };
+    }
+    return {
+      kind: "ok",
+      record: {
+        ...stored,
+        refreshToken: result.tokens.refreshToken,
+        refreshExpiresAt: issuedAt + result.tokens.refreshExpiresInS * 1000,
+      },
+      accessToken: result.tokens.accessToken,
+      expiresInS: result.tokens.expiresInS,
+    };
+  };
+
   /** In the lane: the record as it is now, refreshed when still due. */
   const refreshInLane = async (
     dirId: string,
@@ -477,8 +585,13 @@ export function createVaultIntegrations(
     const result =
       stored.kind === ATLASSIAN_KIND
         ? await refreshAtlassianRecord(dirId, stored)
-        : await refreshSlackRecord(dirId, stored);
-    if (result.kind === "rejected") return { ok: false, rejected: true };
+        : stored.kind === SLACK_KIND
+          ? await refreshSlackRecord(dirId, stored)
+          : await refreshGithubRecord(dirId, stored);
+    if (result.kind === "rejected") {
+      bump(dirId);
+      return { ok: false, rejected: true };
+    }
     if (result.kind === "unavailable") return UNAVAILABLE;
     // The rotation is on disk before anything is cached or answered.
     if (!writeRecord(dirname(file), file, JSON.stringify(result.record))) {
@@ -539,6 +652,8 @@ export function createVaultIntegrations(
     file: string,
     view: AccessView,
   ): boolean => {
+    // Whatever was checked against the record before is void from here.
+    bump(dirId);
     if (!writeRecord(dir, file, JSON.stringify(view.record))) {
       log(`integration ${dirId}: the connected record was not saved`);
       return false;
@@ -693,6 +808,61 @@ export function createVaultIntegrations(
         UNAVAILABLE,
       );
     },
+
+    github(userId, request) {
+      const client = options.clients?.github;
+      if (!client) return Promise.resolve({ ok: false, notConfigured: true });
+      const { dirId, dir, file } = locate(userId, "github");
+      const endpoint = options.githubEndpoint;
+      return enqueue<IntegrationConnect<"github">>(
+        dirId,
+        async () => {
+          cache.delete(dirId);
+          const issuedAt = now();
+          const exchanged = await exchangeGithubCode(client, request, endpoint);
+          if (exchanged.kind !== "ok") {
+            log(
+              `integration ${dirId}: code exchange ${exchanged.kind === "rejected" ? "rejected" : `failed (${exchanged.code})`}`,
+            );
+            return exchanged.kind === "rejected"
+              ? { ok: false, rejected: true }
+              : { ok: false, unreachable: true };
+          }
+          const { tokens } = exchanged;
+          const identity = await githubUser(tokens.accessToken, endpoint);
+          if (identity.kind === "unreachable") {
+            log(
+              `integration ${dirId}: identity check failed (${identity.code})`,
+            );
+            return { ok: false, unreachable: true };
+          }
+          if (identity.kind !== "ok") {
+            log(
+              identity.kind === "rejected"
+                ? `integration ${dirId}: identity check rejected`
+                : `integration ${dirId}: GitHub identity answer unusable`,
+            );
+            return { ok: false, rejected: true };
+          }
+          const record: GithubRecord = {
+            kind: GITHUB_KIND,
+            v: 1,
+            login: identity.login,
+            githubUserId: identity.githubUserId,
+            refreshToken: tokens.refreshToken,
+            refreshExpiresAt: issuedAt + tokens.refreshExpiresInS * 1000,
+          };
+          const view: AccessView = {
+            record,
+            accessToken: tokens.accessToken,
+            expiresAt: issuedAt + tokens.expiresInS * 1000,
+          };
+          if (!store(dirId, dir, file, view)) return UNAVAILABLE;
+          return { ok: true, login: identity.login };
+        },
+        UNAVAILABLE,
+      );
+    },
   };
 
   return {
@@ -734,6 +904,7 @@ export function createVaultIntegrations(
         dirId,
         () => {
           cache.delete(dirId);
+          bump(dirId);
           try {
             rmSync(dir, { recursive: true, force: true });
           } catch {
