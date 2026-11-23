@@ -710,6 +710,52 @@ test("github.token: a reconnect as an identity without access during a held chec
   assert.equal(count("mint"), 0);
 });
 
+// F001: the fence comes before any outcome, `denied` included.
+for (const [change, route, negative] of [
+  ["clear", "repo", () => (github.script.repo = githubJson(403, {}))],
+  ["reconnect", "repo", () => (github.script.repo = githubJson(403, {}))],
+  [
+    "clear",
+    "installation",
+    () => (github.script.installation = githubJson(404, {})),
+  ],
+] as const)
+  test(`github.token: a ${change} during a held negative ${route} answer voids it: unavailable, not denied, nothing minted or cached`, async () => {
+    const { v, lines } = await tokenVault();
+    negative();
+    const held = github.hold(route);
+    const asking = v.githubToken("u1", REPO);
+    await held.arrived;
+    if (change === "clear")
+      assert.deepEqual(await v.integrationClear("u1", "github"), { ok: true });
+    else await connect(v, "u1", FAKE_GITHUB_USER);
+    held.release();
+    assert.deepEqual(await asking, UNAVAILABLE);
+    assert.equal(count("mint"), 0);
+    delete github.script[route];
+    if (change === "clear") await connect(v, "u1", FAKE_GITHUB_USER);
+    const lookups = count("installation");
+    assert.equal((await v.githubToken("u1", REPO)).ok, true);
+    assert.equal(count("mint"), 1, "nothing was cached");
+    assert.equal(count("installation"), lookups + 1, "nor the installation");
+    noSecretsIn(lines);
+  });
+
+test("github.token: a clear while the proof's repository listing is held drops the proven token", async () => {
+  const { v } = await tokenVault();
+  github.script.mint = github.mintWith({ repositories: undefined });
+  const held = github.hold("installationRepos");
+  const asking = v.githubToken("u1", REPO);
+  await held.arrived;
+  assert.deepEqual(await v.integrationClear("u1", "github"), { ok: true });
+  held.release();
+  assert.deepEqual(await asking, UNAVAILABLE);
+  assert.equal(count("revoke"), 0, "dropped, not revoked");
+  await connect(v, "u1", FAKE_GITHUB_USER);
+  assert.equal((await v.githubToken("u1", REPO)).ok, true);
+  assert.equal(count("mint"), 2, "the dropped token was not cached");
+});
+
 test("github.token: a reconnect during a held mint drops the proven token", async () => {
   const { v } = await tokenVault();
   const held = github.hold("mint");

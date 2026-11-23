@@ -18,6 +18,13 @@
  *    and the vault open; else the proven token is dropped, neither cached nor
  *    revoked. Only then is it cached.
  *
+ * The fence is checked after every step that awaits GitHub and before its
+ * outcome is read, so a check against a record that has since moved answers
+ * unavailable, never `denied`, and a mint answer for it is dropped unproven.
+ * A failed mint or proof answers unavailable whatever the generation, and a
+ * failed proof's token is still revoked. Step 2's own negative answers
+ * (absent, rejected) come from that read itself, so they pass through.
+ *
  * The whole call has 25 s; each GitHub call keeps its own 8 s. A spent
  * budget, `close()` or the caller's signal answers unavailable at once and
  * leaves whatever runs to finish unread: a late token is never cached. The
@@ -124,13 +131,14 @@ export function createGithubTokens(deps: GithubTokenDeps): GithubTokens {
       githubRepo(access.accessToken, name, deps.endpoint),
     );
     if (repo === CUT) return UNAVAILABLE;
+    // A check against a record that has since moved proves nothing, either
+    // way: the fence comes before any outcome, `denied` included.
+    if (!answerable()) return UNAVAILABLE;
     if (repo.kind === "denied") return DENIED;
     if (repo.kind === "unavailable") {
       deps.log(`github.token ${dirId}: repository check failed (${repo.code})`);
       return UNAVAILABLE;
     }
-    // A check against a record that has since moved proves nothing.
-    if (!answerable()) return UNAVAILABLE;
     const { rid } = repo;
 
     let installation = installations.get(rid);
@@ -150,7 +158,7 @@ export function createGithubTokens(deps: GithubTokenDeps): GithubTokens {
       const found = await within(() =>
         githubInstallation(jwtOf(client), name, deps.endpoint),
       );
-      if (found === CUT) return UNAVAILABLE;
+      if (found === CUT || !answerable()) return UNAVAILABLE;
       if (found.kind === "denied") return DENIED;
       if (found.kind === "unavailable") {
         deps.log(
@@ -180,6 +188,10 @@ export function createGithubTokens(deps: GithubTokenDeps): GithubTokens {
       // The App may have lost the repository: look it up afresh next time.
       installations.delete(rid);
       deps.log(`github.token ${dirId}: mint failed (${minted.code})`);
+      return UNAVAILABLE;
+    }
+    if (!answerable()) {
+      deps.log(`github.token ${dirId}: minted token dropped unproven`);
       return UNAVAILABLE;
     }
     const proof = await within(() =>
