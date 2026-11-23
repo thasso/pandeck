@@ -115,7 +115,7 @@ import { sessionRefFile } from "./harnesses/storage.ts";
 import {
   pickerModels,
   piModelForAccount,
-  refreshPiModels,
+  refreshAllModels,
 } from "./harnesses/models.ts";
 import {
   firstSendEngine,
@@ -4048,7 +4048,7 @@ export class Connection implements Viewer {
 
   private async onRefreshModels(requestId: string): Promise<void> {
     try {
-      const { error } = await refreshPiModels();
+      const { error } = await refreshAllModels();
       const models = pickerModels();
       this.send({ type: "models", models, requestId });
       // The refreshed list is the receipt; only a broken models.json or an

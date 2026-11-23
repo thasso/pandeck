@@ -9,11 +9,11 @@ at session/run start and live-session failover.
 `ACCOUNT_KINDS` (`app/shared/accountKinds.ts`) describes each kind; code reads
 the descriptor, never the kind id:
 
-| Kind                | Harness    | Credential | Subscription | Models        | Settings section    |
-| ------------------- | ---------- | ---------- | ------------ | ------------- | ------------------- |
-| `openai-codex`      | pi         | login      | yes          | pi's catalog  | `openai`            |
-| `claude`            | claude-sdk | login      | yes          | curated       | `claude-sdk`        |
-| `openai-compatible` | pi         | endpoint   | no           | its `/models` | `openai-compatible` |
+| Kind                | Harness    | Credential | Subscription | Models             | Settings section    |
+| ------------------- | ---------- | ---------- | ------------ | ------------------ | ------------------- |
+| `openai-codex`      | pi         | login      | yes          | pi's catalog       | `openai`            |
+| `claude`            | claude-sdk | login      | yes          | curated, as listed | `claude-sdk`        |
+| `openai-compatible` | pi         | endpoint   | no           | its `/models`      | `openai-compatible` |
 
 Only a subscription kind (`isSubscriptionAccountKind`) has limits, usage,
 benches, login alerts and failover. For any other kind, usage is never read, the
@@ -399,8 +399,17 @@ existence of another enterprise session does not constrain its refinement.
 
 Automatic candidates must be enabled, serve the model (`accountServesModel`),
 not need login, offer the exact model and requested effort, and not be benched.
-Claude shares its curated model list; pi availability comes from each account's
-isolated SDK runtime. Ranking is:
+A Claude account offers the curated models its subscription lists through the
+gateway (`GET /v1/models`, `docs/agent-harnesses.md` models port); while its
+listing is unknown it offers the whole curated list. pi availability comes from
+each account's isolated SDK runtime.
+
+Entitlement is a hard filter, applied before every ranking tier and fallback: a
+Claude account whose known listing omits the model (`lacksModel`) is never a
+candidate, not even a degraded or last-resort one, and an unknown account takes
+part as before. When that filter removed an in-scope account and nothing
+remains, the pick is `model-unavailable` with no account ("No Claude account can
+run this model."), and nothing runs. Ranking is:
 
 1. Fresh usage with room in both plan windows. A window the provider proves
    absent (the card's "no 5h limit") is no cap, so it counts as room with 0%
@@ -436,7 +445,8 @@ protected default, even disabled, marked `disabled-default`; only the
 subscription kinds have one, and only on an install that still has it ("No
 account"). Exclusions and enterprise constraints still apply to that fallback.
 Interactive creation with no enabled account fails clearly, including the
-no-enterprise-account case. The pick result carries the degradation; it never
+no-enterprise-account case, and so does a `model-unavailable` pick: "No Claude
+account can run <model>." The pick result carries the degradation; it never
 silently crosses provider or enterprise boundaries.
 
 New-session and settings-slot selectors default to Automatic. At creation,
@@ -462,10 +472,16 @@ background-automation policy: missing, disabled or pins on an account that does
 not serve the model. A compatible model's slot never degrades: its account is
 missing or disabled, and the run refuses. An enabled pin on an account serving
 the model remains explicit despite login health or model/effort availability;
-failures alert on that account, not a different one. `automaticProfileIdFor`
-remains only a first-enabled hint for non-routing login/usage UI, not a routing
-function. When the saved model has no Automatic option, a Settings slot offers
-**Use Automatic** to clear its pin without changing the model or effort.
+failures alert on that account, not a different one. A pin, slot or explicit
+session pick, on an account whose known listing lacks the model is refused
+before any run: "<account> can't run <model>." A first send answers that as the
+send's refusal, a one-shot or memory processor run rejects, and the memory
+status reports the processor unavailable. An inherited parent pin that lacks the
+model is dropped, and the child routes Automatic instead.
+`automaticProfileIdFor` remains only a first-enabled hint for non-routing
+login/usage UI, not a routing function. When the saved model has no Automatic
+option, a Settings slot offers **Use Automatic** to clear its pin without
+changing the model or effort.
 
 The new-session picker names only accounts with something of their own to run
 (`pickerCredentialProfiles`): an unconnected OpenAI login, or a Claude account

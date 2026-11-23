@@ -8,7 +8,7 @@ import {
   type AccountPickRequest,
 } from "./accountRouter.ts";
 import { listCredentialProfiles } from "./credentialProfiles.ts";
-import { modelsForAccount } from "./harnesses/models.ts";
+import { accountLacksModel, modelsForAccount } from "./harnesses/models.ts";
 import { cachedUsageIndicator } from "./usageCache.ts";
 
 vi.mock("./credentialProfiles.ts", () => ({
@@ -16,7 +16,10 @@ vi.mock("./credentialProfiles.ts", () => ({
   DEFAULT_CLAUDE_PROFILE_ID: "claude-default",
   DEFAULT_OPENAI_PROFILE_ID: "default",
 }));
-vi.mock("./harnesses/models.ts", () => ({ modelsForAccount: vi.fn() }));
+vi.mock("./harnesses/models.ts", () => ({
+  accountLacksModel: vi.fn(async () => false),
+  modelsForAccount: vi.fn(),
+}));
 vi.mock("./usageCache.ts", () => ({ cachedUsageIndicator: vi.fn() }));
 vi.mock("./settings.ts", () => ({
   getSettings: () => ({
@@ -402,6 +405,113 @@ test("retry exclusions also constrain degradation and disabled-default fallback"
     profileId: "next",
     degraded: "no-eligible-account",
   });
+});
+
+test("entitlement is hard: an entitled but benched account beats an unentitled healthy one", () => {
+  const entitled = {
+    ...account("a-entitled", 99, 99),
+    limited: { until: now + 60_000 },
+  };
+  const unentitled = { ...account("b-unentitled", 0, 0), lacksModel: true };
+  for (const candidates of [
+    [entitled, unentitled],
+    [unentitled, entitled],
+  ])
+    assert.deepEqual(rank(candidates), {
+      profileId: "a-entitled",
+      degraded: "no-eligible-account",
+      limited: { until: now + 60_000 },
+    });
+});
+test("every in-scope account lacking the model is model-unavailable, enterprise included", () => {
+  const a = { ...account("a"), lacksModel: true };
+  const b = { ...account("b"), lacksModel: true };
+  assert.deepEqual(rank([a, b]), {
+    profileId: null,
+    degraded: "model-unavailable",
+  });
+  a.profile = { ...a.profile, enterprise: true };
+  assert.deepEqual(rank([a, b], { requiresEnterprise: true }), {
+    profileId: null,
+    degraded: "model-unavailable",
+  });
+  // An account excluded for another reason is not what made the pick fail.
+  assert.deepEqual(rank([account("c")], { excludeProfileIds: ["c"] }), {
+    profileId: null,
+    degraded: "no-enabled-account",
+  });
+});
+test("the disabled default is never returned when its listing lacks the model", () => {
+  const fallback = { ...account("default"), lacksModel: true };
+  fallback.profile.enabled = false;
+  assert.deepEqual(rank([fallback], { allowDisabledDefault: true }), {
+    profileId: null,
+    degraded: "model-unavailable",
+  });
+  const unknown = account("default");
+  unknown.profile.enabled = false;
+  assert.deepEqual(rank([unknown], { allowDisabledDefault: true }), {
+    profileId: "default",
+    degraded: "disabled-default",
+  });
+});
+test("an account with no known listing takes part as before", () => {
+  const unknown = { ...account("unknown", 1, 1, 1), lacksModel: false };
+  assert.deepEqual(rank([unknown, account("other")]), {
+    profileId: "unknown",
+  });
+});
+test("real gather asks the port whether each account lacks the model, including a disabled one", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(now);
+  try {
+    const lacking = account("a-lacking", 1, 1, 1);
+    const entitled = account("b-entitled", 99, 99);
+    const disabled = account("c-disabled");
+    disabled.profile.enabled = false;
+    const candidates = [lacking, entitled, disabled];
+    vi.mocked(listCredentialProfiles).mockReturnValue(
+      candidates.map(({ profile }) => ({
+        ...profile,
+        name: profile.id,
+        status: "ready",
+        createdAt: 0,
+        updatedAt: 0,
+      })),
+    );
+    vi.mocked(modelsForAccount).mockImplementation(async () => [
+      {
+        provider: "openai-codex",
+        id: "codex",
+        name: "Codex",
+        reasoning: true,
+        contextWindow: 1000,
+        supportedThinkingLevels: ["high"],
+      },
+    ]);
+    vi.mocked(cachedUsageIndicator).mockImplementation(
+      (profile) =>
+        candidates.find((candidate) => candidate.profile.id === profile.id)!
+          .usage as UsageIndicator,
+    );
+    vi.mocked(accountLacksModel).mockImplementation(
+      async (id) => id === "a-lacking",
+    );
+    assert.deepEqual(await pickAccount(request), { profileId: "b-entitled" });
+    assert.deepEqual(
+      vi.mocked(accountLacksModel).mock.calls.map(([id]) => id),
+      ["a-lacking", "b-entitled", "c-disabled"],
+    );
+    // A port failure is no proof of absence.
+    vi.mocked(accountLacksModel).mockRejectedValue(new Error("no snapshot"));
+    assert.deepEqual(await pickAccount(request), { profileId: "a-lacking" });
+  } finally {
+    vi.mocked(accountLacksModel).mockImplementation(async () => false);
+    vi.mocked(accountLacksModel).mockClear();
+    vi.mocked(modelsForAccount).mockClear();
+    vi.mocked(cachedUsageIndicator).mockClear();
+    vi.useRealTimers();
+  }
 });
 
 test("real gather asks each account's model/effort snapshot and reads cache only", async () => {

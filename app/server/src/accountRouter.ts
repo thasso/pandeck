@@ -23,7 +23,7 @@ import {
   DEFAULT_OPENAI_PROFILE_ID,
   listCredentialProfiles,
 } from "./credentialProfiles.ts";
-import { modelsForAccount } from "./harnesses/models.ts";
+import { accountLacksModel, modelsForAccount } from "./harnesses/models.ts";
 import { getSettings } from "./settings.ts";
 import { cachedUsageIndicator } from "./usageCache.ts";
 import { readAccountBench } from "./accountHealth.ts";
@@ -45,6 +45,11 @@ type RoutingProfile = Pick<
 export interface AccountCandidate {
   profile: RoutingProfile;
   offersModel: boolean;
+  /**
+   * The account's known model listing lacks the model: a hard exclusion,
+   * unlike every other fact here. Unknown accounts never lack a model.
+   */
+  lacksModel?: boolean;
   usage: UsageIndicator | null;
   limited?: AccountPickPreviewResult["limited"];
 }
@@ -63,12 +68,16 @@ export function rankAccountCandidates(
   now: number,
   defaultProfileId: string | undefined,
 ): AccountPickResult {
-  const scope = candidates.filter(
+  const served = candidates.filter(
     ({ profile }) =>
       accountServesModel(profile, request.model.provider) &&
       (!request.requiresEnterprise || profile.enterprise) &&
       !request.excludeProfileIds?.includes(profile.id),
   );
+  // Entitlement is hard: an account whose listing lacks the model leaves the
+  // scope BEFORE ranking, so neither the degraded pool nor the disabled
+  // default can pick it. Benches, health and usage stay soft.
+  const scope = served.filter((candidate) => !candidate.lacksModel);
   const ranked = rankCandidates(
     scope.map((candidate) => ({
       ...candidate,
@@ -99,9 +108,12 @@ export function rankAccountCandidates(
   }
   return {
     profileId: null,
-    degraded: request.requiresEnterprise
-      ? "no-enterprise-account"
-      : "no-enabled-account",
+    degraded:
+      served.length > scope.length
+        ? "model-unavailable"
+        : request.requiresEnterprise
+          ? "no-enterprise-account"
+          : "no-enabled-account",
   };
 }
 
@@ -133,16 +145,22 @@ function rankingUsage(
 
 /**
  * One account's routing facts for a model: whether its official model snapshot
- * offers the model (and the thinking level), its cached usage and the bench on
- * that model. Automatic and an explicit move judge these same facts.
+ * offers the model (and the thinking level), whether its known listing lacks
+ * it, its cached usage and the bench on that model. Automatic and an explicit
+ * move judge these same facts.
  */
 export async function gatherAccountCandidate(
   profile: RoutingProfile,
   request: Pick<AccountPickRequest, "model" | "thinkingLevel">,
 ): Promise<AccountCandidate> {
-  const models = profile.enabled
-    ? await modelsForAccount(profile).catch(() => [])
-    : [];
+  const [models, lacksModel] = await Promise.all([
+    profile.enabled ? modelsForAccount(profile).catch(() => []) : [],
+    accountLacksModel(
+      profile.id,
+      request.model.provider,
+      request.model.modelId,
+    ).catch(() => false),
+  ]);
   const model = models.find(
     (option) =>
       option.provider === request.model.provider &&
@@ -176,6 +194,7 @@ export async function gatherAccountCandidate(
       !!model &&
       (request.thinkingLevel === undefined ||
         supportedThinkingLevelsForModel(model).includes(request.thinkingLevel)),
+    ...(lacksModel ? { lacksModel } : {}),
     usage,
   };
 }

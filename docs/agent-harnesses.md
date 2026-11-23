@@ -189,26 +189,44 @@ Four layers, each depending only on the ones below it:
      resolves the pi model handle a pi session is created with
      (`NewSession.model`): on an account (`piModelForAccount`), from the shared
      registry (`piModel`), or for a configured slot with its helper fallback
-     (`piModelForSlot`), and re-reads pi's registry (`refreshPiModels`); the
-     caller still says what a missing one means. `refreshPiModels` is the user's
-     Refresh and forces every OpenAI account's catalog fetch. Creating a runtime
-     fetches no catalog (pi ≥1.6), so the server refreshes the same runtimes
-     without forcing once at startup and then hourly, and pi's four-hour
-     freshness window decides when pi.dev is asked (`startModelCatalogRefresh`
-     in `harnesses/boot.ts`); when that changes the pickers' models,
-     `subscribePiPickerModelsChanged` tells `hub.ts`, which pushes `models` to
-     every connection. Every refresh of a runtime, the post-login one included,
-     goes through one coordination point (`refreshRuntime` in
-     `piSdk/models.ts`): pi aborts a runtime's refresh when another starts on
-     it, and the aborted one resolves like a success. An unforced refresh joins
-     whatever runs or is queued, so it never supersedes a forced one; a forced
-     request joins a forced run, or waits for an unforced one to end and then
-     runs, so the user's Refresh always gets its fetch. The Claude-only curated
-     options sit in `harnesses/curatedModels.ts`, which loads no engine SDK, so
-     row projections and the Claude adapter stay cheap: an option by id, the
-     alias a model id runs as (`claudeModelAlias`) and the curated ids. The
-     usage port (`harnesses/usage.ts`) reads subscription usage per account kind
-     and redeems OpenAI reset credits. It also resolves run-usage attribution,
+     (`piModelForSlot`), and re-reads the catalogs (`refreshAllModels`); the
+     caller still says what a missing one means. `refreshAllModels` is the
+     user's Refresh: it forces every OpenAI account's catalog fetch and every
+     enabled Claude account's listing read. Creating a runtime fetches no
+     catalog (pi ≥1.6), so the server refreshes the same runtimes without
+     forcing once at startup and then hourly, and pi's four-hour freshness
+     window decides when pi.dev is asked (`startModelCatalogRefresh` in
+     `harnesses/boot.ts`). `subscribePickerModelsChanged` tells `hub.ts`, which
+     pushes `models` to every connection, when that changes the pickers' models,
+     when a Claude account's listing changes (the union may not; the per-account
+     lists the web re-reads on every `models` do), and when a Claude account is
+     enabled, disabled, added or removed. Every refresh of a runtime, the
+     post-login one included, goes through one coordination point
+     (`refreshRuntime` in `piSdk/models.ts`): pi aborts a runtime's refresh when
+     another starts on it, and the aborted one resolves like a success. An
+     unforced refresh joins whatever runs or is queued, so it never supersedes a
+     forced one; a forced request joins a forced run, or waits for an unforced
+     one to end and then runs, so the user's Refresh always gets its fetch.
+   - A Claude account offers the curated options its subscription lists:
+     `harnesses/claudeAccountModels.ts` keeps, in memory, the model ids each
+     enabled Claude account's `GET /v1/models` returned through the gateway on
+     its server lease. An account with no successful read (gateway off, never
+     read, every read failed) is unknown and offers the whole curated list; a
+     failed or implausible read (no curated id) keeps the last success, and a
+     listing saying more pages follow counts as failed. Reads run at startup,
+     hourly, on the user's Refresh and on any credential change; a routing or
+     admission check waits at most 10 seconds (lease and fetch) for an unknown
+     account's first read, and after a failure or a stalled read it waits again
+     only after 60 seconds. Every read carries a generation, so a read started
+     before a login or deletion never publishes over a later one.
+     `accountLacksModel` is true only for a curated model a known listing omits.
+     `pickerModels` offers the union over enabled Claude accounts (curated when
+     none is enabled). The Claude-only curated options sit in
+     `harnesses/curatedModels.ts`, which loads no engine SDK, so row projections
+     and the Claude adapter stay cheap: an option by id, the alias a model id
+     runs as (`claudeModelAlias`) and the curated ids. The usage port
+     (`harnesses/usage.ts`) reads subscription usage per account kind and
+     redeems OpenAI reset credits. It also resolves run-usage attribution,
      including the protected default used to reopen a legacy unbound session on
      an install that still has one.
    - `harnesses/boot.ts` is what the server's composition root (`index.ts`)

@@ -112,6 +112,7 @@ import {
 } from "./credentialProfileUsage.ts";
 import {
   modelRuntimeForProfile,
+  startClaudeAccountModelRefresh,
   startModelCatalogRefresh,
   warmCredentialProfileModelRuntimes,
   linkPiToolBinaries,
@@ -2112,6 +2113,10 @@ server.listen(PORT, HOST, () => {
   // the warm-up's runtimes, then hourly; pi's four-hour window gates the
   // network.
   startModelCatalogRefresh();
+  // Each enabled Claude account's model listing through the gateway: now,
+  // hourly, and again when its login changes. Without a gateway nothing is
+  // read and every account offers the curated list.
+  startClaudeAccountModelRefresh();
   // Turns runtime events into the Sessions inbox's run-start / failure /
   // settlement-reactivation facts for every harness at once.
   installSessionActivityTracking();

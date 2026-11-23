@@ -14,6 +14,11 @@ import {
 import { credentialProfileById } from "./credentialProfiles.ts";
 import { pickAccount } from "./accountRouter.ts";
 import { sessionStore } from "./db/sessionStore.ts";
+import { accountLacksModel } from "./harnesses/models.ts";
+import {
+  assertAccountCanRunModel,
+  noAccountCanRunModelError,
+} from "./settingsModelSlots.ts";
 
 /** How an engine's `switchAccount` moves a session. */
 export interface AccountSwitchOptions {
@@ -97,9 +102,10 @@ export function requireSessionEnterprise(
 /**
  * Shared interactive creation policy. The model decides which accounts may
  * run it (`accountServesModel`). An explicit pin passes rule P, then must be
- * enabled and serve the model. An inherited pin (the parent session's account,
- * on a fork or draft) is kept, even disabled, only when that exact account
- * serves the new model; otherwise Automatic picks.
+ * enabled, serve the model and not be known to lack it (its model listing).
+ * An inherited pin (the parent session's account, on a fork or draft) is kept,
+ * even disabled, only when that exact account serves the new model and is not
+ * known to lack it; otherwise Automatic picks.
  */
 export async function resolveSessionAccount(
   harness: Harness,
@@ -125,7 +131,11 @@ export async function resolveSessionAccount(
   const stored = selection.credentialProfileId?.trim() || undefined;
   if (stored && options.inheritedPin) {
     const profile = credentialProfileById(stored);
-    if (profile && accountServesModel(profile, model.provider)) {
+    if (
+      profile &&
+      accountServesModel(profile, model.provider) &&
+      !(await accountLacksModel(profile.id, model.provider, model.modelId))
+    ) {
       if (selection.requiresEnterprise && !profile.enterprise)
         throw new Error("This session requires an enterprise account.");
       return stored;
@@ -142,6 +152,7 @@ export async function resolveSessionAccount(
       throw new Error(`Select an enabled ${label} credential profile.`);
     if (selection.requiresEnterprise && !profile.enterprise)
       throw new Error("This session requires an enterprise account.");
+    await assertAccountCanRunModel(pin, model.provider, model.modelId);
     return pin;
   }
   const picked = await pickAccount({
@@ -153,6 +164,8 @@ export async function resolveSessionAccount(
       ? { requiresEnterprise: selection.requiresEnterprise }
       : {}),
   });
+  if (!picked.profileId && picked.degraded === "model-unavailable")
+    throw await noAccountCanRunModelError(model.provider, model.modelId);
   if (!picked.profileId)
     throw new Error(
       selection.requiresEnterprise

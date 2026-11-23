@@ -347,7 +347,9 @@ export interface AccountPickPreviewResult {
     | "no-eligible-account"
     | "disabled-default"
     | "no-enabled-account"
-    | "no-enterprise-account";
+    | "no-enterprise-account"
+    /** Every account in scope is known (by its model listing) not to offer the model. */
+    | "model-unavailable";
 }
 
 export function clampThinkingLevelForModel(

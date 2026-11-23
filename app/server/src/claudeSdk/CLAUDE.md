@@ -4,8 +4,8 @@
 
 - The official Claude CLI provisions profiles. PA exposes no credentials and
   owns OAuth only in `gateway/`: the CLI-mirroring token refresh (U8) and the
-  usage read `GET /api/oauth/usage` on a server lease.
-  `claudeProfileEnvironment` scrubs inherited credential variables.
+  usage and model-listing reads on a server lease. `claudeProfileEnvironment`
+  scrubs inherited credential variables.
 - Do not double-count output: live deltas build visible text; committed
   assistant messages carry metadata and tool openings. A synthetic assistant
   `error` is never streamed, so its text (a provider failure's only wording)

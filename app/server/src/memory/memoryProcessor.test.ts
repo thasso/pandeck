@@ -490,3 +490,45 @@ test("hourly window reset re-allows calls", async () => {
     "calls allowed again after the window resets",
   );
 });
+
+test("a Claude processor pinned to an account whose listing lacks its model is not configured", async () => {
+  const { updateSettings, getSettings } = await import("../settings.ts");
+  const { CLAUDE_SDK_PROVIDER } = await import("@assistant/shared");
+  const { createCredentialProfile, setCredentialProfileEnabled } =
+    await import("../credentialProfiles.ts");
+  const { resetClaudeAccountModelsForTests } =
+    await import("../harnesses/claudeAccountModels.ts");
+  const before = getSettings();
+  const account = createCredentialProfile({
+    name: "Private",
+    provider: "claude",
+  });
+  updateSettings({
+    memory: {
+      ...before.memory,
+      processor: {
+        provider: CLAUDE_SDK_PROVIDER,
+        modelId: "haiku",
+        thinkingLevel: "off",
+        credentialProfileId: account.id,
+      },
+    },
+    claudeSdk: { ...before.claudeSdk, enabled: true },
+  });
+  try {
+    resetClaudeAccountModelsForTests({
+      read: async () => ["claude-opus-5-5", "claude-sonnet-5-5"],
+    });
+    const lacking = await proc.processorConfigStatus();
+    assert.equal(lacking.configured, false);
+    assert.match(lacking.message ?? "", /Private can't run Claude Haiku\./);
+
+    // No listing known: configured, as before.
+    resetClaudeAccountModelsForTests({ read: async () => undefined });
+    assert.deepEqual(await proc.processorConfigStatus(), { configured: true });
+  } finally {
+    resetClaudeAccountModelsForTests();
+    updateSettings({ memory: before.memory, claudeSdk: before.claudeSdk });
+    setCredentialProfileEnabled(account.id, false);
+  }
+});

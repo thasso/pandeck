@@ -40,7 +40,10 @@ import {
 import { searchMemory } from "./memorySelector.ts";
 import { accountOffersModel } from "../harnesses/models.ts";
 import { OneShotError, runOneShot } from "../harnesses/oneShot.ts";
-import { accountForSlot } from "../settingsModelSlots.ts";
+import {
+  accountForSlot,
+  ModelUnavailableOnAccountError,
+} from "../settingsModelSlots.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 
 /* -------------------------------- bounds --------------------------------- */
@@ -180,14 +183,24 @@ export async function processorConfigStatus(): Promise<ProcessorConfigStatus> {
         message:
           "The memory processor is set to Claude SDK, but the Claude SDK integration is disabled.",
       };
-    return { configured: true };
   }
   // Validate the EXACT configured provider/model — never a silent fallback to a
   // different model, which would run something other than what was configured.
-  // Availability is per account, so this checks the account the slot resolves to.
+  // Availability is per account, so this checks the account the slot resolves
+  // to; a pin whose account's model listing lacks the model refuses there.
+  let profileId: string;
+  try {
+    profileId = await accountForSlot(processor);
+  } catch (err) {
+    if (!(err instanceof ModelUnavailableOnAccountError)) throw err;
+    return {
+      configured: false,
+      message: `The configured memory processor model (${processor.provider}/${processor.modelId}) is not available: ${err.message} Pick an available model or account in Memory settings.`,
+    };
+  }
   if (
     !(await accountOffersModel(
-      await accountForSlot(processor),
+      profileId,
       processor.provider,
       processor.modelId,
     ))

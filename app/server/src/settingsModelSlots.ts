@@ -11,8 +11,11 @@
  * router lazily so settings.ts can import them without an import cycle.
  */
 import {
+  ACCOUNT_KINDS,
+  accountKindForModelProvider,
   accountPinForModel,
   accountServesModel,
+  harnessForModelProvider,
   type AppSettings,
   type CredentialProfilePin,
   type CredentialProfileSlotUsage,
@@ -118,6 +121,57 @@ export class EnterpriseAccountRequiredError extends Error {
   }
 }
 
+/**
+ * The model cannot run where it was asked to: the pinned account's known model
+ * listing lacks it, or every account in scope does. A pin refused this way is
+ * never moved to another account.
+ */
+export class ModelUnavailableOnAccountError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ModelUnavailableOnAccountError";
+  }
+}
+
+async function modelName(provider: string, modelId: string): Promise<string> {
+  const { storedSessionModelOption } = await import("./harnesses/models.ts");
+  return (
+    storedSessionModelOption(
+      harnessForModelProvider(provider),
+      provider,
+      modelId,
+    )?.name ?? modelId
+  );
+}
+
+/**
+ * Refuse an account whose known model listing lacks the model ("<account>
+ * can't run <model>."). An account with no known listing passes.
+ */
+export async function assertAccountCanRunModel(
+  profileId: string,
+  provider: string,
+  modelId: string,
+): Promise<void> {
+  const { accountLacksModel } = await import("./harnesses/models.ts");
+  if (!(await accountLacksModel(profileId, provider, modelId))) return;
+  const account = credentialProfileById(profileId)?.name ?? "This account";
+  throw new ModelUnavailableOnAccountError(
+    `${account} can't run ${await modelName(provider, modelId)}.`,
+  );
+}
+
+/** The refusal when Automatic found every account in scope lacking the model. */
+export async function noAccountCanRunModelError(
+  provider: string,
+  modelId: string,
+): Promise<ModelUnavailableOnAccountError> {
+  const label = ACCOUNT_KINDS[accountKindForModelProvider(provider)].label;
+  return new ModelUnavailableOnAccountError(
+    `No ${label} account can run ${await modelName(provider, modelId)}.`,
+  );
+}
+
 /** Why a pinned account could not be used. */
 type SlotAccountDegradation = "missing" | "disabled" | "provider-mismatch";
 
@@ -132,7 +186,9 @@ export interface SlotAccountResolution {
 
 /**
  * The account a slot runs on. A missing, disabled or provider-mismatched pin
- * falls back to Automatic. Refuses when no account can be picked, or when an
+ * falls back to Automatic. An enabled matching pin whose account's known model
+ * listing lacks the model refuses with {@link ModelUnavailableOnAccountError}
+ * and never falls back. Refuses when no account can be picked, or when an
  * enterprise requirement would need a personal or degraded account.
  */
 export async function resolveSlotAccount(
@@ -157,9 +213,13 @@ export async function resolveSlotAccount(
         : !profile.enabled
           ? "disabled"
           : undefined;
-    // Health, model, effort and usage eligibility apply only to Automatic.
-    // An enabled matching pin must fail/alert on that account, not spend another.
-    if (!degraded) return { profileId: pinned };
+    // Health, effort and usage eligibility apply only to Automatic. An enabled
+    // matching pin must fail/alert on that account, not spend another, and so
+    // must one its known model listing lacks: entitlement refuses the pin.
+    if (!degraded) {
+      await assertAccountCanRunModel(pinned, slot.provider, slot.modelId);
+      return { profileId: pinned };
+    }
   }
   const { pickAccount } = await import("./accountRouter.ts");
   const picked = await pickAccount({
@@ -170,6 +230,8 @@ export async function resolveSlotAccount(
     requiresEnterprise: slot.requiresEnterprise === true,
     allowDisabledDefault: slot.requiresEnterprise !== true,
   });
+  if (!picked.profileId && picked.degraded === "model-unavailable")
+    throw await noAccountCanRunModelError(slot.provider, slot.modelId);
   if (slot.requiresEnterprise && (!picked.profileId || picked.degraded))
     throw new EnterpriseAccountRequiredError();
   if (!picked.profileId)
