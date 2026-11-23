@@ -251,8 +251,11 @@ test("Claude acquisition, configure, prompt, native fork and failed fork compens
   });
   assert.equal(claudeSdkStore.get(parent.id), parent);
   await oracle(
-    "Claude.configure",
-    () => parent.configure("claude-opus-4-6", "high"),
+    "Claude.setModel before the first prompt",
+    async () => {
+      await parent.setModel("claude-opus-4-6");
+      await parent.setThinkingLevel("high");
+    },
     {
       equal:
         "configuration is local on an empty, intentionally unlisted conversation",
@@ -360,6 +363,18 @@ test("Claude account transfer, model/reasoning selection and failed prompt use p
   assert.equal(live.credentialProfileId, to);
   assert.equal(sessionStore.get(live.id)?.credentialProfileId, to);
   assert.equal(existsSync(sourceFile), false);
+  await oracle(
+    "Claude.setModel between turns",
+    () => live.setModel("claude-sonnet-4-6"),
+    { changed: [live.id] },
+  );
+  assert.equal(sessionStore.get(live.id)?.model, "sonnet");
+  await oracle(
+    "Claude.setThinkingLevel between turns",
+    () => live.setThinkingLevel("low"),
+    { changed: [live.id] },
+  );
+  assert.equal(sessionStore.get(live.id)?.thinkingLevel, "low");
   failure = true;
   await oracle(
     "Claude failed prompt terminal",

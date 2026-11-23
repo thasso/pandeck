@@ -12,7 +12,11 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { ClaudeResultMessage } from "./messageMapper.ts";
-import { mapResultEpochUsage, mapResultUsage } from "./messageMapper.ts";
+import {
+  mapResultEpochUsage,
+  mapResultMeta,
+  mapResultUsage,
+} from "./messageMapper.ts";
 
 function resultMessage(fields: Record<string, unknown>): ClaudeResultMessage {
   return {
@@ -94,4 +98,44 @@ test("mapResultEpochUsage falls back to top-level usage when modelUsage is absen
       "falls back to top-level cacheWrite",
     );
   }
+});
+
+test("mapResultMeta takes the window from the selected model's entry, never the epoch's busiest", () => {
+  // An epoch that ran Opus before switching to Sonnet: the running total
+  // still leads with Opus.
+  const message = resultMessage({
+    total_cost_usd: 1.1,
+    modelUsage: {
+      "claude-opus-5-5": {
+        inputTokens: 100_000,
+        outputTokens: 5_000,
+        contextWindow: 1_000_000,
+      },
+      "claude-sonnet-5-5": {
+        inputTokens: 1_000,
+        outputTokens: 100,
+        contextWindow: 200_000,
+      },
+      // A helper model: a distinct window shows which entry was read.
+      "claude-haiku-5-5": {
+        inputTokens: 50_000,
+        outputTokens: 1_000,
+        contextWindow: 300_000,
+      },
+    },
+  });
+  assert.deepEqual(mapResultMeta(message, "opus"), {
+    cost: 1.1,
+    contextWindow: 1_000_000,
+  });
+  assert.deepEqual(mapResultMeta(message, "sonnet"), {
+    cost: 1.1,
+    contextWindow: 200_000,
+  });
+  // A concrete id selects like its alias; a model with no entry learns none.
+  assert.equal(
+    mapResultMeta(message, "claude-haiku-5-5").contextWindow,
+    300_000,
+  );
+  assert.deepEqual(mapResultMeta(message, "fable"), { cost: 1.1 });
 });

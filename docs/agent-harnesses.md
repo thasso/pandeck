@@ -87,7 +87,9 @@ compatible account serves display lookups (`findModel`, `listModels`) only.
   not serve, naming the account and pointing at a new session; a hosted engine
   resolves the switch through `findForProfile`. A native fork keeps the parent's
   account, so it is no way across accounts. The web picker disables those models
-  up front (`startedModelDisabled`).
+  up front (`startedModelDisabled`). A started Claude session switches too,
+  between turns, among the curated models its account's listing offers
+  (`docs/session-runtime-switching.md`).
 - **One-shots.** The configured model, then the default helper, then the
   account's first available non-reasoning text model, else its first, each
   through the gate.

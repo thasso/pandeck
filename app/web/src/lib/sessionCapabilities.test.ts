@@ -48,6 +48,39 @@ describe("startedModelDisabled", () => {
     expect(startedModelDisabled(pi(login), model("claude-sdk"))).toBe(true);
   });
 
+  it("lets a started Claude session pick the Claude models its account offers", () => {
+    const claudeAccount = { id: "work", provider: "claude" } as const;
+    const claude = (
+      accountModels?: readonly { provider: string; id: string }[],
+    ) => ({
+      harness: "claude-sdk" as const,
+      started: true,
+      account: claudeAccount,
+      accountModels,
+    });
+    const opus = { provider: "claude-sdk", id: "opus" };
+    const haiku = { provider: "claude-sdk", id: "haiku" };
+    // Its list unknown: every Claude model, no other harness's.
+    expect(startedModelDisabled(claude(), opus)).toBe(false);
+    expect(startedModelDisabled(claude(), haiku)).toBe(false);
+    expect(startedModelDisabled(claude(), model("openai-codex"))).toBe(true);
+    // Its list known: only what it offers.
+    expect(startedModelDisabled(claude([opus]), opus)).toBe(false);
+    expect(startedModelDisabled(claude([opus]), haiku)).toBe(true);
+    expect(startedModelDisabled(claude([opus]), model("openai-codex"))).toBe(
+      true,
+    );
+  });
+
+  it("keeps a started session of unknown harness read-only", () => {
+    expect(
+      startedModelDisabled(
+        { harness: undefined, started: true, account: undefined },
+        model("openai-codex"),
+      ),
+    ).toBe(true);
+  });
+
   it("offers everything before the first turn", () => {
     expect(
       startedModelDisabled(

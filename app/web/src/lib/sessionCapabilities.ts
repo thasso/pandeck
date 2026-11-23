@@ -2,7 +2,7 @@
  * UI capability helpers derived from a session's clean identity pair
  * `{harness, agentType}` — NOT from the legacy `kind`. These are the Stage2-B
  * replacements for the per-kind booleans that App.tsx used to compute inline
- * (`displayIsWorkspaceKind`, `modelLocked`, …).
+ * (`displayIsWorkspaceKind`, …).
  *
  * `harness`/`agentType` are server-populated on every `SessionState` and
  * `SessionListItem`; the optimistic synthetic session staged on the client sets
@@ -34,20 +34,16 @@ export function hasModeAxis(s: SessionCaps): boolean {
 }
 
 /**
- * Non-pi harnesses reject post-turn model/thinking changes server-side (Claude
- * SDK), so once started their pickers are read-only. pi sessions can switch
- * freely.
- */
-export function locksModelAfterStart(s: SessionCaps): boolean {
-  return s.harness !== "pi";
-}
-
-/**
- * Whether a started session's picker must refuse `model`. Its model change
- * stays on the session's harness and bound account, so a pi session refuses
- * Claude SDK models and any model its account does not serve (another
- * endpoint's, or an endpoint's from an OpenAI login, and back). The server
- * refuses them either way; this keeps the picker from offering them.
+ * Whether a started session's picker must refuse `model`. A started session
+ * changes model only on its own harness and bound account
+ * (`docs/session-runtime-switching.md`):
+ *
+ * - pi refuses Claude SDK models and any model its account does not serve
+ *   (another endpoint's, or an endpoint's from an OpenAI login, and back);
+ * - Claude refuses every non-Claude model and, once the bound account's model
+ *   list is known (`accountModels`), a Claude model it does not offer.
+ *
+ * The server refuses them either way; this keeps the picker from offering them.
  */
 export function startedModelDisabled(
   session: {
@@ -55,11 +51,22 @@ export function startedModelDisabled(
     started: boolean;
     /** The bound account, when known. */
     account: { id: string; provider: CredentialProfileProvider } | undefined;
+    /** The models the bound account offers, when its list is known. */
+    accountModels?: readonly Pick<ModelOption, "provider" | "id">[] | undefined;
   },
   model: Pick<ModelOption, "provider" | "id">,
 ): boolean {
   if (!session.started) return false;
-  // Non-pi harnesses lock the model outright (`locksModelAfterStart`).
+  if (session.harness === "claude-sdk")
+    return (
+      !isClaudeSdkModel(model) ||
+      (session.accountModels !== undefined &&
+        !session.accountModels.some(
+          (offered) =>
+            offered.provider === model.provider && offered.id === model.id,
+        ))
+    );
+  // A started session whose harness is not known yet offers nothing.
   if (session.harness !== "pi") return true;
   if (isClaudeSdkModel(model)) return true;
   return (
