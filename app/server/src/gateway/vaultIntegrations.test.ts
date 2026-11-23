@@ -7,7 +7,10 @@
  * fake, sealed, with nothing lost to an edge timeout, a stop or a failed
  * seal. Slack OAuth records (Task-1452): the same over the link against a
  * loopback Slack fake, the 1.2 wire's refusals and answer decoding, and both
- * integrations side by side. Every value is fake.
+ * integrations side by side. GitHub OAuth records (Task-1444): connect,
+ * refresh with rotation, clear and the 1.3 wire's refusals against a loopback
+ * GitHub fake, and both skew directions against a `gateway-vault/1.2` peer.
+ * Every value is fake.
  */
 import assert from "node:assert/strict";
 import { X509Certificate, generateKeyPairSync } from "node:crypto";
@@ -37,6 +40,16 @@ import {
   type AtlassianFake,
 } from "../test/atlassianFake.ts";
 import {
+  FAKE_GITHUB_CODE,
+  FAKE_GITHUB_OTHER,
+  FAKE_GITHUB_REDIRECT,
+  FAKE_GITHUB_USER,
+  fakeGithubApp,
+  githubJson,
+  startGithubFake,
+  type GithubFake,
+} from "../test/githubFake.ts";
+import {
   FAKE_SLACK_CLIENT,
   FAKE_SLACK_CODE,
   FAKE_SLACK_REDIRECT,
@@ -49,7 +62,11 @@ import {
   startSlackFake,
   type SlackFake,
 } from "../test/slackFake.ts";
-import { WorkerConnection } from "../workerProtocol/connection.ts";
+import {
+  WorkerConnection,
+  WorkerMethodError,
+  type ConnectionProtocol,
+} from "../workerProtocol/connection.ts";
 import { socketEndpoint } from "../workerProtocol/unixSocketTransport.ts";
 import { createRemoteVault, type RemoteVault } from "./remoteVault.ts";
 import { recipientOf, writeRecipients } from "./sealedStore.ts";
@@ -94,20 +111,24 @@ const CREDENTIAL = JSON.stringify({
 let atl: AtlassianFake;
 let atlToken: AtlassianFake["token"];
 let slack: SlackFake;
+let github: GithubFake;
 beforeAll(async () => {
   atl = await startAtlassianFake();
   atlToken = atl.token;
   slack = await startSlackFake();
+  github = await startGithubFake();
 });
 afterEach(async () => {
   while (open.length) await open.pop()!.close();
   atl.token = atlToken;
   atl.expiresInS = 3600;
   slack.reset();
+  github.reset();
 });
 afterAll(async () => {
   await atl.close();
   await slack.close();
+  await github.close();
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -837,6 +858,7 @@ async function bothVault(dir: string) {
  */
 async function rawLink(
   port: number,
+  protocol: ConnectionProtocol = GATEWAY_VAULT_PROTOCOL,
 ): Promise<(method: string, json: unknown) => Promise<unknown>> {
   const socket = await new Promise<tls.TLSSocket>((resolve, reject) => {
     const dialed = tls.connect({
@@ -852,7 +874,7 @@ async function rawLink(
   });
   const connection = new WorkerConnection(socketEndpoint(socket), {
     handshake: { role: "worker", workerId: "pandeck-gateway-edge" },
-    protocol: GATEWAY_VAULT_PROTOCOL,
+    protocol,
     handlers: {
       [VAULT_METHODS.report]: () => Promise.resolve(vaultMessage({})),
     },
@@ -959,7 +981,10 @@ test("Slack over the link: a team mismatch stores nothing; a put, a site with Sl
     { ...connect, integration: "atlassian", team: FAKE_TEAM_ID },
     { ...connect, integration: "slack", team: "not-a-team" },
     { ...connect, integration: "slack", team: 7 },
-    { ...connect, integration: "github" },
+    // GitHub's connect takes neither preset; an unknown provider is refused.
+    { ...connect, integration: "github", team: FAKE_TEAM_ID },
+    { ...connect, integration: "github", site: FAKE_SITE },
+    { ...connect, integration: "gitlab" },
   ])
     assert.equal(
       await raw(VAULT_METHODS.integrationConnect, body),
@@ -1124,4 +1149,451 @@ test("Atlassian and Slack side by side over the link: separate records and refre
   accessOf(await remote.integrationGet("u1", "atlassian"));
   assert.ok(existsSync(sealedOf(dir)));
   noSlackSecretsIn(v.lines);
+});
+
+// --- GitHub OAuth records (Task-1444) --------------------------------------
+
+const GH_DIR_ID = integrationDirId("u1", "github");
+const githubPlaintextOf = (dir: string): string =>
+  join(dir, "accounts", GH_DIR_ID, INTEGRATION_FILE);
+const githubSealedOf = (dir: string): string =>
+  join(dir, "sealed", GH_DIR_ID, `${INTEGRATION_FILE}.sealed`);
+const githubStored = (dir: string): Record<string, unknown> =>
+  JSON.parse(readFileSync(githubPlaintextOf(dir), "utf8")) as Record<
+    string,
+    unknown
+  >;
+const githubRefreshesSent = (): string[] =>
+  github
+    .on("token")
+    .filter((request) => request.form.grant_type === "refresh_token")
+    .map((request) => request.form.refresh_token ?? "");
+const connectGithubU1 = (remote: RemoteVault, code = FAKE_GITHUB_CODE) =>
+  remote.integrationConnect("u1", "github", {
+    code,
+    redirectUri: FAKE_GITHUB_REDIRECT,
+  });
+const noGithubSecretsIn = (lines: string[]): void => {
+  for (const line of lines)
+    assert.doesNotMatch(
+      line,
+      /fake-gh-|fake-github-|fake-user|fake-other|u1\b|BEGIN|PRIVATE|eyJ/,
+      line,
+    );
+};
+
+async function githubVault(
+  dir: string,
+  extra: Partial<VaultServerOptions> = {},
+) {
+  return vault(dir, {
+    integrationClients: {
+      atlassian: FAKE_CLIENT,
+      slack: FAKE_SLACK_CLIENT,
+      github: fakeGithubApp().client,
+    },
+    atlassianEndpoint: atl.endpoint,
+    slackEndpoint: slack.endpoint,
+    githubEndpoint: github.endpoint,
+    ...extra,
+  });
+}
+
+/** A restart on `dir` (tmpfs plaintext gone), unlocked, linked. */
+async function githubRestarted(dir: string) {
+  rmSync(join(dir, "accounts"), { recursive: true, force: true });
+  const v = await githubVault(dir);
+  const remote = await link(v.port);
+  await unlock(v.control);
+  return { v, remote };
+}
+
+test("GitHub over the link: connect seals a record without the access token; the view crosses; rejected keeps the record; clear deletes", async () => {
+  const { dir } = sealingDir();
+  const v = await githubVault(dir);
+  const remote = await link(v.port);
+  assert.deepEqual(await connectGithubU1(remote), { ok: false, locked: true });
+  assert.equal(github.seen.length, 0, "a locked vault calls nobody");
+  await unlock(v.control);
+  assert.deepEqual(await connectGithubU1(remote), {
+    ok: true,
+    login: FAKE_GITHUB_USER.login,
+  });
+  assert.equal(github.on("user").length, 1);
+  assert.ok(existsSync(githubSealedOf(dir)));
+  assert.doesNotMatch(readFileSync(githubSealedOf(dir), "utf8"), /fake-gh-/);
+  const plaintext = readFileSync(githubPlaintextOf(dir), "utf8");
+  assert.doesNotMatch(plaintext, /fake-gh-user-access|accessToken/);
+  const stored = githubStored(dir);
+  assert.deepEqual(
+    { ...stored, refreshExpiresAt: typeof stored.refreshExpiresAt },
+    {
+      kind: "github-oauth",
+      v: 1,
+      login: FAKE_GITHUB_USER.login,
+      githubUserId: FAKE_GITHUB_USER.id,
+      refreshToken: github.issuedRefresh.at(-1),
+      refreshExpiresAt: "number",
+    },
+  );
+  assert.ok(
+    Math.abs(
+      (stored.refreshExpiresAt as number) - (Date.now() + 15_638_400_000),
+    ) < 60_000,
+  );
+  // Fresh from the connect: the view crosses the link without a refresh.
+  const record = await remote.integrationGet("u1", "github");
+  assert.equal(record.ok, true, JSON.stringify(record));
+  const view = JSON.parse((record as { credential: string }).credential) as {
+    accessToken: string;
+  };
+  assert.deepEqual(Object.keys(view), [
+    "kind",
+    "login",
+    "accessToken",
+    "expiresAt",
+  ]);
+  assert.equal(view.accessToken, github.issuedAccess[0]);
+  assert.doesNotMatch(JSON.stringify(record), /fake-gh-refresh/);
+  assert.deepEqual(githubRefreshesSent(), []);
+  // A put for GitHub is refused: only a connect writes its record.
+  assert.deepEqual(await remote.integrationPut("u1", "github", CREDENTIAL), {
+    ok: false,
+    unavailable: true,
+  });
+  assert.equal(githubStored(dir).refreshToken, github.issuedRefresh.at(-1));
+  // A refused code stores nothing over the record.
+  assert.deepEqual(await connectGithubU1(remote, "fake-wrong-code"), {
+    ok: false,
+    rejected: true,
+  });
+  assert.equal(githubStored(dir).login, FAKE_GITHUB_USER.login);
+  assert.deepEqual(await remote.integrationClear("u1", "github"), { ok: true });
+  assert.equal(existsSync(githubPlaintextOf(dir)), false);
+  assert.equal(existsSync(githubSealedOf(dir)), false);
+  assert.deepEqual(await remote.integrationGet("u1", "github"), {
+    ok: false,
+    absent: true,
+  });
+  noGithubSecretsIn(v.lines);
+});
+
+test("GitHub: the first get after a restart refreshes once for two readers; the rotation is stored and sealed; a reused token is rejected and the record kept", async () => {
+  const { dir } = sealingDir();
+  const v = await githubVault(dir);
+  const remote = await link(v.port);
+  await unlock(v.control);
+  await connectGithubU1(remote);
+  const exchanged = github.issuedRefresh.at(-1)!;
+  remote.close();
+  await v.close();
+  open.length = 0;
+  const again = await githubRestarted(dir);
+  const [a, b] = await Promise.all([
+    again.remote.integrationGet("u1", "github"),
+    again.remote.integrationGet("u1", "github"),
+  ]);
+  assert.deepEqual(a, b);
+  assert.equal(a.ok, true);
+  assert.deepEqual(githubRefreshesSent(), [exchanged], "one refresh");
+  const rotated = github.issuedRefresh.at(-1)!;
+  assert.notEqual(rotated, exchanged);
+  assert.equal(githubStored(dir).refreshToken, rotated);
+  assert.doesNotMatch(readFileSync(githubSealedOf(dir), "utf8"), /fake-gh-/);
+  // S1a a9-old-refresh: the spent token is refused; the record stays.
+  github.expiresInS = 60;
+  writeFileSync(
+    githubPlaintextOf(dir),
+    JSON.stringify({ ...githubStored(dir), refreshToken: exchanged }),
+  );
+  again.remote.close();
+  await again.v.close();
+  open.length = 0;
+  const third = await githubRestarted(dir);
+  assert.deepEqual(await third.remote.integrationGet("u1", "github"), {
+    ok: false,
+    rejected: true,
+  });
+  assert.equal(githubStored(dir).refreshToken, exchanged, "record kept");
+  noGithubSecretsIn([...v.lines, ...again.v.lines, ...third.v.lines]);
+});
+
+test("GitHub: a refresh that times out answers unavailable; the next get sends the same stored token", async () => {
+  const { dir } = sealingDir();
+  const v = await githubVault(dir);
+  const remote = await link(v.port);
+  await unlock(v.control);
+  github.expiresInS = 60;
+  await connectGithubU1(remote);
+  const stored = githubStored(dir).refreshToken;
+  github.endpoint.timeoutMs = 200;
+  github.script.token = () => {};
+  assert.deepEqual(await remote.integrationGet("u1", "github"), {
+    ok: false,
+    unavailable: true,
+  });
+  delete github.script.token;
+  delete github.endpoint.timeoutMs;
+  assert.equal((await remote.integrationGet("u1", "github")).ok, true);
+  assert.deepEqual(githubRefreshesSent(), [stored, stored]);
+  assert.equal(githubStored(dir).refreshToken, github.issuedRefresh.at(-1));
+  noGithubSecretsIn(v.lines);
+});
+
+test("GitHub: the wire refuses a put, a site or team preset and an unknown provider before any effect; the identity is the new one after a reconnect", async () => {
+  const { dir } = sealingDir();
+  const v = await githubVault(dir);
+  await unlock(v.control);
+  const raw = await rawLink(v.port);
+  const before = accountsSnapshot(dir);
+  const connect = {
+    userId: "u1",
+    code: FAKE_GITHUB_CODE,
+    redirectUri: FAKE_GITHUB_REDIRECT,
+  };
+  for (const [method, body] of [
+    [
+      VAULT_METHODS.integrationConnect,
+      { ...connect, integration: "github", team: FAKE_TEAM_ID },
+    ],
+    [
+      VAULT_METHODS.integrationConnect,
+      { ...connect, integration: "github", site: FAKE_SITE },
+    ],
+    [VAULT_METHODS.integrationConnect, { ...connect, integration: "gitlab" }],
+    [VAULT_METHODS.integrationGet, { userId: "u1", integration: "gitlab" }],
+    [
+      VAULT_METHODS.integrationPut,
+      { userId: "u1", integration: "github", credential: CREDENTIAL },
+    ],
+  ] as const)
+    assert.equal(await raw(method, body), "refused", JSON.stringify(body));
+  assert.equal(github.seen.length, 0, "nobody called");
+  assert.equal(accountsSnapshot(dir), before, "nothing written");
+  // The edge's link replaces the raw one.
+  const remote = await link(v.port);
+  assert.deepEqual(await connectGithubU1(remote), {
+    ok: true,
+    login: FAKE_GITHUB_USER.login,
+  });
+  github.identity = FAKE_GITHUB_OTHER;
+  assert.deepEqual(await connectGithubU1(remote), {
+    ok: true,
+    login: FAKE_GITHUB_OTHER.login,
+  });
+  assert.equal(githubStored(dir).githubUserId, FAKE_GITHUB_OTHER.id);
+  // An identity answer GitHub would never give stores nothing.
+  github.script.user = githubJson(200, { login: "has space", id: 1 });
+  assert.deepEqual(await connectGithubU1(remote), {
+    ok: false,
+    rejected: true,
+  });
+  assert.equal(githubStored(dir).githubUserId, FAKE_GITHUB_OTHER.id);
+  noGithubSecretsIn(v.lines);
+});
+
+test("GitHub connect answers decode: a login, or a shared failure; any other shape is unavailable", async () => {
+  const answers: [unknown, unknown][] = [
+    [
+      { ok: true, login: "fake-user" },
+      { ok: true, login: "fake-user" },
+    ],
+    [
+      { ok: false, rejected: true },
+      { ok: false, rejected: true },
+    ],
+    [
+      { ok: false, unreachable: true },
+      { ok: false, unreachable: true },
+    ],
+    [
+      { ok: false, notConfigured: true },
+      { ok: false, notConfigured: true },
+    ],
+    [
+      { ok: false, locked: true },
+      { ok: false, locked: true },
+    ],
+    [
+      { ok: true, login: "has space" },
+      { ok: false, unavailable: true },
+    ],
+    [
+      { ok: true, login: 1 },
+      { ok: false, unavailable: true },
+    ],
+    [
+      { ok: true, teamId: FAKE_TEAM_ID },
+      { ok: false, unavailable: true },
+    ],
+    [
+      { ok: false, team: "mismatch" },
+      { ok: false, unavailable: true },
+    ],
+    ["ok", { ok: false, unavailable: true }],
+  ];
+  const held = await holdingVault(answers.map(([answer]) => answer));
+  const remote = await link(held.port);
+  for (const [answer, decoded] of answers)
+    assert.deepEqual(
+      await connectGithubU1(remote),
+      decoded,
+      JSON.stringify(answer),
+    );
+});
+
+// --- version skew: gateway-vault/1.3 is additive (Task-1444 AC7, F14) ------
+
+const VAULT_1_2: ConnectionProtocol = {
+  version: "gateway-vault/1.2",
+  compatible: GATEWAY_VAULT_PROTOCOL.compatible,
+};
+
+/**
+ * A vault that speaks `gateway-vault/1.2`: its method table and integrations
+ * are 1.2's, so a GitHub integration is refused as invalid and `github.token`
+ * is an unknown method. It answers each Atlassian and Slack get with a record.
+ */
+async function vault12(): Promise<{ port: number; asked: string[] }> {
+  const asked: string[] = [];
+  const pinned = new X509Certificate(edgeId.certPem).fingerprint256;
+  const integration = (body: Record<string, unknown>): string => {
+    const { integration } = body;
+    if (integration !== "atlassian" && integration !== "slack")
+      throw new WorkerMethodError("invalid_params", "Invalid integration.");
+    return integration;
+  };
+  const server = tls.createServer(
+    {
+      key: vaultId.keyPem,
+      cert: vaultId.certPem,
+      ca: edgeId.certPem,
+      requestCert: true,
+      rejectUnauthorized: false,
+    },
+    (socket) => {
+      if (!isPinnedPeer(socket, pinned)) {
+        socket.destroy();
+        return;
+      }
+      const handle =
+        (method: string, answer: (which: string) => unknown) =>
+        (payload: ReturnType<typeof vaultMessage>) => {
+          asked.push(method);
+          return Promise.resolve(
+            vaultMessage(answer(integration(vaultBody(payload)))),
+          );
+        };
+      const connection = new WorkerConnection(socketEndpoint(socket), {
+        protocol: VAULT_1_2,
+        handshake: { role: "server", admit: () => undefined },
+        limits: VAULT_LIMITS,
+        handlers: {
+          [VAULT_METHODS.hello]: () =>
+            Promise.resolve(
+              vaultMessage({
+                version: VAULT_1_2.version,
+                needsLogin: [],
+                locked: false,
+                accountsDir: "/nowhere",
+                loginKinds: [],
+              }),
+            ),
+          [VAULT_METHODS.profiles]: () => Promise.resolve(vaultMessage({})),
+          [VAULT_METHODS.liveLeases]: () => Promise.resolve(vaultMessage({})),
+          [VAULT_METHODS.integrationGet]: handle(
+            VAULT_METHODS.integrationGet,
+            (which) => ({
+              record: { ok: true, credential: `{"which":"${which}"}` },
+            }),
+          ),
+          [VAULT_METHODS.integrationPut]: handle(
+            VAULT_METHODS.integrationPut,
+            () => ({}),
+          ),
+          [VAULT_METHODS.integrationClear]: handle(
+            VAULT_METHODS.integrationClear,
+            () => ({}),
+          ),
+          [VAULT_METHODS.integrationConnect]: handle(
+            VAULT_METHODS.integrationConnect,
+            () => ({ connect: { ok: false, rejected: true } }),
+          ),
+        },
+      });
+      open.push({ close: () => connection.end("test done") });
+    },
+  );
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  open.push({ close: () => new Promise((done) => server.close(done)) });
+  const address = server.address();
+  return {
+    port: typeof address === "object" && address ? address.port : 0,
+    asked,
+  };
+}
+
+test("a 1.3 edge links to a 1.2 vault: GitHub answers unavailable, never absent; Atlassian and Slack work on the same link", async () => {
+  const old = await vault12();
+  const remote = await link(old.port);
+  assert.ok(remote.connected());
+  assert.deepEqual(await remote.integrationGet("u1", "github"), {
+    ok: false,
+    unavailable: true,
+  });
+  assert.deepEqual(await remote.integrationClear("u1", "github"), {
+    ok: false,
+    unavailable: true,
+  });
+  assert.deepEqual(await connectGithubU1(remote), {
+    ok: false,
+    unavailable: true,
+  });
+  assert.deepEqual(await remote.integrationGet("u1", "atlassian"), {
+    ok: true,
+    credential: '{"which":"atlassian"}',
+  });
+  assert.deepEqual(await remote.integrationGet("u1", "slack"), {
+    ok: true,
+    credential: '{"which":"slack"}',
+  });
+  assert.equal(old.asked.length, 5, "each reached the old vault");
+  assert.ok(remote.connected(), "the link stays up");
+});
+
+test("a 1.2 edge links to a 1.3 vault: its Atlassian and Slack operations work", async () => {
+  const { dir } = sealingDir();
+  const v = await githubVault(dir);
+  await unlock(v.control);
+  const raw = await rawLink(v.port, VAULT_1_2);
+  assert.deepEqual(
+    await raw(VAULT_METHODS.integrationPut, {
+      userId: "u1",
+      integration: "atlassian",
+      credential: CREDENTIAL,
+    }),
+    {},
+  );
+  assert.deepEqual(
+    await raw(VAULT_METHODS.integrationGet, {
+      userId: "u1",
+      integration: "atlassian",
+    }),
+    { record: { ok: true, credential: CREDENTIAL } },
+  );
+  assert.deepEqual(
+    await raw(VAULT_METHODS.integrationConnect, {
+      userId: "u1",
+      integration: "slack",
+      code: FAKE_SLACK_CODE,
+      redirectUri: FAKE_SLACK_REDIRECT,
+    }),
+    { connect: { ok: true, teamId: FAKE_TEAM_ID, teamName: FAKE_TEAM_NAME } },
+  );
+  const slackRecord = (await raw(VAULT_METHODS.integrationGet, {
+    userId: "u1",
+    integration: "slack",
+  })) as { record: { ok: boolean } };
+  assert.equal(slackRecord.record.ok, true);
+  assert.equal(github.seen.length, 0, "an old edge sends no GitHub request");
 });
