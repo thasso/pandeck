@@ -203,8 +203,8 @@ const {
   confluenceLookupTool,
   confluenceMutatePageTool,
   confluenceSearchTool,
-  spliceAdf,
 } = await import("./confluenceTools.ts");
+const { spliceAdf } = await import("../../confluenceMutateApply.ts");
 const { buildSearchCql, normalizePageInput } =
   await import("../../confluenceRead.ts");
 const {
