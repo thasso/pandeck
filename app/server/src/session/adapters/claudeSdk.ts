@@ -43,7 +43,7 @@ export interface ClaudeSdkAdapterDriver {
       turnContext?: string;
       titleText?: string;
     },
-  ): Promise<void>;
+  ): Promise<void | "stopped">;
   /** The native plugin command for a frozen library skill: `/<plugin>:<name>`. */
   skillCommand?(name: string): string;
   /**
@@ -180,7 +180,7 @@ class ClaudeSdkAdapter implements PromptableAdapter {
     this.lastError = undefined;
     this.lastFailure = undefined;
     this.lastStopReason = undefined;
-    await this.driver.prompt(text, {
+    const outcome = await this.driver.prompt(text, {
       ...(options.continuation ? { continuation: true } : {}),
       ...(options.clientRequestId
         ? { clientRequestId: options.clientRequestId }
@@ -197,6 +197,8 @@ class ClaudeSdkAdapter implements PromptableAdapter {
         ? { titleText: options.titleText }
         : {}),
     });
+    // Stopped while waiting for admission: no run opened, nothing was sent.
+    if (outcome === "stopped") return { stopReason: "aborted" };
     const stopReason =
       this.lastStopReason ?? (this.lastError ? "error" : "end");
     return this.lastError

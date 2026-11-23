@@ -269,7 +269,7 @@ const owners: Record<string, Owner> = {
       ),
       group(
         "projected",
-        "setModel setThinkingLevel changeSelection selectionSettled selectModel selectionChanged applyRetainedEffort",
+        "setModel setThinkingLevel changeSelection promptAdmissionTurn cancelWaitingPrompts selectModel selectionChanged applyRetainedEffort",
         "Between turns a started session persists the selection to its row (retained native controls first, after the awaited effect); before the first prompt it is intentionally unlisted.",
         retained + "Claude.setModel retained control",
         retained + "Claude.setThinkingLevel retained control",
@@ -297,7 +297,7 @@ const owners: Record<string, Owner> = {
       ),
       group(
         "projected",
-        "consumeQuery beginProviderInitiatedTurn openProviderTurn",
+        "consumeQuery beginProviderInitiatedTurn admitProviderInitiatedTurn openProviderTurn",
         "The provider stream opens/settles an admitted retained-host turn without a user prompt.",
         retained + "Claude.openProviderTurn callback",
         retained + "Claude provider-initiated terminal callback",

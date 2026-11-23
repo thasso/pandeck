@@ -36,12 +36,28 @@ the session's harness and bound account; moving to another harness is refused.
 - **Effort** is clamped to the model (`clampThinkingLevelForModel`): picking a
   model clamps the current effort, and picking an effort clamps it to the
   current model. Fable has no `off`, so a switch to Fable lifts `off` to `low`.
-- **Admission reservation.** A change holds the session's turn admission from
-  its start until it settles, native controls included: a prompt or a
-  provider-started turn waits and then runs on the new selection, a host-command
-  turn (`/compact`, `/commit`) is refused as busy, an account switch waits, and
-  a second change queues behind the first. Pending selections (Task-1485) are to
-  apply inside this same reservation.
+- **Admission queue.** Model and effort changes, a prompt admitted behind them,
+  provider-started turns and account switches take places in one first-in,
+  first-out queue (`claudeSdk/admissionQueue.ts`). Joining is synchronous, and a
+  place is ready only after every earlier place released. So changes apply in
+  request order and the latest one is what is stored. A change holds its place
+  until it settles, native controls included. A prompt queued behind changes
+  holds its place until its turn is open, so it runs on their result and no
+  change ever runs under it. A provider-started turn holds its place until it
+  opens or is denied. An account switch waits for earlier changes. Until it
+  ends, the session refuses model and effort changes, prompts, host-command
+  turns and provider-started turns; its callers also hold the runtime's
+  admission. It does not keep its place for the whole switch, because a provider
+  turn waiting for that place would stall the query loop the switch waits to
+  close. A host-command turn (`/compact`, `/commit`) cannot wait and is refused
+  as busy while anything is queued. A failed change releases its place. Disposal
+  makes every place ready, and each waiter then finds the session gone. Pending
+  selections (Task-1485) are to apply inside this queue.
+- **Stop while waiting.** Stop cancels a prompt still waiting for admission. It
+  leaves the queue, never reaches the process, and its run ends `aborted`, the
+  ordinary stopped outcome; its request id may be sent again. The runtime's Stop
+  reaches it through the adapter's abort, and a prompt that finished waiting
+  rechecks whether a Stop arrived meanwhile before it opens.
 - **Where it applies.** With no process running, the next query epoch opens on
   the new selection, resuming the native transcript as usual. A process that
   background work keeps open switches through its native controls (`setModel`,

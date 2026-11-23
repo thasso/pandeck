@@ -239,6 +239,7 @@ import {
   ClaudeCompactionWindow,
   readContextUsage,
 } from "./compactionWindow.ts";
+import { AdmissionQueue, type AdmissionPlace } from "./admissionQueue.ts";
 import {
   copyClaudeSessionForAccount,
   lastSavedCostState,
@@ -649,10 +650,17 @@ export class ClaudeSdkSession implements LiveSession {
   /** The selected model's real context window, learned from `result.modelUsage` (e.g. 1M for Sonnet[1m]). */
   private contextWindowTokens: number | undefined;
   /**
-   * The admission reservation of a model or effort change in flight
-   * (`changeSelection`): no turn opens until it settles.
+   * First-in, first-out admission (`admissionQueue.ts`): model and effort
+   * changes, prompts admitted behind them, provider-initiated turns and
+   * account switches, in call order.
    */
-  private selectionChange: Promise<void> | undefined;
+  private readonly admission = new AdmissionQueue();
+  /** Cancels prompts waiting in `admission`; Stop and disposal call them. */
+  private readonly waitingPromptCancels = new Set<() => void>();
+  /** Every Stop counts; a prompt that awaited admission rechecks it. */
+  private stopRequests = 0;
+  /** Account switches in progress: a model or effort change refuses meanwhile. */
+  private accountSwitches = 0;
   /**
    * The retained epoch whose effort controls failed part-way: it may not run
    * the stored effort, so it restarts once quiet (`startTimeSettingsNeedRestart`).
@@ -1338,15 +1346,12 @@ export class ClaudeSdkSession implements LiveSession {
     const alias = knownClaudeSdkModelAlias(modelId);
     if (!alias) throw new Error(`${modelId} is not a Claude model.`);
     await this.changeSelection("model", async () => {
-      const account = this.credentialProfileId;
-      if (account) {
-        await assertAccountCanRunModel(account, CLAUDE_SDK_PROVIDER, alias);
-        // An account switch already under way when the change began.
-        if (this.credentialProfileId !== account)
-          throw new Error(
-            "This session's account changed; choose the model again.",
-          );
-      }
+      if (this.credentialProfileId)
+        await assertAccountCanRunModel(
+          this.credentialProfileId,
+          CLAUDE_SDK_PROVIDER,
+          alias,
+        );
       const thinkingLevel = clampThinkingLevelForModel(
         claudeSdkModelOption(alias),
         this.thinkingLevel,
@@ -1406,29 +1411,52 @@ export class ClaudeSdkSession implements LiveSession {
   }
 
   /**
-   * Run a model or effort change holding the ADMISSION RESERVATION: it starts
-   * only between turns and after any earlier change, and no turn opens until
-   * it settles, native controls included (`#promptRaw` and provider turns wait
-   * on `selectionSettled`, host-command turns refuse).
+   * Run a model or effort change in its ADMISSION PLACE (`admissionQueue.ts`):
+   * after every earlier change, prompt admission, provider turn and account
+   * switch, and between turns. It holds the place until it settles, native
+   * controls included, so a later prompt opens on the result and a later
+   * change applies after it: the latest request is what is stored.
    */
   private async changeSelection(
     what: "model" | "effort",
     change: () => Promise<void>,
   ): Promise<void> {
-    if (this.selectionChange) await this.selectionSettled();
-    this.assertBetweenTurns(what);
-    const reservation: Promise<void> = change().finally(() => {
-      if (this.selectionChange === reservation)
-        this.selectionChange = undefined;
-    });
-    this.selectionChange = reservation;
-    await reservation;
+    const place = this.admission.enter();
+    try {
+      await place.ready;
+      this.assertNotDisposed();
+      if (this.accountSwitches > 0)
+        throw new Error(
+          `This session's account is changing; change its ${what} once it has.`,
+        );
+      this.assertBetweenTurns(what);
+      await change();
+    } finally {
+      place.release();
+    }
   }
 
-  /** Wait out every model or effort change in flight. */
-  private async selectionSettled(): Promise<void> {
-    while (this.selectionChange)
-      await this.selectionChange.catch(() => undefined);
+  /**
+   * Wait in the admission queue for a prompt's turn to open; false when Stop
+   * or disposal cancelled the wait. The caller releases the place once the
+   * turn is open (`running`) or refused.
+   */
+  private async promptAdmissionTurn(place: AdmissionPlace): Promise<boolean> {
+    let cancel: () => void = () => undefined;
+    const cancelled = new Promise<false>((resolve) => {
+      cancel = () => resolve(false);
+    });
+    this.waitingPromptCancels.add(cancel);
+    try {
+      return await Promise.race([place.ready.then(() => true), cancelled]);
+    } finally {
+      this.waitingPromptCancels.delete(cancel);
+    }
+  }
+
+  /** Stop or disposal: no prompt still waiting for admission may open its turn. */
+  private cancelWaitingPrompts(): void {
+    for (const cancel of [...this.waitingPromptCancels]) cancel();
   }
 
   private assertBetweenTurns(what: "model" | "effort"): void {
@@ -1632,90 +1660,105 @@ export class ClaudeSdkSession implements LiveSession {
   ): Promise<void> {
     const { allowWithoutHistory = false, requireEnterprise } = options;
     this.assertNotDisposed();
-    // A model change in flight was gated by the current account; the switch
-    // judges the model it stores.
-    if (this.selectionChange) await this.selectionSettled();
-    const previous = this.profileId;
-    if (!previous || this.running)
-      throw new Error("Cannot switch an unbound or running Claude session.");
-    const providerSessionId = this.providerSessionId;
-    if (!providerSessionId && !allowWithoutHistory)
-      throw new Error(
-        "Cannot preserve Claude history without a native session id.",
-      );
-    const check = () => {
+    // Behind every earlier model or effort change, which its own account
+    // gated. From then until the switch ends, model and effort changes,
+    // prompts, host-command and provider turns refuse at the session (its
+    // callers also hold the runtime's admission). The place is not held
+    // across the switch: a provider turn waiting for it would stall the query
+    // loop the switch waits to close.
+    const place = this.admission.enter();
+    try {
+      await place.ready;
       this.assertNotDisposed();
-      admit();
-      if (this.running || this.profileId !== previous)
-        throw new Error(
-          "The Claude session changed during its account switch.",
-        );
-      assertSessionAccountSwitch(
-        this.id,
-        previous,
-        profileId,
-        "claude",
-        requireEnterprise ? { requireEnterprise } : {},
-      );
-    };
-    check();
-    const closing = this.queryLoop;
-    const retained = this.retainedEpochKey;
-    if (retained) {
-      const closed = await backgroundWorkSupervisor.closeIdleHost(
-        this.id,
-        retained,
-        "switching the session's account",
-      );
-      if (!closed)
-        throw new AccountSwitchBlockedError(
-          "Background work still holds this session's Claude host. Stop it before switching accounts.",
-        );
-      check();
+      this.accountSwitches += 1;
+    } finally {
+      place.release();
     }
-    await this.closeProcess("switching the session's account");
-    if (
-      closing &&
-      !(await settlesWithin(closing, this.processCloseTimeoutMs))
-    ) {
-      this.abortController?.abort();
-      if (!(await settlesWithin(closing, this.processCloseTimeoutMs)))
+    try {
+      const previous = this.profileId;
+      if (!previous || this.running)
+        throw new Error("Cannot switch an unbound or running Claude session.");
+      const providerSessionId = this.providerSessionId;
+      if (!providerSessionId && !allowWithoutHistory)
         throw new Error(
-          "The old Claude process did not exit before the account switch.",
+          "Cannot preserve Claude history without a native session id.",
         );
-    }
-    check();
-    const transfer = providerSessionId
-      ? await copyClaudeSessionForAccount(
+      const check = () => {
+        this.assertNotDisposed();
+        admit();
+        if (this.running || this.profileId !== previous)
+          throw new Error(
+            "The Claude session changed during its account switch.",
+          );
+        assertSessionAccountSwitch(
+          this.id,
           previous,
           profileId,
-          providerSessionId,
-        )
-      : undefined;
-    let committed = false;
-    try {
-      check();
-      sessionStore.switchCredentialProfile(
-        this.id,
-        previous,
-        profileId,
-        requireEnterprise ? { requireEnterprise } : {},
-      );
-      committed = true;
-      this.profileId = profileId;
-      this.onPersist();
-      this.broadcastState();
-      this.onChange();
-    } finally {
-      // The row is the commit point. Cleanup cannot roll back an admitted move,
-      // but neither success nor an abandoned copy should leave an extra history.
-      await (
-        transfer && (committed ? transfer.commit() : transfer.rollback())
-      )?.catch(() => {
-        console.warn(
-          `[claude] Account-switch ${committed ? "source cleanup" : "destination rollback"} failed; session deletion will retry.`,
+          "claude",
+          requireEnterprise ? { requireEnterprise } : {},
         );
-      });
+      };
+      check();
+      const closing = this.queryLoop;
+      const retained = this.retainedEpochKey;
+      if (retained) {
+        const closed = await backgroundWorkSupervisor.closeIdleHost(
+          this.id,
+          retained,
+          "switching the session's account",
+        );
+        if (!closed)
+          throw new AccountSwitchBlockedError(
+            "Background work still holds this session's Claude host. Stop it before switching accounts.",
+          );
+        check();
+      }
+      await this.closeProcess("switching the session's account");
+      if (
+        closing &&
+        !(await settlesWithin(closing, this.processCloseTimeoutMs))
+      ) {
+        this.abortController?.abort();
+        if (!(await settlesWithin(closing, this.processCloseTimeoutMs)))
+          throw new Error(
+            "The old Claude process did not exit before the account switch.",
+          );
+      }
+      check();
+      const transfer = providerSessionId
+        ? await copyClaudeSessionForAccount(
+            previous,
+            profileId,
+            providerSessionId,
+          )
+        : undefined;
+      let committed = false;
+      try {
+        check();
+        sessionStore.switchCredentialProfile(
+          this.id,
+          previous,
+          profileId,
+          requireEnterprise ? { requireEnterprise } : {},
+        );
+        committed = true;
+        this.profileId = profileId;
+        this.onPersist();
+        this.broadcastState();
+        this.onChange();
+      } finally {
+        // The row is the commit point. Cleanup cannot roll back an admitted move,
+        // but neither success nor an abandoned copy should leave an extra history.
+        await (
+          transfer && (committed ? transfer.commit() : transfer.rollback())
+        )?.catch(() => {
+          console.warn(
+            `[claude] Account-switch ${committed ? "source cleanup" : "destination rollback"} failed; session deletion will retry.`,
+          );
+        });
+      }
+    } finally {
+      this.accountSwitches -= 1;
     }
   }
 
@@ -1754,7 +1797,7 @@ export class ClaudeSdkSession implements LiveSession {
       turnContext?: string;
       titleText?: string;
     } = {},
-  ): Promise<void> {
+  ): Promise<void | "stopped"> {
     this.assertNotDisposed();
     // Idempotent on clientRequestId: a duplicate submit is a no-op (so it can't
     // open a second turn or echo a second user bubble).
@@ -1762,13 +1805,6 @@ export class ClaudeSdkSession implements LiveSession {
       if (this.handledRequestIds.has(options.clientRequestId)) return;
       this.handledRequestIds.add(options.clientRequestId);
     }
-    // A model or effort change holds admission until its native controls
-    // settle; the turn then opens on the new selection.
-    if (this.selectionChange) {
-      await this.selectionSettled();
-      this.assertNotDisposed();
-    }
-    if (this.running) throw new Error("A Claude SDK turn is already running.");
     const trimmed = text;
     // Attachments (persisted + threaded to the model): images ride along as image
     // content blocks; every other file is saved to the session attachment store
@@ -1781,12 +1817,44 @@ export class ClaudeSdkSession implements LiveSession {
         : attachments.length
           ? "Please analyze the attached file(s)."
           : trimmed;
-    const { promptWithFiles, images } = buildModelPromptWithAttachments(
-      this.id,
-      modelPromptText,
-      attachments,
-    );
-    this.running = true;
+    // Behind a queued model or effort change (or anything else queued), the
+    // prompt takes its admission place and holds it until its turn is open,
+    // so every earlier change settles first and no later one runs under it.
+    // Stop or disposal cancels the wait: the prompt never reaches the process.
+    const place = this.admission.busy ? this.admission.enter() : undefined;
+    const stopsBefore = this.stopRequests;
+    let built: ReturnType<typeof buildModelPromptWithAttachments>;
+    try {
+      if (
+        place &&
+        (!(await this.promptAdmissionTurn(place)) ||
+          this.stopRequests !== stopsBefore)
+      ) {
+        this.assertNotDisposed();
+        if (options.clientRequestId)
+          this.handledRequestIds.delete(options.clientRequestId);
+        return "stopped";
+      }
+      this.assertNotDisposed();
+      if (this.running)
+        throw new Error("A Claude SDK turn is already running.");
+      // Callers hold the runtime's admission across a switch; this keeps the
+      // session itself from opening a turn on the account being replaced.
+      if (this.accountSwitches > 0)
+        throw new SessionBusyError(
+          this.id,
+          "This session's account is changing; send it again once it has.",
+        );
+      built = buildModelPromptWithAttachments(
+        this.id,
+        modelPromptText,
+        attachments,
+      );
+      this.running = true;
+    } finally {
+      place?.release();
+    }
+    const { promptWithFiles, images } = built;
     this.providerTurnInterrupted = false;
     this.turnCounter += 1;
 
@@ -2797,13 +2865,21 @@ export class ClaudeSdkSession implements LiveSession {
   }
 
   private async beginProviderInitiatedTurn(epochKey: string): Promise<boolean> {
-    // A model or effort change holds admission until its native controls
-    // settle (control answers do not wait on this stream).
-    if (this.selectionChange) {
-      await this.selectionSettled();
+    // In its admission place, held until the turn is open or denied: every
+    // earlier model or effort change settles first (control answers do not
+    // wait on this stream), and a later one finds the turn running.
+    const place = this.admission.enter();
+    try {
+      await place.ready;
       // A prompt admitted meanwhile owns the open turn, as if it came first.
       if (this.running) return true;
+      return await this.admitProviderInitiatedTurn(epochKey);
+    } finally {
+      place.release();
     }
+  }
+
+  private async admitProviderInitiatedTurn(epochKey: string): Promise<boolean> {
     if (
       this.failedStopEpochKey === epochKey ||
       this.stopInterrupt?.epochKey === epochKey
@@ -2825,7 +2901,9 @@ export class ClaudeSdkSession implements LiveSession {
           ? "the retained host has no governed background task"
           : peerPromptStore.listPendingForRecipient(this.id).length > 0
             ? "a queued peer prompt has priority"
-            : undefined;
+            : this.accountSwitches > 0
+              ? "the session's account is changing"
+              : undefined;
     if (denied) {
       this.markProviderResultForDiscard();
       console.warn(`[background] denied Claude provider turn: ${denied}`);
@@ -3472,6 +3550,10 @@ export class ClaudeSdkSession implements LiveSession {
   }
 
   abort(): void {
+    // A prompt still waiting for admission never reaches the process: its
+    // caller gets the stopped outcome instead.
+    this.stopRequests += 1;
+    this.cancelWaitingPrompts();
     if (!this.running) return;
     this.abortingTurn = true;
     // A plain interrupt keeps queued commands and runs them next, so the
@@ -3738,11 +3820,11 @@ export class ClaudeSdkSession implements LiveSession {
         this.id,
         "Cannot run a slash command while Claude is streaming.",
       );
-    // Synchronous admission cannot wait out a model or effort change.
-    if (this.selectionChange)
+    // Synchronous admission cannot wait in the admission queue.
+    if (this.admission.busy || this.accountSwitches > 0)
       throw new SessionBusyError(
         this.id,
-        "Cannot run a slash command while the session's model or effort changes.",
+        "Cannot run a slash command while the session's model, effort or account changes or a turn is being admitted.",
       );
     this.turnCounter += 1;
     this.running = true;
@@ -4942,6 +5024,9 @@ export class ClaudeSdkSession implements LiveSession {
   dispose(): void {
     this.disposed = true;
     this.residency.close();
+    // Nothing waits on admission past disposal; each waiter finds it disposed.
+    this.cancelWaitingPrompts();
+    this.admission.close();
     this.abortController?.abort();
     if (this.retainedEpochKey && !backgroundWorkSupervisor.isDraining)
       backgroundWorkSupervisor.hostLost(
