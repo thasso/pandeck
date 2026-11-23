@@ -573,6 +573,166 @@ test("a model switch on a retained process keeps the stored window and restarts 
   }
 });
 
+const usageEntry = (work: number, contextWindow: number) => ({
+  inputTokens: work,
+  outputTokens: 0,
+  cacheReadInputTokens: 0,
+  cacheCreationInputTokens: 0,
+  costUSD: 0,
+  contextWindow,
+});
+
+test("F001: after a retained switch, the epoch's cumulative report keeps the new model's window and its pending restart", async () => {
+  const h = await retainedWindow(900_000);
+  try {
+    await h.session.setModel("sonnet");
+    const next = h.adapter.prompt("on sonnet");
+    await until(() => h.query.inputs.length === 2);
+    // The running total still leads with the Opus work before the switch.
+    h.query.output.emit({
+      ...result("mixed-models"),
+      modelUsage: {
+        "claude-opus-5-5": usageEntry(100_000, 1_000_000),
+        "claude-sonnet-5-5": usageEntry(1_000, 200_000),
+      },
+    } as unknown as ClaudeSdkMessage);
+    await next;
+    assert.equal(h.session.compactionWindowStatus().contextWindow, 200_000);
+    assert.equal(window(h.session)?.effectiveTokens, 200_000);
+    assert.equal(window(h.session)?.pendingReason, "process-restart");
+  } finally {
+    await disposeRetained(h);
+  }
+});
+
+test("F001 sibling: a retained switch drops the old model's reported threshold, so lowering reads it again", async () => {
+  const h = await retainedWindow();
+  try {
+    await h.session.setModel("sonnet");
+    const next = h.adapter.prompt("on sonnet");
+    await until(() => h.query.inputs.length === 2);
+    const reads = h.query.usageReads.length;
+    h.query.summary = async (usage) => ({
+      ...usage,
+      autoCompactThreshold: 150_000,
+    });
+    const outcome = await h.session.lowerCompactionWindow(180_000, () => {
+      throw new Error("must not store");
+    });
+    assert.deepEqual(h.query.usageReads.slice(reads), ["summary"]);
+    assert.equal(!outcome.ok && outcome.largestAcceptable, 162_999);
+    h.query.output.emit(result("after-lowering"));
+    await next;
+  } finally {
+    await disposeRetained(h);
+  }
+});
+
+test("F002: a prompt waits for a retained model change's native controls, then runs on the new selection", async () => {
+  const h = await retainedWindow();
+  try {
+    await h.session.setThinkingLevel("off");
+    const ack = deferred<void>();
+    let started = false;
+    h.query.setModel = async (model?: string) => {
+      h.query.modelCalls.push(model);
+      started = true;
+      await ack.promise;
+    };
+    const effortWhileRunning: boolean[] = [];
+    h.query.applyFlagSettings = async (settings) => {
+      h.query.flagCalls.push(settings);
+      effortWhileRunning.push(h.session.isRunning);
+    };
+    const change = h.session.setModel("fable");
+    await until(() => started);
+    const turn = h.adapter.prompt("racing the change");
+    assert.throws(
+      () => h.session.beginSyntheticTool("compact", {}),
+      /model or effort changes/,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(h.session.isRunning, false, "admission waits");
+    assert.equal(h.query.inputs.length, 1);
+    ack.resolve();
+    await change;
+    await until(() => h.query.inputs.length === 2);
+    assert.deepEqual(effortWhileRunning, [false]);
+    assert.equal(h.session.modelSelection().model?.id, "fable");
+    assert.equal(h.session.toRecord().thinkingLevel, "low");
+    h.query.output.emit(result("after-change"));
+    await turn;
+  } finally {
+    await disposeRetained(h);
+  }
+});
+
+test("F002: a change queues behind one in flight and applies to the new model", async () => {
+  const h = await retainedWindow();
+  try {
+    const ack = deferred<void>();
+    const controls: string[] = [];
+    h.query.setModel = async (model?: string) => {
+      controls.push(`model ${model}`);
+      await ack.promise;
+    };
+    h.query.applyFlagSettings = async (settings) => {
+      controls.push(`effort ${String(settings.effortLevel)}`);
+    };
+    const first = h.session.setModel("sonnet");
+    const second = h.session.setThinkingLevel("high");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(controls, ["model claude-sonnet-5-5"], "second waits");
+    ack.resolve();
+    await Promise.all([first, second]);
+    assert.deepEqual(controls, ["model claude-sonnet-5-5", "effort high"]);
+    assert.equal(h.session.toRecord().modelId, "sonnet");
+    assert.equal(h.session.toRecord().thinkingLevel, "high");
+  } finally {
+    await disposeRetained(h);
+  }
+});
+
+test("F003: a failed effort control after the model switched stores model and clamped effort together and restarts the process once quiet", async () => {
+  const h = await retainedWindow();
+  try {
+    await h.session.setThinkingLevel("off");
+    h.query.applyFlagSettings = async () => {
+      throw new Error("control failed");
+    };
+    await assert.rejects(
+      h.session.setModel("fable"),
+      /did not take the low effort \(control failed\)/,
+    );
+    assert.deepEqual(h.query.modelCalls, ["claude-fable-5-1"]);
+    assert.equal(h.session.toRecord().modelId, "fable");
+    assert.equal(h.session.toRecord().thinkingLevel, "low");
+    assert.equal(h.query.closeCalls, 0, "background work keeps its host");
+    // No start-time setting changed; only the stale effort restarts it.
+    completeBackgroundShell(h.query);
+    await until(() => h.query.closeCalls === 1);
+  } finally {
+    await disposeRetained(h);
+  }
+});
+
+test("F003 sibling: a failed effort control keeps the stored effort and restarts the process once quiet", async () => {
+  const h = await retainedWindow();
+  try {
+    h.query.applyFlagSettings = async () => {
+      throw new Error("control failed");
+    };
+    const before = h.session.toRecord().thinkingLevel;
+    await assert.rejects(h.session.setThinkingLevel("xhigh"), /control failed/);
+    assert.notEqual(before, "xhigh");
+    assert.equal(h.session.toRecord().thinkingLevel, before);
+    completeBackgroundShell(h.query);
+    await until(() => h.query.closeCalls === 1);
+  } finally {
+    await disposeRetained(h);
+  }
+});
+
 test("last-task completion during a turn waits for that turn's boundary", async () => {
   const h = await retainedWindow();
   try {

@@ -178,7 +178,10 @@ range:
   stored value alone and is a start-time change like any other: the clamp
   follows the new model's window, so a retained process whose clamped value
   changed restarts by the same path, and the next process starts with the new
-  clamp.
+  clamp. The model window behind that clamp is the selected model's own: the
+  epoch's cumulative `modelUsage` still lists the previous model, so its entry
+  never decides it. The retained process's reported threshold belonged to the
+  previous model and is dropped, so the agent path reads it again.
 
 - Applied state is per query epoch. It is `confirmed` while the value the epoch
   started with equals the stored one (clamped). Otherwise it is `pending` with

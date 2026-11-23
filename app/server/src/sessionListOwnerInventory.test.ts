@@ -269,7 +269,7 @@ const owners: Record<string, Owner> = {
       ),
       group(
         "projected",
-        "setModel setThinkingLevel selectModel selectionChanged applyRetainedEffort",
+        "setModel setThinkingLevel changeSelection selectionSettled selectModel selectionChanged applyRetainedEffort",
         "Between turns a started session persists the selection to its row (retained native controls first, after the awaited effect); before the first prompt it is intentionally unlisted.",
         retained + "Claude.setModel retained control",
         retained + "Claude.setThinkingLevel retained control",

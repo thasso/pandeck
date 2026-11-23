@@ -36,11 +36,23 @@ the session's harness and bound account; moving to another harness is refused.
 - **Effort** is clamped to the model (`clampThinkingLevelForModel`): picking a
   model clamps the current effort, and picking an effort clamps it to the
   current model. Fable has no `off`, so a switch to Fable lifts `off` to `low`.
+- **Admission reservation.** A change holds the session's turn admission from
+  its start until it settles, native controls included: a prompt or a
+  provider-started turn waits and then runs on the new selection, a host-command
+  turn (`/compact`, `/commit`) is refused as busy, an account switch waits, and
+  a second change queues behind the first. Pending selections (Task-1485) are to
+  apply inside this same reservation.
 - **Where it applies.** With no process running, the next query epoch opens on
   the new selection, resuming the native transcript as usual. A process that
   background work keeps open switches through its native controls (`setModel`,
   `setMaxThinkingTokens`, `applyFlagSettings`); one without a model control
   refuses the change.
+- **A failed control.** A refused model control changes nothing. Once the model
+  control succeeds, the model and its clamped effort are stored together, so a
+  stored effort the model cannot run never exists. If an effort control then
+  fails, or fails on an effort change, the change reports the failure. The
+  process may then run another effort than the stored one, so it restarts as
+  soon as its background work allows, like a changed start-time setting.
 - **Persistence.** A started session writes the selection to its record and its
   `session_index` row at once; before the first prompt it stays local, as the
   first send creates the session with it.
@@ -48,9 +60,13 @@ the session's harness and bound account; moving to another harness is refused.
   retained switch: a session on its definition's alias runs the pinned version,
   any other model runs as usual (`docs/agent-definitions.md`).
 - **Context window.** The window a previous model reported is dropped and
-  learned again from the new model's first result. The stored compaction window
-  is kept; a query clamps it to the new model at start, and a retained process
-  whose clamped value changed restarts once its background work allows
+  learned again from the new model's results. A `result`'s `modelUsage` is the
+  epoch's running total and still lists the previous model, so the window is
+  read only from the selected model's entry (`mapResultMeta`). A retained
+  process's reported compaction threshold is dropped too, so the agent's
+  lowering reads it again. The stored compaction window is kept; a query clamps
+  it to the new model at start, and a retained process whose clamped value
+  changed restarts once its background work allows
   (`docs/compaction-window.md`).
 
 ### Web

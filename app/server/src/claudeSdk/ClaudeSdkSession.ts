@@ -646,8 +646,18 @@ export class ClaudeSdkSession implements LiveSession {
    * (whose usage is the turn aggregate and would over-count the live context).
    */
   private contextTokens: number | undefined;
-  /** Real model context window learned from `result.modelUsage` (e.g. 1M for Sonnet[1m]). */
+  /** The selected model's real context window, learned from `result.modelUsage` (e.g. 1M for Sonnet[1m]). */
   private contextWindowTokens: number | undefined;
+  /**
+   * The admission reservation of a model or effort change in flight
+   * (`changeSelection`): no turn opens until it settles.
+   */
+  private selectionChange: Promise<void> | undefined;
+  /**
+   * The retained epoch whose effort controls failed part-way: it may not run
+   * the stored effort, so it restarts once quiet (`startTimeSettingsNeedRestart`).
+   */
+  private retainedEffortStale: string | undefined;
   /** Throttle for streaming `contextInfo` broadcasts (see broadcastContextInfo). */
   private lastContextBroadcastAt = 0;
   private autoNameTried = false;
@@ -1325,56 +1335,100 @@ export class ClaudeSdkSession implements LiveSession {
    * to what the model supports.
    */
   async setModel(modelId: string): Promise<void> {
-    this.assertBetweenTurns("model");
     const alias = knownClaudeSdkModelAlias(modelId);
     if (!alias) throw new Error(`${modelId} is not a Claude model.`);
-    if (this.credentialProfileId)
-      await assertAccountCanRunModel(
-        this.credentialProfileId,
-        CLAUDE_SDK_PROVIDER,
-        alias,
+    await this.changeSelection("model", async () => {
+      const account = this.credentialProfileId;
+      if (account) {
+        await assertAccountCanRunModel(account, CLAUDE_SDK_PROVIDER, alias);
+        // An account switch already under way when the change began.
+        if (this.credentialProfileId !== account)
+          throw new Error(
+            "This session's account changed; choose the model again.",
+          );
+      }
+      const thinkingLevel = clampThinkingLevelForModel(
+        claudeSdkModelOption(alias),
+        this.thinkingLevel,
       );
-    // The account check awaited: a turn may have started meanwhile.
-    this.assertBetweenTurns("model");
-    const thinkingLevel = clampThinkingLevelForModel(
-      claudeSdkModelOption(alias),
-      this.thinkingLevel,
-    );
-    const retained = this.retainedQuery();
-    if (retained) {
-      if (!retained.setModel)
-        throw new Error(
-          "This session's Claude process cannot change its model while background work keeps it open.",
-        );
-      // The same pin-aware choice a new query makes: back on a pinned
-      // agent's alias, the retained process runs the pinned version.
-      await retained.setModel(claudeQueryModel(alias, sessionAgent(this.id)));
-      // The process runs the new model from here, whatever the effort does.
+      const retained = this.retainedQuery();
+      if (retained) {
+        if (!retained.setModel)
+          throw new Error(
+            "This session's Claude process cannot change its model while background work keeps it open.",
+          );
+        // The same pin-aware choice a new query makes: back on a pinned
+        // agent's alias, the retained process runs the pinned version.
+        await retained.setModel(claudeQueryModel(alias, sessionAgent(this.id)));
+      }
+      // Model and clamped effort are stored TOGETHER, whatever the effort
+      // control does next: a stored effort the model cannot run never exists.
+      const effortChanged = thinkingLevel !== this.thinkingLevel;
       this.selectModel(alias);
-      if (thinkingLevel !== this.thinkingLevel)
-        try {
+      this.thinkingLevel = thinkingLevel;
+      try {
+        if (retained && effortChanged)
           await this.applyRetainedEffort(retained, thinkingLevel, alias);
-        } catch (error) {
-          this.selectionChanged();
-          throw error;
-        }
-    }
-    this.selectModel(alias);
-    this.thinkingLevel = thinkingLevel;
-    this.selectionChanged();
-    // The compaction window a process starts with is clamped to its model's
-    // window, so a retained process may now need a restart to apply it.
-    this.startTimeSettingsChanged();
+      } catch (error) {
+        this.retainedEffortStale = this.retainedEpochKey;
+        throw new Error(
+          `The model changed, but its Claude process did not take the ${thinkingLevel} effort (${error instanceof Error ? error.message : String(error)}); a new Claude process will start with it.`,
+        );
+      } finally {
+        this.selectionChanged();
+        // The compaction window a process starts with is clamped to its
+        // model's window, so a retained process may now need a restart.
+        this.startTimeSettingsChanged();
+      }
+    });
   }
 
   /** Select the effort for later turns, clamped to the model; a retained process takes it through controls. */
   async setThinkingLevel(thinkingLevel: ThinkingLevel): Promise<void> {
-    this.assertBetweenTurns("effort");
-    const level = this.clampedEffort(thinkingLevel);
-    const retained = this.retainedQuery();
-    if (retained) await this.applyRetainedEffort(retained, level, this.modelId);
-    this.thinkingLevel = level;
-    this.selectionChanged();
+    await this.changeSelection("effort", async () => {
+      const level = this.clampedEffort(thinkingLevel);
+      const retained = this.retainedQuery();
+      if (retained) {
+        try {
+          await this.applyRetainedEffort(retained, level, this.modelId);
+        } catch (error) {
+          // One of the two controls may have landed: the process no longer
+          // runs the stored effort for sure, so it restarts once quiet.
+          this.retainedEffortStale = this.retainedEpochKey;
+          this.startTimeSettingsChanged();
+          throw error;
+        }
+        this.retainedEffortStale = undefined;
+      }
+      this.thinkingLevel = level;
+      this.selectionChanged();
+    });
+  }
+
+  /**
+   * Run a model or effort change holding the ADMISSION RESERVATION: it starts
+   * only between turns and after any earlier change, and no turn opens until
+   * it settles, native controls included (`#promptRaw` and provider turns wait
+   * on `selectionSettled`, host-command turns refuse).
+   */
+  private async changeSelection(
+    what: "model" | "effort",
+    change: () => Promise<void>,
+  ): Promise<void> {
+    if (this.selectionChange) await this.selectionSettled();
+    this.assertBetweenTurns(what);
+    const reservation: Promise<void> = change().finally(() => {
+      if (this.selectionChange === reservation)
+        this.selectionChange = undefined;
+    });
+    this.selectionChange = reservation;
+    await reservation;
+  }
+
+  /** Wait out every model or effort change in flight. */
+  private async selectionSettled(): Promise<void> {
+    while (this.selectionChange)
+      await this.selectionChange.catch(() => undefined);
   }
 
   private assertBetweenTurns(what: "model" | "effort"): void {
@@ -1391,11 +1445,12 @@ export class ClaudeSdkSession implements LiveSession {
     );
   }
 
-  /** A model change drops the window the previous model reported. */
+  /** A model change drops what the previous model reported: its window and its process's threshold. */
   private selectModel(alias: ClaudeSdkModelAlias): void {
     if (alias === this.modelId) return;
     this.modelId = alias;
     this.contextWindowTokens = undefined;
+    this.compactionWindow.modelChanged();
   }
 
   /** Publish a selection change; a started session persists record and row. */
@@ -1464,6 +1519,8 @@ export class ClaudeSdkSession implements LiveSession {
   /** Add other process-start settings here, using their current epoch state. */
   private startTimeSettingsNeedRestart(): boolean {
     return (
+      (this.retainedEffortStale !== undefined &&
+        this.retainedEffortStale === this.retainedEpochKey) ||
       this.compactionWindow.apply(
         sessionStore.get(this.id)?.compactionWindow ?? null,
       ).pendingReason === "process-restart"
@@ -1575,6 +1632,9 @@ export class ClaudeSdkSession implements LiveSession {
   ): Promise<void> {
     const { allowWithoutHistory = false, requireEnterprise } = options;
     this.assertNotDisposed();
+    // A model change in flight was gated by the current account; the switch
+    // judges the model it stores.
+    if (this.selectionChange) await this.selectionSettled();
     const previous = this.profileId;
     if (!previous || this.running)
       throw new Error("Cannot switch an unbound or running Claude session.");
@@ -1701,6 +1761,12 @@ export class ClaudeSdkSession implements LiveSession {
     if (options.clientRequestId) {
       if (this.handledRequestIds.has(options.clientRequestId)) return;
       this.handledRequestIds.add(options.clientRequestId);
+    }
+    // A model or effort change holds admission until its native controls
+    // settle; the turn then opens on the new selection.
+    if (this.selectionChange) {
+      await this.selectionSettled();
+      this.assertNotDisposed();
     }
     if (this.running) throw new Error("A Claude SDK turn is already running.");
     const trimmed = text;
@@ -2731,6 +2797,13 @@ export class ClaudeSdkSession implements LiveSession {
   }
 
   private async beginProviderInitiatedTurn(epochKey: string): Promise<boolean> {
+    // A model or effort change holds admission until its native controls
+    // settle (control answers do not wait on this stream).
+    if (this.selectionChange) {
+      await this.selectionSettled();
+      // A prompt admitted meanwhile owns the open turn, as if it came first.
+      if (this.running) return true;
+    }
     if (
       this.failedStopEpochKey === epochKey ||
       this.stopInterrupt?.epochKey === epochKey
@@ -3665,6 +3738,12 @@ export class ClaudeSdkSession implements LiveSession {
         this.id,
         "Cannot run a slash command while Claude is streaming.",
       );
+    // Synchronous admission cannot wait out a model or effort change.
+    if (this.selectionChange)
+      throw new SessionBusyError(
+        this.id,
+        "Cannot run a slash command while the session's model or effort changes.",
+      );
     this.turnCounter += 1;
     this.running = true;
     this.syntheticTurn = true;
@@ -4193,7 +4272,9 @@ export class ClaudeSdkSession implements LiveSession {
         // `modelUsage`) — NOT the top-level `result.usage`, which is only the
         // final request's snapshot and misses every intermediate tool-loop
         // request and helper/subagent model (see mapResultEpochUsage).
-        const meta = mapResultMeta(message);
+        // The window is the SELECTED model's own; a cumulative report may lead
+        // with the model this epoch ran before a switch.
+        const meta = mapResultMeta(message, this.modelId);
         this.applyResultTotals(mapResultEpochUsage(message), meta.cost);
         if (meta.contextWindow) this.contextWindowTokens = meta.contextWindow;
         return;
