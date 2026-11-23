@@ -1644,7 +1644,7 @@ CLI's environment token is never refreshed, and pi uses the lease as a key.
   the renewal, at most 30 s, then goes on with whatever the file holds; one
   inside the margin starts a renewal and goes on. Renewals are single-flight per
   profile and run in its writer lane, so a login hold fences them.
-- **Claude** mirrors CLI 2.1.316: the same JSON refresh to
+- **Claude** mirrors CLI 2.1.329: the same JSON refresh to
   `platform.claude.com/v1/oauth/token`, no redirects, 30 s. It takes the CLI's
   own locks (`<config dir>/.oauth_refresh.lock`, then `<config dir>.lock`; stale
   after 60 s, kept alive every 5 s, 5 retries 1–2 s apart, then `lock_busy`) and
@@ -1654,22 +1654,23 @@ CLI's environment token is never refreshed, and pi uses the lease as a key.
   is (`adopted`). It writes a 0600 temp file beside the target, fsyncs it and
   renames it over it, keeping every other key, and never creates a file or
   directory, so a deleted profile stays deleted.
-- **Codex** goes through pi 1.5.0's own refresh (`getAuth` with
+- **Codex** goes through pi 1.6.0's own refresh (`getAuth` with
   `minOAuthValidityMs`), injected into the gateway as a port
   (`piSdk/codexRenewal.ts`). Its store takes pi's own `proper-lockfile` lock
-  with pi's options, so pi's engines, a login and the gateway serialise and
-  re-check under one lock. It commits only while the lock was not reported lost
-  and the `openai-codex` entry is still the one the refresh started from, keeps
-  every other provider's entry, and replaces the file by an atomic rename. In
-  the standalone gateway the port spawns one Codex renewal child per credential
-  through `gateway/codexChild.ts`; pi loads only in that child
-  (`codexRenewMain.ts`). The child reads `{authFile, minValidityMs}` on stdin,
-  writes one result line without credentials and exits 0. The parent accepts
-  only fixed result codes, preserving the refresher's `400` and `401` rejections
-  as needs-login, never copying arbitrary upstream strings. Every outcome waits
-  for its exit. Abort or deadline sends SIGTERM then SIGKILL after a five-second
-  grace, so no child writer outlives its lane item. In-process mode still
-  injects the direct refresher.
+  with pi's options, on the resolved file as pi does since 1.6.0, so pi's
+  engines, a login and the gateway serialise and re-check under one lock, a
+  symlinked `auth.json` included. It commits only while the lock was not
+  reported lost and the `openai-codex` entry is still the one the refresh
+  started from, keeps every other provider's entry, and replaces the file by an
+  atomic rename. In the standalone gateway the port spawns one Codex renewal
+  child per credential through `gateway/codexChild.ts`; pi loads only in that
+  child (`codexRenewMain.ts`). The child reads `{authFile, minValidityMs}` on
+  stdin, writes one result line without credentials and exits 0. The parent
+  accepts only fixed result codes, preserving the refresher's `400` and `401`
+  rejections as needs-login, never copying arbitrary upstream strings. Every
+  outcome waits for its exit. Abort or deadline sends SIGTERM then SIGKILL after
+  a five-second grace, so no child writer outlives its lane item. In-process
+  mode still injects the direct refresher.
 - **Outcomes.** A failure (timeout, network, a 5xx, a malformed answer, a busy
   or lost lock, a conflict) writes nothing, never marks the login dead and backs
   off from 30 s, doubling to 10 minutes; success or a changed file ends the

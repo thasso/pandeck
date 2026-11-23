@@ -1,6 +1,6 @@
 /**
  * The gateway's Claude OAuth refresh (U8, `docs/workers.md` "Renewal"),
- * mirroring CLI 2.1.316 (MR-1344-01): the same request, and the same
+ * mirroring CLI 2.1.329 (MR-1344-01): the same request, and the same
  * compare-and-swap save into `.credentials.json`, run under the CLI's own
  * locks (`refreshLock.ts`).
  *
@@ -149,7 +149,7 @@ function isInvalidGrant(body: string): boolean {
 }
 
 /**
- * One refresh request as CLI 2.1.316 sends it (MR Q1): a JSON POST of the
+ * One refresh request as CLI 2.1.329 sends it (MR Q1): a JSON POST of the
  * grant, the client id and the scopes, with axios's `Accept` and
  * `User-Agent`, at most 30 s end to end.
  */
