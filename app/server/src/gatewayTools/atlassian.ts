@@ -16,8 +16,17 @@
  * never stored here: Jira calls go with Bearer to the fixed
  * `api.atlassian.com/ex/jira/<cloudId>` base, the site only makes browse URLs.
  * Any other `kind` is refused.
+ *
+ * Confluence reads (Task-1439 P2) go the same way to
+ * `api.atlassian.com/ex/confluence/<cloudId>`; their failures are fixed texts
+ * too, with no Confluence-read exception.
  */
 import { AtlassianHttpError } from "../atlassian/atlassianFetch.ts";
+import {
+  ConfluenceReadRefusal,
+  type ConfluenceConfig,
+  type ConfluenceReadRefusalCode,
+} from "../atlassian/confluenceClient.ts";
 import { deadlineSignal } from "../httpRetry.ts";
 import { jiraGet, type JiraConfig } from "../jiraClient.ts";
 import {
@@ -115,6 +124,23 @@ export function jiraConfigOf(credential: AtlassianCredential): JiraConfig {
       };
 }
 
+/** The Confluence config: Bearer to the API base, or Basic to the site. */
+export function confluenceConfigOf(
+  credential: AtlassianCredential,
+): ConfluenceConfig {
+  return "accessToken" in credential
+    ? {
+        host: credential.site,
+        cloudId: credential.cloudId,
+        bearerToken: credential.accessToken,
+      }
+    : {
+        host: credential.site,
+        atlassianEmail: credential.email,
+        atlassianToken: credential.token,
+      };
+}
+
 /**
  * The credential's kind and site, and the email an API token was set with;
  * never a token.
@@ -198,4 +224,52 @@ export function credentialRejectedText(
   return "accessToken" in credential
     ? "Atlassian rejected the credential; sign in with Atlassian again on the gateway's page."
     : "Atlassian rejected the credential; reconnect Jira in Pandeck's Settings.";
+}
+
+/**
+ * The edge's text for each Confluence input refusal: the local wording,
+ * without the caller's own values.
+ */
+const CONFLUENCE_REFUSAL_TEXT: Record<ConfluenceReadRefusalCode, string> = {
+  page_missing: "A Confluence page id or URL is required.",
+  page_unparsable:
+    "Could not read a page id; pass the numeric page id or a Confluence page URL.",
+  updated_since_format: "updatedSince must be a YYYY-MM-DD date.",
+  search_filters_missing:
+    "Give at least one of text, title, label, spaceKeys or updatedSince, or pass a raw cql query.",
+  page_tree_scope_missing:
+    "kind=pageTree needs either page (children of it) or spaceKey.",
+  replies_comment_missing:
+    "kind=replies needs the commentId to read replies of.",
+  space_not_found:
+    "That Confluence space was not found, or the Atlassian account cannot see it.",
+};
+
+/**
+ * A Confluence read's failure as its fixed text: an input refusal by its
+ * code, a 401/403 as the credential's remedy, 404 and 400 by their own fixed
+ * texts, any other HTTP status by number alone (never the error's message,
+ * which quotes Confluence's body). Anything else, an abort included, is
+ * thrown on for the host to classify.
+ */
+export function confluenceFailure(
+  err: unknown,
+  credential: AtlassianCredential,
+): never {
+  if (err instanceof ConfluenceReadRefusal)
+    throw new ToolError(CONFLUENCE_REFUSAL_TEXT[err.code]);
+  if (err instanceof AtlassianHttpError) {
+    if (err.status === 401 || err.status === 403)
+      throw new ToolError(credentialRejectedText(credential));
+    if (err.status === 404)
+      throw new ToolError(
+        "Confluence has no such page, space or comment, or the user can't see it.",
+      );
+    if (err.status === 400)
+      throw new ToolError(
+        "Confluence refused the request (HTTP 400); check the CQL or filters, and resolve space keys with confluence_lookup kind=spaces.",
+      );
+    throw new ToolError(`Confluence answered HTTP ${err.status}.`);
+  }
+  throw err;
 }

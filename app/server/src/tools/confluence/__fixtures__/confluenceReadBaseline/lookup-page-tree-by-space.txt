@@ -1,0 +1,29 @@
+{
+  "kind": "pageTree",
+  "confluenceHost": "acme.atlassian.net",
+  "count": 3,
+  "nextCursor": "tree2",
+  "pages": [
+    {
+      "id": "100",
+      "title": "Engineering home",
+      "status": "current",
+      "parentId": null,
+      "url": "https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=100"
+    },
+    {
+      "id": "101",
+      "title": "Runbook",
+      "status": "current",
+      "parentId": "100",
+      "url": "https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=101"
+    },
+    {
+      "id": "104",
+      "title": "Long page",
+      "status": "draft",
+      "parentId": "101",
+      "url": "https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=104"
+    }
+  ]
+}

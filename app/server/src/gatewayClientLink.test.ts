@@ -579,6 +579,28 @@ function linkTo(socketPath: string) {
   return link;
 }
 
+test("the real edge listing gives client mode exactly the three Confluence reads", async () => {
+  // The edge's own listing, as its `tools.list` answers it (Task-1439 P2).
+  const { createEdgeTools } = await import("./gatewayTools/index.ts");
+  const { host } = createEdgeTools({ log: () => {} });
+  const edge = await stubEdge({
+    [CLIENT_METHODS.toolsList]: () =>
+      Promise.resolve(encodeClientMessage({ tools: host.list() })),
+  });
+  const link = linkTo(edge.socketPath);
+  assert.equal(await link.ready, true);
+  assert.deepEqual(
+    remoteTools
+      .knownRemoteTools("confluence")
+      .map((tool) => [tool.name, tool.actionKey]),
+    [
+      ["confluence_search", "confluence:read"],
+      ["confluence_get_page", "confluence:read"],
+      ["confluence_lookup", "confluence:read"],
+    ],
+  );
+});
+
 test("a held listing holds `ready`; an edge without tools is ready with none", async () => {
   let release!: () => void;
   const held = new Promise<void>((resolve) => {

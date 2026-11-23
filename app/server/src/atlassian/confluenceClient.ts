@@ -13,19 +13,52 @@ import {
   atlassianFetch,
   type AtlassianApiConfig,
   type AtlassianCallOptions,
+  type AtlassianConfig,
   type AtlassianQuery,
 } from "./atlassianFetch.ts";
 import { adfToMarkdown } from "./adfToMarkdown.ts";
 import { storageToMarkdown } from "./storageToMarkdown.ts";
 import type { AdfNode } from "./adfFromMarkdown.ts";
 
+/** An API-token config: what the write helpers take. */
 export type ConfluenceApiConfig = AtlassianApiConfig;
+
+/**
+ * An API token (Basic, to the site) or an OAuth access token (Bearer, to
+ * `api.atlassian.com`): what the read helpers take, so the gateway edge can
+ * read with either kind of the user's Atlassian credential.
+ */
+export type ConfluenceConfig = AtlassianConfig;
+
+/** Why a Confluence read refused its input before, or instead of, asking. */
+export type ConfluenceReadRefusalCode =
+  | "page_missing"
+  | "page_unparsable"
+  | "updated_since_format"
+  | "search_filters_missing"
+  | "page_tree_scope_missing"
+  | "replies_comment_missing"
+  | "space_not_found";
+
+/**
+ * An input refusal. `message` is the local tool's text and may name the
+ * caller's input; the edge answers by `code` with its own text. It lives here,
+ * not in `confluenceRead.ts`, so `resolveSpaceId` can throw it.
+ */
+export class ConfluenceReadRefusal extends Error {
+  constructor(
+    readonly code: ConfluenceReadRefusalCode,
+    message: string,
+  ) {
+    super(message);
+  }
+}
 
 /** Body representations this client reads and writes. */
 type ConfluenceBodyFormat = "atlas_doc_format" | "storage";
 
 export async function confluenceGet<T>(
-  config: ConfluenceApiConfig,
+  config: ConfluenceConfig,
   path: string,
   query?: AtlassianQuery,
   options: AtlassianCallOptions = {},
@@ -303,7 +336,7 @@ export function normalizeConfluenceSpace(
 
 /** Resolve a space key (what users type) to the numeric id v2 writes need. */
 export async function resolveSpaceId(
-  config: ConfluenceApiConfig,
+  config: ConfluenceConfig,
   spaceKey: string,
   options: AtlassianCallOptions = {},
 ): Promise<{ id: string; key: string; name: string }> {
@@ -315,7 +348,8 @@ export async function resolveSpaceId(
   );
   const space = result.results?.[0];
   if (!space?.id)
-    throw new Error(
+    throw new ConfluenceReadRefusal(
+      "space_not_found",
       `Confluence space "${spaceKey}" was not found, or the Atlassian account cannot see it.`,
     );
   return {
@@ -327,7 +361,7 @@ export async function resolveSpaceId(
 
 /** Fetch one page with its ADF body, falling back to storage for legacy content. */
 export async function fetchPageWithBody(
-  config: ConfluenceApiConfig,
+  config: ConfluenceConfig,
   pageId: string,
   options: AtlassianCallOptions = {},
 ): Promise<NormalizedConfluencePage> {
