@@ -2440,6 +2440,27 @@ describe("a failed prompt and its optimistic echo", () => {
     expect(state.optimistic.map((entry) => entry.id)).toEqual(["creq-c2"]);
   });
 
+  it("stages a send that could not wait in the queue back in its session's composer, as typed", () => {
+    // A `/skill` held by a pending runtime selection is never queued: its echo
+    // goes, and its exact text comes back to the composer instead.
+    const typed = "/review-pr 412 --focus security";
+    const state = apply(
+      {
+        type: "error",
+        message:
+          "Couldn't switch … /review-pr did not run; it is back in your message box …",
+        target: { type: "session", id: "s1" },
+        failedPromptClientRequestId: "c1",
+        restoreDraft: { sessionId: "s1", text: typed },
+      },
+      optimisticPrompt(false),
+    );
+    expect(state.optimistic).toEqual([]);
+    expect(state.forkDraft).toMatchObject({ sessionId: "s1", text: typed });
+    // Ordinary failures stage nothing.
+    expect(failed(optimisticPrompt(false)).forkDraft).toBeNull();
+  });
+
   it("keeps every echo for a failure that is not a prompt send", () => {
     const state = apply(
       {

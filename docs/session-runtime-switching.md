@@ -29,6 +29,12 @@ has no expiry. A fork does not inherit it.
   enterprise when the session requires it, or one that does not offer the model
   at that effort. Health and benches are judged when the turn starts. `setBy`
   records the user or the coordinator.
+- **Order.** Sets and resets of one session run one at a time, in request order,
+  each from the selection the previous one left: two partial changes both land,
+  and a reset is never undone by a set asked for before it. A set recomputes
+  when a turn's admission spent the selection while it read the session.
+  `move_account` asks its ownership again with the write, so a coordinator the
+  user took the child over from changes nothing.
 - **Reset** (`clearPendingRuntime`) drops it. Both answer with
   `pendingRuntimeAnswer`; a refusal carries `error` and becomes the session's
   failure (`docs/messaging.md`).
@@ -45,9 +51,14 @@ run, an automatic continuation). It does not apply to a steer into a running
 turn, a steer-only message, the account-recovery (failover) continuation, or a
 turn the provider already started (`beginRuntimeProviderTurn`). Order: recheck
 the target, move the account (`switchIdleSessionAccount`, the same engine switch
-as failover), then set model and effort through the runtime adapter, then clear
-the selection in the same step. A changed account appends the display-only
-marker `Switched from A to B — chosen by you.` (or
+as failover), then set model and effort through the runtime adapter, then
+recheck the whole target (enabled, enterprise, login, bench, offers the model at
+that effort). The final admission boundary checks it once more synchronously
+(binding, model, effort and the account rules) and the selection is cleared only
+once the turn is admitted there; a refusal anywhere before keeps it. While a
+selection applies, the disabled-account move does not run: it would replace the
+chosen account. A changed account appends the display-only marker
+`Switched from A to B — chosen by you.` (or
 `— chosen by its coordinating session.`); a model or effort change appends
 nothing.
 
@@ -63,11 +74,15 @@ The turn is **held**, never failed and never run on the old engine
   reason is "Waiting for background work on Claude; stop it to switch now."
 - A user prompt is refused before anything is appended. It goes to the user's
   queue, and the error adds "Your message is waiting in your queue." A skill
-  invocation cannot be queued (Task-1023); its error says to send it again.
+  invocation cannot be queued (Task-1023): the error carries `restoreDraft`, and
+  the client puts the exact typed command back in that session's composer.
 - Queued prompts, peer prompts and background wakes stay where they were, with
   no attempt spent.
-- Changing or resetting the selection wakes delivery, so held work is offered
-  again; so does the end of the background work.
+- Held work is offered again (a delivery wake) when the selection is changed or
+  reset, when background work of the session ends in any way (a Stop from the
+  background UI included: its fact defers but still wakes), and when any account
+  changes (enabled, enterprise, login, bench) for every session with a
+  selection. The scheduler starts nothing when nothing waits.
 
 ## Web
 
@@ -76,9 +91,11 @@ started session) has Model, Effort and Account rows for the next turn. Models of
 another harness or account kind are listed disabled with their reason
 (`lib/sessionRuntimeControl.ts`). The Account row offers Automatic and the
 accounts the server lists for the pending model
-(`listSessionAccountMoveTargets`, asked on every open); an account that cannot
-move shows as text. While a change is pending, a "Next turn" row states the
-target and what runs now, names a coordinator's choice, and offers Reset.
+(`listSessionAccountMoveTargets`), asked again whenever the session, its
+next-turn model or effort, or the accounts change; a refresh keeps the last list
+shown. An account that cannot move shows as text. While a change is pending, a
+"Next turn" row states the target and what runs now, names a coordinator's
+choice, and offers Reset.
 
 While a change is pending, the composer shows a chip "Next turn: <model · effort
 · account>". Tapping it opens the inspector at the Runtime section, as the
@@ -88,9 +105,9 @@ object dock on a phone.
 (`lib/runtimeSlashCommand.ts`). Without an argument they open the Runtime
 section. With one they set the pending selection at once, even mid-turn, and are
 never queued. Their argument completes from the session's models, the target
-model's levels, or Automatic and the accounts of the bound kind that can serve
-the target model; `/account` is offered only when there is more than one such
-account. They are offered only for a started session.
+model's levels, or Automatic, the bound account and the accounts in that same
+server list; `/account` is offered only when the list names another account, and
+not before it has answered. They are offered only for a started session.
 
 A started session refuses `setModel` and `setThinkingLevel` with "This session
 has started: change its model or effort in the Runtime section, from its next

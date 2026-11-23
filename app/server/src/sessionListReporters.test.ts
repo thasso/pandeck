@@ -223,6 +223,7 @@ const CLASSIFIED: Record<
       linkSpawned: "projected-write",
       setSpawnedOwnership: "projected-write",
       spawnedParentsByChildIds: "read",
+      sessionIdsWithPendingRuntime: "read",
       spawnedDescendantIds: "read",
       spawnedParentByChild: "read",
       spawnGrantEdge: "read",

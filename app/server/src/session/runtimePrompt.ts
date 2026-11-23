@@ -426,9 +426,11 @@ async function deliverWithRuntime(
     assertTurnAllowed(driver.sessionId, options.resumeHold);
     assertRecoveryAdmission();
     // An account recovery continuation has already chosen its account, and a
-    // steer-only message starts no turn.
+    // steer-only message starts no turn. An applied pending selection already
+    // chose an eligible account; a move off it now would replace the chosen
+    // account, so its final check holds the turn instead.
     const accountMove =
-      accountRecovery || options.steerOnly
+      accountRecovery || options.steerOnly || pendingSwitch
         ? undefined
         : await moveOffDisabledAccount(driver, () => {
             assertTurnAllowed(driver.sessionId, options.resumeHold);
@@ -445,6 +447,8 @@ async function deliverWithRuntime(
     // Setup may have finished while this send awaited above.
     assertNotFinishedSetup(driver.sessionId);
     admit?.();
+    // Admitted on the target: only now is the pending selection spent.
+    pendingSwitch?.commit();
     const live = ensureRuntimeSessionWithRuntime(runtime, driver);
     if (pendingSwitch?.notice) live.appendNotice(pendingSwitch.notice);
     if (accountMove) live.appendNotice(accountMove.notice);

@@ -5670,23 +5670,40 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       sessionRuntime
         ? {
             control: sessionRuntime,
+            // The server's judgement of the next turn's target, the same
+            // list the inspector's account picker shows.
             accountChoices: runtimeAccountChoices(
               displayCredentialProfile,
-              credentialProfiles,
-              (displayPendingRuntime?.model ?? displaySession?.model)?.provider,
+              sessionRuntime.accounts?.targets,
             ),
             open: openRuntimeSection,
           }
         : undefined,
-    [
-      sessionRuntime,
-      displayCredentialProfile,
-      credentialProfiles,
-      displayPendingRuntime,
-      displaySession?.model,
-      openRuntimeSection,
-    ],
+    [sessionRuntime, displayCredentialProfile, openRuntimeSection],
   );
+  // `/account`'s choices come from that server list, so it is asked for
+  // whenever what it judges changes: the session, the model and effort its
+  // next turn starts on, and the accounts (enabled, enterprise, login).
+  const requestAccountTargets = sessionRuntime?.accounts?.onOpen;
+  const accountTargetsKey = requestAccountTargets
+    ? JSON.stringify([
+        displayCurrentId,
+        displayPendingRuntime?.model ?? displaySession?.model,
+        displayPendingRuntime?.thinkingLevel ?? displaySession?.thinkingLevel,
+        displaySession?.requiresEnterprise === true,
+        credentialProfiles.map(({ id, enabled, enterprise, health }) => [
+          id,
+          enabled,
+          enterprise,
+          health.state,
+        ]),
+      ])
+    : undefined;
+  const requestAccountTargetsRef = useRef(requestAccountTargets);
+  requestAccountTargetsRef.current = requestAccountTargets;
+  useEffect(() => {
+    if (accountTargetsKey !== undefined) requestAccountTargetsRef.current?.();
+  }, [accountTargetsKey]);
   const chat = useSessionChat({
     state,
     actions,

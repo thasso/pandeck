@@ -17,7 +17,7 @@ import {
   type ThinkingLevel,
 } from "@assistant/shared";
 import type { SessionRuntimeControl } from "../components/SessionRuntimeSection.tsx";
-import type { LoadState } from "./loadState.ts";
+import { dataOf, type LoadState } from "./loadState.ts";
 import type { RuntimeCommandContext } from "./runtimeSlashCommand.ts";
 
 /** Why another harness's model is disabled; sub-PR 3 lifts this. */
@@ -104,29 +104,26 @@ export function sessionRuntimeControl(input: {
 }
 
 /**
- * The accounts `/account` may name: enabled accounts of the bound account's
- * kind that serve the model the next turn starts on. `/account` is offered
- * only when there is more than one; none for an account that cannot move.
+ * The accounts `/account` may name: the bound account, and the accounts the
+ * SERVER judged the session may move to for the model and effort its next turn
+ * starts on (`listSessionAccountMoveTargets`, the inspector's list: same kind,
+ * enabled, enterprise requirement, offers the model at that effort, login,
+ * bench). `/account` is offered only when there is more than one; none until
+ * that list has answered, and none for an account that cannot move.
  */
 export function runtimeAccountChoices(
   account: Account | undefined,
-  accounts: readonly (Account & { enabled: boolean })[],
-  modelProvider: string | undefined,
+  targets: LoadState<SessionAccountMoveTarget[]> | undefined,
 ): { id: string; name: string }[] {
-  if (
-    !account ||
-    !modelProvider ||
-    !isSubscriptionAccountKind(account.provider)
-  )
-    return [];
-  return accounts
-    .filter(
-      (candidate) =>
-        candidate.enabled &&
-        candidate.provider === account.provider &&
-        accountServesModel(candidate, modelProvider),
-    )
-    .map(({ id, name }) => ({ id, name }));
+  if (!account || !isSubscriptionAccountKind(account.provider)) return [];
+  const judged = targets ? dataOf(targets) : undefined;
+  if (!judged) return [];
+  return [
+    { id: account.id, name: account.name },
+    ...judged
+      .filter((target) => target.id !== account.id)
+      .map(({ id, name }) => ({ id, name })),
+  ];
 }
 
 /** What `/model`, `/effort` and `/account` resolve against. */

@@ -88,3 +88,53 @@ test("a prompt held by a pending selection waits in the user's queue, with the r
     conn.dispose();
   }
 });
+
+test("a skill held by a pending selection is never queued, and goes back to the composer exactly as typed", async () => {
+  sessionStore.upsert({ id, harness: "pi", agentType: "assistant" });
+  held.message =
+    "Couldn't switch to Big model · B: B needs login. The change is still pending; change or reset it to continue.";
+  const sent: ServerMessage[] = [];
+  const conn = new Connection({
+    OPEN: 1,
+    readyState: 1,
+    send: (raw: string) => sent.push(JSON.parse(raw) as ServerMessage),
+  } as never) as unknown as {
+    handle(msg: ClientMessage): Promise<void>;
+    ensureViewingDriver: () => Promise<unknown>;
+    viewing: unknown;
+    dispose(): void;
+  };
+  const driver = new FakeRuntimeDriver(id);
+  conn.viewing = {
+    sessionId: id,
+    live: true,
+    broadcastState: () => {},
+    removeViewer: () => {},
+  };
+  conn.ensureViewingDriver = async () => driver;
+  const typed = "/review-pr 412 --focus security, then summarize the risks";
+  try {
+    await conn.handle({
+      type: "prompt",
+      text: typed,
+      skill: "review-pr",
+      clientRequestId: "skill-1",
+    } as ClientMessage);
+    await vi.waitFor(() =>
+      assert.ok(sent.some((message) => message.type === "error")),
+    );
+    const [error] = sent.filter(
+      (message) => message.type === "error",
+    ) as Extract<ServerMessage, { type: "error" }>[];
+    assert.equal(
+      error?.message,
+      `${held.message} /review-pr did not run; it is back in your message box to send again once the change applies or is reset.`,
+    );
+    assert.equal(error?.failedPromptClientRequestId, "skill-1");
+    assert.deepEqual(error?.restoreDraft, { sessionId: id, text: typed });
+    assert.equal(promptQueueStore.list(id).length, 0, "skills never queue");
+    assert.deepEqual(driver.promptTexts, [], "nothing was appended");
+  } finally {
+    conn.dispose();
+  }
+});

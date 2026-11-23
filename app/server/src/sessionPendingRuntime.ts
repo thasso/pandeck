@@ -7,7 +7,8 @@
  * change, no account move. The next turn's admission (`runtimePrompt.ts`)
  * applies it through the same seams a direct change used (the engines'
  * `switchAccount`, then the runtime adapter's `setModel` / `setReasoning`) and
- * clears it in that step. When the target cannot run, the turn is HELD, not
+ * clears it only once the turn is admitted on it. When the target cannot run,
+ * at any point up to that admission, the turn is HELD, not
  * failed: nothing runs and nothing falls back to the old engine, every lane
  * keeps its work as it does for a Stop, the reason shows on the session, and a
  * change or reset of the selection offers the session its turn again.
@@ -42,7 +43,6 @@ import {
   assertStillEligible,
   modelRefusal,
   sessionSelection,
-  type MoveSelection,
 } from "./sessionAccountMove.ts";
 import { switchIdleSessionAccount } from "./sessionAccountSwitch.ts";
 
@@ -150,20 +150,88 @@ function sameModel(
 }
 
 /**
+ * Every set and reset of one session's selection, one at a time in request
+ * order. Each computes from the row as the previous one left it, so two
+ * partial changes both land and a reset is never undone by a setter that
+ * started before it.
+ */
+const selectionWrites = new Map<string, Promise<void>>();
+
+function serialized<T>(sessionId: string, work: () => Promise<T>): Promise<T> {
+  const previous = selectionWrites.get(sessionId) ?? Promise.resolve();
+  const run = previous.then(work);
+  const settled = run.then(
+    () => {},
+    () => {},
+  );
+  selectionWrites.set(sessionId, settled);
+  void settled.then(() => {
+    if (selectionWrites.get(sessionId) === settled)
+      selectionWrites.delete(sessionId);
+  });
+  return run;
+}
+
+/** How often a set recomputes after a turn's admission spent the selection under it. */
+const SET_ATTEMPTS = 3;
+
+/** Who may write the selection, asked again synchronously right before the write. */
+interface PendingRuntimeWriteOptions {
+  /** Throws when the caller lost its authority over the session meanwhile. */
+  authorize?: () => void;
+}
+
+/**
  * Set the pending selection from a change, completing it from the current
  * pending selection, else the session's current runtime. Refuses a target
  * outside the session's engine, an unknown model, and an account that could
  * never run it; the effort is clamped to the target model. A target equal to
  * what the session runs now clears the selection. Allowed at any time, during
  * a turn too. Answers what is now pending.
+ *
+ * Linearizable per session: sets and resets run in request order, and a set
+ * recomputes when a turn's admission spent the selection while it read the
+ * session. `authorize` is checked with the write, after every await.
  */
 export async function setSessionPendingRuntime(
   sessionId: string,
   change: SessionRuntimeChange,
   setBy: SessionRuntimeChooser,
+  options: PendingRuntimeWriteOptions = {},
 ): Promise<SessionPendingRuntime | undefined> {
-  const row = sessionStore.get(sessionId);
-  if (!row) throw new Error("Session does not exist or was deleted.");
+  const stored = await serialized(sessionId, async () => {
+    for (let attempt = 1; ; attempt++) {
+      options.authorize?.();
+      const row = sessionStore.get(sessionId);
+      if (!row) throw new Error("Session does not exist or was deleted.");
+      const next = await pendingTarget(row, change, setBy);
+      // Admission (`applyPendingRuntime`) is the one writer outside this
+      // queue. When it spent the selection meanwhile, the session now runs
+      // that target: compute again from there.
+      const latest = sessionStore.get(sessionId);
+      if (!latest) throw new Error("Session does not exist or was deleted.");
+      if (!samePendingRuntime(latest.pendingRuntime, row.pendingRuntime)) {
+        if (attempt < SET_ATTEMPTS) continue;
+        throw new Error(
+          "The session's next-turn selection kept changing; try again.",
+        );
+      }
+      options.authorize?.();
+      if (!samePendingRuntime(next, latest.pendingRuntime))
+        sessionStore.setPendingRuntime(sessionId, next ?? null);
+      return next;
+    }
+  });
+  await announce(sessionId);
+  return stored;
+}
+
+/** The complete target `change` makes of the row's selection; undefined = none. */
+async function pendingTarget(
+  row: SessionMeta,
+  change: SessionRuntimeChange,
+  setBy: SessionRuntimeChooser,
+): Promise<SessionPendingRuntime | undefined> {
   if (row.scope !== "user")
     throw new Error("Only a user session can change its model or account.");
   if (!change.model && !change.thinkingLevel && !change.account)
@@ -222,20 +290,22 @@ export async function setSessionPendingRuntime(
     sameModel(next.model, current.model) &&
     next.thinkingLevel === current.thinkingLevel &&
     (next.account.kind === "automatic" || next.account.id === source?.id);
-  const stored = unchanged ? undefined : next;
-  if (!samePendingRuntime(stored, row.pendingRuntime))
-    sessionStore.setPendingRuntime(sessionId, stored ?? null);
-  await announce(sessionId);
-  return stored;
+  return unchanged ? undefined : next;
 }
 
-/** Drop the pending selection. No native call, no move: no trace at all. */
+/**
+ * Drop the pending selection. No native call, no move: no trace at all. In
+ * the same order as sets, so a set asked for before it cannot restore what it
+ * dropped.
+ */
 export async function clearSessionPendingRuntime(
   sessionId: string,
 ): Promise<void> {
-  const row = sessionStore.get(sessionId);
-  if (!row) throw new Error("Session does not exist or was deleted.");
-  if (row.pendingRuntime) sessionStore.setPendingRuntime(sessionId, null);
+  await serialized(sessionId, async () => {
+    const row = sessionStore.get(sessionId);
+    if (!row) throw new Error("Session does not exist or was deleted.");
+    if (row.pendingRuntime) sessionStore.setPendingRuntime(sessionId, null);
+  });
   await announce(sessionId);
 }
 
@@ -250,12 +320,32 @@ async function announce(sessionId: string): Promise<void> {
   wake(sessionId);
 }
 
-/** What a turn whose admission applied the pending selection still owes. */
+/**
+ * Offer every session with a pending selection its turn again. Wired to the
+ * account changes a held selection may wait on (enabled, enterprise, login,
+ * bench): the held work then runs, or is held again with the current reason.
+ * The scheduler starts nothing for a session with nothing waiting.
+ */
+export function wakePendingRuntimeSessions(): void {
+  const { wake } = host();
+  for (const id of sessionStore.sessionIdsWithPendingRuntime()) wake(id);
+}
+
+/**
+ * What a turn whose admission applied the pending selection still owes. The
+ * selection stays stored until `commit`: a refusal anywhere before it keeps it.
+ */
 export interface AppliedPendingRuntime {
   /** The display-only account-move marker, appended once the turn is admitted. */
   notice?: string;
-  /** The target-bound check repeated right before the turn is admitted. */
+  /**
+   * The whole target again, synchronously, at the final admission boundary:
+   * unchanged selection, model and effort, binding, account enabled,
+   * enterprise, login and bench. Throws a hold that keeps the selection.
+   */
   usable: () => void;
+  /** The turn was admitted on the target: the selection is spent. */
+  commit: () => void;
 }
 
 /**
@@ -268,6 +358,53 @@ function hold(sessionId: string, reason: string): PendingRuntimeHeldError {
     .publishRows()
     .catch(() => {});
   return new PendingRuntimeHeldError(sessionId, reason);
+}
+
+/**
+ * The synchronous account rules for running the target on `target`: kind,
+ * enabled, enterprise requirement, login and bench.
+ */
+function targetRulesRefusal(
+  row: Pick<SessionMeta, "requiresEnterprise">,
+  source: CredentialProfile | undefined,
+  target: CredentialProfile,
+  pending: SessionPendingRuntime,
+): string | undefined {
+  const rules = !source
+    ? undefined
+    : target.id === source.id
+      ? target.enabled
+        ? undefined
+        : `${target.name} is disabled.`
+      : accountRulesRefusal(row, source, target);
+  if (rules) return rules;
+  if (row.requiresEnterprise && !target.enterprise)
+    return `This session requires an enterprise account, and ${target.name} is not one.`;
+  try {
+    assertStillEligible(target, pending.model.id);
+  } catch (error) {
+    return errorText(error);
+  }
+  return undefined;
+}
+
+/**
+ * Every rule for running the target on `target`: the synchronous ones, then
+ * the account's model listing (offers the model at the target effort).
+ */
+async function targetRefusal(
+  row: Pick<SessionMeta, "requiresEnterprise">,
+  source: CredentialProfile | undefined,
+  target: CredentialProfile,
+  pending: SessionPendingRuntime,
+): Promise<string | undefined> {
+  return (
+    targetRulesRefusal(row, source, target, pending) ??
+    (await modelRefusal(target, {
+      model: pending.model,
+      thinkingLevel: pending.thinkingLevel,
+    }))
+  );
 }
 
 /**
@@ -286,23 +423,8 @@ async function resolveAccount(
   /** The chosen account a refusal names. */
   named?: CredentialProfile;
 }> {
-  const selection: MoveSelection & {
-    model: { provider: string; id: string };
-  } = { model: pending.model, thinkingLevel: pending.thinkingLevel };
-  const eligible = async (
-    target: CredentialProfile,
-  ): Promise<string | undefined> =>
-    (!source
-      ? undefined
-      : target.id === source.id
-        ? target.enabled
-          ? undefined
-          : `${target.name} is disabled.`
-        : accountRulesRefusal(row, source, target)) ??
-    (row.requiresEnterprise && !target.enterprise
-      ? `This session requires an enterprise account, and ${target.name} is not one.`
-      : undefined) ??
-    (await modelRefusal(target, selection));
+  const eligible = (target: CredentialProfile) =>
+    targetRefusal(row, source, target, pending);
 
   if (pending.account.kind === "account") {
     const target = credentialProfileById(pending.account.id);
@@ -343,8 +465,10 @@ async function resolveAccount(
  * turn the provider already started. `admit` is the caller's side-effect-free
  * admission, rechecked at every engine step. Account first (the move a user
  * or coordinator picked), then model and effort through the runtime adapter,
- * then the selection is cleared in the same step. Answers undefined when
- * nothing is pending.
+ * then the whole target once more. The caller runs `usable` at its final
+ * admission boundary and `commit` once the turn is admitted there; the
+ * selection is cleared only then, so every refusal before it keeps it.
+ * Answers undefined when nothing is pending.
  */
 export async function applyPendingRuntime(
   driver: RuntimePromptDriver,
@@ -424,30 +548,61 @@ export async function applyPendingRuntime(
     if (error instanceof AutomaticTurnsHeldError) throw error;
     throw couldNot(errorText(error), target);
   }
+
+  // The engine steps awaited: the account may have lost its login, been
+  // disabled or benched, or stopped listing the model meanwhile. The whole
+  // target again, its model listing last: nothing awaits after this.
+  if (target) {
+    const late = await targetRefusal(
+      sessionStore.get(id) ?? row,
+      source,
+      credentialProfileById(target.id) ?? target,
+      pending,
+    );
+    if (late) throw couldNot(late, target);
+  }
   admit();
   unchanged();
-  sessionStore.setPendingRuntime(id, null);
-  void host()
-    .publishRows()
-    .catch(() => {});
-  void host()
-    .stateChanged(id)
-    .catch(() => {});
   const boundTo = target?.id;
   return {
     ...(notice ? { notice } : {}),
     usable: () => {
+      unchanged();
+      const now = driver.modelSelection?.();
+      if (
+        now &&
+        (!sameModel(now.model, pending.model) ||
+          // An uncatalogued model's own adapter clamps its effort.
+          (option && now.thinkingLevel !== pending.thinkingLevel))
+      )
+        throw couldNot("the session's model changed while it switched");
       if (!boundTo) return;
       const profile = credentialProfileById(boundTo);
+      const latest = sessionStore.get(id);
+      if (!profile || !latest)
+        throw couldNot("The chosen account no longer exists", target);
       if (
-        !profile?.enabled ||
         driver.credentialProfileId !== boundTo ||
-        sessionStore.get(id)?.credentialProfileId !== boundTo
+        latest.credentialProfileId !== boundTo
       )
-        throw new PendingRuntimeHeldError(
-          id,
-          `${profile?.name ?? "The chosen account"} became unavailable while the session switched to it.`,
+        throw couldNot(
+          `${profile.name} became unavailable while the session switched to it`,
+          profile,
         );
+      const refusal = targetRulesRefusal(latest, source, profile, pending);
+      if (refusal) throw couldNot(refusal, profile);
+    },
+    commit: () => {
+      // Compare-and-clear: only the selection this turn applied is spent.
+      if (!samePendingRuntime(sessionStore.get(id)?.pendingRuntime, pending))
+        return;
+      sessionStore.setPendingRuntime(id, null);
+      void host()
+        .publishRows()
+        .catch(() => {});
+      void host()
+        .stateChanged(id)
+        .catch(() => {});
     },
   };
 }

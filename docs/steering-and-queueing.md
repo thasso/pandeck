@@ -230,7 +230,9 @@ re-offers it as before. Public re-offer, new notices, and boot also retain that
 behavior. Retirement failures remain visible without provider-controlled error
 text. The at-least-once retirement window remains. Background keeps the outbox
 phases, deferred facts and rendering cap; leftover capped facts wake the
-scheduler again. It never drains peers itself. Direct inline handoffs and
+scheduler again, and so does a newly deferred fact (its work ended, so work held
+on it, such as a pending account switch, is offered again; the deferred fact
+itself starts no turn). It never drains peers itself. Direct inline handoffs and
 explicit send-now keep their own authority. Explicit peer sends serialize only
 other explicit sends, while their waiters fence automatic claims. An adapter
 reports that refusal as `deferred`; the scheduler retains any existing real-idle

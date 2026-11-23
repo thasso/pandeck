@@ -34,12 +34,7 @@ import {
   PropertyText,
 } from "./common/PropertyList.tsx";
 import { EmptyBox, ErrorNote, Spinner } from "./common/load.tsx";
-import {
-  dataOf,
-  errorOf,
-  isPending,
-  type LoadState,
-} from "../lib/loadState.ts";
+import { dataOf, errorOf, type LoadState } from "../lib/loadState.ts";
 
 /** What the Runtime section needs from the app. */
 export interface SessionRuntimeControl {
@@ -255,7 +250,8 @@ export function SessionRuntimeSection({
                     message={accountsError}
                     onRetry={accounts.onOpen}
                   />
-                ) : !targets || isPending(targets) || !eligible ? (
+                ) : !eligible ? (
+                  // Only a first load: a refresh keeps the last list shown.
                   <div
                     role="status"
                     className="flex items-center gap-2 px-2 py-1.5 text-sm text-muted-foreground"

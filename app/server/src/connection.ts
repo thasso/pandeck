@@ -908,8 +908,8 @@ export class Connection implements Viewer {
           // Held by a pending runtime selection that cannot apply yet: the
           // message waits in the user's queue, offered again once the
           // selection can apply or is changed or reset (`sessionPendingRuntime.ts`).
-          // A skill invocation cannot be queued (Task-1023), so its refusal
-          // says to send it again instead.
+          // A skill invocation cannot be queued (Task-1023): its exact text
+          // goes back to the composer instead, so nothing typed is lost.
           const pendingHeld =
             err instanceof PendingRuntimeHeldError ? err : undefined;
           const held =
@@ -939,7 +939,7 @@ export class Connection implements Viewer {
             message: held
               ? `${held.message} Your message is waiting in your queue.`
               : pendingHeld && skillInvocation
-                ? `${pendingHeld.message} /${skillInvocation.name} did not run; send it again once the change applies or is reset.`
+                ? `${pendingHeld.message} /${skillInvocation.name} did not run; it is back in your message box to send again once the change applies or is reset.`
                 : withdrawn
                   ? withdrawn.uncertain
                     ? `The response stopped, and Claude may already have read your message. It is held in your queue: ${STEER_MAY_HAVE_BEEN_READ.toLowerCase()}`
@@ -950,6 +950,14 @@ export class Connection implements Viewer {
             target: { type: "session", id: driver.id },
             ...(msg.clientRequestId !== undefined
               ? { failedPromptClientRequestId: msg.clientRequestId }
+              : {}),
+            ...(pendingHeld && skillInvocation
+              ? {
+                  restoreDraft: {
+                    sessionId: driver.sessionId,
+                    text: msg.text,
+                  },
+                }
               : {}),
             ...(setupFinished ? { setupFinished: true as const } : {}),
           });

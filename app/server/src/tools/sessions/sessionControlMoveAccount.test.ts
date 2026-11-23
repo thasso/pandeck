@@ -226,4 +226,34 @@ describe("session_control move_account", () => {
     assert.equal(pendingTo(c.id), twin2);
     assert.equal(boundTo(c.id), a);
   });
+  it("loses the move the moment the user takes the child over, even while the account resolves", async () => {
+    const a = account("Takeover A");
+    const b = account("Takeover B");
+    const caller = seed("Coordinator");
+    // Each resident read is one await the move passes: the first while the
+    // tool resolves the account, the last while the selection is computed,
+    // right before its write.
+    for (const takeoverAt of [1, 2]) {
+      const c = child(caller, a);
+      let reads = 0;
+      setAccountMoveHostForTests({
+        resident: async () => {
+          if (++reads === takeoverAt)
+            sessionStore.setSpawnedOwnership(c.id, "taken-over");
+          return c.driver;
+        },
+      });
+      await assert.rejects(
+        () => move(caller, c.id, b),
+        /no longer owned.*cannot be moved here/,
+      );
+      assert.ok(reads >= takeoverAt, "the takeover landed during the move");
+      assert.equal(
+        pendingTo(c.id),
+        undefined,
+        `takeover at read ${takeoverAt}`,
+      );
+      assert.equal(boundTo(c.id), a);
+    }
+  });
 });

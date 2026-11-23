@@ -616,6 +616,17 @@ function setPendingRuntime(
   touchSessionRows([id]);
 }
 
+/** Live sessions that have a pending runtime selection. */
+function sessionIdsWithPendingRuntime(): string[] {
+  return (
+    getDb()
+      .prepare(
+        "SELECT id FROM session_index WHERE pending_runtime IS NOT NULL AND deleted_at_ms IS NULL",
+      )
+      .all() as { id: string }[]
+  ).map(({ id }) => id);
+}
+
 /**
  * Tombstone a session and say what the row was, THROWING on a failed write:
  * for a caller whose other writes in the same transaction must not outlive a
@@ -2201,6 +2212,7 @@ export const sessionStore = {
   requireEnterprise,
   setCompactionWindow,
   setPendingRuntime,
+  sessionIdsWithPendingRuntime,
   markDeleted,
   remove,
   markRead,

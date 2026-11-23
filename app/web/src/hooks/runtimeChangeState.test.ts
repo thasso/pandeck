@@ -60,6 +60,31 @@ describe("the account picker's state", () => {
     );
   });
 
+  it("keeps the last list shown while the same session asks again, never another session's", () => {
+    let state = reduceAssistantState(createInitialState(), {
+      kind: "accountMoveTargetsRequested",
+      sessionId: "s1",
+      requestId: "first",
+    });
+    state = server(state, listed("first"));
+    // The next turn's target changed: asked again, the answer stays on screen.
+    state = reduceAssistantState(state, {
+      kind: "accountMoveTargetsRequested",
+      sessionId: "s1",
+      requestId: "second",
+    });
+    expect(state.accountMoveTargets!.targets.status).toBe("refreshing");
+    expect(dataOf(state.accountMoveTargets!.targets)).toEqual([
+      { id: "cp-first", name: "first", enterprise: false },
+    ]);
+    state = reduceAssistantState(state, {
+      kind: "accountMoveTargetsRequested",
+      sessionId: "s2",
+      requestId: "other",
+    });
+    expect(state.accountMoveTargets!.targets.status).toBe("loading");
+  });
+
   it("keeps a move pending until its own answer, which puts a refusal on the session", () => {
     let state = reduceAssistantState(createInitialState(), {
       kind: "runtimeChangeSent",

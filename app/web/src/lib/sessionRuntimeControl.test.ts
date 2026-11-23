@@ -5,6 +5,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import type { ModelOption } from "@assistant/shared";
+import { failed, loading, ready, refreshing } from "./loadState.ts";
 import {
   OTHER_ACCOUNT_KIND_REASON,
   OTHER_HARNESS_REASON,
@@ -118,21 +119,33 @@ describe("sessionRuntimeControl", () => {
 });
 
 describe("runtimeAccountChoices", () => {
-  it("names the enabled accounts of the bound kind that serve the model", () => {
-    const accounts = [
-      { ...personal, enabled: true },
-      { ...work, enabled: true },
-      { id: "cp-d", name: "Off", provider: "claude" as const, enabled: false },
-      { ...chatgpt, enabled: true },
-    ];
-    expect(runtimeAccountChoices(personal, accounts, "claude-sdk")).toEqual([
+  it("names the bound account and the accounts the server judged for the next turn", () => {
+    // An enabled personal account of the same kind that the server left out
+    // (enterprise requirement, or its listing lacks the pending model) is
+    // never offered: only the server's list counts.
+    const judged = ready([
+      { id: "cp-b", name: "Work", enterprise: true },
+      { id: "cp-a", name: "Personal", enterprise: false },
+    ]);
+    expect(runtimeAccountChoices(personal, judged)).toEqual([
       { id: "cp-a", name: "Personal" },
       { id: "cp-b", name: "Work" },
     ]);
-    expect(runtimeAccountChoices(team, accounts, team.id)).toEqual([]);
-    expect(runtimeAccountChoices(undefined, accounts, "claude-sdk")).toEqual(
-      [],
-    );
+    // The server found nothing to move to: only the bound account, so
+    // `/account` (offered for more than one) stays hidden.
+    expect(runtimeAccountChoices(personal, ready([]))).toEqual([
+      { id: "cp-a", name: "Personal" },
+    ]);
+  });
+
+  it("offers nothing until the server answered, keeps its last answer while refreshing, and nothing for an account that cannot move", () => {
+    const list = [{ id: "cp-b", name: "Work", enterprise: false }];
+    expect(runtimeAccountChoices(personal, undefined)).toEqual([]);
+    expect(runtimeAccountChoices(personal, loading())).toEqual([]);
+    expect(runtimeAccountChoices(personal, failed("lost"))).toEqual([]);
+    expect(runtimeAccountChoices(personal, refreshing(list))).toHaveLength(2);
+    expect(runtimeAccountChoices(team, ready(list))).toEqual([]);
+    expect(runtimeAccountChoices(undefined, ready(list))).toEqual([]);
   });
 });
 

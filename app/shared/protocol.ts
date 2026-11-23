@@ -9086,6 +9086,14 @@ export type ServerMessage =
        */
       failedPromptClientRequestId?: string;
       /**
+       * Set when a prompt send that never ran cannot wait in the queue and goes
+       * back to the user instead, exactly as submitted: a `/skill` invocation
+       * held by the session's pending runtime selection (skills are never
+       * queued). The client stages `text` in that session's composer so the
+       * command is retried without retyping.
+       */
+      restoreDraft?: { sessionId: string; text: string };
+      /**
        * Set when the send was refused because its session is the guided setup
        * conversation and setup is finished (`docs/onboarding.md`): the client
        * takes the user to the Personal Assistant's current conversation.

@@ -23,7 +23,7 @@ import {
 } from "./objectInspectors.tsx";
 import { DialogProvider } from "./common/dialogs.tsx";
 import type { SessionRuntimeControl } from "./SessionRuntimeSection.tsx";
-import { failed, loading, ready } from "../lib/loadState.ts";
+import { failed, loading, ready, refreshing } from "../lib/loadState.ts";
 
 const openers = {
   onOpenTask: () => {},
@@ -367,6 +367,17 @@ describe("SessionInspector layout", () => {
       expect(document.body.textContent).toContain(
         "No other account can run this model now.",
       );
+      // Asked again (the next turn's target changed): the last list stays.
+      await show(
+        root,
+        control({
+          accounts: accounts(
+            refreshing([{ id: "cp-b", name: "Account B", enterprise: false }]),
+          ),
+        }),
+      );
+      expect(document.body.textContent).toContain("Account B");
+      expect(document.body.textContent).not.toContain("Loading accounts…");
       await show(
         root,
         control({

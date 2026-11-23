@@ -174,10 +174,20 @@ function makeSessionControlTool() {
         // it runs on drops a pending move.
         if (target.refusal && !target.current)
           throw new Error(`${target.refusal} ${target.alternatives}`);
+        // The user may take the child over while the account resolves: the
+        // ownership edge is asked again with the write itself.
         await setSessionPendingRuntime(
           targetSessionId,
           { account: { kind: "account", id: target.id } },
           "coordinator",
+          {
+            authorize: () =>
+              requireOwnedChild(
+                ctx.session.sessionId,
+                targetSessionId,
+                "moved",
+              ),
+          },
         );
         return textResult(
           target.current

@@ -211,6 +211,7 @@ import {
   isPending,
   loading,
   ready,
+  refreshing,
   type LoadState,
 } from "../lib/loadState.ts";
 
@@ -5416,15 +5417,22 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       ? { ...state, archivedReadFlight: null }
       : state;
 
-  if (action.kind === "accountMoveTargetsRequested")
+  if (action.kind === "accountMoveTargetsRequested") {
+    // Asked again for the same session (its next-turn target or the accounts
+    // changed): the last answer stays on screen while the new one comes.
+    const shown =
+      state.accountMoveTargets?.sessionId === action.sessionId
+        ? dataOf(state.accountMoveTargets.targets)
+        : undefined;
     return {
       ...state,
       accountMoveTargets: {
         sessionId: action.sessionId,
         requestId: action.requestId,
-        targets: loading(),
+        targets: shown ? refreshing(shown) : loading(),
       },
     };
+  }
   if (action.kind === "runtimeChangeSent")
     // The change is the session's own send, so like a prompt it retires that
     // session's earlier failure (a held turn the change may now release); its
@@ -6600,6 +6608,17 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
           setupFinishedRefusals: msg.setupFinished
             ? state.setupFinishedRefusals + 1
             : state.setupFinishedRefusals,
+          // A send that could not wait in the queue comes back to its
+          // session's composer as typed, through the fork draft's handoff.
+          ...(msg.restoreDraft
+            ? {
+                forkDraft: {
+                  sessionId: msg.restoreDraft.sessionId,
+                  text: msg.restoreDraft.text,
+                  token: Date.now(),
+                },
+              }
+            : {}),
         },
         {
           liveStreams: [],
