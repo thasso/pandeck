@@ -76,7 +76,9 @@ const NO_HAIKU = ALL_IDS.filter((id) => id !== "claude-haiku-5-5");
 const UNKNOWN_OFFERED = CURATED.filter((id) => id !== "mythos");
 
 /** Give each listed account its snapshot, as a successful gateway read would. */
-async function listings(byAccount: Record<string, string[]>): Promise<void> {
+async function listings(
+  byAccount: Record<string, string[] | undefined>,
+): Promise<void> {
   const cache = resetClaudeAccountModelsForTests({
     read: async (id) => byAccount[id],
     readable: (id) => id in byAccount,
@@ -435,6 +437,50 @@ test("a pin is judged exactly: offered and lacking are complements on an enabled
       pin,
     );
   }
+});
+
+test("a known listing naming a session's exact legacy pin offers it, though not the alias's current candidate", async () => {
+  const legacy = ["claude-opus-5", "claude-sonnet-5-5"];
+  await listings({ legacy, unknown: undefined });
+  const stored = {
+    pinnedModelId: "claude-opus-5",
+    persistedPinnedModelId: "claude-opus-5",
+  };
+  // Complements with the pin: the account runs exactly that version.
+  for (const pin of [stored, { pinnedModelId: "claude-opus-5" }]) {
+    assert.equal(
+      await accountLacksModel("legacy", "claude-sdk", "opus", pin),
+      false,
+    );
+    assert.equal(
+      await accountOffersModel("legacy", "claude-sdk", "opus", pin),
+      true,
+    );
+  }
+  // Unpinned, the alias's current candidate is what counts: not listed.
+  assert.equal(await accountLacksModel("legacy", "claude-sdk", "opus"), true);
+  assert.equal(await accountOffersModel("legacy", "claude-sdk", "opus"), false);
+  // An unknown account keeps only the session's own stored legacy pin (D1-legacy).
+  assert.equal(
+    await accountOffersModel("unknown", "claude-sdk", "opus", stored),
+    true,
+  );
+  assert.equal(
+    await accountOffersModel("unknown", "claude-sdk", "opus", {
+      pinnedModelId: "claude-opus-5",
+    }),
+    false,
+  );
+  // Only a curated alias of that provider, and only with the integration on.
+  assert.equal(
+    await accountOffersModel("legacy", "claude-sdk", "claude-opus-5", stored),
+    false,
+  );
+  claudeEnabled = false;
+  assert.equal(
+    await accountOffersModel("legacy", "claude-sdk", "opus", stored),
+    false,
+  );
 });
 
 test("picker change notification: a listing change with an unchanged union, and a Claude account's enable, disable or deletion", async () => {

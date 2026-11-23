@@ -9,7 +9,8 @@
  * case feeds `PiLiveSession` the agent events pi emits.
  */
 import assert from "node:assert/strict";
-import { afterAll, test, vi } from "vitest";
+import { afterAll, beforeEach, test, vi } from "vitest";
+import { enableClaudeSdkForTests } from "../test/claudeSdkEnabled.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -61,6 +62,9 @@ assert.ok(
 
 // Runs on an install that still has its protected default accounts.
 await seedLegacyDefaultAccounts();
+
+// These suites drive Claude runs; the integration is off by default.
+beforeEach(enableClaudeSdkForTests);
 
 afterAll(() => {
   closeDb();

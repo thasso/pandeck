@@ -19,6 +19,7 @@ vi.mock("./credentialProfiles.ts", () => ({
 vi.mock("./harnesses/models.ts", () => ({
   accountLacksModel: vi.fn(async () => false),
   modelsForAccount: vi.fn(),
+  pinnedModelOption: vi.fn(),
 }));
 vi.mock("./usageCache.ts", () => ({ cachedUsageIndicator: vi.fn() }));
 vi.mock("./settings.ts", () => ({

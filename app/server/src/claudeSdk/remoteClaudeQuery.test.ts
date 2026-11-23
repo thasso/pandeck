@@ -19,7 +19,8 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
-import { afterAll, test } from "vitest";
+import { afterAll, beforeEach, test } from "vitest";
+import { enableClaudeSdkForTests } from "../test/claudeSdkEnabled.ts";
 import type { Payload } from "../workerProtocol/codec.ts";
 import type {
   ClaudeQuery,
@@ -38,6 +39,9 @@ const CLAUDE_ACCESS = "fake-claude-access";
 const LEASE_TOKEN = `${"aGVhZGVy"}.${"cGF5bG9hZA"}.${"c2VjcmV0"}`;
 const savedApiKey = process.env.ANTHROPIC_API_KEY;
 process.env.ANTHROPIC_API_KEY = SENTINEL;
+// These suites drive Claude runs; the integration is off by default.
+beforeEach(enableClaudeSdkForTests);
+
 afterAll(() => {
   if (savedApiKey === undefined) delete process.env.ANTHROPIC_API_KEY;
   else process.env.ANTHROPIC_API_KEY = savedApiKey;

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { beforeEach, test, vi } from "vitest";
+import { enableClaudeSdkForTests } from "./test/claudeSdkEnabled.ts";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -48,6 +49,8 @@ beforeEach(async () => {
   rmSync(join(dataDir, "settings"), { recursive: true, force: true });
   // These cover an install that still has its protected defaults.
   await seedLegacyDefaultAccounts();
+  // The helpers run on Claude; the integration is off by default.
+  await enableClaudeSdkForTests();
 });
 
 test("a Claude helper agent authenticates as its pinned account", async () => {

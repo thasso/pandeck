@@ -8,6 +8,7 @@
 import { claudeSdkModelOption } from "../claudeSdk/modelSettings.ts";
 import { resolveClaudeSdkModel } from "../claudeSdk/modelResolution.ts";
 import { credentialProfileById } from "../credentialProfiles.ts";
+import { getSettings } from "../settings.ts";
 import { ModelUnavailableOnAccountError } from "../settingsModelSlots.ts";
 import {
   claudeAccountModelIds,
@@ -28,16 +29,20 @@ export interface ClaudeModelPin {
  * The id `aliasOrId` runs on the account, after waiting (bounded) for the
  * account's first listing; an undefined account is unknown. Throws
  * {@link ModelUnavailableOnAccountError} ("<account> can't run <model>.") when
- * the account does not offer it. The Claude SDK setting is not judged here: a
- * disabled integration already refuses to open sessions (`availability.ts`)
- * and to offer models (`models.ts`), so a run that reaches this resolves as
- * before.
+ * the account does not offer it. With the Claude SDK disabled in settings
+ * nothing is offered: a resident session, a retained process's model change
+ * or a configured helper reaches no provider either, refused the same way
+ * (`availability.ts` only guards opening sessions).
  */
 export async function resolveClaudeAccountModel(
   profileId: string | undefined,
   aliasOrId: string,
   pin: ClaudeModelPin = {},
 ): Promise<string> {
+  if (!getSettings().claudeSdk.enabled)
+    throw new ModelUnavailableOnAccountError(
+      "Claude SDK is disabled in settings.",
+    );
   if (profileId !== undefined) await ensureClaudeAccountModels(profileId);
   const id = resolveClaudeSdkModel(
     aliasOrId,

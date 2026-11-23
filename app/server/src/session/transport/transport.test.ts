@@ -9,7 +9,8 @@
  * receiving durable history via a fresh snapshot.
  */
 import assert from "node:assert/strict";
-import { afterAll, test } from "vitest";
+import { afterAll, beforeEach, test } from "vitest";
+import { enableClaudeSdkForTests } from "../../test/claudeSdkEnabled.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -39,6 +40,9 @@ const { ClaudeSdkSession } = await import("../../test/claudeSdkSession.ts");
 /* --------------------- 1. projection: folding + overlay ------------------ */
 // Runs on an install that still has its protected default accounts.
 await seedLegacyDefaultAccounts();
+
+// These suites drive Claude runs; the integration is off by default.
+beforeEach(enableClaudeSdkForTests);
 
 test("projection: folding + overlay", () => {
   const entries: SessionEntry[] = [

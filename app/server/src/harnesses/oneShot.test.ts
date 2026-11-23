@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test, vi } from "vitest";
+import {
+  disableClaudeSdkForTests,
+  enableClaudeSdkForTests,
+} from "../test/claudeSdkEnabled.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -104,7 +108,9 @@ function request(overrides: Partial<OneShotRequest> = {}): OneShotRequest {
   };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  // These suites drive Claude runs; the integration is off by default.
+  await enableClaudeSdkForTests();
   vi.resetAllMocks();
   vi.mocked(credentialProfileById).mockReturnValue({
     enterprise: true,
@@ -415,6 +421,43 @@ test.each(MYTHOS_LESS_READS)(
     }
   },
 );
+
+test("a helper pinned to a Claude account runs nothing while the Claude SDK is disabled", async () => {
+  const actual = await vi.importActual<
+    typeof import("../settingsModelSlots.ts")
+  >("../settingsModelSlots.ts");
+  vi.mocked(resolveSlotAccount).mockImplementation(actual.resolveSlotAccount);
+  claudeProfile();
+  vi.mocked(runClaudeSdkOneShot).mockResolvedValue({ text: "ok", usage: {} });
+  resetClaudeAccountModelsForTests({ read: async () => [...PRIVATE] });
+  try {
+    await disableClaudeSdkForTests();
+    // The slot keeps its explicit account after the integration is turned off.
+    for (const modelId of ["sonnet", "fable"])
+      await assert.rejects(
+        runOneShot(request({ model: { provider: "claude-sdk", modelId } })),
+        (err: Error) =>
+          err.name === "ModelUnavailableOnAccountError" &&
+          err.message === "Claude SDK is disabled in settings.",
+        modelId,
+      );
+    assert.equal(vi.mocked(runClaudeSdkOneShot).mock.calls.length, 0);
+    assert.equal(vi.mocked(observeAccountHealth).mock.calls.length, 0);
+    assert.equal(vi.mocked(reportAccountRunFailure).mock.calls.length, 0);
+    assert.equal(vi.mocked(pickAccount).mock.calls.length, 0);
+    await enableClaudeSdkForTests();
+    assert.equal(
+      (
+        await runOneShot(
+          request({ model: { provider: "claude-sdk", modelId: "sonnet" } }),
+        )
+      ).text,
+      "ok",
+    );
+  } finally {
+    resetClaudeAccountModelsForTests();
+  }
+});
 
 test("an Automatic mythos helper whose account stops listing it after the pick is a local refusal, never a retry", async () => {
   claudeProfile();

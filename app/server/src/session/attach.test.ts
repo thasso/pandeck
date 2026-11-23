@@ -8,7 +8,8 @@
  * duplicating the session.
  */
 import assert from "node:assert/strict";
-import { afterAll, test } from "vitest";
+import { afterAll, beforeEach, test } from "vitest";
+import { enableClaudeSdkForTests } from "../test/claudeSdkEnabled.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -83,6 +84,9 @@ function fakeSeam(messages: ClaudeSdkMessage[]): ClaudeSdkSeam {
 /* --------------------- attach an existing session ------------------------ */
 // Runs on an install that still has its protected default accounts.
 await seedLegacyDefaultAccounts();
+
+// These suites drive Claude runs; the integration is off by default.
+beforeEach(enableClaudeSdkForTests);
 
 test("attach an existing session, and a durable /commit card survives reconnect", async () => {
   const runtime = new SessionRuntime(new SessionLogStore(true));

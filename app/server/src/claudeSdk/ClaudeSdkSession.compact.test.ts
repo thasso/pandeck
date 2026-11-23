@@ -12,7 +12,8 @@
  * must report `skipped` rather than a bogus compaction card.
  */
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { beforeEach, test } from "vitest";
+import { enableClaudeSdkForTests } from "../test/claudeSdkEnabled.ts";
 import type { ServerMessage } from "@assistant/shared";
 import { entriesToDisplayMessages } from "@assistant/shared/display";
 import { agentPromptLayer } from "../agents/agentDefinitionPolicy.ts";
@@ -274,6 +275,9 @@ function askingNoSessionHooks(run: () => Promise<void>): () => Promise<void> {
 
 // Runs on an install that still has its protected default accounts.
 await seedLegacyDefaultAccounts();
+
+// These suites drive Claude runs; the integration is off by default.
+beforeEach(enableClaudeSdkForTests);
 
 test(
   "Claude manual compaction reports the boundary and renders one durable card",

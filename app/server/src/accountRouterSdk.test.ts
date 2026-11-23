@@ -24,7 +24,8 @@ const {
   patchCredentialProfile,
   setCredentialProfileEnabled,
 } = await import("./credentialProfiles.ts");
-const { pickAccount } = await import("./accountRouter.ts");
+const { gatherAccountCandidate, pickAccount } =
+  await import("./accountRouter.ts");
 const { modelsForAccount, piModelForAccount } =
   await import("./harnesses/models.ts");
 const { createSession } = await import("./harnesses/create.ts");
@@ -569,3 +570,45 @@ test.each(MYTHOS_LESS_READS)(
       }
     }),
 );
+
+test("real port: a healthy account listing a session's exact legacy pin is a full candidate, effort still judged", () =>
+  withClaudeSdk(async () => {
+    const target = healthyClaude("Legacy target");
+    resetClaudeAccountModelsForTests({
+      read: async () => ["claude-opus-5", "claude-sonnet-5-5"],
+    });
+    const legacy = {
+      model: { provider: "claude-sdk", modelId: "opus" },
+      thinkingLevel: "high" as const,
+      pinnedModelId: "claude-opus-5",
+      persistedPinnedModelId: "claude-opus-5",
+    };
+    try {
+      const profile = listCredentialProfiles().find(({ id }) => id === target)!;
+      const candidate = await gatherAccountCandidate(profile, legacy);
+      assert.equal(candidate.offersModel, true);
+      assert.equal(candidate.lacksModel, undefined);
+      assert.deepEqual(await pickAccount(legacy), { profileId: target });
+      // An effort the model does not support is still not offered.
+      assert.equal(
+        (
+          await gatherAccountCandidate(profile, {
+            ...legacy,
+            thinkingLevel: "minimal",
+          })
+        ).offersModel,
+        false,
+      );
+      // Unpinned, the alias's current candidate is not listed: nothing runs.
+      assert.deepEqual(
+        await pickAccount({
+          model: legacy.model,
+          thinkingLevel: legacy.thinkingLevel,
+        }),
+        { profileId: null, degraded: "model-unavailable" },
+      );
+    } finally {
+      setCredentialProfileEnabled(target, false);
+      resetClaudeAccountModelsForTests();
+    }
+  }));

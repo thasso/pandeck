@@ -5,7 +5,11 @@
  * stored pin. A refusal at the open is a local-policy backstop.
  */
 import assert from "node:assert/strict";
-import { afterEach, test } from "vitest";
+import { afterEach, beforeEach, test } from "vitest";
+import {
+  disableClaudeSdkForTests,
+  enableClaudeSdkForTests,
+} from "../test/claudeSdkEnabled.ts";
 import type { ServerMessage } from "@assistant/shared";
 import { freezeSessionAgent } from "../agents/sessionAgent.ts";
 import {
@@ -25,6 +29,9 @@ import type {
 const PROVIDER_SESSION = "11111111-2222-3333-4444-555555555555";
 const profiles: string[] = [];
 let sequence = 0;
+
+// These suites drive Claude runs; the integration is off by default.
+beforeEach(enableClaudeSdkForTests);
 
 afterEach(() => {
   resetClaudeAccountModelsForTests();
@@ -331,4 +338,41 @@ test("a refused model change reaches the adapter's caller and announces no confi
     events.filter((event) => event.type === "sessionConfigChanged").length,
     1,
   );
+});
+
+test("a resident session opens no query, compact or model change while the Claude SDK is disabled", async () => {
+  const { company } = accounts({ company: COMPANY });
+  const models: string[] = [];
+  const resident = session(company!, "sonnet", recordingSeam(models), {
+    providerSessionId: PROVIDER_SESSION,
+  });
+  const adapter = resident.createRuntimeAdapter();
+  const events: AdapterEvent[] = [];
+  adapter.subscribe((event) => events.push(event));
+  const kept = retained(company!, "sonnet");
+  await disableClaudeSdkForTests();
+
+  const local = { kind: "unknown", localPolicy: true };
+  assert.deepEqual(await adapter.prompt("hello"), {
+    stopReason: "error",
+    errorMessage: "Claude SDK is disabled in settings.",
+    failure: local,
+  });
+  const failing = events.find((event) => event.type === "runFailing");
+  assert.deepEqual(failing && "failure" in failing && failing.failure, local);
+  await assert.rejects(
+    resident.compactContext(),
+    /Claude SDK is disabled in settings\./,
+  );
+  await assert.rejects(
+    kept.session.setModel("opus"),
+    (err: Error) => err.name === "ModelUnavailableOnAccountError",
+  );
+  assert.deepEqual(models, [], "no query opened");
+  assert.deepEqual(kept.calls, [], "no control call");
+  assert.equal(kept.session.toRecord().modelId, "sonnet");
+
+  await enableClaudeSdkForTests();
+  assert.equal((await adapter.prompt("again")).stopReason, "end");
+  assert.deepEqual(models, ["claude-sonnet-5-5"]);
 });

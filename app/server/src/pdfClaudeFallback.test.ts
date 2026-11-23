@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { afterEach, describe, test } from "vitest";
+import { afterEach, beforeEach, describe, test } from "vitest";
+import { enableClaudeSdkForTests } from "./test/claudeSdkEnabled.ts";
 import { buildTestPdf } from "./test/pdfFixtures.ts";
 import {
   convertPdfToMarkdown,
@@ -63,6 +64,9 @@ function fakeSeam(
 
 // Runs on an install that still has its protected default accounts.
 await seedLegacyDefaultAccounts();
+
+// These suites drive Claude runs; the integration is off by default.
+beforeEach(enableClaudeSdkForTests);
 
 describe("registerPdfClaudeFallback", () => {
   afterEach(() => {

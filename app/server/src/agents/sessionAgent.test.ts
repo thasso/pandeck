@@ -12,7 +12,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { test } from "vitest";
+import { beforeEach, test } from "vitest";
+import { enableClaudeSdkForTests } from "../test/claudeSdkEnabled.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "session-agent-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -48,6 +49,9 @@ const reviewer = {
   skills: [],
   body: "Prove every new test fails without the change.",
 };
+
+// These suites drive Claude runs; the integration is off by default.
+beforeEach(enableClaudeSdkForTests);
 
 test("the first freeze wins for the session's life", () => {
   assert.equal(sessionAgent("fresh"), undefined);

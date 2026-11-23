@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { afterEach, test, vi } from "vitest";
+import { afterEach, beforeEach, test, vi } from "vitest";
+import { enableClaudeSdkForTests } from "../test/claudeSdkEnabled.ts";
 import type { SessionSkillInvocation } from "@assistant/shared";
 import { skillInvocationTrail } from "../skills/skillInvocations.ts";
 import {
@@ -41,6 +42,9 @@ const sessions: InstanceType<typeof ClaudeSdkSession>[] = [];
 
 // Runs on an install that still has its protected default accounts.
 await seedLegacyDefaultAccounts();
+
+// These suites drive Claude runs; the integration is off by default.
+beforeEach(enableClaudeSdkForTests);
 
 afterEach(() => {
   for (const session of sessions.splice(0)) session.dispose();

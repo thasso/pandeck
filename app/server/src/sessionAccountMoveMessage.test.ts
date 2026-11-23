@@ -417,6 +417,93 @@ test.each([
   },
 );
 
+test("an opus session pinned to claude-opus-5 lists and moves to an account offering that exact version", async () => {
+  const before = getSettings().claudeSdk;
+  updateSettings({ claudeSdk: { ...before, enabled: true } });
+  const from = claudeAccount("Claude From");
+  const legacy = claudeAccount("Claude Legacy");
+  resetClaudeAccountModelsForTests({
+    read: async (id) =>
+      id === legacy
+        ? ["claude-opus-5", "claude-sonnet-5-5"]
+        : ["claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"],
+  });
+  const id = `account-move-message-${sequence++}`;
+  sessionStore.upsert({
+    id,
+    harness: "claude-sdk",
+    agentType: "assistant",
+    credentialProfileId: from,
+  });
+  sessions.push(id);
+  sessionStore.freezeAgent(
+    id,
+    JSON.stringify({
+      name: "pinned-opus",
+      blob: "0".repeat(40),
+      persona: "assistant",
+      provider: "claude-sdk",
+      model: "opus",
+      pinnedModel: "claude-opus-5",
+      effort: "high",
+      runtimeSource: "definition",
+      denyTools: [],
+      skills: [],
+      body: "",
+    }),
+  );
+  const driver = new FakeRuntimeDriver(id) as InstanceType<
+    typeof FakeRuntimeDriver
+  > & {
+    modelSelection(): {
+      model: { provider: string; id: string };
+      thinkingLevel: "high";
+    };
+    switchAccount(profileId: string, admit: () => void): Promise<void>;
+  };
+  driver.modelSelection = () => ({
+    model: { provider: "claude-sdk", id: "opus" },
+    thinkingLevel: "high",
+  });
+  driver.switchAccount = async (next, admit) => {
+    admit();
+    sessionStore.switchCredentialProfile(id, from, next);
+  };
+  setAccountMoveHostForTests({
+    runtime: sessionRuntime,
+    resident: async () => driver,
+    acquire: async () => driver,
+    publishRows: async () => {},
+  });
+  const { sent, connection } = connect();
+  try {
+    await connection.handle({
+      type: "listSessionAccountMoveTargets",
+      sessionId: id,
+      requestId: "legacy-list",
+    });
+    const listed = answers(sent, "sessionAccountMoveTargets").at(-1)?.accounts;
+    assert.ok(listed?.some((target) => target.id === legacy));
+
+    await connection.handle({
+      type: "moveSessionAccount",
+      sessionId: id,
+      credentialProfileId: legacy,
+      requestId: "legacy-move",
+    });
+    assert.deepEqual(answers(sent, "sessionAccountMoveAnswer").at(-1), {
+      type: "sessionAccountMoveAnswer",
+      requestId: "legacy-move",
+      sessionId: id,
+    });
+    assert.equal(sessionStore.get(id)?.credentialProfileId, legacy);
+  } finally {
+    connection.dispose();
+    resetClaudeAccountModelsForTests();
+    updateSettings({ claudeSdk: before });
+  }
+});
+
 test("validates both messages before any effect", () => {
   assert.ok(
     validateClientMessage({

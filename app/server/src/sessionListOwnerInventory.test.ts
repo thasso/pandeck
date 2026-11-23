@@ -402,7 +402,7 @@ const owners: Record<string, Owner> = {
       ),
       group(
         "read",
-        "toolAdmissionRefusal assertToolAdmission assertNotDisposed liveMessages timelineEntries committedTimeline messageCount snapshot modelOption nativeFacts contextInfo currentTurnEstimate compactionWindowStatus runningEpochKey compactionWindowStart canQuietClose startTimeSettingsNeedRestart modelSelection assertSkillRegistered answersBeforePrompt answersOnlyContext isProviderTurnContent promptConditions frozenSkillNames committedToolCalls toolLoadingFacts turnOutcome savedProviderTotals blockKey listItem toRecord toRecordMeta",
+        "toolAdmissionRefusal assertToolAdmission assertNotDisposed liveMessages timelineEntries committedTimeline messageCount snapshot modelOption nativeFacts contextInfo currentTurnEstimate compactionWindowStatus runningEpochKey compactionWindowStart canQuietClose startTimeSettingsNeedRestart modelSelection resolveSessionModel assertSkillRegistered answersBeforePrompt answersOnlyContext isProviderTurnContent promptConditions frozenSkillNames committedToolCalls toolLoadingFacts turnOutcome savedProviderTotals blockKey listItem toRecord toRecordMeta",
         "Read or derive native/canonical/policy/public data without changing a list input.",
       ),
     ],

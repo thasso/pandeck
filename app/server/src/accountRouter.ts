@@ -23,7 +23,11 @@ import {
   DEFAULT_OPENAI_PROFILE_ID,
   listCredentialProfiles,
 } from "./credentialProfiles.ts";
-import { accountLacksModel, modelsForAccount } from "./harnesses/models.ts";
+import {
+  accountLacksModel,
+  pinnedModelOption,
+  modelsForAccount,
+} from "./harnesses/models.ts";
 import { getSettings } from "./settings.ts";
 import { cachedUsageIndicator } from "./usageCache.ts";
 import { readAccountBench } from "./accountHealth.ts";
@@ -176,27 +180,42 @@ export async function gatherAccountCandidate(
     "model" | "thinkingLevel" | "pinnedModelId" | "persistedPinnedModelId"
   >,
 ): Promise<AccountCandidate> {
-  const [models, lacksModel] = await Promise.all([
-    profile.enabled ? modelsForAccount(profile).catch(() => []) : [],
+  const pin = {
+    ...(request.pinnedModelId !== undefined
+      ? { pinnedModelId: request.pinnedModelId }
+      : {}),
+    ...(request.persistedPinnedModelId !== undefined
+      ? { persistedPinnedModelId: request.persistedPinnedModelId }
+      : {}),
+  };
+  // A pinned session is offered by its pin, never by whether the account
+  // also lists the alias's current candidate.
+  const [model, lacksModel] = await Promise.all([
+    !profile.enabled
+      ? undefined
+      : pin.pinnedModelId !== undefined
+        ? pinnedModelOption(
+            profile.id,
+            request.model.provider,
+            request.model.modelId,
+            pin,
+          ).catch(() => undefined)
+        : modelsForAccount(profile)
+            .catch(() => [])
+            .then((models) =>
+              models.find(
+                (option) =>
+                  option.provider === request.model.provider &&
+                  option.id === request.model.modelId,
+              ),
+            ),
     accountLacksModel(
       profile.id,
       request.model.provider,
       request.model.modelId,
-      {
-        ...(request.pinnedModelId !== undefined
-          ? { pinnedModelId: request.pinnedModelId }
-          : {}),
-        ...(request.persistedPinnedModelId !== undefined
-          ? { persistedPinnedModelId: request.persistedPinnedModelId }
-          : {}),
-      },
+      pin,
     ).catch(() => false),
   ]);
-  const model = models.find(
-    (option) =>
-      option.provider === request.model.provider &&
-      option.id === request.model.modelId,
-  );
   // Usage and benches speak only for subscription logins; any other
   // account ranks on its own state alone.
   const kind = profile.provider;

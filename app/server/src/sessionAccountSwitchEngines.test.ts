@@ -2017,8 +2017,9 @@ test("a cold pi move whose load fails still wakes the queued work it refused", a
  * login if it were ever re-analyzed), with an eligible COMPANY account Z.
  * `flip` makes the bound account's listing PRIVATE once its next run starts,
  * after any admission or `/compact` check and before the query open resolves.
+ * `refuseQueries` makes every provider call throw.
  */
-async function mythosFixture() {
+async function mythosFixture({ refuseQueries = false } = {}) {
   const { resetClaudeAccountModelsForTests } =
     await import("./harnesses/claudeAccountModels.ts");
   const { COMPANY, PRIVATE } = await import("./test/claudeListings.ts");
@@ -2033,6 +2034,7 @@ async function mythosFixture() {
   const seam: ClaudeSdkSeam = {
     query(params) {
       queries.push(params);
+      if (refuseQueries) throw new Error("no provider call may happen");
       return {
         async *[Symbol.asyncIterator]() {
           if (typeof params.prompt !== "string") {
@@ -2117,6 +2119,11 @@ async function mythosFixture() {
       flipOnStart = true;
     },
     toPrivate,
+    /** Native history without a provider call: the session resumes this id. */
+    seedProviderSession() {
+      (live as unknown as { providerSessionId: string }).providerSessionId =
+        providerId;
+    },
     timeline: () =>
       JSON.stringify(sessionRuntime.get(id)?.clientTimeline() ?? []),
     /** Nothing about the bound account changed, and nothing moved. */
@@ -2233,6 +2240,59 @@ test.each(["before the turn", "at the open"] as const)(
       await new Promise((resolve) => setTimeout(resolve, 20));
       f.assertNoEvidence();
     } finally {
+      await f.dispose();
+    }
+  },
+);
+
+test.each(["at the pre-check", "at the open"] as const)(
+  "/compact refused %s leaves the delivered memory snapshot as it was",
+  async (when) => {
+    const { memoryLoadStore } = await import("./db/memoryLoadStore.ts");
+    const { runCompactForHost } = await import("./hostSlashCommands.ts");
+    const { ensureRuntimeSessionWithRuntime } =
+      await import("./session/runtimePrompt.ts");
+    const f = await mythosFixture({ refuseQueries: true });
+    try {
+      f.seedProviderSession();
+      // The runtime holds the session as a first turn would have left it.
+      ensureRuntimeSessionWithRuntime(sessionRuntime, f.live);
+      memoryLoadStore.putSnapshot({
+        sessionId: f.id,
+        fingerprint: "fp",
+        effective: [{ id: "m1", revision: 1 }],
+        renderedText: "<memory>kept</memory>",
+        renderedChars: 21,
+        lastDeliveryState: "injected",
+        lastDeliveryTurnId: "turn-1",
+        cumulativeInjectedChars: 120,
+        updatedAt: 1_000,
+      });
+      const before = memoryLoadStore.getSnapshot(f.id);
+      assert.ok(before);
+      if (when === "at the pre-check") {
+        // A known listing without mythos, throughout.
+        f.toPrivate();
+        await assert.rejects(runCompactForHost(f.live, ""), {
+          name: "ModelUnavailableOnAccountError",
+          message: MYTHOS_REFUSAL,
+        });
+        assert.equal(f.runStarts(), 0);
+      } else {
+        // Mythos is listed at the pre-check, gone by the query open.
+        f.flipOnNextRun();
+        await runCompactForHost(f.live, "");
+        assert.equal(f.runStarts(), 1);
+        assert.deepEqual(
+          f.reports.map((report) => report.failure),
+          [{ kind: "unknown", localPolicy: true }],
+        );
+        assert.ok(f.timeline().includes(MYTHOS_REFUSAL));
+      }
+      assert.deepEqual(memoryLoadStore.getSnapshot(f.id), before);
+      assert.deepEqual(f.queries, []);
+    } finally {
+      memoryLoadStore.clearSnapshot(f.id);
       await f.dispose();
     }
   },

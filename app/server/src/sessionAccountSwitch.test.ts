@@ -19,6 +19,11 @@ const offers = vi.hoisted(
 );
 /** Per account, the pinned ids its listing lacks. */
 const lacksPin = vi.hoisted(() => new Map<string, string[]>());
+/**
+ * Accounts whose listing runs only an exact (legacy) pin: the unpinned alias
+ * catalog offers nothing there, the pin's own option does.
+ */
+const pinOnly = vi.hoisted(() => new Map<string, string>());
 vi.mock("./harnesses/models.ts", () => ({
   accountLacksModel: async (
     id: string,
@@ -29,11 +34,28 @@ vi.mock("./harnesses/models.ts", () => ({
     pin?.pinnedModelId !== undefined &&
     (lacksPin.get(id)?.includes(pin.pinnedModelId) ?? false),
   modelsForAccount: async ({ id }: { id: string }) =>
-    offers.has(id)
+    offers.has(id) && !pinOnly.has(id)
       ? [{ ...offers.get(id), name: "Test model", reasoning: false }]
       : [],
   accountOffersModel: async (id: string, provider: string, model: string) =>
-    offers.get(id)?.provider === provider && offers.get(id)?.id === model,
+    !pinOnly.has(id) &&
+    offers.get(id)?.provider === provider &&
+    offers.get(id)?.id === model,
+  // A pinned pick is offered by its pin: what the account offers, unless its
+  // listing lacks that pin.
+  pinnedModelOption: async (
+    id: string,
+    provider: string,
+    model: string,
+    pin: { pinnedModelId?: string },
+  ) =>
+    pin.pinnedModelId !== undefined &&
+    !(lacksPin.get(id)?.includes(pin.pinnedModelId) ?? false) &&
+    (!pinOnly.has(id) || pinOnly.get(id) === pin.pinnedModelId) &&
+    offers.get(id)?.provider === provider &&
+    offers.get(id)?.id === model
+      ? { ...offers.get(id), name: "Test model", reasoning: false }
+      : undefined,
   // A stored session's model, as the session list reads it without a harness.
   storedSessionModelOption: (
     _harness: string,
@@ -96,6 +118,7 @@ afterEach(async () => {
   for (const id of created.splice(0))
     profiles.setCredentialProfileEnabled(id, false);
   lacksPin.clear();
+  pinOnly.clear();
 });
 afterAll(() => {
   untrack.dispose();
@@ -1901,4 +1924,63 @@ test("a local-policy failure is never switch evidence, whatever its kind", async
     JSON.stringify(messages(s)).includes("No other eligible account"),
     false,
   );
+});
+
+/** The session was spawned from a definition pinned to legacy opus 5. */
+function pinOpus5(sessionId: string): void {
+  sessionStore.freezeAgent(
+    sessionId,
+    JSON.stringify({
+      name: "pinned-opus",
+      blob: "0".repeat(40),
+      persona: "assistant",
+      provider: "claude-sdk",
+      model: "opus",
+      pinnedModel: "claude-opus-5",
+      effort: "high",
+      runtimeSource: "definition",
+      denyTools: [],
+      skills: [],
+      body: "",
+    }),
+  );
+}
+
+/** An account listing legacy opus 5 but not opus's current candidate. */
+function legacyOpusOnly(name: string): string {
+  const id = claudeOn(name, "opus");
+  pinOnly.set(id, "claude-opus-5");
+  return id;
+}
+
+test("an opus-5-pinned session moves off a disabled account to one listing only that exact version", async () => {
+  const x = claudeOn("X", "opus");
+  const legacy = legacyOpusOnly("Legacy");
+  const s = setup("claude-sdk", x, [undefined]);
+  pinOpus5(s.id);
+  profiles.setCredentialProfileEnabled(x, false);
+  await s.send();
+  assert.deepEqual(s.moves, [legacy]);
+});
+
+test("failure recovery of an opus-5-pinned session moves to an account listing only that exact version", async () => {
+  const x = claudeOn("X", "opus");
+  const legacy = legacyOpusOnly("Legacy");
+  const s = setup("claude-sdk", x, [{ kind: "quota" }, undefined]);
+  pinOpus5(s.id);
+  await s.send().catch(() => {});
+  await vi.waitFor(() => assert.equal(s.driver.credentialProfileId, legacy));
+  assert.deepEqual(s.moves, [legacy]);
+});
+
+test("an unpinned opus session is not offered an account listing only legacy opus 5", async () => {
+  const x = claudeOn("X", "opus");
+  legacyOpusOnly("Legacy");
+  const s = setup("claude-sdk", x, [undefined]);
+  profiles.setCredentialProfileEnabled(x, false);
+  await assert.rejects(
+    s.send(),
+    /X is disabled and no other eligible account is available/,
+  );
+  assert.deepEqual(s.moves, []);
 });

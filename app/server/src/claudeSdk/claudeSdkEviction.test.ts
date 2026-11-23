@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, test, vi } from "vitest";
+import { enableClaudeSdkForTests } from "../test/claudeSdkEnabled.ts";
 import type { ServerMessage, SessionState } from "@assistant/shared";
 import { DATA_DIR } from "../config.ts";
 import { HARNESS_IDLE_EVICT_MS } from "../harness.ts";
@@ -114,7 +115,9 @@ await seedLegacyDefaultAccounts();
 
 beforeAll(() => claudeSdkStore.setSeam(() => Promise.resolve(gatedSeam)));
 
-beforeEach(() => {
+beforeEach(async () => {
+  // These suites drive Claude runs; the integration is off by default.
+  await enableClaudeSdkForTests();
   gate = undefined;
   vi.useFakeTimers();
 });

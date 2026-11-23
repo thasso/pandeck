@@ -21,7 +21,15 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  test,
+  expect,
+} from "vitest";
+import { enableClaudeSdkForTests } from "../test/claudeSdkEnabled.ts";
 import {
   displayMessageCount,
   entriesToDisplayMessages,
@@ -49,6 +57,9 @@ import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 const tmp = mkdtempSync(join(tmpdir(), "claude-sdk-records-"));
 // Runs on an install that still has its protected default accounts.
 await seedLegacyDefaultAccounts();
+
+// These suites drive Claude runs; the integration is off by default.
+beforeEach(enableClaudeSdkForTests);
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 

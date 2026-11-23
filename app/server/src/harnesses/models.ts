@@ -175,6 +175,8 @@ export async function accountOffersModel(
   pin: ClaudeModelPin = {},
 ): Promise<boolean> {
   if (harnessForModelProvider(provider) === "claude-sdk") {
+    if (pin.pinnedModelId !== undefined)
+      return !!(await pinnedModelOption(profileId, provider, modelId, pin));
     await ensureClaudeAccountModels(profileId);
     const settings = getSettings();
     if (
@@ -186,6 +188,30 @@ export async function accountOffersModel(
     return claudeModelRuns(profileId, modelId, pin);
   }
   return !!(await findModelForProfile(profileId, provider, modelId));
+}
+
+/**
+ * The option a pinned session runs on the account, judged by its pin alone:
+ * a known listing naming the exact pin offers the alias even when it lists
+ * none of the alias's current candidates (a session's legacy `claude-opus-5`).
+ * Only Claude pins a version, so only a curated Claude alias with the Claude
+ * SDK enabled has one; the pin rule itself is {@link accountLacksModel}'s.
+ */
+export async function pinnedModelOption(
+  profileId: string,
+  provider: string,
+  modelId: string,
+  pin: ClaudeModelPin,
+): Promise<ModelOption | undefined> {
+  if (!getSettings().claudeSdk.enabled) return undefined;
+  const model = CLAUDE_SDK_MODELS.find(
+    (option) => option.provider === provider && option.id === modelId,
+  );
+  if (!model) return undefined;
+  await ensureClaudeAccountModels(profileId);
+  return claudeModelRuns(profileId, modelId, pin)
+    ? claudeOption(model)
+    : undefined;
 }
 
 /** Whether the Claude account's resolution finds an id for the model. */
