@@ -123,20 +123,32 @@ on the edge"):
   (`gateway/edgeTools.ts`, types only). A boundary test pins both directions.
 - A user's integration credential is a vault record, sealed like a token file:
   the pilot's Atlassian API token, or an OAuth record the vault wrote itself,
-  Atlassian's (Task-1411) or Slack's (Task-1452). For an OAuth record the vault
-  holds the confidential client, exchanges the code, does every refresh as the
-  record's only writer and seals each rotated refresh token before answering;
-  the refresh token and the client secret never leave it. The edge gets only a
-  short-lived access token and the record's ids: Atlassian's cloud id and site,
-  or Slack's team, user and workspace host. It reads either from the vault for
-  one tool call, or one set or status check, and never caches, logs or writes
-  it. Every vault integration call is bounded, and a late answer is dropped.
+  Atlassian's (Task-1411), Slack's (Task-1452) or GitHub's (Task-1444). For an
+  OAuth record the vault holds the confidential client, exchanges the code, does
+  every refresh as the record's only writer and seals each rotated refresh token
+  before answering; the refresh token and the client secret never leave it. The
+  edge gets only a short-lived access token and the record's ids: Atlassian's
+  cloud id and site, or Slack's team, user and workspace host. It reads either
+  from the vault for one tool call, or one set or status check, and never
+  caches, logs or writes it. Every vault integration call is bounded, and a late
+  answer is dropped.
 - An Atlassian OAuth access token goes only to
   `https://api.atlassian.com/ex/<product>/ <cloudId>` with a site-relative path,
   checked before the request; the site makes only browse URLs.
 - A Slack user access token goes only to `https://slack.com/api/<method>` for
   the edge's read methods (Task-1454), as `Authorization: Bearer`, redirects
   refused.
+- The vault also holds a GitHub App (Task-1444): the user OAuth client of the
+  GitHub record and the App's private key, which could mint a token with any
+  permission the App has, writes included. So the vault mints only READ
+  installation tokens: `github.token` (`gateway-vault/1.3`) answers one for a
+  single repository, after the user's own token proves on that call that they
+  can pull it, asking for exactly that repository id and
+  `{contents: read, metadata: read}`, and hands it out only when GitHub's answer
+  proves both. A token that fails the proof is revoked; a call whose record
+  changed meanwhile drops its token. R-ME: every GitHub write uses the user's
+  own token on the gateway, never an installation token. GitHub does not enforce
+  this; the vault's lack of any write path and its proof of every token do.
 - The gateway hands tools typed credential outcomes and never builds a tool
   error; only fixed, edge-owned tool texts reach a caller. Two exceptions, each
   sanitized and capped and reaching only that user's caller:
