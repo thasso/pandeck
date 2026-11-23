@@ -274,6 +274,22 @@ const DEFAULT_TITLE = "New Claude SDK";
 const STEER_CANCEL_TIMEOUT_MS = 2_000;
 /** Drop answers plus the retained Stop's interrupt acknowledgement. */
 const STOP_INTERRUPT_TIMEOUT_MS = 2 * STEER_CANCEL_TIMEOUT_MS;
+
+/** How often a model change re-judges a session that keeps moving accounts. */
+const MODEL_CHANGE_ATTEMPTS = 3;
+
+/**
+ * A model change that lost a race with an account move: nothing changed, and
+ * the user picks the model again on the account the session now has.
+ */
+class AccountChangedDuringModelChangeError extends Error {
+  override name = "AccountChangedDuringModelChangeError";
+  constructor() {
+    super(
+      "The session moved to another account while its model was changing. Pick the model again.",
+    );
+  }
+}
 const COMPACTION_STATE_UNREAD =
   "Could not read this session's compaction state; nothing changed.";
 
@@ -1340,25 +1356,39 @@ export class ClaudeSdkSession implements LiveSession {
     // Back on a pinned agent's alias, that is the pinned version; a model
     // change is no stored pin, so no legacy allowance applies.
     const pin = claudeSessionPin(alias, sessionAgent(this.id));
-    const sdkModelId = await resolveClaudeAccountModel(
-      this.credentialProfileId,
-      alias,
-      pin !== undefined ? { pinnedModelId: pin } : {},
-    );
-    if (
-      this.activeQuery &&
-      this.retainedEpochKey !== undefined &&
-      this.retainedEpochKey === this.queryEpochKey &&
-      this.activeQuery.setModel
-    ) {
-      // The retained process runs the version its account resolved.
-      await this.activeQuery.setModel(sdkModelId);
-      this.modelId = alias;
-      this.broadcastState();
-      this.onPersist();
+    // Nothing holds the account during a model change, so an account move can
+    // commit while a resolve waits for its listing: an answer is only used for
+    // the account it was asked about, and a moved session is judged again on
+    // the account it now has (bounded).
+    for (let attempt = 0; attempt < MODEL_CHANGE_ATTEMPTS; attempt++) {
+      const account = this.credentialProfileId;
+      const sdkModelId = await resolveClaudeAccountModel(
+        account,
+        alias,
+        pin !== undefined ? { pinnedModelId: pin } : {},
+      );
+      if (this.credentialProfileId !== account) continue;
+      if (
+        this.activeQuery &&
+        this.retainedEpochKey !== undefined &&
+        this.retainedEpochKey === this.queryEpochKey &&
+        this.activeQuery.setModel
+      ) {
+        // The retained process runs the version its account resolved.
+        await this.activeQuery.setModel(sdkModelId);
+        // A move during that call closed this process before committing; the
+        // new account never judged the model, so nothing changes.
+        if (this.credentialProfileId !== account)
+          throw new AccountChangedDuringModelChangeError();
+        this.modelId = alias;
+        this.broadcastState();
+        this.onPersist();
+        return;
+      }
+      this.configure(modelId, undefined);
       return;
     }
-    this.configure(modelId, undefined);
+    throw new AccountChangedDuringModelChangeError();
   }
 
   /** Select thinking for later turns on a retained process through controls. */

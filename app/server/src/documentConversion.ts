@@ -48,13 +48,14 @@ export interface PdfConversionResult {
 
 /**
  * Injected scanned-PDF fallback (a Claude document block). Runs server-side.
- * Returns null to decline (e.g. disabled in settings or produced no text), so
- * the caller degrades to the low-text result with a note instead of erroring.
+ * Returns null to decline (e.g. disabled in settings or produced no text), or
+ * `unavailable` with the reason it could not run (e.g. the Claude SDK is off),
+ * so the caller degrades to the low-text result with a note instead of erroring.
  */
 export type PdfClaudeFallback = (input: {
   bytes: Uint8Array;
   pageCount: number;
-}) => Promise<{ markdown: string } | null>;
+}) => Promise<{ markdown: string } | { unavailable: string } | null>;
 
 let claudeFallback: PdfClaudeFallback | null = null;
 
@@ -109,6 +110,13 @@ export async function convertPdfToMarkdown(
       bytes: freshCopy(input.bytes),
       pageCount,
     });
+    if (fallback && "unavailable" in fallback) {
+      return lowTextResult(
+        pageCount,
+        rawText,
+        `PDF text layer looks empty (likely scanned); the Claude fallback could not run. ${fallback.unavailable}`,
+      );
+    }
     if (!fallback || !fallback.markdown.trim()) {
       return lowTextResult(
         pageCount,

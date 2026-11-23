@@ -438,7 +438,8 @@ test("a helper pinned to a Claude account runs nothing while the Claude SDK is d
         runOneShot(request({ model: { provider: "claude-sdk", modelId } })),
         (err: Error) =>
           err.name === "ModelUnavailableOnAccountError" &&
-          err.message === "Claude SDK is disabled in settings.",
+          err.message ===
+            'Claude SDK is disabled in settings. Turn on "Enable Claude SDK sessions" in Settings > Claude SDK to run Claude models.',
         modelId,
       );
     assert.equal(vi.mocked(runClaudeSdkOneShot).mock.calls.length, 0);

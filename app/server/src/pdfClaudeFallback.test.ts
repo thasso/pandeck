@@ -1,6 +1,26 @@
 import assert from "node:assert/strict";
-import { afterEach, beforeEach, describe, test } from "vitest";
-import { enableClaudeSdkForTests } from "./test/claudeSdkEnabled.ts";
+import { afterEach, beforeEach, describe, test, vi } from "vitest";
+import {
+  disableClaudeSdkForTests,
+  enableClaudeSdkForTests,
+} from "./test/claudeSdkEnabled.ts";
+
+// Recorded, not replaced: a refused fallback must leave no health or retry.
+vi.mock("./accountHealth.ts", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./accountHealth.ts")>();
+  return {
+    ...original,
+    observeAccountHealth: vi.fn(original.observeAccountHealth),
+    reportAccountRunFailure: vi.fn(original.reportAccountRunFailure),
+    reportAccountRunWorking: vi.fn(original.reportAccountRunWorking),
+  };
+});
+vi.mock("./accountRouter.ts", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./accountRouter.ts")>();
+  return { ...original, pickAccount: vi.fn(original.pickAccount) };
+});
+const health = await import("./accountHealth.ts");
+const router = await import("./accountRouter.ts");
 import { buildTestPdf } from "./test/pdfFixtures.ts";
 import {
   convertPdfToMarkdown,
@@ -140,5 +160,48 @@ describe("registerPdfClaudeFallback", () => {
     assert.equal(result.usedClaudeFallback, false);
     assert.equal(result.lowText, true);
     assert.match(result.note ?? "", /disabled/i);
+  });
+
+  test("degrades with an actionable note, and no Claude call, health or retry, while the Claude SDK is off", async () => {
+    updateSettings({
+      pdfConversion: { fallbackEnabled: true, ...CLAUDE_DEFAULTS },
+    });
+    await disableClaudeSdkForTests();
+    const state = { called: false };
+    setClaudeSdkOneShotSeam(() =>
+      Promise.resolve(fakeSeam("should not run", state)),
+    );
+    registerPdfClaudeFallback();
+    vi.mocked(health.observeAccountHealth).mockClear();
+    vi.mocked(health.reportAccountRunFailure).mockClear();
+    vi.mocked(health.reportAccountRunWorking).mockClear();
+    vi.mocked(router.pickAccount).mockClear();
+
+    const result = await convertPdfToMarkdown({
+      bytes: buildTestPdf({ pages: 2 }),
+    });
+    assert.equal(state.called, false, "Claude is never called");
+    assert.equal(result.engine, "pdf2md");
+    assert.equal(result.usedClaudeFallback, false);
+    assert.equal(result.lowText, true);
+    assert.equal(
+      result.note,
+      'PDF text layer looks empty (likely scanned); the Claude fallback could not run. Claude SDK is disabled in settings. Turn on "Enable Claude SDK sessions" in Settings > Claude SDK to run Claude models.',
+    );
+    assert.equal(vi.mocked(health.observeAccountHealth).mock.calls.length, 0);
+    assert.equal(
+      vi.mocked(health.reportAccountRunFailure).mock.calls.length,
+      0,
+    );
+    assert.equal(
+      vi.mocked(health.reportAccountRunWorking).mock.calls.length,
+      0,
+    );
+    // No second account was tried.
+    assert.ok(
+      vi
+        .mocked(router.pickAccount)
+        .mock.calls.every(([request]) => !request.excludeProfileIds?.length),
+    );
   });
 });

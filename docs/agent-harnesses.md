@@ -240,28 +240,40 @@ Four layers, each depending only on the ones below it:
      anything changes, and for every Claude one-shot; the record keeps the
      alias, never the concrete id. A refusal names the account and model
      ("Private can't run Claude Mythos."). With the Claude SDK disabled in
-     settings the bound resolver runs nothing: a resident session's turn,
-     standalone compact or retained model change and every helper or one-shot
-     are refused ("Claude SDK is disabled in settings.") before any provider
-     call, as local policy at a query open; `availability.ts` only guards
-     opening sessions. `accountLacksModel` is true when the account's resolution
-     finds nothing, with a pin exactly that pin: Claude normalizes every id it
-     accepts (`claudeModelAlias`, `mythos` tested first), so another spelling or
-     an older concrete id is judged as its curated model and an unknown id as
-     the default. For a pinned request `accountOffersModel` and routing's
-     candidate check ask the pin itself (`pinnedModelOption`), not the alias's
-     unpinned option: a known listing with a session's exact legacy pin
-     (`claude-opus-5`) but not the alias's current candidate offers that
-     session, still bounded by the curated options, the enabled integration and
-     the effort check. A refusal before any provider call is local policy, never
-     provider evidence: a turn or `/compact` refused at admission opens no run,
-     and one refused at the open (a listing that changed in between) ends with
-     `RunFailureFacts` `{kind: "unknown", localPolicy: true}`, carried by
-     `runFailing`, `messageCompleted` and host-command turns alike, which
-     health, benches, switches and failure classification ignore. The account
-     projection's models come from `modelsByAccount`. `pickerModels` offers the
-     union over enabled Claude accounts (curated when none is enabled; `mythos`
-     only where some account lists it). The Claude-only curated options sit in
+     settings the bound resolver runs nothing new: a resident session opening a
+     new query (turn or standalone compact), a retained process's model change
+     and every helper or one-shot are refused before any provider call ("Claude
+     SDK is disabled in settings. Turn on "Enable Claude SDK sessions" in
+     Settings > Claude SDK to run Claude models."), as local policy at a query
+     open; `availability.ts` only guards opening sessions. Turning the setting
+     off takes effect at the next query open: a retained process already open
+     keeps taking prompts and `/compact` until its query ends (revoking it is
+     [Task-1487](pa://task/1487)). So a helper set to a Claude model, and the
+     scanned-PDF fallback (`convert_pdf`, on by default with Claude), need that
+     setting even on a Claude login: the fallback then degrades to the low-text
+     result with that refusal as its note, with no account health, retry or
+     switch. `setModel` judges the model on the account the session has when the
+     change lands: an account move that commits while the resolve waits for a
+     listing is judged again on the new account (bounded), and one that commits
+     during a retained process's control call drops the change with a typed
+     error. `accountLacksModel` is true when the account's resolution finds
+     nothing, with a pin exactly that pin: Claude normalizes every id it accepts
+     (`claudeModelAlias`, `mythos` tested first), so another spelling or an
+     older concrete id is judged as its curated model and an unknown id as the
+     default. For a pinned request `accountOffersModel` and routing's candidate
+     check ask the pin itself (`pinnedModelOption`), not the alias's unpinned
+     option: a known listing with a session's exact legacy pin (`claude-opus-5`)
+     but not the alias's current candidate offers that session, still bounded by
+     the curated options, the enabled integration and the effort check. A
+     refusal before any provider call is local policy, never provider evidence:
+     a turn or `/compact` refused at admission opens no run, and one refused at
+     the open (a listing that changed in between) ends with `RunFailureFacts`
+     `{kind: "unknown", localPolicy: true}`, carried by `runFailing`,
+     `messageCompleted` and host-command turns alike, which health, benches,
+     switches and failure classification ignore. The account projection's models
+     come from `modelsByAccount`. `pickerModels` offers the union over enabled
+     Claude accounts (curated when none is enabled; `mythos` only where some
+     account lists it). The Claude-only curated options sit in
      `harnesses/curatedModels.ts`, which loads no engine SDK, so row projections
      and the Claude adapter stay cheap: an option by id, the alias a model id
      runs as (`claudeModelAlias`) and the curated ids. The usage port

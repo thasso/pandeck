@@ -26,13 +26,22 @@ export interface ClaudeModelPin {
 }
 
 /**
+ * The refusal of every Claude run while the integration is off: what is off,
+ * and the one switch that turns it on.
+ */
+const CLAUDE_SDK_DISABLED =
+  'Claude SDK is disabled in settings. Turn on "Enable Claude SDK sessions" in Settings > Claude SDK to run Claude models.';
+
+/**
  * The id `aliasOrId` runs on the account, after waiting (bounded) for the
  * account's first listing; an undefined account is unknown. Throws
  * {@link ModelUnavailableOnAccountError} ("<account> can't run <model>.") when
  * the account does not offer it. With the Claude SDK disabled in settings
- * nothing is offered: a resident session, a retained process's model change
- * or a configured helper reaches no provider either, refused the same way
- * (`availability.ts` only guards opening sessions).
+ * nothing is offered: a resident session opening a new query, a retained
+ * process's model change or a configured helper (the scanned-PDF fallback
+ * too) reaches no provider either, refused the same way (`availability.ts`
+ * only guards opening sessions). Turning the setting off takes effect at the
+ * next query open: a retained query keeps taking prompts and compacts (Task-1487).
  */
 export async function resolveClaudeAccountModel(
   profileId: string | undefined,
@@ -40,9 +49,7 @@ export async function resolveClaudeAccountModel(
   pin: ClaudeModelPin = {},
 ): Promise<string> {
   if (!getSettings().claudeSdk.enabled)
-    throw new ModelUnavailableOnAccountError(
-      "Claude SDK is disabled in settings.",
-    );
+    throw new ModelUnavailableOnAccountError(CLAUDE_SDK_DISABLED);
   if (profileId !== undefined) await ensureClaudeAccountModels(profileId);
   const id = resolveClaudeSdkModel(
     aliasOrId,

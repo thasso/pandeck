@@ -10,6 +10,7 @@ import { CLAUDE_SDK_PROVIDER } from "@assistant/shared";
 import { runOneShot } from "./harnesses/oneShot.ts";
 import { PDF_MIME, setPdfClaudeFallback } from "./documentConversion.ts";
 import { getSettings } from "./settings.ts";
+import { ModelUnavailableOnAccountError } from "./settingsModelSlots.ts";
 
 const SYSTEM_PROMPT = `You transcribe a PDF document into clean, faithful GitHub-flavored Markdown.
 
@@ -27,21 +28,31 @@ export function registerPdfClaudeFallback(): void {
   setPdfClaudeFallback(async ({ bytes }) => {
     const settings = getSettings().pdfConversion;
     if (!settings.fallbackEnabled) return null;
-    const { text, failure } = await runOneShot({
-      model: { provider: CLAUDE_SDK_PROVIDER, modelId: settings.modelId },
-      thinkingLevel: settings.thinkingLevel,
-      credentialProfileId: settings.credentialProfileId,
-      systemPrompt: SYSTEM_PROMPT,
-      prompt: USER_PROMPT,
-      documents: [
-        {
-          mimeType: PDF_MIME,
-          dataBase64: Buffer.from(bytes).toString("base64"),
-        },
-      ],
-      timeoutMs: settings.timeoutMs,
-      timeoutMessage: "PDF Claude fallback timed out.",
-    });
+    let run: Awaited<ReturnType<typeof runOneShot>>;
+    try {
+      run = await runOneShot({
+        model: { provider: CLAUDE_SDK_PROVIDER, modelId: settings.modelId },
+        thinkingLevel: settings.thinkingLevel,
+        credentialProfileId: settings.credentialProfileId,
+        systemPrompt: SYSTEM_PROMPT,
+        prompt: USER_PROMPT,
+        documents: [
+          {
+            mimeType: PDF_MIME,
+            dataBase64: Buffer.from(bytes).toString("base64"),
+          },
+        ],
+        timeoutMs: settings.timeoutMs,
+        timeoutMessage: "PDF Claude fallback timed out.",
+      });
+    } catch (err) {
+      // PA refused before any provider call (the Claude SDK is off, or no
+      // account can run the model): the conversion degrades and says why.
+      if (err instanceof ModelUnavailableOnAccountError)
+        return { unavailable: err.message };
+      throw err;
+    }
+    const { text, failure } = run;
     // A transcript cut short by an error must not stand in for the document.
     if (failure !== undefined) throw new Error(failure);
     const markdown = text.trim();

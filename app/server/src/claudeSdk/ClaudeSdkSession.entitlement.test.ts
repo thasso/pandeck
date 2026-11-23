@@ -26,6 +26,8 @@ import type {
   ClaudeSdkSeam,
 } from "./sdkSeam.ts";
 
+const DISABLED =
+  'Claude SDK is disabled in settings. Turn on "Enable Claude SDK sessions" in Settings > Claude SDK to run Claude models.';
 const PROVIDER_SESSION = "11111111-2222-3333-4444-555555555555";
 const profiles: string[] = [];
 let sequence = 0;
@@ -355,15 +357,12 @@ test("a resident session opens no query, compact or model change while the Claud
   const local = { kind: "unknown", localPolicy: true };
   assert.deepEqual(await adapter.prompt("hello"), {
     stopReason: "error",
-    errorMessage: "Claude SDK is disabled in settings.",
+    errorMessage: DISABLED,
     failure: local,
   });
   const failing = events.find((event) => event.type === "runFailing");
   assert.deepEqual(failing && "failure" in failing && failing.failure, local);
-  await assert.rejects(
-    resident.compactContext(),
-    /Claude SDK is disabled in settings\./,
-  );
+  await assert.rejects(resident.compactContext(), { message: DISABLED });
   await assert.rejects(
     kept.session.setModel("opus"),
     (err: Error) => err.name === "ModelUnavailableOnAccountError",
