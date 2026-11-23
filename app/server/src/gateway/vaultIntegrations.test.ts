@@ -71,6 +71,7 @@ import { socketEndpoint } from "../workerProtocol/unixSocketTransport.ts";
 import { createRemoteVault, type RemoteVault } from "./remoteVault.ts";
 import { recipientOf, writeRecipients } from "./sealedStore.ts";
 import { askVaultControl } from "./vaultControl.ts";
+import { createVaultIntegrations } from "./vaultIntegrations.ts";
 import {
   GATEWAY_VAULT_PROTOCOL,
   GATEWAY_VAULT_VERSION,
@@ -762,6 +763,111 @@ test("a stop during a held refresh waits; the rotation is on disk and sealed, a 
   noSecretsIn([...v.lines, ...again.v.lines]);
 });
 
+// The same two stop cases for GitHub (Task-1444 AC8), plus `github.token`
+// at close; the GitHub helpers are with the GitHub tests below.
+for (const route of ["token", "user"] as const)
+  test(`GitHub: a stop during a connect held at ${route === "token" ? "the code exchange" : "the identity check"} waits, then the record is written and sealed before the flush`, async () => {
+    const { dir } = sealingDir();
+    const v = await githubVault(dir);
+    const remote = await link(v.port);
+    await unlock(v.control);
+    const held = github.hold(route);
+    const connecting = connectGithubU1(remote);
+    await held.arrived;
+    let closed = false;
+    const closing = v.close().then(() => (closed = true));
+    await delay(150);
+    assert.equal(closed, false, "the stop waits for the running connect");
+    held.release();
+    await closing;
+    await connecting;
+    const issued = github.issuedRefresh.at(-1);
+    assert.equal(githubStored(dir).refreshToken, issued);
+    assert.ok(existsSync(githubSealedOf(dir)));
+    const after = accountsSnapshot(dir);
+    await delay(100);
+    assert.equal(
+      accountsSnapshot(dir),
+      after,
+      "nothing written after the stop",
+    );
+    remote.close();
+    const again = await githubRestarted(dir);
+    assert.equal((await again.remote.integrationGet("u1", "github")).ok, true);
+    assert.equal(githubRefreshesSent().at(-1), issued);
+    noGithubSecretsIn([...v.lines, ...again.v.lines]);
+  });
+
+test("GitHub: a stop during a held refresh waits; the rotation is on disk and sealed, a queued clear refused", async () => {
+  const { dir } = sealingDir();
+  const v = await githubVault(dir);
+  const remote = await link(v.port);
+  await unlock(v.control);
+  github.expiresInS = 60;
+  await connectGithubU1(remote);
+  const held = github.hold("token");
+  const reading = remote.integrationGet("u1", "github");
+  await held.arrived;
+  const clearing = remote.integrationClear("u1", "github");
+  await delay(50);
+  let closed = false;
+  const closing = v.close().then(() => (closed = true));
+  await delay(150);
+  assert.equal(closed, false, "the stop waits for the running refresh");
+  held.release();
+  await closing;
+  await reading;
+  assert.deepEqual(await clearing, { ok: false, unavailable: true });
+  const rotated = github.issuedRefresh.at(-1);
+  assert.equal(githubStored(dir).refreshToken, rotated, "the clear never ran");
+  const after = accountsSnapshot(dir);
+  await delay(100);
+  assert.equal(accountsSnapshot(dir), after);
+  remote.close();
+  const again = await githubRestarted(dir);
+  assert.equal((await again.remote.integrationGet("u1", "github")).ok, true);
+  assert.equal(githubRefreshesSent().at(-1), rotated);
+  noGithubSecretsIn([...v.lines, ...again.v.lines]);
+});
+
+test("GitHub: a mint held across a stop is cut and its token dropped; github.token after the stop calls nobody", async () => {
+  const { dir } = sealingDir();
+  const v = await githubVault(dir);
+  const remote = await link(v.port);
+  await unlock(v.control);
+  await connectGithubU1(remote);
+  github.addRepository("fake-owner/fake-repo", 9001, [FAKE_GITHUB_USER.login]);
+  const held = github.hold("mint");
+  const asking = remote.githubToken("u1", GITHUB_REPO);
+  await held.arrived;
+  const after = accountsSnapshot(dir);
+  // The mint is not waited for: the stop ends while GitHub still holds it.
+  await v.close();
+  assert.deepEqual(await asking, { ok: false, unavailable: true });
+  held.release();
+  await delay(100);
+  assert.equal(github.on("revoke").length, 0, "dropped, not revoked");
+  assert.equal(accountsSnapshot(dir), after, "nothing written");
+  const seen = github.seen.length;
+  assert.deepEqual(await remote.githubToken("u1", GITHUB_REPO), {
+    ok: false,
+    unavailable: true,
+  });
+  // The vault's own integrations, closed, answer unavailable unasked.
+  const closed = createVaultIntegrations({
+    stateDir: dir,
+    clients: { github: fakeGithubApp().client },
+    githubEndpoint: github.endpoint,
+  });
+  await closed.close();
+  assert.deepEqual(await closed.githubToken("u1", GITHUB_REPO), {
+    ok: false,
+    unavailable: true,
+  });
+  assert.equal(github.seen.length, seen, "nobody called after the stop");
+  noGithubSecretsIn(v.lines);
+});
+
 test("an edge-side timeout during a held refresh answers unavailable; the vault still stores and serves the rotation", async () => {
   const { dir } = sealingDir();
   const v = await oauthVault(dir);
@@ -1208,6 +1314,70 @@ async function githubRestarted(dir: string) {
   return { v, remote };
 }
 
+const GITHUB_REPO = { owner: "fake-owner", repo: "fake-repo" };
+
+test("github.token over the link: locked, then a proven read token; invalid is never sent; denied and absent cross", async () => {
+  const { dir } = sealingDir();
+  const v = await githubVault(dir);
+  const remote = await link(v.port);
+  github.addRepository("fake-owner/fake-repo", 9001, [FAKE_GITHUB_USER.login]);
+  assert.deepEqual(await remote.githubToken("u1", GITHUB_REPO), {
+    ok: false,
+    locked: true,
+  });
+  assert.equal(github.seen.length, 0, "a locked vault calls nobody");
+  await unlock(v.control);
+  await connectGithubU1(remote);
+  const answer = await remote.githubToken("u1", GITHUB_REPO);
+  assert.equal(answer.ok, true, JSON.stringify(answer));
+  assert.equal((answer as { token: string }).token, github.minted.at(-1));
+  assert.ok((answer as { expiresAt: number }).expiresAt > Date.now());
+  assert.equal(
+    github.on("mint")[0]?.body,
+    JSON.stringify({
+      repository_ids: [9001],
+      permissions: { contents: "read", metadata: "read" },
+    }),
+  );
+  const seen = github.seen.length;
+  for (const request of [
+    { ...GITHUB_REPO, access: "write" },
+    { ...GITHUB_REPO, access: "read" },
+    { owner: "fake-owner", repo: ".." },
+  ])
+    assert.deepEqual(
+      await remote.githubToken("u1", request as typeof GITHUB_REPO),
+      { ok: false, invalid: true },
+    );
+  assert.equal(github.seen.length, seen, "never sent");
+  assert.deepEqual(
+    await remote.githubToken("u1", { owner: "fake-owner", repo: "gone" }),
+    { ok: false, denied: true },
+  );
+  assert.deepEqual(await remote.githubToken("u2", GITHUB_REPO), {
+    ok: false,
+    absent: true,
+  });
+  noGithubSecretsIn(v.lines);
+});
+
+test("github.token: the edge answers unavailable at its bound while the vault still holds the call", async () => {
+  const { dir } = sealingDir();
+  const v = await githubVault(dir);
+  const remote = await link(v.port, 300);
+  await unlock(v.control);
+  await connectGithubU1(remote);
+  github.addRepository("fake-owner/fake-repo", 9001, [FAKE_GITHUB_USER.login]);
+  const held = github.hold("repo");
+  const started = Date.now();
+  const asking = remote.githubToken("u1", GITHUB_REPO);
+  await held.arrived;
+  assert.deepEqual(await asking, { ok: false, unavailable: true });
+  assert.ok(Date.now() - started < 2_000);
+  held.release();
+  noGithubSecretsIn(v.lines);
+});
+
 test("GitHub over the link: connect seals a record without the access token; the view crosses; rejected keeps the record; clear deletes", async () => {
   const { dir } = sealingDir();
   const v = await githubVault(dir);
@@ -1253,7 +1423,7 @@ test("GitHub over the link: connect seals a record without the access token; the
     "accessToken",
     "expiresAt",
   ]);
-  assert.equal(view.accessToken, github.issuedAccess[0]);
+  assert.equal(view.accessToken, github.issuedAccess.at(-1));
   assert.doesNotMatch(JSON.stringify(record), /fake-gh-refresh/);
   assert.deepEqual(githubRefreshesSent(), []);
   // A put for GitHub is refused: only a connect writes its record.
@@ -1366,6 +1536,18 @@ test("GitHub: the wire refuses a put, a site or team preset and an unknown provi
       VAULT_METHODS.integrationPut,
       { userId: "u1", integration: "github", credential: CREDENTIAL },
     ],
+    [
+      VAULT_METHODS.githubToken,
+      { userId: "u1", ...GITHUB_REPO, access: "write" },
+    ],
+    [
+      VAULT_METHODS.githubToken,
+      { userId: "u1", ...GITHUB_REPO, access: "read" },
+    ],
+    [VAULT_METHODS.githubToken, { userId: "u1", ...GITHUB_REPO, ref: "main" }],
+    [VAULT_METHODS.githubToken, { userId: "u1", owner: "a b", repo: "x" }],
+    [VAULT_METHODS.githubToken, { userId: "u1", owner: "x", repo: ".." }],
+    [VAULT_METHODS.githubToken, { ...GITHUB_REPO }],
   ] as const)
     assert.equal(await raw(method, body), "refused", JSON.stringify(body));
   assert.equal(github.seen.length, 0, "nobody called");
@@ -1546,6 +1728,11 @@ test("a 1.3 edge links to a 1.2 vault: GitHub answers unavailable, never absent;
     unavailable: true,
   });
   assert.deepEqual(await connectGithubU1(remote), {
+    ok: false,
+    unavailable: true,
+  });
+  // `github.token` is an unknown method there: unavailable as well.
+  assert.deepEqual(await remote.githubToken("u1", GITHUB_REPO), {
     ok: false,
     unavailable: true,
   });

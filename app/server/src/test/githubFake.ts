@@ -143,6 +143,15 @@ export interface GithubFake {
   /** Installation tokens minted, in order. */
   readonly minted: string[];
   hold(route: GithubRoute): { arrived: Promise<void>; release(): void };
+  /**
+   * A mint responder that issues a token as the default does, then answers
+   * `status` with its body's members replaced, or (as `undefined`) dropped,
+   * by `overrides`.
+   */
+  mintWith(
+    overrides: Record<string, unknown>,
+    status?: number,
+  ): GithubResponder;
   on(route: GithubRoute): SeenGithubRequest[];
   /** Adds a repository `owner/name` with id `id` that `pullers` may pull. */
   addRepository(fullName: string, id: number, pullers: string[]): void;
@@ -244,6 +253,27 @@ export async function startGithubFake(): Promise<GithubFake> {
     return answer;
   };
 
+  /** A default mint's answer: the asked permissions and repositories. */
+  const mintAnswer = (request: SeenGithubRequest): Record<string, unknown> => {
+    const asked = JSON.parse(request.body) as {
+      repository_ids: number[];
+      permissions: Record<string, string>;
+    };
+    const token = `fake-gh-install-${minted.length + 1}`;
+    minted.push(token);
+    mintedRepos.set(token, asked.repository_ids);
+    return {
+      token,
+      expires_at: githubTime(Date.now() + 3_600_000),
+      permissions: asked.permissions,
+      repository_selection: "selected",
+      repositories: asked.repository_ids.map((id) => ({
+        id,
+        full_name: `fake-owner/repo-${id}`,
+      })),
+    };
+  };
+
   const defaults: Record<GithubRoute, GithubResponder> = {
     token(request, res) {
       if (request.form.grant_type === "refresh_token") {
@@ -320,25 +350,7 @@ export async function startGithubFake(): Promise<GithubFake> {
           repository_selection: "selected",
         });
     },
-    mint(request, res) {
-      const asked = JSON.parse(request.body) as {
-        repository_ids: number[];
-        permissions: Record<string, string>;
-      };
-      const token = `fake-gh-install-${minted.length + 1}`;
-      minted.push(token);
-      mintedRepos.set(token, asked.repository_ids);
-      res.status(201, {
-        token,
-        expires_at: githubTime(Date.now() + 3_600_000),
-        permissions: asked.permissions,
-        repository_selection: "selected",
-        repositories: asked.repository_ids.map((id) => ({
-          id,
-          full_name: `fake-owner/repo-${id}`,
-        })),
-      });
-    },
+    mint: (request, res) => res.status(201, mintAnswer(request)),
     installationRepos(request, res) {
       const ids = mintedRepos.get(request.bearer ?? "");
       if (!ids) {
@@ -379,6 +391,10 @@ export async function startGithubFake(): Promise<GithubFake> {
       holds.set(route, { arrived, released });
       return { arrived: arrivedP, release };
     },
+    mintWith:
+      (overrides, status = 201) =>
+      (request, res) =>
+        res.status(status, { ...mintAnswer(request), ...overrides }),
     on: (route) => seen.filter((request) => request.route === route),
     addRepository(fullName, id, pullers) {
       repositories.set(fullName.toLowerCase(), {
