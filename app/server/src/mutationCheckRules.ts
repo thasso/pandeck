@@ -21,7 +21,7 @@ export const MAX_PROPOSAL_ITEMS = 10;
 /** A proposal's serialized ceiling, UTF-8 bytes of `JSON.stringify(items)`. */
 export const PROPOSAL_MAX_BYTES = 1_048_576;
 /** The most entries a metadata array holds; opaque JSON has no such cap. */
-const ARRAY_MAX = 1_000;
+export const ARRAY_MAX = 1_000;
 /** The deepest an opaque JSON value nests, counted in containers. */
 const JSON_DEPTH_MAX = 32;
 /** Keys an opaque JSON object never has, at any depth. */

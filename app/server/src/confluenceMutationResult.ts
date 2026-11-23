@@ -98,8 +98,10 @@ export function buildConfluenceResultRecord(
     record.resultPageId = vettedId(applied.resultPageId, "pageId", vet);
   if (applied.resultPageUrl === null) record.resultPageUrl = null;
   else if (applied.resultPageUrl !== undefined) {
+    // A written id backs the link, a withheld or null one nothing; only
+    // without one does the sent id back it (`linkBacked`).
     const backing =
-      applied.resultPageId !== undefined && applied.resultPageId !== null
+      applied.resultPageId !== undefined
         ? (record.resultPageId ?? undefined)
         : vet.identifier(sent.pageId, "pageId");
     const url = vet.url(applied.resultPageUrl, backing);
@@ -131,11 +133,13 @@ export function buildConfluenceResultRecord(
   return record;
 }
 
+const pageId = formatted("pageId");
+
 /** The record's shape, its links on `site`. */
 function recordShape(site: string): Check<ConfluenceResultRecord> {
   return closed<ConfluenceResultRecord>({
     effects: req(effects),
-    resultPageId: opt(nullable(formatted("pageId"))),
+    resultPageId: opt(nullable(pageId)),
     resultPageUrl: opt(nullable(siteUrl(site))),
     resultVersion: opt(nullable(version)),
     warning: opt(boundedText(ITEM_WARNING_MAX)),
@@ -160,7 +164,24 @@ export function checkConfluenceResult(
   site: string,
 ): record is ConfluenceResultRecord {
   if (!recordShape(site)(record, 0)) return false;
+  if (typeof record.resultPageUrl === "string" && !linkBacked(sent, record))
+    return false;
   return (record.attachment === undefined) === (sent.attachment === undefined);
+}
+
+/**
+ * Whether a link on `record` has the identifier the builder backs it by: the
+ * written page id, else, with none written, the sent one. Only the
+ * credential's own vetting, which the receiver cannot repeat, is left to the
+ * edge.
+ */
+function linkBacked(
+  sent: ConfluencePageMutationItemDisplay,
+  record: ConfluenceResultRecord,
+): boolean {
+  if (record.resultPageId !== undefined)
+    return typeof record.resultPageId === "string";
+  return pageId(sent.pageId, 0);
 }
 
 /**

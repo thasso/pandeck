@@ -571,6 +571,86 @@ describe("buildJiraResultRecord vets every result on its raw value (A1)", () => 
   });
 });
 
+describe("the builders send only what the checkers accept (fix-m1-1)", () => {
+  test("F001: an observed rank order over the array cap is left out whole, never refused", () => {
+    const keys = (count: number) =>
+      Array.from({ length: count }, (_, index) => `STAR-${index + 1}`);
+    const atCap = build(item({ rankResultOrder: keys(1_000) }));
+    expect(atCap.rankResultOrder).toHaveLength(1_000);
+    expect(checkJiraResult(atCap, item(), SITE)).toBe(true);
+    const over = build(item({ rankResultOrder: keys(1_001) }));
+    expect(over.rankResultOrder).toBeUndefined();
+    expect(checkJiraResult(over, item(), SITE)).toBe(true);
+  });
+
+  test("F002: a link without the identifier its builder backs it by is refused", () => {
+    const url = `${BROWSE}/STAR-1`;
+    const sprintUrl = `https://${SITE}/jira/software/sprints/5`;
+    const accepted: [unknown, JiraIssueMutationItemDisplay][] = [
+      [{ effects: "possible", resultIssueUrl: url }, item()],
+      [
+        { effects: "possible", resultIssueKey: "STAR-1", resultIssueUrl: url },
+        createItem(),
+      ],
+      [{ effects: "possible", resultIssueUrl: sprintUrl }, sprintItem()],
+      [{ effects: "possible", resultIssueUrl: null }, createItem()],
+    ];
+    for (const [record, sent] of accepted)
+      expect(checkJiraResult(record, sent, SITE)).toBe(true);
+    const refused: [unknown, JiraIssueMutationItemDisplay][] = [
+      // A create's link needs its result key.
+      [{ effects: "possible", resultIssueUrl: url }, createItem()],
+      [
+        { effects: "possible", resultIssueKey: null, resultIssueUrl: url },
+        createItem(),
+      ],
+      // Any other item's link needs a well-formed sent key.
+      [{ effects: "possible", resultIssueUrl: url }, item({ issueKey: "" })],
+      [
+        { effects: "possible", resultIssueUrl: url },
+        item({ issueKey: "star-1" }),
+      ],
+      // A sprint's link needs a positive sprint id.
+      [
+        { effects: "possible", resultIssueUrl: sprintUrl },
+        sprintItem({
+          sprint: { sprintId: 0, name: "S", state: "future", changes: [] },
+        }),
+      ],
+    ];
+    for (const [record, sent] of refused)
+      expect(checkJiraResult(record, sent, SITE)).toBe(false);
+  });
+
+  test("F002: every link the builder sends passes the checker", () => {
+    const cases: [
+      JiraIssueMutationItemDisplay,
+      JiraIssueMutationItemDisplay,
+    ][] = [
+      [item({ resultIssueUrl: `${BROWSE}/STAR-1` }), item()],
+      [
+        createItem({
+          issueKey: "STAR-7",
+          resultIssueKey: "STAR-7",
+          resultIssueUrl: `${BROWSE}/STAR-7`,
+        }),
+        createItem(),
+      ],
+      [
+        sprintItem({
+          resultIssueUrl: `https://${SITE}/jira/software/sprints/5`,
+        }),
+        sprintItem(),
+      ],
+    ];
+    for (const [applied, sent] of cases) {
+      const record = build(applied, sent);
+      expect(record.resultIssueUrl).toBe(applied.resultIssueUrl);
+      expect(checkJiraResult(record, sent, SITE)).toBe(true);
+    }
+  });
+});
+
 describe("checkJiraResult refuses what the edge must never send", () => {
   const sent = item({ linkChanges: [link()], rankSteps: [step(), step()] });
   const valid: JiraResultRecord = {

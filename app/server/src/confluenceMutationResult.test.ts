@@ -338,13 +338,11 @@ describe("buildConfluenceResultRecord vets every result on its raw value (C1)", 
       build(
         item({
           operation: "delete",
-          resultPageId: null,
           resultPageUrl: `${PAGES}/123`,
         }),
       ),
     ).toEqual({
       effects: "possible",
-      resultPageId: null,
       resultPageUrl: `${PAGES}/123`,
     });
     expect(
@@ -418,6 +416,48 @@ describe("buildConfluenceResultRecord vets every result on its raw value (C1)", 
     );
     expect(record.error).toBe("e".repeat(ITEM_ERROR_MAX));
     expect(build(item({ error: "" })).error).toBe(ERROR_FALLBACK);
+  });
+});
+
+describe("the builder sends only what the checker accepts (fix-m1-1)", () => {
+  test("F002: a link needs a written page id, or none written and a sent one", () => {
+    const url = `${PAGES}/123`;
+    const noPage = item();
+    delete noPage.pageId;
+    const accepted: [unknown, ConfluencePageMutationItemDisplay][] = [
+      [
+        { effects: "possible", resultPageId: "123", resultPageUrl: url },
+        item(),
+      ],
+      [
+        { effects: "possible", resultPageId: "123", resultPageUrl: url },
+        noPage,
+      ],
+      [{ effects: "possible", resultPageUrl: url }, item()],
+      [
+        { effects: "possible", resultPageId: null, resultPageUrl: null },
+        item(),
+      ],
+    ];
+    for (const [record, sent] of accepted)
+      expect(checkConfluenceResult(record, sent, SITE)).toBe(true);
+    const refused: [unknown, ConfluencePageMutationItemDisplay][] = [
+      // A written id that was withheld or absent backs nothing.
+      [{ effects: "possible", resultPageId: null, resultPageUrl: url }, item()],
+      // Without a written id, the sent one must be there and well formed.
+      [{ effects: "possible", resultPageUrl: url }, noPage],
+      [{ effects: "possible", resultPageUrl: url }, item({ pageId: "12a" })],
+    ];
+    for (const [record, sent] of refused)
+      expect(checkConfluenceResult(record, sent, SITE)).toBe(false);
+  });
+
+  test("F002: a written null page id never falls back to the sent one", () => {
+    const record = build(
+      item({ resultPageId: null, resultPageUrl: `${PAGES}/123` }),
+    );
+    expect(record).toEqual({ effects: "possible", resultPageId: null });
+    expect(checkConfluenceResult(record, item(), SITE)).toBe(true);
   });
 });
 

@@ -21,6 +21,7 @@ import type {
   JiraSprintUpdateDisplay,
 } from "@assistant/shared/jiraMutation";
 import {
+  ARRAY_MAX,
   arrayOf,
   closed,
   nullable,
@@ -128,6 +129,24 @@ function urlBacking(
   return vet.identifier(sent.issueKey, "jiraKey");
 }
 
+/**
+ * Whether a link on `record` has the identifier `urlBacking` backs it by:
+ * the receiver's side of that rule. Only the credential's own vetting,
+ * which the receiver cannot repeat, is left to the edge.
+ */
+function linkBacked(
+  sent: JiraIssueMutationItemDisplay,
+  record: JiraResultRecord,
+): boolean {
+  if (sent.operation === "create")
+    return typeof record.resultIssueKey === "string";
+  if (sent.operation === "sprint") {
+    const id = sent.sprint?.sprintId;
+    return typeof id === "number" && Number.isSafeInteger(id) && id > 0;
+  }
+  return jiraKey(sent.issueKey, 0);
+}
+
 /** The sprint as Jira returned it, whole, or nothing when any part fails. */
 function vettedSprintResult(
   raw: SprintResult,
@@ -177,7 +196,9 @@ export function buildJiraResultRecord(
     );
   if (typeof applied.error === "string")
     record.error = vet.text(applied.error, ITEM_ERROR_MAX, ERROR_FALLBACK);
-  if (applied.rankResultOrder) {
+  // An order the checker would refuse (over the array cap, or any key
+  // unsafe) is left out whole.
+  if (applied.rankResultOrder && applied.rankResultOrder.length <= ARRAY_MAX) {
     const order = applied.rankResultOrder.map((key) =>
       vet.identifier(key, "jiraKey"),
     );
@@ -259,6 +280,8 @@ export function checkJiraResult(
   )
     return false;
   if (record.sprintResult !== undefined && sent.sprint === undefined)
+    return false;
+  if (typeof record.resultIssueUrl === "string" && !linkBacked(sent, record))
     return false;
   return (
     alignedWith(record.linkChanges, sent.linkChanges) &&
