@@ -44,9 +44,9 @@ gated by `gatewayConfluence` (the gateway is connected and Confluence is
 `enabled`; Jira's toggle plays no part), replaces the local group. Only the
 three reads are offered: `confluence_search`, `confluence_get_page` and
 `confluence_lookup`, with the edge's names and schemas, run with the gateway's
-Atlassian connection. `remoteTools.ts` accepts no other Confluence name, so
-`confluence_mutate_page` waits for gateway writes and
-`confluence_download_attachment` for Task-1441. With Confluence off a call
+Atlassian connection. `remoteTools.ts` accepts no other Confluence name and no
+write, so the edge's `confluence_mutate_page` (below) is not offered here and
+`confluence_download_attachment` waits for Task-1441. With Confluence off a call
 answers the local tools' text, "Confluence tools are disabled. Enable them in
 Settings → Confluence."
 
@@ -211,13 +211,43 @@ ceiling: `docs/workers.md` "Tools on the edge". All three schemas refuse unknown
 arguments.
 
 `confluence_mutate_page`'s prepare and apply live beside `tools/confluence/` in
-modules the edge may import but no edge tool uses yet: `confluenceMutate.ts`
-(schema, description, prepare), `confluenceMutateApply.ts` (apply),
+modules the local tool and the edge share: `confluenceMutate.ts` (schema,
+description, prepare), `confluenceMutateApply.ts` (apply),
 `confluenceAttachmentChange.ts` (attachment staging and apply) and
 `confluenceMutationErrors.ts` (typed errors, signal helpers and the delete
 guard). The local tool wraps them with its settings, the session attachment
 store and the approval card. `docs/workers.md` "Tools on the edge" lists their
 seams.
+
+The edge offers `confluence_mutate_page` too (Task-1463 P5b,
+`app/server/src/gatewayTools/confluenceMutatePage.ts`), with the user's own
+Atlassian credential and no approval card: the client's approval of the call is
+the user's consent, and Confluence changes as soon as the call runs. Its
+schema's structure is the local one. It differs as follows:
+
+- **Upload is unavailable.** An `uploadAttachment` item refuses the whole call
+  before anything is read or sent ("Uploading attachments is not available
+  through this gateway yet; nothing was written to Confluence."), until the edge
+  has a byte source (P8).
+- **Deletes follow the gateway's scope list.** A `delete` runs only when the
+  scope list the gateway asks Atlassian for holds `delete:page:confluence`, and
+  a `deleteAttachment` only when it holds `delete:attachment:confluence`;
+  otherwise the whole call is refused the same way. The default list holds both.
+  They stay trash only, behind the same positive-status check as the local tool
+  ("Deletes go to the trash, once"), which does not catch a change made
+  elsewhere between the read and the DELETE.
+- **Links are vetted.** Confluence gives a link in one of two kinds. A
+  site-relative `_links.webui` becomes an absolute link on the site, kept when
+  it passes the edge's link rules. An absolute link, which the core passes
+  through as Confluence gave it, is kept only when it lies under
+  `https://<site>/`; a link to any other host is omitted, and the row keeps its
+  page id.
+- **The result is compact and bounded.** Ids, versions and texts are checked and
+  capped, and the answer stays under 55,000 characters. After a timeout or
+  interrupt, wait 60 s before reading the pages or retrying.
+
+`docs/workers.md` "Tools on the edge" ("Confluence write") holds the full
+contract: deadlines, texts, caps and the shrink order.
 
 ## Attachments
 

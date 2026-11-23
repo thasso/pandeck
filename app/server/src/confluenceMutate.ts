@@ -68,6 +68,7 @@ const CURRENT_BODY_PREVIEW_CHARS = 4000;
 
 export const confluenceMutateParamsSchema = {
   type: "object",
+  additionalProperties: false,
   properties: {
     items: {
       type: "array",
@@ -75,6 +76,7 @@ export const confluenceMutateParamsSchema = {
         "Confluence page proposals. Nothing is written until the user approves the card.",
       items: {
         type: "object",
+        additionalProperties: false,
         properties: {
           operation: {
             type: "string",

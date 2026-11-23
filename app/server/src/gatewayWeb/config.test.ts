@@ -21,6 +21,7 @@ import {
   defaultDistDir,
   GatewayWebConfigError,
   loadGatewayWebConfig,
+  requestedAtlassianScopes,
   type AllowRule,
 } from "./config.ts";
 
@@ -356,6 +357,32 @@ test("atlassian.scopes: absent gives the default list; a list keeps case, drops 
     scopes(Array.from({ length: 64 }, (_, i) => `s${i}`))?.length,
     65,
   );
+});
+
+test("requestedAtlassianScopes: the loaded list, or the default without a UI config or without atlassian.scopes (Task-1463 P5b)", () => {
+  // No UI config, and a UI config with no atlassian section: the default.
+  assert.deepEqual(requestedAtlassianScopes(), DEFAULT_SCOPES);
+  const plain = loadGatewayWebConfig(fixture().file);
+  assert.equal(plain.atlassian, undefined);
+  assert.deepEqual(requestedAtlassianScopes(plain), DEFAULT_SCOPES);
+  // An override is what the gateway asks for, offline_access appended.
+  const override = loadGatewayWebConfig(
+    fixture(
+      (c) =>
+        (c.atlassian = {
+          clientId: FAKE_CLIENT.clientId,
+          scopes: ["read:page:confluence", "delete:page:confluence"],
+        }),
+    ).file,
+  );
+  assert.deepEqual(requestedAtlassianScopes(override), [
+    "read:page:confluence",
+    "delete:page:confluence",
+    "offline_access",
+  ]);
+  // A fresh copy each time: a caller cannot change the default.
+  requestedAtlassianScopes().push("x");
+  assert.deepEqual(requestedAtlassianScopes(), DEFAULT_SCOPES);
 });
 
 test("atlassian.scopes refuses a non-list, an empty or spaced entry, a long entry and more than 64 entries, naming only the field", () => {

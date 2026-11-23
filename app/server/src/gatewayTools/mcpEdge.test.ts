@@ -370,12 +370,13 @@ test("the relay lists Jira's, Confluence's and Slack's read tools as read-only, 
   const { a1, tokens } = await twoUsers();
   const client = await mcpClient(a1.url, tokens.a1);
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 11);
-  // Every tool but the one write tool (Task-1463) is read-only.
+  assert.equal(tools.length, 12);
+  // Every tool but the write tools (Task-1463) is read-only.
+  const writes = new Set(["jira_mutate_issue", "confluence_mutate_page"]);
   for (const tool of tools)
     assert.equal(
       tool.annotations?.readOnlyHint,
-      tool.name !== "jira_mutate_issue",
+      !writes.has(tool.name),
       tool.name,
     );
   const lookup = tools.find((tool) => tool.name === "jira_lookup")!;
@@ -440,6 +441,7 @@ test("an SDK client lists and calls jira_get_issue through the relay, with its o
       "slack_thread_read",
       "slack_unread",
       "jira_mutate_issue",
+      "confluence_mutate_page",
     ],
   );
   assert.deepEqual(listed.tools[0]!.inputSchema.required, ["issue"]);

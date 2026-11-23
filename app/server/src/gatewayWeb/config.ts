@@ -138,6 +138,15 @@ const DEFAULT_ATLASSIAN_SCOPES: readonly string[] = [
   "offline_access",
 ];
 
+/**
+ * The Atlassian scopes this gateway requests: the UI config's list, or the
+ * default when it names none or there is no UI config. The edge's tools read
+ * it once at start to decide which Confluence deletes they offer.
+ */
+export function requestedAtlassianScopes(ui?: GatewayWebConfig): string[] {
+  return ui?.atlassian?.scopes ?? [...DEFAULT_ATLASSIAN_SCOPES];
+}
+
 const SCOPE = /^[\x21-\x7e]{1,128}$/;
 const MAX_SCOPES = 64;
 

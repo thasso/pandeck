@@ -10,6 +10,11 @@ import assert from "node:assert/strict";
 import { afterEach, test, vi } from "vitest";
 import type { JiraIssueMutationItemDisplay } from "@assistant/shared/jiraMutation";
 import { AtlassianHttpError } from "../atlassian/atlassianFetch.ts";
+import { ConfluenceReadRefusal } from "../atlassian/confluenceClient.ts";
+import {
+  ConfluenceMutationError,
+  ConfluenceWriteHttpError,
+} from "../confluenceMutationErrors.ts";
 import { setRetrySleepForTests } from "../httpRetry.ts";
 import { applyJiraMutationItems } from "../jiraMutateApply.ts";
 import {
@@ -22,7 +27,10 @@ import { json, stubJiraFetch } from "../test/jiraEdgeFetch.ts";
 import { jiraConfigOf } from "./atlassian.ts";
 import { FAKE_ACCESS } from "../test/atlassianFake.ts";
 import type { AtlassianCredential } from "./descriptor.ts";
-import { describeWriteFailure } from "./writeFailure.ts";
+import {
+  describeConfluenceWriteFailure,
+  describeWriteFailure,
+} from "./writeFailure.ts";
 
 const TOKEN = "FAKE-TOKEN-SENTINEL-0123456789";
 const CREDENTIAL: AtlassianCredential = {
@@ -291,4 +299,128 @@ test("a piece of the token inside a longer text reads [redacted]: rule 2's own t
     "Jira refused the change (HTTP 400): field x is required; invalid near [redacted] here",
   );
   for (const text of [own, reasons]) assertNoCredential(text, CREDENTIAL);
+});
+
+// ------------------------------------------- Confluence (Task-1463 P5b)
+
+const cflBody = `{"errorMessages":["${REASON_SENTINEL}"],"x":"${BODY_SENTINEL} ${TOKEN} ${BASIC}"}`;
+const cflWrite = (status: number, reasons?: readonly string[]) =>
+  new ConfluenceWriteHttpError(
+    `Confluence API returned HTTP ${status} for PUT /wiki/api/v2/pages/123: ${cflBody}`,
+    status,
+    reasons,
+  );
+const cflRead = (status: number, reasons?: readonly string[]) =>
+  new AtlassianHttpError(
+    `Confluence API returned HTTP ${status} for GET /wiki/api/v2/pages/123: ${cflBody}`,
+    status,
+    reasons,
+  );
+
+function describeCfl(err: unknown, credential = CREDENTIAL): string {
+  const text = describeConfluenceWriteFailure(err, credential);
+  for (const forbidden of FORBIDDEN)
+    assert.ok(!text.includes(forbidden), `${text} holds ${forbidden}`);
+  assertNoCredential(text, credential);
+  return text;
+}
+
+test("Confluence rule 1: an abort is rethrown, by its name or by a phase signal", () => {
+  const abort = new DOMException("aborted", "AbortError");
+  assert.throws(
+    () => describeConfluenceWriteFailure(abort, CREDENTIAL),
+    (err) => err === abort,
+  );
+  const controller = new AbortController();
+  controller.abort();
+  const other = cflWrite(400, [REASON_SENTINEL]);
+  assert.throws(
+    () =>
+      describeConfluenceWriteFailure(other, CREDENTIAL, [controller.signal]),
+    (err) => err === other,
+  );
+});
+
+test("Confluence rule 2: the core's own text, vetted and capped at 1,000", () => {
+  assert.equal(
+    describeCfl(new ConfluenceMutationError("create needs a body.")),
+    "create needs a body.",
+  );
+  assert.equal(
+    describeCfl(new ConfluenceMutationError("x".repeat(1_500))).length,
+    1_000,
+  );
+  assert.equal(
+    describeCfl(new ConfluenceMutationError(`page named ${TOKEN}`)),
+    "page named [redacted]",
+  );
+  // Jira's own error is not Confluence's own text.
+  assert.equal(
+    describeCfl(
+      new JiraMutationError("Requested transition is not available."),
+    ),
+    "The request to Confluence failed; the change may or may not have been applied.",
+  );
+});
+
+test("Confluence rule 3: 401 and 403 are the credential's remedy, for writes and reads", () => {
+  for (const err of [cflWrite(401, [REASON_SENTINEL]), cflRead(403)]) {
+    assert.equal(describeCfl(err), TOKEN_REMEDY);
+    assert.equal(describeCfl(err, OAUTH), OAUTH_REMEDY);
+  }
+});
+
+test("Confluence rule 4: a write's 4xx shows Confluence's reasons when present, else the status form", () => {
+  assert.equal(
+    describeCfl(cflWrite(400, [REASON_SENTINEL, "title is taken"])),
+    `Confluence refused the change (HTTP 400): ${REASON_SENTINEL}; title is taken`,
+  );
+  assert.equal(
+    describeCfl(cflWrite(409)),
+    "Confluence refused the change (HTTP 409).",
+  );
+  assert.equal(
+    describeCfl(cflWrite(400, [`token ${TOKEN}`])),
+    "Confluence refused the change (HTTP 400): token [redacted]",
+  );
+  // Jira's write error is no Confluence write.
+  assert.equal(
+    describeCfl(writeError(400, [REASON_SENTINEL])),
+    "Confluence answered HTTP 400.",
+  );
+});
+
+test("Confluence rule 5: a read's 4xx and any 5xx show the status alone", () => {
+  assert.equal(
+    describeCfl(cflRead(404, [REASON_SENTINEL])),
+    "Confluence answered HTTP 404.",
+  );
+  assert.equal(
+    describeCfl(cflWrite(502, [REASON_SENTINEL])),
+    "Confluence answered HTTP 502.",
+  );
+});
+
+test("Confluence rule 6: a read refusal is its fixed edge text", () => {
+  assert.equal(
+    describeCfl(
+      new ConfluenceReadRefusal(
+        "page_unparsable",
+        `could not read ${BODY_SENTINEL}`,
+      ),
+    ),
+    "Could not read a page id; pass the numeric page id or a Confluence page URL.",
+  );
+});
+
+test("Confluence rule 7: anything else is fixed, saying the change may or may not have landed", () => {
+  for (const err of [
+    new Error(`socket hang up ${BODY_SENTINEL} ${TOKEN}`),
+    new TypeError("fetch failed"),
+    undefined,
+  ])
+    assert.equal(
+      describeCfl(err),
+      "The request to Confluence failed; the change may or may not have been applied.",
+    );
 });

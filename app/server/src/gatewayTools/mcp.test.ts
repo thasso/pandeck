@@ -293,6 +293,49 @@ test("the listing marks jira_mutate_issue as not read-only and the read tools as
   assert.equal(hint("jira_get_issue"), true);
 });
 
+/** The `/mcp` listing of an edge built with `atlassianScopes`. */
+async function listedBy(atlassianScopes?: readonly string[]) {
+  const { url } = await serve(
+    createEdgeTools({
+      log: () => {},
+      ...(atlassianScopes ? { atlassianScopes } : {}),
+    }).host,
+  );
+  const listed = await post(
+    url,
+    { jsonrpc: "2.0", id: 1, method: "tools/list" },
+    { "mcp-protocol-version": "2025-06-18" },
+  );
+  assert.equal(listed.status, 200);
+  return (
+    JSON.parse(listed.text) as {
+      result: {
+        tools: Array<{
+          name: string;
+          annotations?: { readOnlyHint?: boolean };
+        }>;
+      };
+    }
+  ).result.tools;
+}
+
+test("confluence_mutate_page is listed not read-only, the same whether deletes are on or off (Task-1463 P5b)", async () => {
+  const on = await listedBy([
+    "delete:page:confluence",
+    "delete:attachment:confluence",
+  ]);
+  const off = await listedBy();
+  const mutate = on.find((tool) => tool.name === "confluence_mutate_page");
+  assert.equal(mutate?.annotations?.readOnlyHint, false);
+  assert.equal(
+    on.find((tool) => tool.name === "confluence_get_page")?.annotations
+      ?.readOnlyHint,
+    true,
+  );
+  // The switch acts at call time only: the descriptor never changes.
+  assert.deepEqual(on, off);
+});
+
 test("a cancellation notification on another POST does not reach a running write call (Task-1463 AC18)", async () => {
   let signal: AbortSignal | undefined;
   let started: () => void = () => {};

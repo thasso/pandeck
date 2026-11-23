@@ -15,8 +15,16 @@ import {
   CONFLUENCE_SEARCH_DESCRIPTION,
   CONFLUENCE_SEARCH_SCHEMA,
 } from "../confluenceRead.ts";
+import {
+  CONFLUENCE_MUTATE_PAGE_DESCRIPTION,
+  confluenceMutateParamsSchema,
+} from "../confluenceMutate.ts";
 import { confluenceGetPage } from "./confluenceGetPage.ts";
 import { confluenceLookup } from "./confluenceLookup.ts";
+import {
+  confluenceDeleteSwitchFor,
+  confluenceMutatePageTool,
+} from "./confluenceMutatePage.ts";
 import { confluenceSearch } from "./confluenceSearch.ts";
 import { JIRA_LOOKUP_DESCRIPTION, lookupParamsSchema } from "../jiraLookup.ts";
 import {
@@ -91,6 +99,7 @@ test("the edge's tools offer the host's listing", () => {
       "slack_thread_read",
       "slack_unread",
       "jira_mutate_issue",
+      "confluence_mutate_page",
     ],
   );
   assert.deepEqual(
@@ -268,4 +277,85 @@ test("the Confluence reads share the local tools' schema and description objects
     assert.equal(tool.integration, "atlassian");
     assert.equal(tool.maxResultChars, undefined, `${tool.name}: 60,000`);
   }
+});
+
+const confluenceMutatePage = confluenceMutatePageTool(
+  confluenceDeleteSwitchFor(undefined),
+);
+
+test("confluence_mutate_page is an edge write tool, with the write deadline", () => {
+  assert.equal(confluenceMutatePage.name, "confluence_mutate_page");
+  assert.equal(confluenceMutatePage.effect, "write");
+  assert.equal(confluenceMutatePage.actionKey, "confluence:write");
+  assert.equal(confluenceMutatePage.integration, "atlassian");
+  assert.equal(confluenceMutatePage.maxResultChars, 60_000);
+  assert.equal(confluenceMutatePage.deadlineMs, WRITE_DEADLINE_MS);
+  assert.ok(EDGE_TOOLS.some((tool) => tool.name === "confluence_mutate_page"));
+  // Measured: the edge schema is 2,625 characters, the local one 2,725.
+  assert.equal(JSON.stringify(confluenceMutatePage.inputSchema).length, 2_625);
+  assert.equal(JSON.stringify(confluenceMutateParamsSchema).length, 2_725);
+});
+
+test("confluence_mutate_page keeps the local schema's structure exactly, closed at the root and per item", () => {
+  assert.deepEqual(
+    withoutDescriptions(confluenceMutatePage.inputSchema),
+    withoutDescriptions(confluenceMutateParamsSchema),
+  );
+  const schema = confluenceMutatePage.inputSchema as unknown as {
+    additionalProperties?: unknown;
+    properties: { items: { items: { additionalProperties?: unknown } } };
+  };
+  assert.equal(schema.additionalProperties, false);
+  assert.equal(schema.properties.items.items.additionalProperties, false);
+});
+
+test("confluence_mutate_page differs from the local tool in exactly two schema strings and its description", () => {
+  const edge = descriptionsOf(confluenceMutatePage.inputSchema);
+  const local = descriptionsOf(confluenceMutateParamsSchema);
+  assert.deepEqual([...edge.keys()], [...local.keys()]);
+  const changed = [...edge.keys()].filter(
+    (path) => edge.get(path) !== local.get(path),
+  );
+  assert.deepEqual(changed, [
+    "properties.items.description",
+    "properties.items.items.properties.placement.description",
+  ]);
+  assert.equal(
+    edge.get("properties.items.description"),
+    "Confluence changes, applied in this call.",
+  );
+  const placement = String(
+    edge.get("properties.items.items.properties.placement.description"),
+  );
+  assert.ok(placement.includes("defaults to append"), placement);
+  assert.ok(placement.includes("DESTROYS every macro, layout and image"));
+  // The third: the tool description (C3): one call, interrupts, the gate.
+  assert.notEqual(
+    confluenceMutatePage.description,
+    CONFLUENCE_MUTATE_PAGE_DESCRIPTION,
+  );
+  // Measured: 929 characters.
+  assert.equal(confluenceMutatePage.description.length, 929);
+  for (const clause of [
+    "This tool writes in one call: the client asks the user to approve it, and Confluence changes as soon as it runs.",
+    "Use it only when the user explicitly asks to write to Confluence",
+    "Interrupting the call does not stop it; it may still be writing.",
+    "After a timeout or interrupt, wait 60 s before reading the pages and before any retry: an early unchanged read does not prove nothing will change.",
+    "uploadAttachment is not available here",
+    "deletes work only where this gateway enables them",
+    "Prefer append over replace",
+  ])
+    assert.ok(confluenceMutatePage.description.includes(clause), clause);
+});
+
+test("docs/workers.md names confluence_mutate_page under the interrupt limitation", () => {
+  const docs = readFileSync(
+    new URL("../../../../docs/workers.md", import.meta.url),
+    "utf8",
+  ).replace(/\s+/g, " ");
+  for (const clause of [
+    "`confluence_mutate_page` shares this limitation",
+    "An interrupted write therefore keeps running until it completes or reaches its 45 s deadline",
+  ])
+    assert.ok(docs.includes(clause), clause);
 });
