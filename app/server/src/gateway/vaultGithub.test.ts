@@ -769,6 +769,45 @@ test("github.token: a reconnect during a held mint drops the proven token", asyn
   assert.equal(count("mint"), 2, "the dropped token was not cached");
 });
 
+// F004: after a mint the fence decides delivery and caching, never cleanup.
+for (const [change, answer, overrides, revokes] of [
+  [
+    "clear",
+    "an overbroad",
+    { permissions: { contents: "write", metadata: "read" } },
+    1,
+  ],
+  [
+    "reconnect",
+    "an overbroad",
+    { permissions: { contents: "write", metadata: "read" } },
+    1,
+  ],
+  ["clear", "a non-token", { token: "fake has space" }, 0],
+  ["clear", "a fully valid", {}, 0],
+] as const)
+  test(`github.token: a ${change} during a held mint, released with ${answer} answer: unavailable, nothing cached, ${revokes} revoke`, async () => {
+    const { v, lines } = await tokenVault();
+    github.script.mint = github.mintWith(overrides);
+    const held = github.hold("mint");
+    const asking = v.githubToken("u1", REPO);
+    await held.arrived;
+    if (change === "clear")
+      assert.deepEqual(await v.integrationClear("u1", "github"), { ok: true });
+    else await connect(v, "u1", FAKE_GITHUB_USER);
+    held.release();
+    assert.deepEqual(await asking, UNAVAILABLE);
+    assert.equal(count("revoke"), revokes);
+    if (revokes > 0)
+      assert.equal(github.on("revoke")[0]?.bearer, github.minted.at(-1));
+    delete github.script.mint;
+    if (change === "clear") await connect(v, "u1", FAKE_GITHUB_USER);
+    assert.equal((await v.githubToken("u1", REPO)).ok, true);
+    assert.equal(count("mint"), 2, "nothing was cached");
+    assert.equal(count("revoke"), revokes);
+    noSecretsIn(lines);
+  });
+
 test("github.token: after an identity switch the cached token is not handed to the new identity", async () => {
   const { v } = await tokenVault();
   assert.equal((await v.githubToken("u1", REPO)).ok, true);

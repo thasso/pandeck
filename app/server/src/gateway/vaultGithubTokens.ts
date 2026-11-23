@@ -18,12 +18,14 @@
  *    and the vault open; else the proven token is dropped, neither cached nor
  *    revoked. Only then is it cached.
  *
- * The fence is checked after every step that awaits GitHub and before its
- * outcome is read, so a check against a record that has since moved answers
- * unavailable, never `denied`, and a mint answer for it is dropped unproven.
- * A failed mint or proof answers unavailable whatever the generation, and a
- * failed proof's token is still revoked. Step 2's own negative answers
- * (absent, rejected) come from that read itself, so they pass through.
+ * The fence is checked after the user check and the installation lookup,
+ * before their outcome is read, so a check against a record that has since
+ * moved answers unavailable, never `denied`. A mint answer is always proven:
+ * the fence decides only delivery and caching, never cleanup, so a token that
+ * passes `isToken` and fails the proof is revoked whatever the generation, and
+ * a proven token for a stale generation is dropped (step 6). Step 2's own
+ * negative answers (absent, rejected) come from that read itself, so they pass
+ * through.
  *
  * The whole call has 25 s; each GitHub call keeps its own 8 s. A spent
  * budget, `close()` or the caller's signal answers unavailable at once and
@@ -190,10 +192,8 @@ export function createGithubTokens(deps: GithubTokenDeps): GithubTokens {
       deps.log(`github.token ${dirId}: mint failed (${minted.code})`);
       return UNAVAILABLE;
     }
-    if (!answerable()) {
-      deps.log(`github.token ${dirId}: minted token dropped unproven`);
-      return UNAVAILABLE;
-    }
+    // No fence here: the proof decides cleanup whatever the generation, so a
+    // stale token that fails it is revoked like any other (AC5 step 7).
     const proof = await within(() =>
       proveReadToken(minted.body, rid, deps.now, deps.endpoint),
     );
