@@ -24,8 +24,9 @@ import {
   type McpCaller,
   type McpHandlerOptions,
 } from "./mcp.ts";
+import { confluenceDeleteSwitchFor } from "./confluenceMutatePage.ts";
 import { describeSlackAccessView } from "./slack.ts";
-import { EDGE_TOOLS } from "./tools.ts";
+import { edgeTools } from "./tools.ts";
 
 interface AtlassianIntegration {
   parse(
@@ -54,15 +55,24 @@ export interface EdgeToolSet {
   };
 }
 
-export function createEdgeTools(
-  options: ToolHostOptions & McpHandlerOptions = {},
-): EdgeToolSet {
+export interface EdgeToolOptions extends ToolHostOptions, McpHandlerOptions {
+  /**
+   * The Atlassian scopes the gateway requests (`ui.json` or its default),
+   * read once at start. Absent, Confluence deletes are off (fail closed).
+   */
+  atlassianScopes?: readonly string[];
+}
+
+export function createEdgeTools(options: EdgeToolOptions = {}): EdgeToolSet {
   const log = options.log ?? ((line: string) => console.log(`[tools] ${line}`));
-  const host = createToolHost(EDGE_TOOLS, { ...options, log });
+  const tools = edgeTools({
+    confluenceDeletes: confluenceDeleteSwitchFor(options.atlassianScopes),
+  });
+  const host = createToolHost(tools, { ...options, log });
   return {
     handleMcp: createMcpHandler(host, log, {
       // A write tool's own deadline can outlast the host's (Task-1463).
-      deadlineMs: longestDeadlineMs(EDGE_TOOLS, options.deadlineMs),
+      deadlineMs: longestDeadlineMs(tools, options.deadlineMs),
       ...(options.lifecycleMs !== undefined
         ? { lifecycleMs: options.lifecycleMs }
         : {}),

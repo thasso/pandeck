@@ -16,8 +16,9 @@
  *   A tool failure is an `isError` result with the host's fixed text. Two
  *   exceptions (ADR-0005), never shown with credential material, sanitized
  *   and capped: Jira's own `errorMessages`/`errors` reasons for a rejected
- *   `jira_search_issues` (HTTP 400, D4-yes), and `jira_mutate_issue`'s
- *   shared-code messages and Jira's reasons for a write call's 4xx (D-W2).
+ *   `jira_search_issues` (HTTP 400, D4-yes), and the write tools'
+ *   (`jira_mutate_issue`, `confluence_mutate_page`) shared-code messages and
+ *   the product's reasons for a write call's 4xx (D-W2).
  * - The whole exchange is bounded (the longest deadline a call can run plus a
  *   margin): at that point the call is aborted, the response ends with a
  *   fixed error and the SDK instances close, whatever the SDK still waits

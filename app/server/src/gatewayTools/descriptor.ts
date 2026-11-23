@@ -12,10 +12,11 @@
  * - D4 (Task-1439): Jira's own `errorMessages` and `errors` reasons for a
  *   `jira_search_issues` HTTP 400 (`jiraSearchIssues.ts`). They may quote the
  *   user's JQL, field names or a URL Jira chose to mention.
- * - D-W2 (Task-1463, 2026-11-21): for `jira_mutate_issue`, the shared
- *   prepare/apply code's own messages, and Jira's reasons for a 4xx on a write
- *   call (`writeFailure.ts`). 401/403 keep the fixed credential text; 5xx,
- *   network errors and timeouts stay fixed.
+ * - D-W2 (Task-1463, 2026-11-21): for `jira_mutate_issue` and
+ *   `confluence_mutate_page`, the shared prepare/apply code's own messages,
+ *   and the product's reasons for a 4xx on a write call (`writeFailure.ts`).
+ *   401/403 keep the fixed credential text; 5xx, network errors and timeouts
+ *   stay fixed.
  */
 import type { SlackAccessView } from "./slack.ts";
 

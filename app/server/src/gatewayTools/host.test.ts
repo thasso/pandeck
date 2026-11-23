@@ -81,6 +81,7 @@ test("the registry lists Jira's, Confluence's and Slack's read tools with their 
       ["slack_thread_read", "read", "slack:read"],
       ["slack_unread", "read", "slack:read"],
       ["jira_mutate_issue", "write", "jira:write"],
+      ["confluence_mutate_page", "write", "confluence:write"],
     ],
   );
   const [listed] = host.list();

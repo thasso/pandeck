@@ -2829,8 +2829,9 @@ tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
   never reaches the call's `ctx.signal`, because the stateless handler cannot
   connect that separate `notifications/cancelled` POST to the call. So after a
   timeout or interrupt, reconcile only after that window: wait 60 s before
-  reading the issues or retrying. Pandeck's client mode still drops write tools
-  from a listing.
+  reading the issues or retrying. `confluence_mutate_page` shares this
+  limitation (below). Pandeck's client mode still drops write tools from a
+  listing.
 - **Confluence reads** (Task-1439). `confluence_search`, `confluence_get_page`
   and `confluence_lookup` run the same read path as the local tools
   (`confluenceRead.ts` with `atlassian/confluenceClient.ts` beside
@@ -2856,8 +2857,8 @@ tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
   lower `maxResults`. `includeComments` costs one request per comment within the
   host's 30 s, so a slow site with many comments can time out; the same lower
   limits are the remedy.
-- **Confluence mutation core** (Task-1463 P5a). The edge may import these
-  modules, but no edge tool uses them yet. They are the prepare
+- **Confluence mutation core** (Task-1463 P5a). The edge's
+  `confluence_mutate_page` uses these modules (below). They are the prepare
   (`confluenceMutate.ts`) and apply (`confluenceMutateApply.ts`) halves of
   `confluence_mutate_page`, with `confluenceAttachmentChange.ts` for the
   attachment operations and the typed errors and signal helpers in
@@ -2885,6 +2886,51 @@ tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
   not a conditional DELETE. A change made elsewhere between the read and the
   DELETE is still not caught: `docs/confluence.md` "Deletes go to the trash,
   once".
+- **Confluence write** (Task-1463 P5b). `confluence_mutate_page` (effect
+  `write`, action key `confluence:write`, `readOnlyHint: false` on `/mcp`) runs
+  the same core as the local tool with the local schema's exact structure,
+  closed at the root and per item. Two schema descriptions and the tool
+  description differ: no approval card follows, Confluence changes as soon as
+  the call runs, and `placement` says that `replace` destroys the page's macros,
+  layouts and images. It shares the Jira write's runner
+  (`gatewayTools/writeCall.ts`): the 45 s deadline, prepare done 22 s before it
+  or "Preparing the changes took too long; nothing was written to Confluence.
+  Send fewer items.", the fence before apply, and no further item once less than
+  7 s remain. Before the credential is read or anything is sent, a gate refuses
+  the whole call at the first item, in input order, that this edge does not
+  offer: an upload ("Uploading attachments is not available through this gateway
+  yet; nothing was written to Confluence."), a `delete` when page deletes are
+  off ("Deleting pages is not enabled on this gateway; nothing was written to
+  Confluence.") or a `deleteAttachment` when attachment deletes are off
+  ("Deleting attachments is not enabled on this gateway; nothing was written to
+  Confluence."). Deletes follow the scope list the gateway asks Atlassian for
+  (`atlassian.scopes`, or the default list, which holds both): page deletes are
+  on only when it holds `delete:page:confluence`, attachment deletes only when
+  it holds `delete:attachment:confluence`, matched exactly. An edge built
+  without a scope list offers neither. To turn deletes on or off, change
+  `atlassian.scopes` and restart the gateway; turning them on also needs each
+  user to sign in with Atlassian again, since a grant made without the scope is
+  refused. A delete still needs P5a's positive status, at prepare and again at
+  apply, which is no guard against a change made elsewhere between that read and
+  the DELETE. Failures follow D-W2 as for Jira, with "Confluence" in each text;
+  a refusal in prepare adds " Nothing was written to Confluence.". The result is
+  `{summary, url?, warnings?, items}`, each item
+  `{operation, pageId, ok, title?, url?, version?, attachment?, warning?, error?}`
+  with `attachment` `{fileName, id?, version?}`. Texts are vetted and capped
+  (summary 2,000, 10 warnings of 300 and then a count, item error 600, warning
+  400, title and file name 200). A page id must match `^[0-9]{1,20}$` or is
+  `null`, an attachment id `^att[0-9]{1,20}$` or is omitted, and a version is an
+  integer up to 999,999,999; each is checked for the secret before its pattern.
+  A link follows the Jira write's rules: an item's link is backed by its page id
+  and the call's link by the item it names, and a link off the site is omitted.
+  The serialized result stays under 55,000 characters, shrinking warnings to one
+  count, then item texts to 200, then titles and file names to 50, then each row
+  to `{operation, pageId, ok, error?}`; no step drops a row's outcome. As the
+  answer is sent it is checked once more: if it holds the secret, only the rows'
+  outcomes remain, and failing that the answer is "The changes ran, but their
+  result cannot be shown without revealing the credential; check the pages
+  before retrying." After a timeout or interrupt, wait 60 s before reading the
+  pages or retrying.
 - **Slack reads** (Task-1454). The four tools run the same read path as the
   local ones (`slackRead.ts` with `slackMetadataCache.ts` beside `tools/slack/`,
   which wraps them) with the same schema and description objects, action key

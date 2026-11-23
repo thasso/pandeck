@@ -58,6 +58,7 @@ import {
   GatewayWebConfigError,
   admittedEmail,
   loadGatewayWebConfig,
+  requestedAtlassianScopes,
 } from "./gatewayWeb/config.ts";
 import {
   IntegrationsRefusal,
@@ -453,7 +454,9 @@ export async function startEdge(
     port: options.port,
     ...(options.machinePaths ? { machinePaths: options.machinePaths } : {}),
     ...(extras.renewCodex ? { renewCodex: extras.renewCodex } : {}),
-    tools: extras.tools ?? createEdgeTools(),
+    tools:
+      extras.tools ??
+      createEdgeTools({ atlassianScopes: requestedAtlassianScopes(ui) }),
     clients: {
       modelPort: options.modelPort,
       clientPort: options.clientPort,

@@ -8,8 +8,9 @@
  * exceptions (ADR-0005), never with credential material, sanitized and
  * capped: a rejected `jira_search_issues` (HTTP 400) may show Jira's own
  * `errorMessages`/`errors` reasons (D4-yes, `jiraSearchIssues.ts`), and
- * `jira_mutate_issue` its shared code's messages and Jira's reasons for a
- * write call's 4xx (D-W2, `writeFailure.ts`).
+ * `jira_mutate_issue` and `confluence_mutate_page` their shared code's
+ * messages and the product's reasons for a write call's 4xx (D-W2,
+ * `writeFailure.ts`).
  *
  * Or the vault's OAuth access view (Task-1411), `{kind: "atlassian-oauth",
  * site, cloudId, accessToken, expiresAt}`, decoded and checked per call and
@@ -230,7 +231,10 @@ export function credentialRejectedText(
  * The edge's text for each Confluence input refusal: the local wording,
  * without the caller's own values.
  */
-const CONFLUENCE_REFUSAL_TEXT: Record<ConfluenceReadRefusalCode, string> = {
+export const CONFLUENCE_REFUSAL_TEXT: Record<
+  ConfluenceReadRefusalCode,
+  string
+> = {
   page_missing: "A Confluence page id or URL is required.",
   page_unparsable:
     "Could not read a page id; pass the numeric page id or a Confluence page URL.",

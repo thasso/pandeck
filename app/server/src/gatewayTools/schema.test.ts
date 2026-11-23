@@ -7,6 +7,7 @@
  */
 import assert from "node:assert/strict";
 import { afterEach, test, vi } from "vitest";
+import { confluenceMutateParamsSchema } from "../confluenceMutate.ts";
 import { encodeAtlassianCredential } from "./atlassian.ts";
 import type { ObjectSchema } from "./descriptor.ts";
 import { createToolHost, type ToolCaller } from "./host.ts";
@@ -1011,4 +1012,83 @@ test("the edge jira_mutate_issue schema holds no default below the root", () => 
     "properties.nested.properties.mode",
     "properties.rows.items.properties.label",
   ]);
+});
+
+// C4 (Task-1463 P5b): the Confluence write's schemas, the shared one and the
+// edge's, hold no default below the root, and its items are closed.
+
+const confluenceEdge = () => {
+  const edge = EDGE_TOOLS.find(
+    (tool) => tool.name === "confluence_mutate_page",
+  );
+  assert.ok(edge);
+  return edge;
+};
+
+test("the shared and edge confluence_mutate_page schemas hold no default below the root", () => {
+  assert.deepEqual(defaultsBelowRoot(confluenceMutateParamsSchema), []);
+  assert.deepEqual(defaultsBelowRoot(confluenceEdge().inputSchema), []);
+});
+
+test("on the edge Confluence schema a root default still applies when absent, and never below", () => {
+  // The control: the real schema with one root default added. It is applied
+  // when the property is absent, so the empty walk above is not vacuous.
+  const schema = {
+    ...confluenceEdge().inputSchema,
+    properties: {
+      ...confluenceEdge().inputSchema.properties,
+      dryRun: { type: "boolean", default: false },
+    },
+  } as ObjectSchema;
+  const item = { page: "123", body: "Added" };
+  const params = acceptedBy(schema, { items: [item] });
+  assert.deepEqual(params, { items: [item], dryRun: false });
+  assert.equal(
+    acceptedBy(schema, { items: [item], dryRun: true }).dryRun,
+    true,
+  );
+  // No item key appears that the caller did not send (`placement` included).
+  assert.deepEqual(
+    acceptedBy(confluenceEdge().inputSchema, { items: [item] }),
+    {
+      items: [item],
+    },
+  );
+});
+
+test("an unknown item key on confluence_mutate_page is invalid_params before any request; a valid item passes the check", async () => {
+  const fetch = vi.fn(async () => new Response("{}", { status: 500 }));
+  vi.stubGlobal("fetch", fetch);
+  const caller: ToolCaller = {
+    clientId: "client-1",
+    credential: () =>
+      Promise.resolve({
+        ok: true,
+        credential: encodeAtlassianCredential({
+          site: "acme.atlassian.net",
+          email: "a@x.test",
+          token: "fake-1",
+        }),
+      }),
+  };
+  const host = createToolHost(EDGE_TOOLS, { log: () => {} });
+  const answer = await host.call(
+    "confluence_mutate_page",
+    { items: [{ page: "123", body: "Added", [SENTINEL]: "x" }] },
+    caller,
+  );
+  assert.equal(answer.ok, false);
+  assert.equal(answer.ok ? "" : answer.code, "invalid_params");
+  assert.ok(!(answer.ok ? "" : answer.message).includes(SENTINEL));
+  assert.equal(fetch.mock.calls.length, 0);
+  const root = await host.call(
+    "confluence_mutate_page",
+    { items: [{ page: "123", body: "Added" }], [SENTINEL]: 1 },
+    caller,
+  );
+  assert.equal(root.ok ? "" : root.code, "invalid_params");
+  assert.equal(fetch.mock.calls.length, 0);
+  acceptedBy(confluenceEdge().inputSchema, {
+    items: [{ page: "123", body: "Added" }],
+  });
 });

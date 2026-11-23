@@ -61,12 +61,14 @@ export type ConfluenceMutateItemParams = {
 
 export type ConfluenceMutateParams = { items?: ConfluenceMutateItemParams[] };
 
-const MAX_MUTATION_ITEMS = 10;
+/** Items per call; the edge's result projection is bounded by it (P5b). */
+export const MAX_MUTATION_ITEMS = 10;
 /** How much of the current page travels to the card purely as edit context. */
 const CURRENT_BODY_PREVIEW_CHARS = 4000;
 
 export const confluenceMutateParamsSchema = {
   type: "object",
+  additionalProperties: false,
   properties: {
     items: {
       type: "array",
@@ -74,6 +76,7 @@ export const confluenceMutateParamsSchema = {
         "Confluence page proposals. Nothing is written until the user approves the card.",
       items: {
         type: "object",
+        additionalProperties: false,
         properties: {
           operation: {
             type: "string",

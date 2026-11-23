@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { afterEach, test, vi } from "vitest";
 import { updateConfluenceSettings } from "./confluenceSettings.ts";
 import { GatewayUnavailableError } from "./gatewayLink.ts";
+import { createEdgeTools } from "./gatewayTools/index.ts";
 import { subscribeIntegrationToolChanges } from "./integrationToolChanges.ts";
 import { updateJiraSettings } from "./jiraSettings.ts";
 import {
@@ -305,6 +306,29 @@ test("the edge's write tool is dropped while its read tools are accepted (Task-1
   assert.deepEqual(
     acceptRemoteTools([mutate, JIRA_GET_ISSUE]).map((t) => t.name),
     ["jira_get_issue"],
+  );
+});
+
+test("the edge's real confluence_mutate_page is dropped while its Confluence read is accepted (Task-1463 P5b AC12)", () => {
+  // As the edge lists them, deletes on: the write's own descriptor, unedited.
+  const listed = createEdgeTools({
+    log: () => {},
+    atlassianScopes: ["delete:page:confluence", "delete:attachment:confluence"],
+  })
+    .host.list()
+    .filter((t) =>
+      ["confluence_mutate_page", "confluence_get_page"].includes(t.name),
+    );
+  assert.deepEqual(
+    listed.map((t) => [t.name, t.effect]),
+    [
+      ["confluence_get_page", "read"],
+      ["confluence_mutate_page", "write"],
+    ],
+  );
+  assert.deepEqual(
+    acceptRemoteTools([...listed].reverse()).map((t) => t.name),
+    ["confluence_get_page"],
   );
 });
 

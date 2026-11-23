@@ -963,6 +963,18 @@ test("the edge's jira_mutate_issue reaches no cache module (Task-1463 AC4)", () 
   );
 });
 
+test("the edge's confluence_mutate_page reaches no cache module (Task-1463 P5b)", () => {
+  // Like the Jira write: every read is per call; the local tool's settings,
+  // session attachment store and caches stay with it.
+  const closure = closureOf("gatewayTools/confluenceMutatePage.ts");
+  assert.ok(closure.has("confluenceMutate.ts"), "the scan found the core");
+  assert.ok(closure.has("confluenceMutateApply.ts"), "the scan found apply");
+  assert.deepEqual(
+    [...closure].filter((module) => /cache/i.test(module)),
+    [],
+  );
+});
+
 test("the login children: only the Codex one loads pi, through the gateway port", () => {
   // The child side's protocol imports only node, so each entry adds only its
   // own driver (ADR-0005 "The login children").
