@@ -66,6 +66,10 @@ import {
   supportedThinkingLevelsForModel,
 } from "./thinkingLevels.ts";
 import type { ThinkingLevel } from "./thinkingLevels.ts";
+import type {
+  SessionPendingRuntime,
+  SessionRuntimeAccount,
+} from "./sessionRuntime.ts";
 import { clampInt } from "./memoryValidation.ts";
 import type {
   MemoryListFilter,
@@ -93,6 +97,7 @@ export * from "./peerRuntimes.ts";
 export * from "./approvalGrants.ts";
 export * from "./harnesses.ts";
 export * from "./accountKinds.ts";
+export * from "./sessionRuntime.ts";
 export * from "./compactionWindow.ts";
 export { SESSION_TIMELINE_PROJECTION_VERSION } from "./runtimeEvents.ts";
 export type { TimelineCacheDescriptor } from "./runtimeEvents.ts";
@@ -1725,6 +1730,11 @@ export interface SlashCommandInfo {
    * /rename). Omitted = refused while the agent is streaming.
    */
   runsWhileStreaming?: boolean;
+  /**
+   * What the command's one argument names, for the composer's argument
+   * autocomplete: one of the session's models, effort levels or accounts.
+   */
+  argument?: "model" | "effort" | "account";
 }
 
 /**
@@ -2052,6 +2062,11 @@ export interface SessionListItem {
   thinkingLevel?: ThinkingLevel;
   /** Current account binding; only a live account switch replaces it. */
   credentialProfileId?: string;
+  /**
+   * The model, effort and account the next turn starts on, when a change is
+   * pending (`docs/session-runtime-switching.md`); absent when none is.
+   */
+  pendingRuntime?: SessionPendingRuntime;
   /** Only enterprise accounts may run this session; absent means no restriction. */
   requiresEnterprise?: boolean;
   /** Explicit concurrent counted peer-turn cap; absent uses the default 4. */
@@ -4904,6 +4919,11 @@ export interface SessionState {
    * per-turn tool policy the user may flip at any time.
    */
   mode?: SessionMode;
+  /**
+   * The model, effort and account the next turn starts on, when a change is
+   * pending (`docs/session-runtime-switching.md`); absent when none is.
+   */
+  pendingRuntime?: SessionPendingRuntime;
   /** Only enterprise accounts may run this session; absent means no restriction. */
   requiresEnterprise?: boolean;
   /**
@@ -7753,15 +7773,21 @@ export type ClientMessage =
       requestId: string;
     }
   /**
-   * Move an idle session to another account of the same kind at once, loading
-   * it when it is not resident; answered by `sessionAccountMoveAnswer`.
+   * Change the model, effort and/or account a started session's next turn
+   * starts on (`docs/session-runtime-switching.md`). Accepted at any time,
+   * during a turn too; nothing changes until that turn is admitted. Answered
+   * by `pendingRuntimeAnswer`.
    */
   | {
-      type: "moveSessionAccount";
+      type: "setPendingRuntime";
       sessionId: string;
-      credentialProfileId: string;
       requestId: string;
+      model?: { provider: string; id: string };
+      thinkingLevel?: ThinkingLevel;
+      account?: SessionRuntimeAccount;
     }
+  /** Drop the pending selection; leaves no trace. Answered by `pendingRuntimeAnswer`. */
+  | { type: "clearPendingRuntime"; sessionId: string; requestId: string }
   /**
    * Set the scope of the session's OWN grants named in `keys`: true also
    * covers the sessions it starts, false keeps them to this session. Keys the
@@ -7832,6 +7858,11 @@ export type ClientMessage =
       beforeSeq: number;
       limit?: number;
     }
+  /**
+   * Model and effort of the viewed session that has NOT started yet (a draft
+   * on the server). A started session refuses both: its changes are a pending
+   * selection (`setPendingRuntime`).
+   */
   | { type: "setModel"; provider: string; id: string }
   | { type: "setThinkingLevel"; level: ThinkingLevel }
   /**
@@ -8829,11 +8860,12 @@ export type ServerMessage =
       | { error: string; accounts?: undefined }
     ))
   /**
-   * The answer to `moveSessionAccount`: no `error` means the session moved
-   * (its row arrives through the session list); `error` is why it did not.
+   * The answer to `setPendingRuntime` / `clearPendingRuntime`: no `error`
+   * means it was stored (the session's row and state carry it); `error` is
+   * why it was refused.
    */
   | {
-      type: "sessionAccountMoveAnswer";
+      type: "pendingRuntimeAnswer";
       requestId: string;
       sessionId: string;
       error?: string;

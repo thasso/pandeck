@@ -49,6 +49,7 @@ import {
   moveOffDisabledAccount,
   prepareAccountRecoveryTurn,
 } from "../sessionAccountSwitch.ts";
+import { applyPendingRuntime } from "../sessionPendingRuntime.ts";
 import {
   assertAccountRecoveryAdmission,
   type AccountRecoveryTicket,
@@ -405,6 +406,25 @@ async function deliverWithRuntime(
       await assertSkillInvocation(options, frozenSkills);
     assertTurnAllowed(driver.sessionId, options.resumeHold);
     assertRecoveryAdmission();
+    // The pending runtime selection applies to a NEW turn of any origin, ahead
+    // of the disabled-account move so the chosen account wins. A held target
+    // throws, keeping the selection and every lane's work.
+    const pendingSwitch = appliesPendingRuntime(
+      driver,
+      options,
+      accountRecovery,
+    )
+      ? await applyPendingRuntime(
+          driver,
+          () => {
+            assertTurnAllowed(driver.sessionId, options.resumeHold);
+            assertRecoveryAdmission();
+          },
+          () => ensureRuntimeSessionWithRuntime(runtime, driver),
+        )
+      : undefined;
+    assertTurnAllowed(driver.sessionId, options.resumeHold);
+    assertRecoveryAdmission();
     // An account recovery continuation has already chosen its account, and a
     // steer-only message starts no turn.
     const accountMove =
@@ -419,12 +439,14 @@ async function deliverWithRuntime(
     // Nothing below awaits before the append. The enterprise check runs before
     // `admit`, which must stay the last check: a peer admission reserves its
     // delivery, and a refusal after that reservation could strand the prompt.
+    pendingSwitch?.usable();
     accountMove?.usable();
     assertSessionEnterpriseAccount(driver);
     // Setup may have finished while this send awaited above.
     assertNotFinishedSetup(driver.sessionId);
     admit?.();
     const live = ensureRuntimeSessionWithRuntime(runtime, driver);
+    if (pendingSwitch?.notice) live.appendNotice(pendingSwitch.notice);
     if (accountMove) live.appendNotice(accountMove.notice);
     prepareAccountRecoveryTurn(live, accountRecovery);
     return await runPromptWithRuntime(
@@ -439,6 +461,23 @@ async function deliverWithRuntime(
     releaseAdmission();
     releaseRun();
   }
+}
+
+/**
+ * Whether this prompt may apply the session's pending runtime selection
+ * (`sessionPendingRuntime.ts`). Every new turn does, whatever its origin,
+ * continuations included. Excluded by kind: a message into a RUNNING turn
+ * (a steer stays on the engine that turn started on), a steer-only message
+ * (it starts no turn), and the account-recovery continuation (failover
+ * finishing the same turn on another account of the same kind). A turn the
+ * provider starts itself (`beginRuntimeProviderTurn`) never comes here.
+ */
+function appliesPendingRuntime(
+  driver: RuntimePromptDriver,
+  options: RuntimePromptOptions,
+  accountRecovery: AccountRecoveryTicket | undefined,
+): boolean {
+  return !driver.isRunning && !options.steerOnly && !accountRecovery;
 }
 
 /**

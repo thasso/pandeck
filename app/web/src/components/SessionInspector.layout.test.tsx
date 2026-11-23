@@ -10,9 +10,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
 import type {
+  ModelOption,
   ProjectRecord,
-  SessionAccountMoveTarget,
   SessionListItem,
+  SessionRuntimeChange,
   TaskSummary,
   WorktreeRecord,
 } from "@assistant/shared";
@@ -21,7 +22,8 @@ import {
   sessionInspectorActions,
 } from "./objectInspectors.tsx";
 import { DialogProvider } from "./common/dialogs.tsx";
-import { failed, loading, ready, type LoadState } from "../lib/loadState.ts";
+import type { SessionRuntimeControl } from "./SessionRuntimeSection.tsx";
+import { failed, loading, ready } from "../lib/loadState.ts";
 
 const openers = {
   onOpenTask: () => {},
@@ -230,9 +232,26 @@ describe("SessionInspector layout", () => {
     expect(host.textContent).not.toContain(hint);
   });
 
-  describe("Move to another account", () => {
-    const subscription = { name: "Personal", provider: "claude" as const };
-    const label = "Move to another account";
+  describe("Runtime section", () => {
+    const opus: ModelOption = {
+      provider: "anthropic",
+      id: "claude-opus",
+      name: "Claude Opus",
+      reasoning: true,
+      supportedThinkingLevels: ["low", "medium", "high"],
+      contextWindow: 200_000,
+    };
+    const sonnet: ModelOption = {
+      ...opus,
+      id: "claude-sonnet",
+      name: "Claude Sonnet",
+    };
+    const gpt: ModelOption = {
+      ...opus,
+      provider: "openai-codex",
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+    };
     const mount = () => {
       const host = document.createElement("div");
       document.body.append(host);
@@ -241,150 +260,211 @@ describe("SessionInspector layout", () => {
       return { host, root };
     };
     const control = (
-      over: Partial<{
-        targets: LoadState<SessionAccountMoveTarget[]> | undefined;
-        pending: boolean;
-        onOpen: () => void;
-        onPick: (id: string) => void;
-      }> = {},
-    ) => ({
-      targets: undefined,
-      pending: false,
-      onOpen: () => {},
-      onPick: () => {},
+      over: Partial<SessionRuntimeControl> = {},
+    ): SessionRuntimeControl => ({
+      current: {
+        model: {
+          provider: "anthropic",
+          id: "claude-opus",
+          name: "Claude Opus",
+        },
+        thinkingLevel: "high",
+        accountName: "Personal",
+      },
+      pending: undefined,
+      models: [opus, sonnet, gpt],
+      modelRefusal: (model) =>
+        model.provider === "openai-codex"
+          ? "Another harness: not available yet"
+          : undefined,
+      accounts: {
+        targets: undefined,
+        onOpen: () => {},
+        nameOf: (id) => ({ "cp-b": "Account B" })[id],
+      },
+      busy: false,
+      onChange: () => {},
+      onReset: () => {},
       ...over,
     });
-    const show = (
-      root: Root,
-      accountMove: ReturnType<typeof control>,
-      isStreaming = false,
-      credentialProfile: {
-        name: string;
-        provider: "claude" | "openai-compatible";
-      } | null = subscription,
-    ) =>
+    const show = (root: Root, runtime: SessionRuntimeControl) =>
       act(async () =>
         root.render(
           <SessionInspector
             {...base}
-            sessions={[
-              {
-                id: "s1",
-                title: "Session",
-                ...(isStreaming ? { isStreaming } : {}),
-              } as SessionListItem,
-            ]}
-            {...(credentialProfile ? { credentialProfile } : {})}
-            accountMove={accountMove}
+            sessions={[{ id: "s1", title: "Session" } as SessionListItem]}
+            credentialProfile={{ name: "Personal", provider: "claude" }}
+            runtime={runtime}
           />,
         ),
       );
-    const trigger = (host: HTMLElement) =>
-      [...host.querySelectorAll<HTMLButtonElement>("button")].find((item) =>
-        item.textContent?.includes(label),
-      );
-    const open = async (host: HTMLElement) => {
-      await act(async () => {
-        trigger(host)!.click();
-        await Promise.resolve();
-      });
-      return document.querySelector<HTMLElement>('[role="menu"]');
-    };
+    const trigger = (host: HTMLElement, label: string) =>
+      host.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!;
+    const options = () => [
+      ...document.querySelectorAll<HTMLElement>('[role="option"]'),
+    ];
 
-    it("is offered only on a subscription account", async () => {
+    it("shows the model, effort and account the next turn starts on, and no pending row", async () => {
       const { host, root } = mount();
       await show(root, control());
-      expect(trigger(host)).toBeDefined();
-      await show(root, control(), false, {
-        name: "Team LLM",
-        provider: "openai-compatible",
-      });
-      expect(trigger(host)).toBeUndefined();
-      await show(root, control(), false, null);
-      expect(trigger(host)).toBeUndefined();
+      expect(host.textContent).toContain("Runtime");
+      expect(trigger(host, "Next turn's model").textContent).toContain(
+        "Claude Opus",
+      );
+      expect(trigger(host, "Next turn's effort").textContent).toContain("High");
+      expect(trigger(host, "Next turn's account").textContent).toContain(
+        "Automatic · Personal",
+      );
+      expect(host.textContent).not.toContain("Next turn:");
+      expect(
+        [...host.querySelectorAll("button")].some(
+          (button) => button.textContent?.trim() === "Reset",
+        ),
+      ).toBe(false);
     });
 
-    it("is disabled while the session runs, with the shared hint", async () => {
+    it("lists another harness's model disabled with its reason, and sends the one picked", async () => {
       const { host, root } = mount();
-      await show(root, control(), true);
-      expect(trigger(host)!.disabled).toBe(true);
-      const describedBy = trigger(host)!.getAttribute("aria-describedby");
-      expect(
-        describedBy && document.getElementById(describedBy)?.textContent,
-      ).toBe("Available once the current turn ends.");
-      await show(root, control());
-      expect(trigger(host)!.disabled).toBe(false);
-      expect(host.textContent).not.toContain(
-        "Available once the current turn ends.",
+      const changes: SessionRuntimeChange[] = [];
+      await show(root, control({ onChange: (change) => changes.push(change) }));
+      await act(async () => trigger(host, "Next turn's model").click());
+      const gptOption = options().find((item) =>
+        item.textContent?.includes("GPT-5.5"),
+      )!;
+      expect(gptOption.textContent).toContain(
+        "Another harness: not available yet",
       );
+      expect(gptOption.getAttribute("aria-disabled")).toBe("true");
+      await act(async () =>
+        options()
+          .find((item) => item.textContent === "Claude Sonnet")!
+          .click(),
+      );
+      expect(changes).toEqual([
+        { model: { provider: "anthropic", id: "claude-sonnet" } },
+      ]);
     });
 
     it("asks for the accounts when opened and states loading, empty and failure", async () => {
       const { host, root } = mount();
       let opened = 0;
-      const onOpen = () => {
-        opened += 1;
-      };
-      await show(root, control({ onOpen }));
-      let menu = await open(host);
+      const accounts = (
+        targets: NonNullable<SessionRuntimeControl["accounts"]>["targets"],
+      ) => ({
+        targets,
+        onOpen: () => {
+          opened += 1;
+        },
+        nameOf: () => undefined,
+      });
+      await show(root, control({ accounts: accounts(undefined) }));
+      await act(async () => trigger(host, "Next turn's account").click());
       expect(opened).toBe(1);
-      expect(menu?.querySelector('[role="status"]')?.textContent).toContain(
-        "Loading accounts…",
+      expect(document.body.textContent).toContain("Loading accounts…");
+      await show(root, control({ accounts: accounts(loading()) }));
+      expect(document.body.textContent).toContain("Loading accounts…");
+      await show(root, control({ accounts: accounts(ready([])) }));
+      expect(document.body.textContent).toContain(
+        "No other account can run this model now.",
       );
-      await show(root, control({ onOpen, targets: loading() }));
-      expect(
-        document.querySelector('[role="menu"] [role="status"]')?.textContent,
-      ).toContain("Loading accounts…");
-      await show(root, control({ onOpen, targets: ready([]) }));
-      menu = document.querySelector('[role="menu"]');
-      expect(menu?.textContent).toContain(
-        "No other account can run this session's model.",
-      );
-      await show(
-        root,
-        control({ onOpen, targets: failed("The accounts could not be read.") }),
-      );
-      menu = document.querySelector('[role="menu"]');
-      expect(menu?.textContent).toContain("The accounts could not be read.");
-      const retry = [...menu!.querySelectorAll("button")].find((button) =>
-        /retry/i.test(button.textContent ?? ""),
-      );
-      expect(retry).toBeDefined();
-      await act(async () => retry!.click());
-      expect(opened).toBe(2);
-    });
-
-    it("lists the eligible accounts and sends the one picked", async () => {
-      const { host, root } = mount();
-      const picked: string[] = [];
       await show(
         root,
         control({
-          targets: ready([
-            { id: "cp-b", name: "Account B", enterprise: false },
-            { id: "cp-w", name: "Work", enterprise: true },
-          ]),
-          onPick: (id) => picked.push(id),
+          accounts: accounts(failed("The accounts could not be read.")),
         }),
       );
-      await open(host);
-      const items = [
-        ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
-      ];
-      expect(items.map((item) => item.textContent)).toEqual([
+      expect(document.body.textContent).toContain(
+        "The accounts could not be read.",
+      );
+    });
+
+    it("lists the eligible accounts after Automatic and sends the one picked", async () => {
+      const { host, root } = mount();
+      const changes: SessionRuntimeChange[] = [];
+      await show(
+        root,
+        control({
+          accounts: {
+            targets: ready([
+              { id: "cp-b", name: "Account B", enterprise: false },
+              { id: "cp-w", name: "Work", enterprise: true },
+            ]),
+            onOpen: () => {},
+            nameOf: () => undefined,
+          },
+          onChange: (change) => changes.push(change),
+        }),
+      );
+      await act(async () => trigger(host, "Next turn's account").click());
+      expect(options().map((item) => item.textContent)).toEqual([
+        "Automatickeeps Personal when it can",
         "Account B",
         "Workenterprise",
       ]);
-      await act(async () => items[1]!.click());
-      expect(picked).toEqual(["cp-w"]);
+      await act(async () => options()[2]!.click());
+      expect(changes).toEqual([{ account: { kind: "account", id: "cp-w" } }]);
     });
 
-    it("shows the move in flight on its control", async () => {
+    it("states a pending change, who chose it, and resets it", async () => {
       const { host, root } = mount();
-      await show(root, control({ pending: true }));
-      const button = trigger(host)!;
-      expect(button.getAttribute("aria-busy")).toBe("true");
-      expect(button.disabled).toBe(true);
+      let resets = 0;
+      await show(
+        root,
+        control({
+          pending: {
+            model: { provider: "anthropic", id: "claude-sonnet" },
+            thinkingLevel: "medium",
+            account: { kind: "account", id: "cp-b" },
+            setBy: "coordinator",
+          },
+          onReset: () => {
+            resets += 1;
+          },
+        }),
+      );
+      expect(host.textContent).toContain(
+        "Next turn: Claude Sonnet · Medium · Account B",
+      );
+      expect(host.textContent).toContain(
+        "Now: Claude Opus · High · Personal · chosen by its coordinating session",
+      );
+      expect(trigger(host, "Next turn's account").textContent).toContain(
+        "Account B",
+      );
+      const reset = [
+        ...host.querySelectorAll<HTMLButtonElement>("button"),
+      ].find((button) => button.textContent?.trim() === "Reset")!;
+      await act(async () => reset.click());
+      expect(resets).toBe(1);
+    });
+
+    it("shows a change in flight on Reset", async () => {
+      const { host, root } = mount();
+      await show(
+        root,
+        control({
+          busy: true,
+          pending: {
+            model: { provider: "anthropic", id: "claude-opus" },
+            thinkingLevel: "low",
+            account: { kind: "automatic" },
+            setBy: "user",
+          },
+        }),
+      );
+      const reset = [
+        ...host.querySelectorAll<HTMLButtonElement>("button"),
+      ].find((button) => button.textContent?.trim() === "Reset")!;
+      expect(reset.getAttribute("aria-busy")).toBe("true");
+    });
+
+    it("shows a fixed account as text, without a picker", async () => {
+      const { host, root } = mount();
+      await show(root, control({ accounts: undefined }));
+      expect(
+        host.querySelector('[aria-label="Next turn\'s account"]'),
+      ).toBeNull();
+      expect(host.textContent).toContain("Personal");
     });
   });
 

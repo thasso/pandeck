@@ -594,6 +594,7 @@ export function listSessions(
       ...(row.credentialProfileId
         ? { credentialProfileId: row.credentialProfileId }
         : {}),
+      ...(row.pendingRuntime ? { pendingRuntime: row.pendingRuntime } : {}),
       ...(row.requiresEnterprise ? { requiresEnterprise: true } : {}),
       ...(row.peerTurnCap !== undefined
         ? { peerTurnCap: row.peerTurnCap }

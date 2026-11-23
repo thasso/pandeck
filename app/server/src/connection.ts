@@ -152,10 +152,12 @@ import {
 } from "./db/backgroundWorkStore.ts";
 import { isStateTopicInvariant } from "./stateTopicKernel.ts";
 import { publishSessionRowsNow, stateTopicFor } from "./stateTopics.ts";
+import { accountMoveTargets } from "./sessionAccountMove.ts";
 import {
-  accountMoveTargets,
-  moveSessionAccount,
-} from "./sessionAccountMove.ts";
+  clearSessionPendingRuntime,
+  PendingRuntimeHeldError,
+  setSessionPendingRuntime,
+} from "./sessionPendingRuntime.ts";
 import {
   backgroundWorkHumanStopDeps,
   stopAllBackgroundWorkForHuman,
@@ -903,6 +905,20 @@ export class Connection implements Viewer {
           // have been read, so sending it again is the user's call.
           const withdrawn =
             err instanceof SteerWithdrawnError ? err : undefined;
+          // Held by a pending runtime selection that cannot apply yet: the
+          // message waits in the user's queue, offered again once the
+          // selection can apply or is changed or reset (`sessionPendingRuntime.ts`).
+          // A skill invocation cannot be queued (Task-1023), so its refusal
+          // says to send it again instead.
+          const pendingHeld =
+            err instanceof PendingRuntimeHeldError ? err : undefined;
+          const held =
+            pendingHeld && !skillInvocation ? pendingHeld : undefined;
+          if (held)
+            queuePrompt(driver.sessionId, {
+              text: msg.text,
+              ...(attachments.length ? { attachments } : {}),
+            });
           if (withdrawn)
             queuePrompt(
               driver.sessionId,
@@ -920,13 +936,17 @@ export class Connection implements Viewer {
           const setupFinished = err instanceof SetupFinishedError;
           this.send({
             type: "error",
-            message: withdrawn
-              ? withdrawn.uncertain
-                ? `The response stopped, and Claude may already have read your message. It is held in your queue: ${STEER_MAY_HAVE_BEEN_READ.toLowerCase()}`
-                : "The response ended before it read your message. It is waiting in your queue."
-              : setupFinished
-                ? errorText(err)
-                : `Failed to send prompt: ${errorText(err)}`,
+            message: held
+              ? `${held.message} Your message is waiting in your queue.`
+              : pendingHeld && skillInvocation
+                ? `${pendingHeld.message} /${skillInvocation.name} did not run; send it again once the change applies or is reset.`
+                : withdrawn
+                  ? withdrawn.uncertain
+                    ? `The response stopped, and Claude may already have read your message. It is held in your queue: ${STEER_MAY_HAVE_BEEN_READ.toLowerCase()}`
+                    : "The response ended before it read your message. It is waiting in your queue."
+                  : setupFinished
+                    ? errorText(err)
+                    : `Failed to send prompt: ${errorText(err)}`,
             target: { type: "session", id: driver.id },
             ...(msg.clientRequestId !== undefined
               ? { failedPromptClientRequestId: msg.clientRequestId }
@@ -988,6 +1008,7 @@ export class Connection implements Viewer {
       case "setModel":
         return this.onSetModel(msg.provider, msg.id);
       case "setThinkingLevel":
+        if (this.refuseStartedRuntimeConfig()) return;
         return this.withViewedSession((_driver, view) => {
           if (view) this.applySessionConfig(() => view.setReasoning(msg.level));
         });
@@ -1243,12 +1264,9 @@ export class Connection implements Viewer {
           msg.sessionId,
           msg.requestId,
         );
-      case "moveSessionAccount":
-        return this.onMoveSessionAccount(
-          msg.sessionId,
-          msg.credentialProfileId,
-          msg.requestId,
-        );
+      case "setPendingRuntime":
+      case "clearPendingRuntime":
+        return this.onPendingRuntime(msg);
 
       case "grantApprovalForSession":
         grantApprovalForSession(
@@ -4071,7 +4089,26 @@ export class Connection implements Viewer {
     }
   }
 
+  /**
+   * `setModel` / `setThinkingLevel` serve a session that has not started (a
+   * draft on the server). A started session's change is a pending selection
+   * (`setPendingRuntime`); refused here with the reason, targeted at it.
+   */
+  private refuseStartedRuntimeConfig(): boolean {
+    const sessionId = this.viewing?.sessionId;
+    if (!sessionId || (sessionStore.get(sessionId)?.messageCount ?? 0) === 0)
+      return false;
+    this.send({
+      type: "error",
+      target: { type: "session", id: sessionId },
+      message:
+        "This session has started: change its model or effort in the Runtime section, from its next turn.",
+    });
+    return true;
+  }
+
   private async onSetModel(provider: string, id: string): Promise<void> {
+    if (this.refuseStartedRuntimeConfig()) return;
     // Route model changes through the runtime view (the pi adapter resolves the
     // model via the profile registry; the claude-sdk adapter takes the alias).
     // The harness owns the selection, so a storage-backed view opens it first.
@@ -4909,32 +4946,36 @@ export class Connection implements Viewer {
   }
 
   /**
-   * The user's move of an idle session to the account they picked, right
-   * away. The answer retires the inspector's pending control; a refusal is
-   * the session's failure (`web/src/lib/messageArrival.ts`).
+   * The user's change to what a started session's next turn runs on, or its
+   * reset (`sessionPendingRuntime.ts`). Accepted during a turn too. The answer
+   * retires the pending control; a refusal is the session's failure
+   * (`web/src/lib/messageArrival.ts`).
    */
-  private async onMoveSessionAccount(
-    sessionId: string,
-    credentialProfileId: string,
-    requestId: string,
+  private async onPendingRuntime(
+    msg: Extract<
+      ClientMessage,
+      { type: "setPendingRuntime" } | { type: "clearPendingRuntime" }
+    >,
   ): Promise<void> {
+    const { sessionId, requestId } = msg;
     try {
-      await moveSessionAccount({
-        sessionId,
-        targetProfileId: credentialProfileId,
-        by: "user",
-        // The user may move any of their own sessions while it exists.
-        authorize: () => {
-          const row = sessionStore.get(sessionId);
-          if (!row) throw new Error("Session does not exist or was deleted.");
-          if (row.scope !== "user")
-            throw new Error("Only a user session can move to another account.");
-        },
-      });
-      this.send({ type: "sessionAccountMoveAnswer", requestId, sessionId });
+      if (!isSafeId(sessionId)) throw new Error("Invalid session id.");
+      if (msg.type === "clearPendingRuntime")
+        await clearSessionPendingRuntime(sessionId);
+      else
+        await setSessionPendingRuntime(
+          sessionId,
+          {
+            ...(msg.model ? { model: msg.model } : {}),
+            ...(msg.thinkingLevel ? { thinkingLevel: msg.thinkingLevel } : {}),
+            ...(msg.account ? { account: msg.account } : {}),
+          },
+          "user",
+        );
+      this.send({ type: "pendingRuntimeAnswer", requestId, sessionId });
     } catch (err) {
       this.send({
-        type: "sessionAccountMoveAnswer",
+        type: "pendingRuntimeAnswer",
         requestId,
         sessionId,
         error: errorText(err),

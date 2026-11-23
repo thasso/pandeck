@@ -31,13 +31,17 @@ import { SessionBusyError } from "./session/runtime/errors.ts";
 /**
  * A turn refused because the session is held. It IS busy to every caller: each
  * one already keeps its work for a later idle edge on `SessionBusyError`
- * instead of spending a retry or dropping it.
+ * instead of spending a retry or dropping it, and puts it back as it was,
+ * spending no attempt, on this class. A Stop is one hold; a pending runtime
+ * selection that cannot apply yet is another (`sessionPendingRuntime.ts`),
+ * whose message is its own.
  */
 export class AutomaticTurnsHeldError extends SessionBusyError {
-  constructor(sessionId: string) {
+  constructor(sessionId: string, message?: string) {
     super(
       sessionId,
-      `Session ${sessionId} was stopped; nothing is sent until it is resumed.`,
+      message ??
+        `Session ${sessionId} was stopped; nothing is sent until it is resumed.`,
     );
     this.name = "AutomaticTurnsHeldError";
   }

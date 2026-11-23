@@ -187,6 +187,7 @@ const CLASSIFIED: Record<
       hasAnySession: "read",
       upsert: "projected-write",
       setPeerTurnCap: "projected-write",
+      setPendingRuntime: "projected-write",
       switchCredentialProfile: "projected-write",
       requireEnterprise: "projected-write",
       setCompactionWindow: "non-projected-write",

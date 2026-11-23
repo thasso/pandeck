@@ -96,6 +96,7 @@ import type {
   PromptQueueCommand,
   ServerMessage,
   SessionAccountMoveTarget,
+  SessionRuntimeChange,
   TimelineAnchorTarget,
   StateEventsMessage,
   BackgroundWorkItemSummary,
@@ -613,11 +614,13 @@ export interface UIState {
     targets: LoadState<SessionAccountMoveTarget[]>;
   } | null;
   /**
-   * PENDING CONTROL STATE ONLY: session id → the request id of the account
-   * move this browser sent and has not had answered. Its answer retires it;
-   * a refusal arrives as the session's failure (`lib/messageArrival.ts`).
+   * PENDING CONTROL STATE ONLY: session id → the request id of the runtime
+   * change (`setPendingRuntime` / `clearPendingRuntime`) this browser sent and
+   * has not had answered. Its answer retires it; a refusal arrives as the
+   * session's failure (`lib/messageArrival.ts`). The selection itself arrives
+   * on the session row.
    */
-  accountMovePending: Record<string, string>;
+  runtimeChangePending: Record<string, string>;
   /**
    * Owners whose last Stop-all left a retained host open because an ordinary
    * prompted turn is still inside its safe boundary. The wait is shown; it is
@@ -1007,7 +1010,7 @@ const emptyInitial: UIState = {
   backgroundStopPending: [],
   backgroundStopAllPending: [],
   accountMoveTargets: null,
-  accountMovePending: {},
+  runtimeChangePending: {},
   backgroundHostCloseWaiting: [],
   sessionListFresh: false,
   taskListFresh: false,
@@ -2056,7 +2059,7 @@ type Action =
       sessionId: string;
       requestId: string;
     }
-  | { kind: "accountMoveSent"; sessionId: string; requestId: string }
+  | { kind: "runtimeChangeSent"; sessionId: string; requestId: string }
   | { kind: "optimisticWorktreeRemove"; worktreeId: string }
   | {
       kind: "optimisticPullRequestCardAction";
@@ -5422,14 +5425,14 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
         targets: loading(),
       },
     };
-  if (action.kind === "accountMoveSent")
-    // The move is the session's own send, so like a prompt it retires that
-    // session's earlier failure (a refused move a retry may now fix); its
+  if (action.kind === "runtimeChangeSent")
+    // The change is the session's own send, so like a prompt it retires that
+    // session's earlier failure (a held turn the change may now release); its
     // answer never does, which could erase a newer failure.
     return {
       ...state,
-      accountMovePending: {
-        ...state.accountMovePending,
+      runtimeChangePending: {
+        ...state.runtimeChangePending,
         [action.sessionId]: action.requestId,
       },
       sessionFailures: withoutSessionFailure(
@@ -5807,7 +5810,7 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       ...(action.connected
         ? {}
         : {
-            accountMovePending: {},
+            runtimeChangePending: {},
             accountMoveTargets:
               state.accountMoveTargets &&
               isPending(state.accountMoveTargets.targets)
@@ -5878,13 +5881,14 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       },
     };
   }
-  if (msg.type === "sessionAccountMoveAnswer") {
+  if (msg.type === "pendingRuntimeAnswer") {
     // Control feedback only: the row arrives through the session list, and a
     // refusal becomes the session's failure in `reduceAssistantState`.
-    if (state.accountMovePending[msg.sessionId] !== msg.requestId) return state;
-    const accountMovePending = { ...state.accountMovePending };
-    delete accountMovePending[msg.sessionId];
-    return { ...state, accountMovePending };
+    if (state.runtimeChangePending[msg.sessionId] !== msg.requestId)
+      return state;
+    const runtimeChangePending = { ...state.runtimeChangePending };
+    delete runtimeChangePending[msg.sessionId];
+    return { ...state, runtimeChangePending };
   }
   // Drop streamed events addressed to a session we're no longer viewing. The
   // server tags every turn event with its sessionId; the snapshot in `history`
@@ -6993,7 +6997,10 @@ export interface AssistantActions {
   /** Ask the server which accounts the idle session could move to now. */
   listSessionAccountMoveTargets: (sessionId: string) => void;
   /** Move the idle session to that account right away. */
-  moveSessionAccount: (sessionId: string, credentialProfileId: string) => void;
+  /** Change what a started session's next turn starts on. */
+  setPendingRuntime: (sessionId: string, change: SessionRuntimeChange) => void;
+  /** Drop that change: the next turn starts on what the session runs now. */
+  clearPendingRuntime: (sessionId: string) => void;
   /**
    * Stop one background item, or everything one session owns, under HUMAN
    * authorization. The server calls the supervisor's Stop service directly; the
@@ -8938,15 +8945,15 @@ export function useAssistant({
         dispatch({ kind: "accountMoveTargetsRequested", sessionId, requestId });
         send({ type: "listSessionAccountMoveTargets", sessionId, requestId });
       },
-      moveSessionAccount: (sessionId, credentialProfileId) => {
+      setPendingRuntime: (sessionId, change) => {
         const requestId = createClientId();
-        dispatch({ kind: "accountMoveSent", sessionId, requestId });
-        send({
-          type: "moveSessionAccount",
-          sessionId,
-          credentialProfileId,
-          requestId,
-        });
+        dispatch({ kind: "runtimeChangeSent", sessionId, requestId });
+        send({ type: "setPendingRuntime", sessionId, requestId, ...change });
+      },
+      clearPendingRuntime: (sessionId) => {
+        const requestId = createClientId();
+        dispatch({ kind: "runtimeChangeSent", sessionId, requestId });
+        send({ type: "clearPendingRuntime", sessionId, requestId });
       },
       setSpawnOwnership: (id, ownership) => {
         const requestId = trackMutation(

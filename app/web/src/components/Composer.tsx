@@ -78,6 +78,10 @@ import {
 } from "./DictationControls.tsx";
 import { AGENT_TYPE_DISPLAY } from "./agentTypeDisplay.ts";
 import { Button } from "./ui/button.tsx";
+import type {
+  RuntimeArgumentOption,
+  RuntimeCommandName,
+} from "../lib/runtimeSlashCommand.ts";
 import { Input } from "./ui/input.tsx";
 import {
   InputGroup,
@@ -165,6 +169,17 @@ interface Props {
    * dispatching them to the server.
    */
   onClientSlashCommand?: (name: string, rawArgs: string) => string | null;
+  /**
+   * The arguments `/model`, `/effort` and `/account` complete to, for a
+   * started session (`lib/runtimeSlashCommand.ts`). Stable by content.
+   */
+  runtimeArguments?: (name: RuntimeCommandName) => RuntimeArgumentOption[];
+  /**
+   * Shown only while a change to the next turn's model, effort or account is
+   * pending: what it starts on, and the way to the inspector's Runtime
+   * section (`docs/session-runtime-switching.md`).
+   */
+  runtimeChip?: { label: string; onOpen: () => void };
   /**
    * The current skills library scan, read only for the frozen
    * `session.activeSkills`: each one's description, argument hint and whether
@@ -728,12 +743,13 @@ interface SlashState {
   items: SlashMenuItem[];
 }
 
-function slashState(
+export function slashState(
   text: string,
   commands: SlashCommandInfo[],
   skills: readonly ComposerSkill[],
   agentType: AgentType | undefined,
   harness: Harness | undefined,
+  runtimeArguments?: (name: RuntimeCommandName) => RuntimeArgumentOption[],
 ): SlashState {
   if (!text.startsWith("/") || text.startsWith("//") || text.includes("\n")) {
     return { active: false, items: [] };
@@ -752,8 +768,39 @@ function slashState(
   const match = body.match(/^(\S*)(?:\s+([\s\S]*))?$/);
   const token = match?.[1] ?? "";
   const hasArgs = match?.[2] !== undefined;
+  if (hasArgs) {
+    // A runtime command's one argument completes from the session's own
+    // models, levels or accounts once the user starts typing it: a bare
+    // `/model ` still sends on Enter and opens the Runtime section. A typed
+    // value that already names one closes the menu, so Enter sends the command
+    // instead of completing it again.
+    const argument = allowed.some((cmd) => cmd.name === token)
+      ? commands.find((cmd) => cmd.name === token)?.argument
+      : undefined;
+    const typed = (match?.[2] ?? "").trim().toLowerCase();
+    if (!argument || !runtimeArguments || !typed)
+      return { active: false, items: [] };
+    const options = runtimeArguments(argument).filter(
+      (option) => !option.disabled,
+    );
+    if (options.some((option) => option.value.toLowerCase() === typed))
+      return { active: false, items: [] };
+    const items = options
+      .filter(
+        (option) =>
+          option.value.toLowerCase().startsWith(typed) ||
+          option.label.toLowerCase().startsWith(typed),
+      )
+      .slice(0, 8)
+      .map((option) => ({
+        name: `${token} ${option.value}`,
+        description: option.label,
+        usage: option.detail ?? "",
+      }));
+    return { active: true, items };
+  }
   const items = allowed.filter((cmd) => cmd.name.startsWith(token)).slice(0, 8);
-  return { active: !hasArgs, items };
+  return { active: true, items };
 }
 
 /**
@@ -900,6 +947,8 @@ export const Composer = memo(function Composer({
   models,
   slashCommands,
   onClientSlashCommand,
+  runtimeArguments,
+  runtimeChip,
   skillSummaries,
   actions,
   focusToken,
@@ -1180,6 +1229,7 @@ export const Composer = memo(function Composer({
     skills,
     session?.agentType,
     session?.harness,
+    runtimeArguments,
   );
   const selectedSlash =
     slash.items[Math.min(slashIndex, Math.max(0, slash.items.length - 1))];
@@ -2317,6 +2367,20 @@ export const Composer = memo(function Composer({
                           mode={sessionMode}
                           onChange={(mode) => actions.setSessionMode(mode)}
                         />
+                      ) : null}
+                      {runtimeChip ? (
+                        <Button
+                          variant="outline"
+                          size="xs"
+                          className="min-w-0 max-w-48"
+                          title={`Next turn: ${runtimeChip.label}`}
+                          aria-label={`Next turn: ${runtimeChip.label}. Open the Runtime section.`}
+                          onClick={runtimeChip.onOpen}
+                        >
+                          <span className="truncate">
+                            Next turn: {runtimeChip.label}
+                          </span>
+                        </Button>
                       ) : null}
                     </div>
                   ) : null}

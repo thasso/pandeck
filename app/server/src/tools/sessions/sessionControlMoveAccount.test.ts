@@ -1,7 +1,8 @@
 /**
- * `session_control` `move_account`: an owning coordinator moves its idle child
- * to another eligible account through the same move the session inspector
- * uses, and loses that authority the moment the user takes the child over.
+ * `session_control` `move_account`: an owning coordinator sets its child's
+ * pending account, the same selection the session inspector sets, applied
+ * when the child's next turn starts; it loses that authority the moment the
+ * user takes the child over.
  */
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
@@ -25,8 +26,13 @@ const { sessionRuntime } = await import("../../session/runtimeInstance.ts");
 const { FakeRuntimeDriver } = await import("../../test/fakeRuntimeDriver.ts");
 const { setAccountMoveHostForTests } =
   await import("../../sessionAccountMove.ts");
-const { assertAccountRecoveryAdmission } =
-  await import("../../session/runtime/accountRecoveryAdmission.ts");
+const { setPendingRuntimeHostForTests } =
+  await import("../../sessionPendingRuntime.ts");
+setPendingRuntimeHostForTests({
+  stateChanged: async () => {},
+  publishRows: async () => {},
+  wake: () => {},
+});
 const { sessionControlTools, setSessionControlRuntimeForTests } =
   await import("./sessionControlTool.ts");
 
@@ -68,7 +74,7 @@ function seed(title: string, credentialProfileId?: string): string {
   return id;
 }
 
-/** A loaded idle child whose engine switch can be held open by `gate`. */
+/** A loaded child; setting its pending account never switches its engine. */
 function child(coordinator: string, from: string) {
   const id = seed("Child", from);
   sessionStore.linkSpawned(coordinator, id);
@@ -79,43 +85,17 @@ function child(coordinator: string, from: string) {
       model: { provider: string; id: string };
       thinkingLevel: "off";
     };
-    switchAccount(
-      profileId: string,
-      admit: () => void,
-      options?: unknown,
-    ): Promise<void>;
+    switchAccount(): Promise<void>;
   };
-  let bound = from;
-  let gate: (() => Promise<void>) | undefined;
   driver.modelSelection = () => ({
     model: offers.get(from)!,
     thinkingLevel: "off",
   });
-  driver.switchAccount = async (next, admit) => {
-    admit();
-    await gate?.();
-    admit();
-    sessionStore.switchCredentialProfile(id, bound, next);
-    bound = next;
+  driver.switchAccount = async () => {
+    throw new Error("a pending account never switches when it is set");
   };
-  setAccountMoveHostForTests({
-    runtime: sessionRuntime,
-    resident: async () => driver,
-    acquire: async () => driver,
-    publishRows: async () => {},
-  });
-  return {
-    id,
-    driver,
-    hold(entered: () => void) {
-      let release!: () => void;
-      gate = () => {
-        entered();
-        return new Promise<void>((resolve) => (release = resolve));
-      };
-      return () => release();
-    },
-  };
+  setAccountMoveHostForTests({ resident: async () => driver });
+  return { id, driver };
 }
 
 const tool = () => sessionControlTools()[0]!;
@@ -140,6 +120,10 @@ const move = (caller: string, target: string, accountName: unknown) =>
 const text = (result: Awaited<ReturnType<typeof move>>) =>
   (result.content[0] as { type: "text"; text: string }).text;
 const boundTo = (id: string) => sessionStore.get(id)?.credentialProfileId;
+const pendingTo = (id: string) => {
+  const account = sessionStore.get(id)?.pendingRuntime?.account;
+  return account?.kind === "account" ? account.id : account?.kind;
+};
 
 afterEach(async () => {
   setSessionControlRuntimeForTests(undefined);
@@ -153,28 +137,27 @@ afterEach(async () => {
 });
 
 describe("session_control move_account", () => {
-  it("moves an owned idle child by name or id, and says so", async () => {
+  it("sets an owned child's pending account by name or id, and says so", async () => {
     const a = account("Move A");
     const b = account("Move B");
     const caller = seed("Coordinator");
     const c = child(caller, a);
     assert.equal(
       text(await move(caller, c.id, "move b")),
-      `Moved ${c.id} from Move A to Move B.`,
+      `${c.id} moves to Move B when its next turn starts.`,
     );
-    assert.equal(boundTo(c.id), b);
+    assert.equal(boundTo(c.id), a, "nothing moves before the next turn");
+    assert.equal(pendingTo(c.id), b);
+    assert.equal(sessionStore.get(c.id)?.pendingRuntime?.setBy, "coordinator");
     assert.equal(
       text(await move(caller, c.id, a)),
-      `Moved ${c.id} from Move B to Move A.`,
+      `${c.id} stays on Move A; no account move is pending.`,
     );
     assert.equal(boundTo(c.id), a);
-    assert.match(
-      JSON.stringify(sessionRuntime.get(c.id)?.clientTimeline()),
-      /Switched from Move A to Move B — chosen by its coordinating session\./,
-    );
+    assert.equal(sessionStore.get(c.id)?.pendingRuntime, undefined);
   });
 
-  it("refuses a session it does not own, the caller itself, or a running child", async () => {
+  it("refuses a session it does not own or the caller itself; a running child takes it for its next turn", async () => {
     const a = account("Owner A");
     account("Owner B");
     const caller = seed("Coordinator");
@@ -201,29 +184,11 @@ describe("session_control move_account", () => {
       isRunning: (id) => id === running.id,
       abort: () => assert.fail("no abort"),
     });
-    await assert.rejects(
-      () => move(caller, running.id, "Owner B"),
-      /is running; move it once its turn ends/,
+    assert.match(
+      text(await move(caller, running.id, "Owner B")),
+      /moves to Owner B when its next turn starts\.$/,
     );
     assert.equal(boundTo(running.id), a);
-  });
-
-  it("refuses a takeover that lands mid-move and releases every hold", async () => {
-    const a = account("Takeover A");
-    const b = account("Takeover B");
-    const caller = seed("Coordinator");
-    const c = child(caller, a);
-    let entered = false;
-    const release = c.hold(() => (entered = true));
-    const moving = move(caller, c.id, "Takeover B");
-    await vi.waitFor(() => assert.ok(entered));
-    assert.ok(sessionStore.setSpawnedOwnership(c.id, "taken-over"));
-    release();
-    await assert.rejects(moving, /no longer owned.*cannot be moved here/);
-    assert.equal(boundTo(c.id), a);
-    assert.equal(sessionRuntime.isBusy(c.id), false);
-    assertAccountRecoveryAdmission(c.id);
-    assert.notEqual(boundTo(c.id), b);
   });
 
   it("names the eligible accounts for an unknown name, and refuses an ambiguous one", async () => {
@@ -253,11 +218,12 @@ describe("session_control move_account", () => {
       ),
     });
     await move(caller, c.id, twin2);
-    assert.equal(boundTo(c.id), twin2);
+    assert.equal(pendingTo(c.id), twin2);
     await assert.rejects(
       () => move(caller, c.id, " "),
       /requires an account name or id/,
     );
-    assert.equal(boundTo(c.id), twin2);
+    assert.equal(pendingTo(c.id), twin2);
+    assert.equal(boundTo(c.id), a);
   });
 });

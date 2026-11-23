@@ -62,7 +62,7 @@ interface Controller {
 }
 const controllers = new WeakMap<LiveRuntimeSession, Controller>();
 /** A model selection's identity: a move is refused once it changes. */
-export function selectionSignature(selection: Selection | undefined): string {
+function selectionSignature(selection: Selection | undefined): string {
   return JSON.stringify({
     model: selection?.model
       ? { provider: selection.model.provider, id: selection.model.id }

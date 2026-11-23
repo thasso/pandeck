@@ -36,6 +36,7 @@ import {
   ModeSelector,
   composerSkills,
   resolveSlashSubmit,
+  slashState,
 } from "./Composer.tsx";
 
 stubMatchMedia();
@@ -621,6 +622,153 @@ describe("Composer busy mode", () => {
       text: "/compact",
       command: { name: "compact", rawArgs: "" },
     });
+  });
+});
+
+describe("Composer runtime commands", () => {
+  const commands: SlashCommandInfo[] = [
+    {
+      name: "model",
+      description: "Choose the model this session's next turn starts on",
+      usage: "/model [model]",
+      agentTypes: ["developer"],
+      execution: "client",
+      runsWhileStreaming: true,
+      argument: "model",
+    },
+  ];
+  const runtimeArguments = () => [
+    { value: "claude-opus", label: "Claude Opus" },
+    { value: "claude-sonnet", label: "Claude Sonnet" },
+    {
+      value: "gpt-5.5",
+      label: "GPT-5.5",
+      detail: "Another harness: not available yet",
+      disabled: true,
+    },
+  ];
+
+  it("completes an argument once one is typed, never a refused one", () => {
+    const state = (text: string) =>
+      slashState(
+        text,
+        commands,
+        [],
+        "developer",
+        "claude-sdk",
+        runtimeArguments,
+      );
+    expect(state("/model ").active).toBe(false);
+    expect(state("/model claude").items.map((item) => item.name)).toEqual([
+      "model claude-opus",
+      "model claude-sonnet",
+    ]);
+    expect(state("/model gpt").items).toEqual([]);
+    expect(state("/model Claude Son").items).toEqual([
+      {
+        name: "model claude-sonnet",
+        description: "Claude Sonnet",
+        usage: "",
+      },
+    ]);
+    // A complete value closes the menu so Enter sends it.
+    expect(state("/model claude-opus ").active).toBe(false);
+    expect(
+      slashState("/model claude", commands, [], "developer", "claude-sdk")
+        .active,
+    ).toBe(false);
+  });
+
+  let root: Root | null = null;
+  let container: HTMLDivElement | null = null;
+
+  afterEach(() => {
+    act(() => root?.unmount());
+    root = null;
+    container = null;
+    window.localStorage.clear();
+  });
+
+  function renderComposer(
+    runtimeChip?: ComponentProps<typeof Composer>["runtimeChip"],
+  ) {
+    const onSend = vi.fn();
+    const onQueue = vi.fn();
+    const onClientSlashCommand = vi.fn(() => null);
+    ({ container, root } = mount());
+    act(() =>
+      root!.render(
+        <Composer
+          onSend={onSend}
+          onQueue={onQueue}
+          onAbort={() => {}}
+          streaming
+          disabled={false}
+          contextInfo={null}
+          session={
+            {
+              agentType: "developer",
+              harness: "claude-sdk",
+              canSteer: true,
+            } as never
+          }
+          models={[]}
+          slashCommands={commands}
+          onClientSlashCommand={onClientSlashCommand}
+          runtimeArguments={runtimeArguments}
+          {...(runtimeChip ? { runtimeChip } : {})}
+          actions={{ runSlashCommand: vi.fn() } as unknown as AssistantActions}
+        />,
+      ),
+    );
+    const textarea = container.querySelector("textarea")!;
+    return { textarea, onSend, onQueue, onClientSlashCommand };
+  }
+
+  function type(textarea: HTMLTextAreaElement, value: string) {
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )?.set;
+    act(() => {
+      setter?.call(textarea, value);
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+
+  function press(textarea: HTMLTextAreaElement) {
+    act(() => {
+      textarea.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
+    });
+  }
+
+  it("sets the model at once mid-turn, never queueing it", () => {
+    const { textarea, onSend, onQueue, onClientSlashCommand } =
+      renderComposer();
+    type(textarea, "/model claude-s");
+    // Enter completes the argument, then sends the complete command.
+    press(textarea);
+    expect(textarea.value).toBe("/model claude-sonnet ");
+    press(textarea);
+    expect(onClientSlashCommand).toHaveBeenCalledWith("model", "claude-sonnet");
+    expect(onQueue).not.toHaveBeenCalled();
+    expect(onSend).not.toHaveBeenCalled();
+    expect(textarea.value).toBe("");
+  });
+
+  it("shows the chip only while a change is pending, and opens Runtime from it", () => {
+    renderComposer();
+    expect(container!.textContent).not.toContain("Next turn:");
+    act(() => root?.unmount());
+    const onOpen = vi.fn();
+    renderComposer({ label: "Claude Sonnet · High", onOpen });
+    const chip = [...container!.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Next turn: Claude Sonnet · High"),
+    )!;
+    act(() => chip.click());
+    expect(onOpen).toHaveBeenCalledTimes(1);
   });
 });
 

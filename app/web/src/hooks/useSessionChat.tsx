@@ -55,6 +55,17 @@ import {
   spawnedSessionsView,
 } from "../lib/sessionInbox.ts";
 import type { AssistantActions, UIState } from "./useAssistant.ts";
+import {
+  runtimeTargetLabel,
+  type SessionRuntimeControl,
+} from "../components/SessionRuntimeSection.tsx";
+import {
+  isRuntimeCommand,
+  resolveRuntimeCommand,
+  runtimeArgumentOptions,
+  type RuntimeCommandName,
+} from "../lib/runtimeSlashCommand.ts";
+import { runtimeCommandContext } from "../lib/sessionRuntimeControl.ts";
 import type { TranscriptFocus } from "./useTranscriptFocus.ts";
 import {
   usePendingChatComments,
@@ -173,6 +184,20 @@ export interface SessionChatInput {
   canCreateDrafts?: boolean;
   /** `/review`: only a host that can start the review session offers it. */
   onReviewCommand?: (rawArgs: string) => string | null;
+  /**
+   * `/model`, `/effort`, `/account` and the composer's runtime chip, for a
+   * started session (`lib/runtimeSlashCommand.ts`). Without it the commands
+   * are not offered.
+   */
+  runtimeCommands?:
+    | {
+        control: SessionRuntimeControl;
+        /** Accounts `/account` may name; offered only when more than one. */
+        accountChoices: readonly { id: string; name: string }[];
+        /** Open the inspector at its Runtime section. */
+        open: () => void;
+      }
+    | undefined;
 }
 
 /** Submitting follows the answer, wherever in the conversation it was sent from. */
@@ -251,6 +276,7 @@ export function useSessionChat({
   onForkSession = actions.forkSession,
   canCreateDrafts = true,
   onReviewCommand,
+  runtimeCommands,
 }: SessionChatInput) {
   const {
     sessions,
@@ -997,6 +1023,19 @@ export function useSessionChat({
   const runClientSlashCommand = useCallback(
     (name: string, rawArgs: string): string | null => {
       if (name === "review" && onReviewCommand) return onReviewCommand(rawArgs);
+      if (isRuntimeCommand(name)) {
+        if (!runtimeCommands || !sessionId)
+          return `/${name} is available once the session has started.`;
+        const resolved = resolveRuntimeCommand(
+          name,
+          rawArgs,
+          runtimeCommandContext(runtimeCommands),
+        );
+        if (resolved.kind === "error") return resolved.message;
+        if (resolved.kind === "open") runtimeCommands.open();
+        else actions.setPendingRuntime(sessionId, resolved.change);
+        return null;
+      }
       if (name === "rename") {
         // Only "is there a session" is decided here: the loaded transcript is a
         // window that may open mid-turn with no user row, so whether there is a
@@ -1007,8 +1046,39 @@ export function useSessionChat({
       }
       return `/${name} is not available here.`;
     },
-    [actions, sessionId, onReviewCommand],
+    [actions, sessionId, onReviewCommand, runtimeCommands],
   );
+  // The registry this composer offers: the runtime commands only for a
+  // started session, and `/account` only when it has an account to choose.
+  const slashCommands = useMemo(
+    () =>
+      state.slashCommands.filter((command) =>
+        !isRuntimeCommand(command.name)
+          ? true
+          : runtimeCommands !== undefined &&
+            (command.name !== "account" ||
+              runtimeCommands.accountChoices.length > 1),
+      ),
+    [state.slashCommands, runtimeCommands],
+  );
+  const runtimeArguments = useMemo(
+    () =>
+      runtimeCommands
+        ? (name: RuntimeCommandName) =>
+            runtimeArgumentOptions(name, runtimeCommandContext(runtimeCommands))
+        : undefined,
+    [runtimeCommands],
+  );
+  const runtimeChip = useMemo(() => {
+    const pending = runtimeCommands?.control.pending;
+    if (!runtimeCommands || !pending) return undefined;
+    return {
+      label: runtimeTargetLabel(pending, runtimeCommands.control.models, (id) =>
+        runtimeCommands.control.accounts?.nameOf(id),
+      ),
+      onOpen: runtimeCommands.open,
+    };
+  }, [runtimeCommands]);
   // Live peer-prompt card lifecycle patches (Task 90/89 in-place reconciliation)
   // overlaid onto the rendered messages regardless of their source above.
   const transcriptMessages = useMemo(
@@ -1060,8 +1130,10 @@ export function useSessionChat({
         state.contextInfo?.sessionId === sessionId ? state.contextInfo : null,
       session,
       models,
-      slashCommands: state.slashCommands,
+      slashCommands,
       onClientSlashCommand: runClientSlashCommand,
+      ...(runtimeArguments ? { runtimeArguments } : {}),
+      ...(runtimeChip ? { runtimeChip } : {}),
       skillSummaries: skillSummariesCache.current.value,
       actions,
       draftStorageKey,

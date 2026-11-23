@@ -1023,3 +1023,44 @@ test("dismissRunFailure writes nothing for a deleted session", () => {
     "failed",
   );
 });
+
+test("a pending runtime selection persists across restart, survives upserts, and a damaged value reads as none", () => {
+  const id = `pending-runtime-${Date.now()}`;
+  sessionStore.upsert({ id, harness: "pi", agentType: "assistant" });
+  assert.equal(sessionStore.get(id)?.pendingRuntime, undefined);
+  const pending = {
+    model: { provider: "openai-codex", id: "gpt-5.5" },
+    thinkingLevel: "high" as const,
+    account: { kind: "account" as const, id: "cp_b" },
+    setBy: "coordinator" as const,
+  };
+  sessionStore.setPendingRuntime(id, pending);
+  sessionStore.upsert({
+    id,
+    harness: "pi",
+    agentType: "assistant",
+    title: "T",
+  });
+  closeDb();
+  assert.deepEqual(sessionStore.get(id)?.pendingRuntime, pending);
+  // A row created next to it, as a fork's is, starts with none.
+  const child = `${id}-fork`;
+  sessionStore.upsert({ id: child, harness: "pi", agentType: "assistant" });
+  assert.equal(sessionStore.get(child)?.pendingRuntime, undefined);
+  getDb()
+    .prepare("UPDATE session_index SET pending_runtime = ? WHERE id = ?")
+    .run('{"model":', id);
+  assert.equal(sessionStore.get(id)?.pendingRuntime, undefined);
+  assert.equal(sessionStore.get(id)?.title, "T", "the row still opens");
+  sessionStore.setPendingRuntime(id, null);
+  assert.equal(
+    getDb()
+      .prepare("SELECT pending_runtime FROM session_index WHERE id = ?")
+      .get(id)?.pending_runtime,
+    null,
+  );
+  sessionStore.markDeleted(id);
+  assert.throws(() => sessionStore.setPendingRuntime(id, pending));
+  sessionStore.remove(id);
+  sessionStore.remove(child);
+});

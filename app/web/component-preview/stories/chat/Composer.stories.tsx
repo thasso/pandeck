@@ -28,7 +28,36 @@ type State =
   | "streaming"
   | "disabled"
   | "inert"
-  | "dictation";
+  | "dictation"
+  | "runtimePending"
+  | "runtimeArgument";
+/** `/model`, as the server registers it (`slashCommands.ts`). */
+const modelCommand = {
+  name: "model",
+  description: "Choose the model this session's next turn starts on",
+  usage: "/model [model]",
+  agentTypes: ["developer" as const],
+  execution: "client" as const,
+  runsWhileStreaming: true,
+  argument: "model" as const,
+};
+const runtimeCommands = [...chatCommands, modelCommand];
+/** What `/model` completes to: this engine's models, another harness's disabled. */
+const runtimeArguments = () =>
+  chatModels.map((model) =>
+    model.provider === "claude-sdk"
+      ? { value: model.id, label: model.name }
+      : {
+          value: model.id,
+          label: model.name,
+          detail: "Another harness: not available yet",
+          disabled: true,
+        },
+  );
+const runtimeChip = {
+  label: "Claude Opus 4.6 · High · Work",
+  onOpen: noop,
+};
 function ComposerPreview({
   state,
   frameWidth,
@@ -99,7 +128,10 @@ function ComposerPreview({
       ? "Keep transcript rows stable when another session broadcasts an update."
       : state === "slash"
         ? "/"
-        : "";
+        : state === "runtimeArgument"
+          ? "/model o"
+          : "";
+  const runtime = state === "runtimePending" || state === "runtimeArgument";
   return (
     <div
       ref={host}
@@ -116,7 +148,9 @@ function ComposerPreview({
         contextInfo={null}
         session={chatSession}
         models={chatModels}
-        slashCommands={chatCommands}
+        slashCommands={runtime ? runtimeCommands : chatCommands}
+        {...(runtime ? { runtimeArguments } : {})}
+        {...(state === "runtimePending" ? { runtimeChip } : {})}
         actions={chatActions}
         draft={{ sessionId: chatSession.sessionId, token: 1, text }}
         draftAutoFocus={false}
@@ -145,6 +179,18 @@ export const Disabled = { args: { state: "disabled" } } satisfies Story;
 /** First run: shown, but takes no text until an account works. */
 export const Inert = { args: { state: "inert" } } satisfies Story;
 export const Dictation = { args: { state: "dictation" } } satisfies Story;
+/** A change to the next turn's model, effort or account is pending. */
+export const RuntimePending = {
+  args: { state: "runtimePending" },
+} satisfies Story;
+export const RuntimePendingPhone = {
+  args: { frameWidth: 390, state: "runtimePending" },
+  globals: { viewport: { value: "paPhone", isRotated: false } },
+} satisfies Story;
+/** `/model` completing its argument from this engine's models. */
+export const RuntimeArgument = {
+  args: { state: "runtimeArgument" },
+} satisfies Story;
 export const Phone = {
   args: { frameWidth: 390, state: "typed" },
   globals: { viewport: { value: "paPhone", isRotated: false } },
