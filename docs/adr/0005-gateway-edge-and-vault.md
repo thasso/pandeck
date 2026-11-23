@@ -128,10 +128,10 @@ on the edge"):
   every refresh as the record's only writer and seals each rotated refresh token
   before answering; the refresh token and the client secret never leave it. The
   edge gets only a short-lived access token and the record's ids: Atlassian's
-  cloud id and site, or Slack's team, user and workspace host. It reads either
-  from the vault for one tool call, or one set or status check, and never
-  caches, logs or writes it. Every vault integration call is bounded, and a late
-  answer is dropped.
+  cloud id and site, Slack's team, user and workspace host, or GitHub's login.
+  It reads that view from the vault for one tool call, or one set or status
+  check, and never caches, logs or writes it. Every vault integration call is
+  bounded, and a late answer is dropped.
 - An Atlassian OAuth access token goes only to
   `https://api.atlassian.com/ex/<product>/ <cloudId>` with a site-relative path,
   checked before the request; the site makes only browse URLs.

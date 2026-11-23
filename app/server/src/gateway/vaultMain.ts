@@ -19,9 +19,12 @@
  * must be a tmpfs, it starts locked, and `gateway-admin unlock` unlocks it
  * over `--control-socket` (`/run/pandeck-vault/control.sock` unless given).
  * `--integrations-config` names a 0600 JSON file of users' OAuth clients,
- * `{"atlassian" | "slack": {"clientId", "clientSecret"}}`
+ * `{"atlassian" | "slack": {"clientId", "clientSecret"}}` plus the GitHub
+ * App, `{"github": {"appId", "clientId", "clientSecret", "privateKeyFile"}}`
  * (`integrationClients.ts`): with a provider's client the vault exchanges its
- * codes and refreshes those records itself. A file it refuses stops the start.
+ * codes and refreshes those records itself, and with the App's key it mints
+ * `github.token`'s read installation tokens. A file it refuses stops the
+ * start.
  *
  * SIGTERM or SIGINT stops it once every login, renewal and running
  * integration operation it started has ended and been sealed; then it exits 0.
