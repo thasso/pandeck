@@ -48,6 +48,7 @@ import type {
 } from "@assistant/shared";
 import {
   CLAUDE_SDK_PROVIDER,
+  clampThinkingLevelForModel,
   isCodingAgentType,
   sessionModeOrDefault,
   UNLABELED_SESSION_TITLE,
@@ -244,6 +245,7 @@ import {
   ClaudeCompactionWindow,
   readContextUsage,
 } from "./compactionWindow.ts";
+import { AdmissionQueue, type AdmissionPlace } from "./admissionQueue.ts";
 import {
   copyClaudeSessionForAccount,
   lastSavedCostState,
@@ -254,6 +256,7 @@ import {
   claudeSdkModelOption,
   reasoningToThinking,
   knownClaudeSdkModelAlias,
+  type ClaudeSdkModelAlias,
 } from "./modelSettings.ts";
 import type {
   ClaudeQuery,
@@ -274,9 +277,6 @@ const DEFAULT_TITLE = "New Claude SDK";
 const STEER_CANCEL_TIMEOUT_MS = 2_000;
 /** Drop answers plus the retained Stop's interrupt acknowledgement. */
 const STOP_INTERRUPT_TIMEOUT_MS = 2 * STEER_CANCEL_TIMEOUT_MS;
-
-/** How often a model change re-judges a session that keeps moving accounts. */
-const MODEL_CHANGE_ATTEMPTS = 3;
 
 /**
  * A model change that lost a race with an account move: nothing changed, and
@@ -616,10 +616,9 @@ export class ClaudeSdkSession implements LiveSession {
   private modelId: string;
   private thinkingLevel: ThinkingLevel;
   /**
-   * Build vs Plan. Deliberately NOT covered by {@link configurationLocked}:
-   * model and thinking are frozen by the first prompt because the SDK fixes
-   * them at query time, but the mode is only a tool policy, and every turn
-   * builds a fresh `query()` from it.
+   * Build vs Plan. Unlike model and effort, which refuse a change while a turn
+   * runs, the mode is only a tool policy read against the live value, so it
+   * may change at any time.
    */
   private mode: SessionMode;
   /** The agentType applied to this session (default workshop). */
@@ -667,8 +666,25 @@ export class ClaudeSdkSession implements LiveSession {
    * (whose usage is the turn aggregate and would over-count the live context).
    */
   private contextTokens: number | undefined;
-  /** Real model context window learned from `result.modelUsage` (e.g. 1M for Sonnet[1m]). */
+  /** The selected model's real context window, learned from `result.modelUsage` (e.g. 1M for Sonnet[1m]). */
   private contextWindowTokens: number | undefined;
+  /**
+   * First-in, first-out admission (`admissionQueue.ts`): model and effort
+   * changes, prompts admitted behind them, provider-initiated turns and
+   * account switches, in call order.
+   */
+  private readonly admission = new AdmissionQueue();
+  /** Cancels prompts waiting in `admission`; Stop and disposal call them. */
+  private readonly waitingPromptCancels = new Set<() => void>();
+  /** Every Stop counts; a prompt that awaited admission rechecks it. */
+  private stopRequests = 0;
+  /** Account switches in progress: a model or effort change refuses meanwhile. */
+  private accountSwitches = 0;
+  /**
+   * The retained epoch whose effort controls failed part-way: it may not run
+   * the stored effort, so it restarts once quiet (`startTimeSettingsNeedRestart`).
+   */
+  private retainedEffortStale: string | undefined;
   /** Throttle for streaming `contextInfo` broadcasts (see broadcastContextInfo). */
   private lastContextBroadcastAt = 0;
   private autoNameTried = false;
@@ -1331,94 +1347,207 @@ export class ClaudeSdkSession implements LiveSession {
 
   /* ------------------------------- configure ------------------------------- */
 
-  get configurationLocked(): boolean {
-    return this.committed.length > 0 || Boolean(this.liveTurn) || this.running;
-  }
-
-  configure(modelId?: string, thinkingLevel?: ThinkingLevel): void {
-    if (this.configurationLocked)
-      throw new Error(
-        "Model and thinking level are locked after the first prompt.",
-      );
-    if (modelId) this.modelId = claudeSdkModelAlias(modelId);
-    if (thinkingLevel) this.thinkingLevel = thinkingLevel;
-    this.broadcastState();
-  }
+  /*
+   * Model and effort change between turns, before or after the first prompt
+   * (`docs/session-runtime-switching.md`). Nothing changes under a running
+   * turn: it refuses, so the turn's assistant entry, context window and native
+   * controls stay those it started with.
+   */
 
   /**
-   * Select the model. Mirrors the `PiLiveSession.setModel` surface the
-   * connection drives; model/thinking are locked once a turn has run (the SDK
-   * fixes them at query time), so this throws after the first prompt.
+   * Select the model, applied at once like pi's switch: a retained process
+   * switches through its native control (pin-aware, as a new query chooses),
+   * and any later query epoch, resume included, opens on it. Only a curated
+   * Claude model the bound account can run is accepted; the effort is clamped
+   * to what the model supports.
    */
   async setModel(modelId: string): Promise<void> {
-    const alias = claudeSdkModelAlias(modelId);
-    // The session's account must run the new model before anything changes.
-    // Back on a pinned agent's alias, that is the pinned version; a model
-    // change is no stored pin, so no legacy allowance applies.
+    const alias = knownClaudeSdkModelAlias(modelId);
+    if (!alias) throw new Error(`${modelId} is not a Claude model.`);
+    // Back on a pinned agent's alias, the account must run the pinned
+    // version; a model change is no stored pin, so no legacy allowance applies.
     const pin = claudeSessionPin(alias, sessionAgent(this.id));
-    // Nothing holds the account during a model change, so an account move can
-    // commit while a resolve waits for its listing: an answer is only used for
-    // the account it was asked about, and a moved session is judged again on
-    // the account it now has (bounded).
-    for (let attempt = 0; attempt < MODEL_CHANGE_ATTEMPTS; attempt++) {
+    await this.changeSelection("model", async () => {
+      // The session's CURRENT account must run the new model before anything
+      // changes (`resolveClaudeAccountModel`: its listing, the pin, and the
+      // Claude SDK setting). An account switch waits behind this place, but
+      // an answer is still used only for the account it was asked about.
       const account = this.credentialProfileId;
       const sdkModelId = await resolveClaudeAccountModel(
         account,
         alias,
         pin !== undefined ? { pinnedModelId: pin } : {},
       );
-      if (this.credentialProfileId !== account) continue;
-      if (
-        this.activeQuery &&
-        this.retainedEpochKey !== undefined &&
-        this.retainedEpochKey === this.queryEpochKey &&
-        this.activeQuery.setModel
-      ) {
+      if (this.credentialProfileId !== account)
+        throw new AccountChangedDuringModelChangeError();
+      const thinkingLevel = clampThinkingLevelForModel(
+        claudeSdkModelOption(alias),
+        this.thinkingLevel,
+      );
+      const retained = this.retainedQuery();
+      if (retained) {
+        if (!retained.setModel)
+          throw new Error(
+            "This session's Claude process cannot change its model while background work keeps it open.",
+          );
         // The retained process runs the version its account resolved.
-        await this.activeQuery.setModel(sdkModelId);
+        await retained.setModel(sdkModelId);
         // A move during that call closed this process before committing; the
         // new account never judged the model, so nothing changes.
         if (this.credentialProfileId !== account)
           throw new AccountChangedDuringModelChangeError();
-        this.modelId = alias;
-        this.broadcastState();
-        this.onPersist();
-        return;
       }
-      this.configure(modelId, undefined);
-      return;
-    }
-    throw new AccountChangedDuringModelChangeError();
+      // Model and clamped effort are stored TOGETHER, whatever the effort
+      // control does next: a stored effort the model cannot run never exists.
+      const effortChanged = thinkingLevel !== this.thinkingLevel;
+      this.selectModel(alias);
+      this.thinkingLevel = thinkingLevel;
+      try {
+        if (retained && effortChanged)
+          await this.applyRetainedEffort(retained, thinkingLevel, alias);
+      } catch (error) {
+        this.retainedEffortStale = this.retainedEpochKey;
+        throw new Error(
+          `The model changed, but its Claude process did not take the ${thinkingLevel} effort (${error instanceof Error ? error.message : String(error)}); a new Claude process will start with it.`,
+        );
+      } finally {
+        this.selectionChanged();
+        // The compaction window a process starts with is clamped to its
+        // model's window, so a retained process may now need a restart.
+        this.startTimeSettingsChanged();
+      }
+    });
   }
 
-  /** Select thinking for later turns on a retained process through controls. */
+  /** Select the effort for later turns, clamped to the model; a retained process takes it through controls. */
   async setThinkingLevel(thinkingLevel: ThinkingLevel): Promise<void> {
-    if (
-      this.activeQuery &&
+    await this.changeSelection("effort", async () => {
+      const level = this.clampedEffort(thinkingLevel);
+      const retained = this.retainedQuery();
+      if (retained) {
+        try {
+          await this.applyRetainedEffort(retained, level, this.modelId);
+        } catch (error) {
+          // One of the two controls may have landed: the process no longer
+          // runs the stored effort for sure, so it restarts once quiet.
+          this.retainedEffortStale = this.retainedEpochKey;
+          this.startTimeSettingsChanged();
+          throw error;
+        }
+        this.retainedEffortStale = undefined;
+      }
+      this.thinkingLevel = level;
+      this.selectionChanged();
+    });
+  }
+
+  /**
+   * Run a model or effort change in its ADMISSION PLACE (`admissionQueue.ts`):
+   * after every earlier change, prompt admission, provider turn and account
+   * switch, and between turns. It holds the place until it settles, native
+   * controls included, so a later prompt opens on the result and a later
+   * change applies after it: the latest request is what is stored.
+   */
+  private async changeSelection(
+    what: "model" | "effort",
+    change: () => Promise<void>,
+  ): Promise<void> {
+    const place = this.admission.enter();
+    try {
+      await place.ready;
+      this.assertNotDisposed();
+      if (this.accountSwitches > 0)
+        throw new Error(
+          `This session's account is changing; change its ${what} once it has.`,
+        );
+      this.assertBetweenTurns(what);
+      await change();
+    } finally {
+      place.release();
+    }
+  }
+
+  /**
+   * Wait in the admission queue for a prompt's turn to open; false when Stop
+   * or disposal cancelled the wait. The caller releases the place once the
+   * turn is open (`running`) or refused.
+   */
+  private async promptAdmissionTurn(place: AdmissionPlace): Promise<boolean> {
+    let cancel: () => void = () => undefined;
+    const cancelled = new Promise<false>((resolve) => {
+      cancel = () => resolve(false);
+    });
+    this.waitingPromptCancels.add(cancel);
+    try {
+      return await Promise.race([place.ready.then(() => true), cancelled]);
+    } finally {
+      this.waitingPromptCancels.delete(cancel);
+    }
+  }
+
+  /** Stop or disposal: no prompt still waiting for admission may open its turn. */
+  private cancelWaitingPrompts(): void {
+    for (const cancel of [...this.waitingPromptCancels]) cancel();
+  }
+
+  private assertBetweenTurns(what: "model" | "effort"): void {
+    if (this.liveTurn || this.running)
+      throw new Error(
+        `This session is running; change its ${what} once the turn ends.`,
+      );
+  }
+
+  private clampedEffort(level: ThinkingLevel): ThinkingLevel {
+    return clampThinkingLevelForModel(
+      claudeSdkModelOption(this.modelId),
+      level,
+    );
+  }
+
+  /** A model change drops what the previous model reported: its window and its process's threshold. */
+  private selectModel(alias: ClaudeSdkModelAlias): void {
+    if (alias === this.modelId) return;
+    this.modelId = alias;
+    this.contextWindowTokens = undefined;
+    this.compactionWindow.modelChanged();
+  }
+
+  /** Publish a selection change; a started session persists record and row. */
+  private selectionChanged(): void {
+    this.broadcastState();
+    if (this.committed.length > 0) {
+      this.broadcastContextInfo(true);
+      this.onPersist();
+    }
+  }
+
+  /** The idle process background work keeps open, when one is. */
+  private retainedQuery(): ClaudeQuery | undefined {
+    return this.activeQuery &&
       this.retainedEpochKey !== undefined &&
       this.retainedEpochKey === this.queryEpochKey
-    ) {
-      const controls = reasoningToThinking(thinkingLevel, this.modelId);
-      const thinking = controls.thinking;
-      if (this.activeQuery.setMaxThinkingTokens) {
-        const tokens =
-          thinking?.type === "disabled"
-            ? 0
-            : thinking?.type === "enabled"
-              ? (thinking.budgetTokens ?? null)
-              : null;
-        await this.activeQuery.setMaxThinkingTokens(tokens);
-      }
-      if (this.activeQuery.applyFlagSettings)
-        await this.activeQuery.applyFlagSettings({
-          effortLevel: controls.effort ?? null,
-        });
-      this.thinkingLevel = thinkingLevel;
-      this.broadcastState();
-      this.onPersist();
-      return;
+      ? this.activeQuery
+      : undefined;
+  }
+
+  private async applyRetainedEffort(
+    query: ClaudeQuery,
+    level: ThinkingLevel,
+    modelId: string,
+  ): Promise<void> {
+    const controls = reasoningToThinking(level, modelId);
+    const thinking = controls.thinking;
+    if (query.setMaxThinkingTokens) {
+      const tokens =
+        thinking?.type === "disabled"
+          ? 0
+          : thinking?.type === "enabled"
+            ? (thinking.budgetTokens ?? null)
+            : null;
+      await query.setMaxThinkingTokens(tokens);
     }
-    this.configure(undefined, thinkingLevel);
+    if (query.applyFlagSettings)
+      await query.applyFlagSettings({ effortLevel: controls.effort ?? null });
   }
 
   /* ---------------------------- compaction window --------------------------- */
@@ -1449,6 +1578,8 @@ export class ClaudeSdkSession implements LiveSession {
   /** Add other process-start settings here, using their current epoch state. */
   private startTimeSettingsNeedRestart(): boolean {
     return (
+      (this.retainedEffortStale !== undefined &&
+        this.retainedEffortStale === this.retainedEpochKey) ||
       this.compactionWindow.apply(
         sessionStore.get(this.id)?.compactionWindow ?? null,
       ).pendingReason === "process-restart"
@@ -1560,87 +1691,105 @@ export class ClaudeSdkSession implements LiveSession {
   ): Promise<void> {
     const { allowWithoutHistory = false, requireEnterprise } = options;
     this.assertNotDisposed();
-    const previous = this.profileId;
-    if (!previous || this.running)
-      throw new Error("Cannot switch an unbound or running Claude session.");
-    const providerSessionId = this.providerSessionId;
-    if (!providerSessionId && !allowWithoutHistory)
-      throw new Error(
-        "Cannot preserve Claude history without a native session id.",
-      );
-    const check = () => {
+    // Behind every earlier model or effort change, which its own account
+    // gated. From then until the switch ends, model and effort changes,
+    // prompts, host-command and provider turns refuse at the session (its
+    // callers also hold the runtime's admission). The place is not held
+    // across the switch: a provider turn waiting for it would stall the query
+    // loop the switch waits to close.
+    const place = this.admission.enter();
+    try {
+      await place.ready;
       this.assertNotDisposed();
-      admit();
-      if (this.running || this.profileId !== previous)
-        throw new Error(
-          "The Claude session changed during its account switch.",
-        );
-      assertSessionAccountSwitch(
-        this.id,
-        previous,
-        profileId,
-        "claude",
-        requireEnterprise ? { requireEnterprise } : {},
-      );
-    };
-    check();
-    const closing = this.queryLoop;
-    const retained = this.retainedEpochKey;
-    if (retained) {
-      const closed = await backgroundWorkSupervisor.closeIdleHost(
-        this.id,
-        retained,
-        "switching the session's account",
-      );
-      if (!closed)
-        throw new AccountSwitchBlockedError(
-          "Background work still holds this session's Claude host. Stop it before switching accounts.",
-        );
-      check();
+      this.accountSwitches += 1;
+    } finally {
+      place.release();
     }
-    await this.closeProcess("switching the session's account");
-    if (
-      closing &&
-      !(await settlesWithin(closing, this.processCloseTimeoutMs))
-    ) {
-      this.abortController?.abort();
-      if (!(await settlesWithin(closing, this.processCloseTimeoutMs)))
+    try {
+      const previous = this.profileId;
+      if (!previous || this.running)
+        throw new Error("Cannot switch an unbound or running Claude session.");
+      const providerSessionId = this.providerSessionId;
+      if (!providerSessionId && !allowWithoutHistory)
         throw new Error(
-          "The old Claude process did not exit before the account switch.",
+          "Cannot preserve Claude history without a native session id.",
         );
-    }
-    check();
-    const transfer = providerSessionId
-      ? await copyClaudeSessionForAccount(
+      const check = () => {
+        this.assertNotDisposed();
+        admit();
+        if (this.running || this.profileId !== previous)
+          throw new Error(
+            "The Claude session changed during its account switch.",
+          );
+        assertSessionAccountSwitch(
+          this.id,
           previous,
           profileId,
-          providerSessionId,
-        )
-      : undefined;
-    let committed = false;
-    try {
-      check();
-      sessionStore.switchCredentialProfile(
-        this.id,
-        previous,
-        profileId,
-        requireEnterprise ? { requireEnterprise } : {},
-      );
-      committed = true;
-      this.profileId = profileId;
-      this.onPersist();
-      this.broadcastState();
-      this.onChange();
-    } finally {
-      // The row is the commit point. Cleanup cannot roll back an admitted move,
-      // but neither success nor an abandoned copy should leave an extra history.
-      await (
-        transfer && (committed ? transfer.commit() : transfer.rollback())
-      )?.catch(() => {
-        console.warn(
-          `[claude] Account-switch ${committed ? "source cleanup" : "destination rollback"} failed; session deletion will retry.`,
+          "claude",
+          requireEnterprise ? { requireEnterprise } : {},
         );
-      });
+      };
+      check();
+      const closing = this.queryLoop;
+      const retained = this.retainedEpochKey;
+      if (retained) {
+        const closed = await backgroundWorkSupervisor.closeIdleHost(
+          this.id,
+          retained,
+          "switching the session's account",
+        );
+        if (!closed)
+          throw new AccountSwitchBlockedError(
+            "Background work still holds this session's Claude host. Stop it before switching accounts.",
+          );
+        check();
+      }
+      await this.closeProcess("switching the session's account");
+      if (
+        closing &&
+        !(await settlesWithin(closing, this.processCloseTimeoutMs))
+      ) {
+        this.abortController?.abort();
+        if (!(await settlesWithin(closing, this.processCloseTimeoutMs)))
+          throw new Error(
+            "The old Claude process did not exit before the account switch.",
+          );
+      }
+      check();
+      const transfer = providerSessionId
+        ? await copyClaudeSessionForAccount(
+            previous,
+            profileId,
+            providerSessionId,
+          )
+        : undefined;
+      let committed = false;
+      try {
+        check();
+        sessionStore.switchCredentialProfile(
+          this.id,
+          previous,
+          profileId,
+          requireEnterprise ? { requireEnterprise } : {},
+        );
+        committed = true;
+        this.profileId = profileId;
+        this.onPersist();
+        this.broadcastState();
+        this.onChange();
+      } finally {
+        // The row is the commit point. Cleanup cannot roll back an admitted move,
+        // but neither success nor an abandoned copy should leave an extra history.
+        await (
+          transfer && (committed ? transfer.commit() : transfer.rollback())
+        )?.catch(() => {
+          console.warn(
+            `[claude] Account-switch ${committed ? "source cleanup" : "destination rollback"} failed; session deletion will retry.`,
+          );
+        });
+      }
+    } finally {
+      this.accountSwitches -= 1;
     }
   }
 
@@ -1679,7 +1828,7 @@ export class ClaudeSdkSession implements LiveSession {
       turnContext?: string;
       titleText?: string;
     } = {},
-  ): Promise<void> {
+  ): Promise<void | "stopped"> {
     this.assertNotDisposed();
     // Idempotent on clientRequestId: a duplicate submit is a no-op (so it can't
     // open a second turn or echo a second user bubble).
@@ -1687,7 +1836,6 @@ export class ClaudeSdkSession implements LiveSession {
       if (this.handledRequestIds.has(options.clientRequestId)) return;
       this.handledRequestIds.add(options.clientRequestId);
     }
-    if (this.running) throw new Error("A Claude SDK turn is already running.");
     const trimmed = text;
     // Attachments (persisted + threaded to the model): images ride along as image
     // content blocks; every other file is saved to the session attachment store
@@ -1700,12 +1848,44 @@ export class ClaudeSdkSession implements LiveSession {
         : attachments.length
           ? "Please analyze the attached file(s)."
           : trimmed;
-    const { promptWithFiles, images } = buildModelPromptWithAttachments(
-      this.id,
-      modelPromptText,
-      attachments,
-    );
-    this.running = true;
+    // Behind a queued model or effort change (or anything else queued), the
+    // prompt takes its admission place and holds it until its turn is open,
+    // so every earlier change settles first and no later one runs under it.
+    // Stop or disposal cancels the wait: the prompt never reaches the process.
+    const place = this.admission.busy ? this.admission.enter() : undefined;
+    const stopsBefore = this.stopRequests;
+    let built: ReturnType<typeof buildModelPromptWithAttachments>;
+    try {
+      if (
+        place &&
+        (!(await this.promptAdmissionTurn(place)) ||
+          this.stopRequests !== stopsBefore)
+      ) {
+        this.assertNotDisposed();
+        if (options.clientRequestId)
+          this.handledRequestIds.delete(options.clientRequestId);
+        return "stopped";
+      }
+      this.assertNotDisposed();
+      if (this.running)
+        throw new Error("A Claude SDK turn is already running.");
+      // Callers hold the runtime's admission across a switch; this keeps the
+      // session itself from opening a turn on the account being replaced.
+      if (this.accountSwitches > 0)
+        throw new SessionBusyError(
+          this.id,
+          "This session's account is changing; send it again once it has.",
+        );
+      built = buildModelPromptWithAttachments(
+        this.id,
+        modelPromptText,
+        attachments,
+      );
+      this.running = true;
+    } finally {
+      place?.release();
+    }
+    const { promptWithFiles, images } = built;
     this.providerTurnInterrupted = false;
     this.turnCounter += 1;
 
@@ -2743,6 +2923,21 @@ export class ClaudeSdkSession implements LiveSession {
   }
 
   private async beginProviderInitiatedTurn(epochKey: string): Promise<boolean> {
+    // In its admission place, held until the turn is open or denied: every
+    // earlier model or effort change settles first (control answers do not
+    // wait on this stream), and a later one finds the turn running.
+    const place = this.admission.enter();
+    try {
+      await place.ready;
+      // A prompt admitted meanwhile owns the open turn, as if it came first.
+      if (this.running) return true;
+      return await this.admitProviderInitiatedTurn(epochKey);
+    } finally {
+      place.release();
+    }
+  }
+
+  private async admitProviderInitiatedTurn(epochKey: string): Promise<boolean> {
     if (
       this.failedStopEpochKey === epochKey ||
       this.stopInterrupt?.epochKey === epochKey
@@ -2764,7 +2959,9 @@ export class ClaudeSdkSession implements LiveSession {
           ? "the retained host has no governed background task"
           : peerPromptStore.listPendingForRecipient(this.id).length > 0
             ? "a queued peer prompt has priority"
-            : undefined;
+            : this.accountSwitches > 0
+              ? "the session's account is changing"
+              : undefined;
     if (denied) {
       this.markProviderResultForDiscard();
       console.warn(`[background] denied Claude provider turn: ${denied}`);
@@ -3411,6 +3608,10 @@ export class ClaudeSdkSession implements LiveSession {
   }
 
   abort(): void {
+    // A prompt still waiting for admission never reaches the process: its
+    // caller gets the stopped outcome instead.
+    this.stopRequests += 1;
+    this.cancelWaitingPrompts();
     if (!this.running) return;
     this.abortingTurn = true;
     // A plain interrupt keeps queued commands and runs them next, so the
@@ -3685,6 +3886,12 @@ export class ClaudeSdkSession implements LiveSession {
       throw new SessionBusyError(
         this.id,
         "Cannot run a slash command while Claude is streaming.",
+      );
+    // Synchronous admission cannot wait in the admission queue.
+    if (this.admission.busy || this.accountSwitches > 0)
+      throw new SessionBusyError(
+        this.id,
+        "Cannot run a slash command while the session's model, effort or account changes or a turn is being admitted.",
       );
     this.turnCounter += 1;
     this.running = true;
@@ -4224,7 +4431,9 @@ export class ClaudeSdkSession implements LiveSession {
         // `modelUsage`) — NOT the top-level `result.usage`, which is only the
         // final request's snapshot and misses every intermediate tool-loop
         // request and helper/subagent model (see mapResultEpochUsage).
-        const meta = mapResultMeta(message);
+        // The window is the SELECTED model's own; a cumulative report may lead
+        // with the model this epoch ran before a switch.
+        const meta = mapResultMeta(message, this.modelId);
         this.applyResultTotals(mapResultEpochUsage(message), meta.cost);
         if (meta.contextWindow) this.contextWindowTokens = meta.contextWindow;
         return;
@@ -4892,6 +5101,9 @@ export class ClaudeSdkSession implements LiveSession {
   dispose(): void {
     this.disposed = true;
     this.residency.close();
+    // Nothing waits on admission past disposal; each waiter finds it disposed.
+    this.cancelWaitingPrompts();
+    this.admission.close();
     this.abortController?.abort();
     if (this.retainedEpochKey && !backgroundWorkSupervisor.isDraining)
       backgroundWorkSupervisor.hostLost(

@@ -188,7 +188,6 @@ import type { BacklogState } from "./hooks/useBacklog.ts";
 import { UserTimeZoneContext } from "./hooks/useUserTimeZone.ts";
 import {
   isOptimisticHarness,
-  locksModelAfterStart,
   startedModelDisabled,
 } from "./lib/sessionCapabilities.ts";
 import { createClientId } from "./lib/clientId.ts";
@@ -4791,12 +4790,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   };
   const draftRuntimeRef = useRef(draftRuntime);
   draftRuntimeRef.current = draftRuntime;
-  // Capability-driven picker locking: non-pi harnesses pin model/thinking after
-  // their first turn (see lib/sessionCapabilities.locksModelAfterStart).
-  const modelLocked = displaySession
-    ? locksModelAfterStart(displaySession) && runtimeHasStarted
-    : false;
-  const thinkingLocked = modelLocked;
   // The account the shown session runs on: fixed at its first prompt, the
   // staged pick before that. The inspector's Profile and the composer's
   // runtime line both state it.
@@ -4860,18 +4853,27 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     }
   };
   // A started session changes model only on its harness and bound account.
+  const displayAccountModels =
+    displayCredentialProfileId != null
+      ? credentialProfileModels[displayCredentialProfileId]
+      : undefined;
   const isModelDisabled = useCallback(
     (model: ModelOption) =>
-      modelLocked ||
       startedModelDisabled(
         {
           harness: displayHarness,
           started: runtimeHasStarted,
           account: displayCredentialProfile,
+          accountModels: displayAccountModels,
         },
         model,
       ),
-    [modelLocked, displayHarness, runtimeHasStarted, displayCredentialProfile],
+    [
+      displayHarness,
+      runtimeHasStarted,
+      displayCredentialProfile,
+      displayAccountModels,
+    ],
   );
   const sessionTasks = displaySession?.tasks ?? [];
   const relatedGlobalTasks = displaySession?.relatedGlobalTasks ?? [];
@@ -6328,8 +6330,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         onRequestDictation: mobileLayout ? requestDictation : undefined,
         transcript: dictationTranscript,
         isModelDisabled,
-        modelLocked,
-        thinkingLocked,
         accountName: displayAccountName,
         selectedAgentType: showAgentTypePicker ? agentTypeForPicker : undefined,
         availableAgentTypes: showAgentTypePicker

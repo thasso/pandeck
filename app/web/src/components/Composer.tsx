@@ -200,12 +200,7 @@ interface Props {
   /** Disable Send without adding a second narration for a source described elsewhere. */
   sendBlocked?: boolean;
   isModelDisabled?: (model: ModelOption) => boolean;
-  modelLocked?: boolean;
-  thinkingLocked?: boolean;
-  /**
-   * The account the session runs on, for the runtime line under the card once
-   * model and thinking are locked (a started session).
-   */
+  /** The account the session runs on, for the runtime line under the card. */
   accountName?: string | undefined;
   /** Hide runtime model/thinking controls for server-configured special sessions. */
   hideRuntimeControls?: boolean;
@@ -545,8 +540,6 @@ function RuntimeSettingsPanel({
   level,
   actions,
   isModelDisabled,
-  modelLocked = false,
-  thinkingLocked = false,
   agentType,
   availableAgentTypes,
   onAgentTypeChange,
@@ -557,8 +550,6 @@ function RuntimeSettingsPanel({
   level: ThinkingLevel;
   actions: AssistantActions;
   isModelDisabled?: ((model: ModelOption) => boolean) | undefined;
-  modelLocked?: boolean;
-  thinkingLocked?: boolean;
   // Present only for a fresh, unprompted session — the agent type is fixed once
   // the first prompt is sent.
   agentType?: AgentType | undefined;
@@ -596,7 +587,6 @@ function RuntimeSettingsPanel({
           models={models}
           value={model}
           variant="field"
-          locked={modelLocked}
           isModelDisabled={isModelDisabled}
           onChange={setModelAndClampThinking}
         />
@@ -610,7 +600,6 @@ function RuntimeSettingsPanel({
           model={model}
           value={level}
           variant="field"
-          locked={thinkingLocked}
           onChange={(lvl) => actions.setThinkingLevel(lvl)}
         />
       </section>
@@ -922,8 +911,6 @@ export const Composer = memo(function Composer({
   sendBlockedReason,
   sendBlocked = false,
   isModelDisabled,
-  modelLocked = false,
-  thinkingLocked = false,
   accountName,
   hideRuntimeControls: hideRuntimeControlsProp = false,
   inertPlaceholder,
@@ -1739,10 +1726,9 @@ export const Composer = memo(function Composer({
         : {}),
     });
   // The composer picks no runtime: a new session chooses agent, account,
-  // model and effort on its landing (`NewSessionQuickStart`), a started one
-  // has them fixed. Either way one quiet line under the card states it:
-  // account, model, effort — the same composer before and after the first
-  // message.
+  // model and effort on its landing (`NewSessionQuickStart`). Before and
+  // after the first message one quiet line under the card states it:
+  // account, model, effort.
   const runtimeShown = !hideRuntimeControls;
   // Model and effort are what the reader checks; the account is what gives
   // way, so the strip truncates only the account (`runtimeAccount`).
@@ -2033,8 +2019,6 @@ export const Composer = memo(function Composer({
             level={thinkingLevel}
             actions={actions}
             isModelDisabled={isModelDisabled}
-            modelLocked={modelLocked}
-            thinkingLocked={thinkingLocked}
             agentType={selectedAgentType}
             availableAgentTypes={availableAgentTypes}
             onAgentTypeChange={onAgentTypeChange}

@@ -126,7 +126,6 @@ export interface ModelSelectProps<M extends ModelOption = ModelOption> {
   value: ModelRef;
   onChange: (model: M) => void;
   isModelDisabled?: ((model: M) => boolean) | undefined;
-  locked?: boolean;
   variant?: SelectVariant;
   placeholder?: string;
   placement?: "top" | "bottom" | "auto";
@@ -138,7 +137,6 @@ export function ModelSelect<M extends ModelOption>({
   value,
   onChange,
   isModelDisabled,
-  locked = false,
   variant = "pill",
   placeholder = "Select model",
   placement = "auto",
@@ -159,13 +157,9 @@ export function ModelSelect<M extends ModelOption>({
             className={
               className ?? (variant === "field" ? "w-full justify-between" : "")
             }
-            disabled={locked}
           />
         }
-        title={
-          title ??
-          (locked ? "Model is locked after this session started" : "Model")
-        }
+        title={title ?? "Model"}
       >
         {selected ? (
           <ProviderIcon provider={selected.provider} size={15} />

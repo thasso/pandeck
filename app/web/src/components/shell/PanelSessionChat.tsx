@@ -18,10 +18,7 @@ import {
 } from "../../hooks/useSessionChat.tsx";
 import { useTranscriptFocus } from "../../hooks/useTranscriptFocus.ts";
 import { visibleModels } from "../../lib/models.ts";
-import {
-  locksModelAfterStart,
-  startedModelDisabled,
-} from "../../lib/sessionCapabilities.ts";
+import { startedModelDisabled } from "../../lib/sessionCapabilities.ts";
 import { sessionPath } from "../../lib/sessionRoutes.ts";
 import { IconButton } from "../common/IconButton.tsx";
 import { SessionChat } from "../SessionChat.tsx";
@@ -177,17 +174,24 @@ export function PanelSessionChat({
   );
 
   const started = state.messages.some((message) => message.role === "user");
-  const modelLocked = locksModelAfterStart(session) && started;
   const account = credentialProfiles.find(
     (profile) => profile.id === sessionRow?.credentialProfileId,
   );
+  // The bound account's models, once its list is known; none listed reads as
+  // unknown, so the server's refusal stays the only gate then.
+  const accountModels = useMemo(() => {
+    const offered = host.accountModels.filter(
+      (model) => model.credentialProfileId === account?.id,
+    );
+    return offered.length > 0 ? offered : undefined;
+  }, [host.accountModels, account?.id]);
   const isModelDisabled = useCallback(
     (model: ModelOption) =>
       startedModelDisabled(
-        { harness: session.harness, started, account },
+        { harness: session.harness, started, account, accountModels },
         model,
       ),
-    [session.harness, started, account],
+    [session.harness, started, account, accountModels],
   );
   const commentSelection = chat.commentSelection;
   return (
@@ -220,8 +224,6 @@ export function PanelSessionChat({
         chat={chat}
         composer={{
           isModelDisabled,
-          modelLocked,
-          thinkingLocked: modelLocked,
           accountName: account?.name,
         }}
         transcript={{
