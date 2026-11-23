@@ -664,7 +664,8 @@ test("the gateway's edge reaches the vault only through its port", () => {
  * Jira, Confluence and Slack read modules, the shared Jira mutation core
  * (prepare, apply, rank, sprint, permissions and their typed errors), the
  * shared Confluence mutation core (prepare, apply, attachment change and their
- * typed errors) and their helpers, a closed set, plus the three Markdown
+ * typed errors) and their helpers, the two-phase proposal checks and result
+ * contracts (`CONTRACT_MODULES`), a closed set, plus the three Markdown
  * packages the ADF converter uses and Turndown, which the Confluence client
  * brings for the storage fallback; never a tool under `tools/`, settings, a
  * cache file, approvals, the session attachment store or `@assistant/shared`
@@ -682,7 +683,9 @@ const GATEWAY_TOOLS_ALLOWED = new Set([
   "confluenceAttachmentChange.ts",
   "confluenceMutate.ts",
   "confluenceMutateApply.ts",
+  "confluenceMutationCheck.ts",
   "confluenceMutationErrors.ts",
+  "confluenceMutationResult.ts",
   "confluenceRead.ts",
   "httpRetry.ts",
   "jiraClient.ts",
@@ -690,7 +693,9 @@ const GATEWAY_TOOLS_ALLOWED = new Set([
   "jiraLookup.ts",
   "jiraMutate.ts",
   "jiraMutateApply.ts",
+  "jiraMutationCheck.ts",
   "jiraMutationErrors.ts",
+  "jiraMutationResult.ts",
   "jiraPermissions.ts",
   "jiraRank.ts",
   "jiraRead.ts",
@@ -698,6 +703,8 @@ const GATEWAY_TOOLS_ALLOWED = new Set([
   "jiraSprint.ts",
   "jiraSprintLookup.ts",
   "jiraUsers.ts",
+  "mutationCheckRules.ts",
+  "mutationResultCodec.ts",
   "slackMetadataCache.ts",
   "slackRead.ts",
   "slackUrls.ts",
@@ -768,6 +775,36 @@ test("only the edge's entry loads its tools, and they reach no server state", ()
       [],
       `the shared leaf ${leaf} imports nothing`,
     );
+  }
+});
+
+/**
+ * The two-phase proposal checks and result contracts (Task-1463 P6a): both
+ * sides of `tools.prepare`/`tools.apply` load them, so they reach nothing but
+ * each other and the import-free shared mutation leaves, never a transport,
+ * a credential or the shared cores they describe.
+ */
+const CONTRACT_MODULES = new Set([
+  "confluenceMutationCheck.ts",
+  "confluenceMutationResult.ts",
+  "jiraMutationCheck.ts",
+  "jiraMutationResult.ts",
+  "mutationCheckRules.ts",
+  "mutationResultCodec.ts",
+]);
+
+test("the proposal checks and result contracts import only each other and the shared mutation leaves", () => {
+  for (const module of CONTRACT_MODULES) {
+    assert.ok(GATEWAY_TOOLS_ALLOWED.has(module), `${module} is allowed`);
+    const scan = scans.get(module);
+    assert.ok(scan, `the scan found ${module}`);
+    for (const target of scan.imports)
+      assert.ok(
+        CONTRACT_MODULES.has(target) ||
+          target === "@assistant/shared/jiraMutation" ||
+          target === "@assistant/shared/confluenceMutation",
+        `${module} imports ${target}`,
+      );
   }
 });
 
