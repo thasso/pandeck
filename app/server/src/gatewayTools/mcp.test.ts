@@ -22,7 +22,9 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-const listedHost = (call: ToolHost["call"]): ToolHost => ({
+const listedHost = (
+  call: ToolHost["call"],
+): Pick<ToolHost, "list" | "call"> => ({
   list: () => [
     {
       name: "probe",
@@ -40,7 +42,7 @@ const listedHost = (call: ToolHost["call"]): ToolHost => ({
 });
 
 async function serve(
-  host: ToolHost,
+  host: Pick<ToolHost, "list" | "call">,
   options: McpHandlerOptions = {},
 ): Promise<{ url: string; lines: string[] }> {
   const lines: string[] = [];

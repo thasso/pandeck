@@ -162,8 +162,12 @@ function readBody(req: http.IncomingMessage): Promise<Body> {
   });
 }
 
+/**
+ * `/mcp` sees only the host's list and its one-call `call`: never a client's
+ * `callForClient`, `prepare` or `apply` (Task-1463 P6a).
+ */
 export function createMcpHandler(
-  host: ToolHost,
+  host: Pick<ToolHost, "list" | "call">,
   log: (line: string) => void,
   options: McpHandlerOptions = {},
 ): (

@@ -810,6 +810,18 @@ test("the proposal checks and result contracts import only each other and the sh
   }
 });
 
+test("the edge's result vetting is imported only from its tools", () => {
+  // `gatewayTools/mutationResultVetting.ts` (Task-1463 P6a) closes the
+  // result contracts over one call's credential; nothing outside the edge's
+  // tools, not even the edge's composition, may build it.
+  const importers = importersOf(
+    (target) => target === "gatewayTools/mutationResultVetting.ts",
+  );
+  assert.ok(importers.length > 0, "the scan found its importers");
+  for (const module of importers)
+    assert.ok(module.startsWith("gatewayTools/"), `${module} imports it`);
+});
+
 /**
  * The gateway's own sign-in and page (Task-1402): beyond `node:` and
  * themselves, only the OIDC library, the shared wire model and the static

@@ -65,17 +65,36 @@ export function holdsSecret(
 }
 
 /**
+ * Whether `value`, or its form escaped once more as a JSON string, holds a
+ * secret form or a piece of 16 or more characters of one (Task-1463 P6a).
+ * Unlike {@link holdsSecret}, an auth marker alone does not count: this
+ * checks card data the user reviews, such as a page body that says "basic
+ * setup", not upstream error text.
+ */
+export function carriesSecret(
+  value: string,
+  credential: AtlassianCredential,
+): boolean {
+  return [value, JSON.stringify(value)].some(
+    (form) => secretSpans(form, credential, false).length > 0,
+  );
+}
+
+/**
  * The spans of `text` that carry credential material, as `[start, end)`
- * pairs in order and possibly overlapping: each auth marker, each whole
- * secret form, and each 16-character window that is a piece of one.
+ * pairs in order and possibly overlapping: each auth marker (unless
+ * `markers` is false), each whole secret form, and each 16-character window
+ * that is a piece of one.
  */
 function secretSpans(
   text: string,
   credential: AtlassianCredential,
+  markers = true,
 ): Array<[number, number]> {
   const spans: Array<[number, number]> = [];
-  for (const match of text.matchAll(new RegExp(AUTH_MARKER, "giu")))
-    spans.push([match.index, match.index + match[0].length]);
+  if (markers)
+    for (const match of text.matchAll(new RegExp(AUTH_MARKER, "giu")))
+      spans.push([match.index, match.index + match[0].length]);
   const secrets = secretForms(credential);
   for (const secret of secrets)
     for (
