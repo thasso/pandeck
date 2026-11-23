@@ -35,6 +35,16 @@ export interface AccountPickRequest {
   excludeProfileIds?: readonly string[];
   /** Background automation alone may use the protected, disabled default. */
   allowDisabledDefault?: boolean;
+  /**
+   * A Claude run's pinned concrete version: only an account that runs this
+   * exact id is in scope (`harnesses/models.ts` `accountLacksModel`).
+   */
+  pinnedModelId?: string;
+  /**
+   * The existing session's stored pin string, for the unknown-account legacy
+   * allowance. Never set for a new start, spawn or definition.
+   */
+  persistedPinnedModelId?: string;
 }
 
 type RoutingProfile = Pick<
@@ -106,14 +116,24 @@ export function rankAccountCandidates(
         ...(fallback.limited ? { limited: fallback.limited } : {}),
       };
   }
+  // "model-unavailable" only when entitlement decided it: a lacking account
+  // would otherwise have been usable (enabled, or the disabled default this
+  // request may fall back to). A disabled account that lacks the model is
+  // excluded twice, and the accurate reason is the other one.
+  const usableLacking = served.some(
+    ({ profile, lacksModel }) =>
+      lacksModel &&
+      (profile.enabled ||
+        (request.allowDisabledDefault === true &&
+          profile.id === defaultProfileId)),
+  );
   return {
     profileId: null,
-    degraded:
-      served.length > scope.length
-        ? "model-unavailable"
-        : request.requiresEnterprise
-          ? "no-enterprise-account"
-          : "no-enabled-account",
+    degraded: usableLacking
+      ? "model-unavailable"
+      : request.requiresEnterprise
+        ? "no-enterprise-account"
+        : "no-enabled-account",
   };
 }
 
@@ -151,7 +171,10 @@ function rankingUsage(
  */
 export async function gatherAccountCandidate(
   profile: RoutingProfile,
-  request: Pick<AccountPickRequest, "model" | "thinkingLevel">,
+  request: Pick<
+    AccountPickRequest,
+    "model" | "thinkingLevel" | "pinnedModelId" | "persistedPinnedModelId"
+  >,
 ): Promise<AccountCandidate> {
   const [models, lacksModel] = await Promise.all([
     profile.enabled ? modelsForAccount(profile).catch(() => []) : [],
@@ -159,6 +182,14 @@ export async function gatherAccountCandidate(
       profile.id,
       request.model.provider,
       request.model.modelId,
+      {
+        ...(request.pinnedModelId !== undefined
+          ? { pinnedModelId: request.pinnedModelId }
+          : {}),
+        ...(request.persistedPinnedModelId !== undefined
+          ? { persistedPinnedModelId: request.persistedPinnedModelId }
+          : {}),
+      },
     ).catch(() => false),
   ]);
   const model = models.find(

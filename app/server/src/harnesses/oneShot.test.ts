@@ -32,6 +32,12 @@ import {
 } from "../gatewayLink.ts";
 import { refusalText } from "../gateway/refusals.ts";
 import { resetClaudeAccountModelsForTests } from "./claudeAccountModels.ts";
+import {
+  COMPANY,
+  MYTHOS_LESS_READS,
+  PRIVATE,
+  Y,
+} from "../test/claudeListings.ts";
 import { isLoginDeath } from "../providerErrors.ts";
 import {
   NoHelperModelError,
@@ -328,6 +334,108 @@ test("a pinned Claude one-shot on an account whose listing lacks the model never
       vi.mocked(runClaudeSdkOneShot).mock.calls[0]?.[0].credentialProfileId,
       "profile-1",
     );
+  } finally {
+    resetClaudeAccountModelsForTests();
+  }
+});
+
+/** Profile `profile-1` as an enabled personal Claude account named Private. */
+function claudeProfile(): void {
+  vi.mocked(credentialProfileById).mockReturnValue({
+    id: "profile-1",
+    name: "Private",
+    provider: "claude",
+    enabled: true,
+    enterprise: false,
+  } as never);
+}
+
+test("a Claude one-shot runs the concrete id its account resolves", async () => {
+  claudeProfile();
+  vi.mocked(runClaudeSdkOneShot).mockResolvedValue({ text: "ok", usage: {} });
+  const fable = request({
+    model: { provider: "claude-sdk", modelId: "fable" },
+  });
+  try {
+    for (const [listing, expected] of [
+      [Y, "claude-fable-5-1"],
+      [COMPANY, "claude-fable-5-2"],
+    ] as const) {
+      vi.mocked(runClaudeSdkOneShot).mockClear();
+      resetClaudeAccountModelsForTests({ read: async () => [...listing] });
+      await runOneShot(fable);
+      assert.equal(
+        vi.mocked(runClaudeSdkOneShot).mock.calls[0]?.[0].sdkModelId,
+        expected,
+      );
+    }
+  } finally {
+    resetClaudeAccountModelsForTests();
+  }
+});
+
+test.each(MYTHOS_LESS_READS)(
+  "a mythos helper pinned to a %s account is refused before the SDK; other models run",
+  async (_cause, deps) => {
+    const actual = await vi.importActual<
+      typeof import("../settingsModelSlots.ts")
+    >("../settingsModelSlots.ts");
+    vi.mocked(resolveSlotAccount).mockImplementation(actual.resolveSlotAccount);
+    claudeProfile();
+    vi.mocked(runClaudeSdkOneShot).mockResolvedValue({
+      text: "ok",
+      usage: {},
+    });
+    resetClaudeAccountModelsForTests(deps);
+    try {
+      await assert.rejects(
+        runOneShot(
+          request({ model: { provider: "claude-sdk", modelId: "mythos" } }),
+        ),
+        (err: Error) => {
+          assert.equal(err.name, "ModelUnavailableOnAccountError");
+          assert.equal(err.message, "Private can't run Claude Mythos.");
+          return true;
+        },
+      );
+      assert.equal(vi.mocked(runClaudeSdkOneShot).mock.calls.length, 0);
+      assert.equal(vi.mocked(pickAccount).mock.calls.length, 0);
+      for (const modelId of ["opus", "sonnet", "haiku", "fable"])
+        assert.equal(
+          (
+            await runOneShot(
+              request({ model: { provider: "claude-sdk", modelId } }),
+            )
+          ).text,
+          "ok",
+          modelId,
+        );
+    } finally {
+      resetClaudeAccountModelsForTests();
+    }
+  },
+);
+
+test("an Automatic mythos helper whose account stops listing it after the pick is a local refusal, never a retry", async () => {
+  claudeProfile();
+  // The pick (mocked) chose automatic-1; its listing then lacks mythos.
+  vi.mocked(runClaudeSdkOneShot).mockResolvedValue({ text: "ok", usage: {} });
+  resetClaudeAccountModelsForTests({ read: async () => [...PRIVATE] });
+  try {
+    await assert.rejects(
+      runOneShot(
+        request({
+          model: { provider: "claude-sdk", modelId: "mythos" },
+          credentialProfileId: undefined,
+        }),
+      ),
+      (err: Error) => err.name === "ModelUnavailableOnAccountError",
+    );
+    assert.equal(vi.mocked(resolveSlotAccount).mock.calls.length, 1);
+    assert.equal(vi.mocked(runClaudeSdkOneShot).mock.calls.length, 0);
+    assert.equal(vi.mocked(reportAccountRunFailure).mock.calls.length, 0);
+    assert.equal(vi.mocked(observeAccountHealth).mock.calls.length, 0);
+    assert.equal(vi.mocked(pickAccount).mock.calls.length, 0);
   } finally {
     resetClaudeAccountModelsForTests();
   }
@@ -1370,6 +1478,7 @@ test("AC13: with the switch off the engines get exactly today's inputs", async (
   await runOneShot(request());
   assert.deepEqual(vi.mocked(runClaudeSdkOneShot).mock.calls[0]?.[0], {
     modelId: "s",
+    sdkModelId: "claude-sonnet-5-5",
     thinkingLevel: "low",
     credentialProfileId: "profile-1",
     systemPrompt: "system",

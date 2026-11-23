@@ -405,12 +405,23 @@ listing is unknown it offers the whole curated list. pi availability comes from
 each account's isolated SDK runtime.
 
 Entitlement is a hard filter, applied before every ranking tier and fallback: a
-Claude account whose known listing omits the model (`lacksModel`: the curated
-model the run executes, whatever spelling or older id names it) is never a
-candidate, not even a degraded or last-resort one, and an unknown account takes
-part as before. When that filter removed an in-scope account and nothing
-remains, the pick is `model-unavailable` with no account ("No Claude account can
-run this model."), and nothing runs. Ranking is:
+Claude account that cannot run the model (`lacksModel`, the per-account rule in
+`docs/agent-harnesses.md` models port: a known listing with none of the alias's
+candidates, or an unknown account for `mythos`) is never a candidate, not even a
+degraded or last-resort one. A request carrying a pin (`pinnedModelId`, a pinned
+definition's exact version) asks whether the account runs exactly that pin, so a
+`claude-fable-5-2` definition never routes to an account listing only 5-1, and
+an explicit move or automatic switch of a pinned session refuses or skips such
+an account the same way ("Claude Y can't run claude-fable-5-2, the version this
+session is pinned to."). The pick is `model-unavailable` with no account ("No
+Claude account can run Claude Mythos.") only when that filter removed an account
+that would otherwise have been usable (enabled, in scope, not the disabled
+default) and nothing remains; otherwise the usual degradation names the cause.
+Nothing runs. An entitlement refusal is a local policy decision, never health,
+bench or switch evidence: a run it ends carries `RunFailureFacts`
+`{kind: "unknown", localPolicy: true}`, which the health tracker, the switch's
+`recoverable` check and failure classification ignore. Only a PA refusal made
+before any provider call may set `localPolicy`. Ranking is:
 
 1. Fresh usage with room in both plan windows. A window the provider proves
    absent (the card's "no 5h limit") is no cap, so it counts as room with 0%

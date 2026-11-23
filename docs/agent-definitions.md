@@ -137,13 +137,18 @@ Each entry takes:
    version. When two providers offer the same id, `provider/id`
    (`openai-codex/gpt-6-luna`, or a pin such as `claude-sdk/claude-opus-5-5`)
    names one of them.
-2. A Claude family alias: `opus`, `sonnet`, `haiku`, `fable`. With the Claude
-   integration enabled these are the Claude SDK's own model ids, so `opus`
-   follows the latest Opus; without it, an alias is matched like any short name
-   (rule 3) and can be ambiguous. A concrete Claude id (`claude-opus-5-5`) pins
-   a version: it resolves to its alias only while that alias runs exactly that
-   version (`pinnedModelIdsFor` in `harnesses/models.ts`), and is refused once
-   the alias has moved on, never carried along to a newer one.
+2. A Claude family alias: `opus`, `sonnet`, `haiku`, `fable`, `mythos`. With the
+   Claude integration enabled these are the Claude SDK's own model ids, so
+   `opus` follows the newest Opus the session's account lists; without it, an
+   alias is matched like any short name (rule 3) and can be ambiguous. A
+   concrete Claude id (`claude-fable-5-1`) pins a version: it resolves to its
+   alias only while it is one of that alias's candidates and some enabled
+   account runs it (`pinnedModelIdsFor` in `harnesses/models.ts`), and is
+   refused otherwise, never carried along to a newer one. A pinned session runs
+   only on an account that lists its pin; an account whose listing is unknown
+   runs a candidate pin of the same alias, or the session's own stored older pin
+   of that family, but never a `mythos` pin (`docs/agent-harnesses.md` models
+   port).
 3. A short name (`luna`) that matches exactly one model id from the connected
    accounts on a whole hyphen-separated token. More than one match, or none, is
    a validation error, never a guess.
@@ -381,8 +386,12 @@ The session runs the model it was spawned on, never one a harness picks:
 - A Claude query of a pinned definition runs the pinned version while the
   session is on the definition's alias, however the alias is mapped later
   (`claudeQueryModel` in `claudeSdk/options.ts`, which also picks the model a
-  retained process switches to). A model the user switched the session to runs
-  as usual.
+  retained process switches to). Every query open resolves it on the session's
+  current account (`harnesses/claudeModelResolution.ts`): an account that does
+  not run the pin refuses the turn as local policy rather than run another
+  version, and Automatic, moves and switches pick only accounts that run it. A
+  model the user switched the session to runs as usual, resolved the same way
+  per account.
 - pi restores a session's model from its messages. An agent session without any
   (a fork before the first prompt, a spawn reopened before it ran) starts on its
   branch's last selected model, else the frozen one, and refuses when the

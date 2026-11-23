@@ -177,3 +177,31 @@ test("every card replaces the tool block and lands under its own envelope and en
     });
   }
 });
+
+test("a tool error with failure facts completes the turn carrying them; none without", () => {
+  const local = { kind: "unknown", localPolicy: true } as const;
+  const completion = (events: AdapterEvent[]) =>
+    events.find((event) => event.type === "messageCompleted");
+  const facts = openTurn();
+  finishHostCommandTool(
+    facts.target,
+    facts.turn,
+    "t1",
+    "usage limit 401 account can't run Claude Mythos.",
+    true,
+    local,
+  );
+  const withFacts = completion(facts.events);
+  assert.ok(withFacts?.type === "messageCompleted");
+  assert.deepEqual(withFacts.failure, local);
+  assert.equal(
+    withFacts.error,
+    "usage limit 401 account can't run Claude Mythos.",
+  );
+
+  const plain = openTurn();
+  finishHostCommandTool(plain.target, plain.turn, "t1", "failed", true);
+  const withoutFacts = completion(plain.events);
+  assert.ok(withoutFacts?.type === "messageCompleted");
+  assert.equal("failure" in withoutFacts, false);
+});

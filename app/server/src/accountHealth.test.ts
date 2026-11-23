@@ -615,6 +615,44 @@ it("rejects deferred older success within a process, but starts a fresh clock af
   expect(f.push).toHaveBeenCalledTimes(1);
 });
 
+it("a local-policy refusal is never health evidence, whatever its kind or text", () => {
+  const f = fixture("ready", "claude");
+  type Host = Parameters<typeof trackSessionRunHealth>[0];
+  let start!: Parameters<Host["subscribeStarted"]>[0];
+  let fail!: Parameters<Host["subscribeFailed"]>[0];
+  let close!: Parameters<Host["subscribeClosed"]>[0];
+  const observe = vi.fn(f.store.observe.bind(f.store));
+  const failed = vi.fn(f.store.runFailure.bind(f.store));
+  const working = vi.fn(f.store.runWorking.bind(f.store));
+  trackSessionRunHealth(
+    {
+      session: () => ({ credentialProfileId: "acct" }),
+      subscribeStarted: (fn) => ((start = fn), () => {}),
+      subscribeFailed: (fn) => ((fail = fn), () => {}),
+      subscribeClosed: (fn) => ((close = fn), () => {}),
+    },
+    { observe, failed, working },
+  );
+  for (const [runId, failure] of [
+    ["r1", { kind: "unknown", localPolicy: true }],
+    ["r2", { ...authFailure(), localPolicy: true }],
+  ] as const) {
+    start("s1", runId, "claude-sdk", "mythos");
+    fail({
+      sessionId: "s1",
+      runId,
+      failure,
+      errorMessage: "usage limit 401 account can't run Claude Mythos.",
+      origin: undefined,
+      at: 1,
+    });
+    close("s1", runId, "error");
+  }
+  expect(failed).not.toHaveBeenCalled();
+  expect(working).not.toHaveBeenCalled();
+  expect(f.store.read("acct", true).state).toBe("unknown");
+});
+
 it("tracks run ids, ignores stale reports, and clears pending entries on all closures and disposal", () => {
   const f = fixture("ready", "openai-codex");
   type Host = Parameters<typeof trackSessionRunHealth>[0];

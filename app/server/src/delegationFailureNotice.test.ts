@@ -2797,6 +2797,21 @@ describe("a journaled failure replays only what it was owed when it happened", (
     assert.doesNotMatch(text, /cybersecurity/);
   });
 
+  it("a local-policy refusal keeps its facts: misleading text is never read as a usage limit or login", () => {
+    freshJournal();
+    const { id: parent } = coordinator("Local refusal parent");
+    const child = piChild(parent, "Local refusal child");
+    const [row] = recordRunFailureNotices({
+      sessionId: child.sessionId,
+      runId: "local-refusal",
+      origin: BACKGROUND,
+      errorMessage: "usage limit 401 account can't run Claude Mythos.",
+      failure: { kind: "unknown", localPolicy: true },
+      at: Date.now(),
+    });
+    assert.equal(row!.category, "provider_error");
+  });
+
   it("a cybersecurity refusal reported only in prose is still classified as one", () => {
     freshJournal();
     const { id: parent } = coordinator("Prose cyber parent");

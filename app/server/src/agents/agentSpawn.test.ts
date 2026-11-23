@@ -178,7 +178,7 @@ test("a definition resolves to its model, account and the exact bytes it froze",
 });
 
 test("a definition naming a concrete version freezes that version", async () => {
-  models = [{ ...model("claude-sdk", "opus"), pinnedId: "claude-opus-5-5" }];
+  models = [{ ...model("claude-sdk", "opus"), pinnedIds: ["claude-opus-5-5"] }];
   write("test-reviewer", reviewer({ model: "claude-opus-5-5" }));
   const { agent } = await resolveAgentSpawn("test-reviewer");
   assert.equal(agent.model, "opus");
@@ -434,7 +434,7 @@ test("a listed model that cannot run refuses when named; the default still runs"
 
 test("a name matching two listed models is refused as ambiguous", async () => {
   models = [
-    { ...model("claude-sdk", "opus"), pinnedId: "claude-opus-5-5" },
+    { ...model("claude-sdk", "opus"), pinnedIds: ["claude-opus-5-5"] },
     model("openai-codex", "gpt-6.1-sol"),
   ];
   write(
@@ -490,7 +490,7 @@ test("a listing keeps every listed model when only the default cannot run", asyn
 
 test("a picked runtime that is a listed model at its effort runs as listed, pin included", async () => {
   models = [
-    { ...model("claude-sdk", "opus"), pinnedId: "claude-opus-5-5" },
+    { ...model("claude-sdk", "opus"), pinnedIds: ["claude-opus-5-5"] },
     model("openai-codex", "gpt-6.1-sol"),
   ];
   write(
@@ -525,8 +525,78 @@ test("a picked runtime that is a listed model at its effort runs as listed, pin 
       { provider: "claude-sdk", modelId: "opus", thinkingLevel: "high" },
       "acct-claude-sdk",
     ),
-    /the account picked for it \(Account acct-claude-sdk\) does not offer claude-sdk\/opus/,
+    /the account picked for it \(Account acct-claude-sdk\) does not offer claude-sdk\/claude-opus-5-5\./,
   );
+});
+
+/** An `offers` that runs fable everywhere but 5-2 only off account Y. */
+function fableOffers(calls: Array<string | undefined>) {
+  return async (
+    profileId: string,
+    _provider: string,
+    _modelId: string,
+    pin?: { pinnedModelId?: string },
+  ) => {
+    calls.push(pin?.pinnedModelId);
+    return !(
+      profileId === "acct-y" && pin?.pinnedModelId === "claude-fable-5-2"
+    );
+  };
+}
+
+test("a 5-2-pinned definition refuses an explicit start and a picked runtime on an account without 5-2", async () => {
+  models = [
+    {
+      ...model("claude-sdk", "fable"),
+      pinnedIds: ["claude-fable-5-2", "claude-fable-5-1"],
+    },
+  ];
+  write(
+    "test-reviewer",
+    reviewer({ model: "claude-fable-5-2", effort: "high" }),
+  );
+  const calls: Array<string | undefined> = [];
+  setAgentSpawnSourcesForTests({
+    library: () => new LibraryStore(agentKind, root),
+    accountFor: () => ({ profileId: "acct-x" }),
+    offers: fableOffers(calls),
+    accountName: (id) => `Account ${id}`,
+  });
+  await assert.rejects(
+    resolveAgentSpawn("test-reviewer", undefined, { profileId: "acct-y" }),
+    (error: Error) =>
+      error instanceof AgentSpawnRefusedError &&
+      /\(Account acct-y\) does not offer claude-sdk\/claude-fable-5-2\./.test(
+        error.message,
+      ),
+  );
+  await assert.rejects(
+    resolveAgentOnRuntime(
+      "test-reviewer",
+      { provider: "claude-sdk", modelId: "fable", thinkingLevel: "high" },
+      "acct-y",
+    ),
+    (error: Error) =>
+      error instanceof AgentSpawnRefusedError &&
+      /\(Account acct-y\) does not offer claude-sdk\/claude-fable-5-2\./.test(
+        error.message,
+      ),
+  );
+  assert.deepEqual(calls, ["claude-fable-5-2", "claude-fable-5-2"]);
+  // The pinned spawn's Automatic pick carries the pin into the router.
+  const picks: Array<string | undefined> = [];
+  setAgentSpawnSourcesForTests({
+    library: () => new LibraryStore(agentKind, root),
+    accountFor: (request) => {
+      picks.push(request.pinnedModelId);
+      return { profileId: "acct-x" };
+    },
+    offers: fableOffers(calls),
+    accountName: (id) => `Account ${id}`,
+  });
+  const { agent } = await resolveAgentSpawn("test-reviewer");
+  assert.deepEqual(picks, ["claude-fable-5-2"]);
+  assert.equal(agent.pinnedModel, "claude-fable-5-2");
 });
 
 test("a model that stopped resolving refuses; nothing falls back", async () => {

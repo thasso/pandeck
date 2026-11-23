@@ -12,6 +12,7 @@ import {
   type CredentialProfile,
 } from "./credentialProfiles.ts";
 import { assertSessionAccountSwitch } from "./sessionAccount.ts";
+import { sessionClaudePin } from "./harnesses/curatedModels.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 import type { RuntimePromptDriver } from "./session/runtimePrompt.ts";
 import type {
@@ -130,6 +131,8 @@ export async function moveOffDisabledAccount(
       ? { thinkingLevel: selected.thinkingLevel }
       : {}),
     requiresEnterprise,
+    // A pinned session moves only where its exact version runs.
+    ...sessionClaudePin(driver.id, model.provider, model.id),
   });
   const target =
     pick.profileId && !pick.degraded
@@ -283,6 +286,8 @@ export function installAccountRecovery(
     return !!(
       ended.profileId &&
       facts &&
+      // A refusal PA made before any provider call is no account evidence.
+      !facts.localPolicy &&
       source &&
       selection?.model &&
       driver.credentialProfileId === ended.profileId &&
@@ -406,6 +411,8 @@ export function installAccountRecovery(
       requiresEnterprise:
         cyber || sessionStore.get(driver.id)?.requiresEnterprise === true,
       excludeProfileIds: [...visited],
+      // A pinned session moves only where its exact version runs.
+      ...sessionClaudePin(driver.id, selected.provider, selected.id),
     });
     guard(recovery);
     if (!pick.profileId || pick.degraded || visited.has(pick.profileId)) {

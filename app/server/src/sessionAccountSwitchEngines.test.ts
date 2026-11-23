@@ -2008,3 +2008,358 @@ test("a cold pi move whose load fails still wakes the queued work it refused", a
     profiles.setCredentialProfileEnabled(b, false);
   }
 });
+
+/* ------------- entitlement refusals are local policy, end to end ------------- */
+
+/**
+ * The real runtime, Claude adapter and run lifecycle around a mythos session on
+ * "usage limit 401 account" (a name whose refusal text would read as quota or
+ * login if it were ever re-analyzed), with an eligible COMPANY account Z.
+ * `flip` makes the bound account's listing PRIVATE once its next run starts,
+ * after any admission or `/compact` check and before the query open resolves.
+ */
+async function mythosFixture() {
+  const { resetClaudeAccountModelsForTests } =
+    await import("./harnesses/claudeAccountModels.ts");
+  const { COMPANY, PRIVATE } = await import("./test/claudeListings.ts");
+  const bound = account("claude", "usage limit 401 account");
+  const z = account("claude", "Z");
+  let boundListing: readonly string[] = COMPANY;
+  const cache = resetClaudeAccountModelsForTests({
+    read: async (id) => [...(id === bound ? boundListing : COMPANY)],
+  });
+  const providerId = randomUUID();
+  const queries: ClaudeQueryParams[] = [];
+  const seam: ClaudeSdkSeam = {
+    query(params) {
+      queries.push(params);
+      return {
+        async *[Symbol.asyncIterator]() {
+          if (typeof params.prompt !== "string") {
+            const iterator = params.prompt[Symbol.asyncIterator]();
+            await iterator.next();
+            await iterator.return?.();
+          }
+          yield {
+            type: "system",
+            subtype: "init",
+            session_id: providerId,
+            uuid: randomUUID(),
+          } as ClaudeSdkMessage;
+          yield {
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            session_id: providerId,
+            uuid: randomUUID(),
+            total_cost_usd: 0,
+            modelUsage: {},
+          } as unknown as ClaudeSdkMessage;
+        },
+      };
+    },
+  };
+  const internals = claudeSdkStore as unknown as {
+    seam: () => Promise<ClaudeSdkSeam>;
+  };
+  const factory = vi.spyOn(internals, "seam").mockResolvedValue(seam);
+  const id = randomUUID();
+  const spyHealth = {
+    observe: vi.fn(health.observeAccountHealth),
+    failed: vi.fn(),
+    working: vi.fn(),
+  };
+  const spyTracker = health.trackSessionRunHealth(
+    {
+      session: sessionStore.get,
+      subscribeStarted: lifecycle.subscribeSessionRunStarted,
+      subscribeFailed: lifecycle.subscribeSessionRunFailed,
+      subscribeClosed: lifecycle.subscribeSessionTurnClosed,
+    },
+    spyHealth,
+  );
+  const reports: import("./session/runtime/liveSession.ts").RunFailureReport[] =
+    [];
+  const offFailed = lifecycle.subscribeSessionRunFailed((report) => {
+    if (report.sessionId === id) reports.push(report);
+  });
+  let runStarts = 0;
+  let flipOnStart = false;
+  const toPrivate = () => {
+    boundListing = PRIVATE;
+    // Synchronous: the next resolve reads the account again.
+    cache.forget(bound);
+  };
+  const offStarted = lifecycle.subscribeSessionRunStarted((sessionId) => {
+    if (sessionId !== id) return;
+    runStarts += 1;
+    if (flipOnStart) toPrivate();
+  });
+  const live = await createSession({
+    harness: "claude-sdk",
+    id,
+    agentType: "assistant",
+    credentialProfileId: bound,
+    modelId: "mythos",
+    thinkingLevel: "medium",
+    title: "Mythos",
+  });
+  return {
+    bound,
+    z,
+    id,
+    live: live as import("./claudeSdk/ClaudeSdkSession.ts").ClaudeSdkSession,
+    queries,
+    reports,
+    spyHealth,
+    runStarts: () => runStarts,
+    flipOnNextRun: () => {
+      flipOnStart = true;
+    },
+    toPrivate,
+    timeline: () =>
+      JSON.stringify(sessionRuntime.get(id)?.clientTimeline() ?? []),
+    /** Nothing about the bound account changed, and nothing moved. */
+    assertNoEvidence() {
+      assert.equal(spyHealth.failed.mock.calls.length, 0);
+      assert.equal(spyHealth.working.mock.calls.length, 0);
+      assert.equal(health.readAccountBench(bound, "mythos"), undefined);
+      assert.notEqual(
+        profiles.credentialProfileSummaryById(bound)?.health.state,
+        "needs-login",
+      );
+      assert.equal(sessionStore.get(id)?.credentialProfileId, bound);
+      assert.equal(live.credentialProfileId, bound);
+      assert.ok(!this.timeline().includes("Switched from"));
+    },
+    async dispose() {
+      offStarted();
+      offFailed();
+      spyTracker.dispose();
+      factory.mockRestore();
+      await sessionRuntime.disposeSession(id);
+      claudeSdkStore.remove(id);
+      profiles.setCredentialProfileEnabled(bound, false);
+      profiles.setCredentialProfileEnabled(z, false);
+      resetClaudeAccountModelsForTests();
+    },
+  };
+}
+
+const MYTHOS_REFUSAL = "usage limit 401 account can't run Claude Mythos.";
+
+test("a turn refused at the query open (listing changed after admission) is local policy end to end", async () => {
+  const f = await mythosFixture();
+  try {
+    f.flipOnNextRun();
+    await promptRuntimeSessionWithRuntime(
+      sessionRuntime,
+      f.live,
+      "Hello",
+    ).catch(() => {});
+    assert.equal(f.runStarts(), 1, "the prompt was delivered as one run");
+    assert.equal(f.queries.length, 0);
+    assert.deepEqual(
+      f.reports.map((report) => report.failure),
+      [{ kind: "unknown", localPolicy: true }],
+    );
+    assert.equal(f.reports[0]?.errorMessage, MYTHOS_REFUSAL);
+    assert.ok(f.timeline().includes(MYTHOS_REFUSAL));
+    // No recovery: nothing re-prompts and no other account is tried.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(f.runStarts(), 1);
+    assert.equal(f.queries.length, 0);
+    f.assertNoEvidence();
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("a turn on an account that lacks the model is refused at admission: no run, no row", async () => {
+  const f = await mythosFixture();
+  try {
+    f.toPrivate();
+    await assert.rejects(
+      promptRuntimeSessionWithRuntime(sessionRuntime, f.live, "Hello"),
+      (err: Error) =>
+        err.name === "ModelUnavailableOnAccountError" &&
+        err.message === MYTHOS_REFUSAL,
+    );
+    assert.equal(f.runStarts(), 0);
+    assert.equal(f.queries.length, 0);
+    assert.deepEqual(f.reports, []);
+    assert.ok(!f.timeline().includes("Hello"), "no appended user row");
+    f.assertNoEvidence();
+    assert.equal(f.live.toRecord().modelId, "mythos");
+  } finally {
+    await f.dispose();
+  }
+});
+
+test.each(["before the turn", "at the open"] as const)(
+  "/compact refused %s is local policy: no provider call and no evidence",
+  async (when) => {
+    const f = await mythosFixture();
+    try {
+      // A first turn on the COMPANY listing gives the session native history.
+      await promptRuntimeSessionWithRuntime(sessionRuntime, f.live, "First");
+      assert.equal(f.queries.length, 1);
+      // That run was the account's real evidence; only what follows counts.
+      f.spyHealth.failed.mockClear();
+      f.spyHealth.working.mockClear();
+      const startsBefore = f.runStarts();
+      const { runCompactForHost } = await import("./hostSlashCommands.ts");
+      if (when === "before the turn") {
+        f.toPrivate();
+        await assert.rejects(runCompactForHost(f.live, ""), (err: Error) => {
+          assert.equal(err.name, "ModelUnavailableOnAccountError");
+          assert.equal(err.message, MYTHOS_REFUSAL);
+          return true;
+        });
+        assert.equal(f.runStarts(), startsBefore, "no synthetic turn or run");
+        assert.ok(!f.timeline().includes("/compact"));
+        assert.deepEqual(f.reports, []);
+      } else {
+        f.flipOnNextRun();
+        await runCompactForHost(f.live, "");
+        assert.equal(f.runStarts(), startsBefore + 1);
+        assert.deepEqual(
+          f.reports.map((report) => report.failure),
+          [{ kind: "unknown", localPolicy: true }],
+        );
+        assert.ok(f.timeline().includes(MYTHOS_REFUSAL));
+      }
+      assert.equal(f.queries.length, 1, "compaction never reached the SDK");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      f.assertNoEvidence();
+    } finally {
+      await f.dispose();
+    }
+  },
+);
+
+test.each([
+  {
+    name: "gateway off keeps an existing 5-1 pin",
+    listing: "off",
+    model: "fable",
+    pin: "claude-fable-5-1",
+    runs: "claude-fable-5-1",
+  },
+  {
+    name: "a failed read refuses a mythos pin",
+    listing: "failed",
+    model: "mythos",
+    pin: "claude-mythos-5-2",
+  },
+  {
+    name: "a failed read refuses a mythos pin stored under opus",
+    listing: "failed",
+    model: "opus",
+    pin: "claude-mythos-5-1",
+  },
+  {
+    name: "a known account refuses a pin it does not list",
+    listing: "y",
+    model: "fable",
+    pin: "claude-fable-5-2",
+  },
+  {
+    name: "gateway off keeps the session's own legacy pin",
+    listing: "off",
+    model: "opus",
+    pin: "claude-opus-5",
+    runs: "claude-opus-5",
+  },
+] as const)(
+  "turn admission judges the stored pin: $name",
+  async ({ listing, model, pin, ...expected }) => {
+    const { resetClaudeAccountModelsForTests } =
+      await import("./harnesses/claudeAccountModels.ts");
+    const { Y } = await import("./test/claudeListings.ts");
+    const { freezeSessionAgent } = await import("./agents/sessionAgent.ts");
+    const bound = account("claude", `Pinned ${listing}`);
+    resetClaudeAccountModelsForTests({
+      read: async () => {
+        if (listing === "failed") throw new Error("listing failed");
+        return listing === "y" ? [...Y] : undefined;
+      },
+    });
+    const queries: ClaudeQueryParams[] = [];
+    const seam: ClaudeSdkSeam = {
+      query(params) {
+        queries.push(params);
+        return {
+          async *[Symbol.asyncIterator]() {
+            if (typeof params.prompt !== "string") {
+              const iterator = params.prompt[Symbol.asyncIterator]();
+              await iterator.next();
+              await iterator.return?.();
+            }
+            yield {
+              type: "result",
+              subtype: "success",
+              is_error: false,
+              session_id: randomUUID(),
+              uuid: randomUUID(),
+              total_cost_usd: 0,
+              modelUsage: {},
+            } as unknown as ClaudeSdkMessage;
+          },
+        };
+      },
+    };
+    const internals = claudeSdkStore as unknown as {
+      seam: () => Promise<ClaudeSdkSeam>;
+    };
+    const factory = vi.spyOn(internals, "seam").mockResolvedValue(seam);
+    const id = randomUUID();
+    try {
+      const live = await createSession({
+        harness: "claude-sdk",
+        id,
+        agentType: "assistant",
+        credentialProfileId: bound,
+        modelId: model,
+        thinkingLevel: "medium",
+        title: "Pinned",
+      });
+      freezeSessionAgent(id, {
+        name: "pinned",
+        blob: "0".repeat(40),
+        persona: "assistant",
+        provider: "claude-sdk",
+        model,
+        pinnedModel: pin,
+        effort: "medium",
+        runtimeSource: "definition",
+        denyTools: [],
+        skills: [],
+        body: "",
+      });
+      const sent = promptRuntimeSessionWithRuntime(
+        sessionRuntime,
+        live,
+        "Hello",
+      );
+      if ("runs" in expected) {
+        await sent;
+        assert.deepEqual(
+          queries.map((query) => query.options?.model),
+          [expected.runs],
+        );
+      } else {
+        await assert.rejects(sent, {
+          name: "ModelUnavailableOnAccountError",
+        });
+        assert.equal(queries.length, 0);
+      }
+    } finally {
+      factory.mockRestore();
+      await sessionRuntime.disposeSession(id);
+      claudeSdkStore.remove(id);
+      profiles.setCredentialProfileEnabled(bound, false);
+      resetClaudeAccountModelsForTests();
+    }
+  },
+);

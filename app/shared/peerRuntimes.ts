@@ -125,7 +125,7 @@ export function peerRuntimeFamilyOf(
 ): PeerRuntimeFamily {
   const model = modelId.trim().toLowerCase();
   if (provider === "claude-sdk" || model.startsWith("claude")) return "claude";
-  if (/^(opus|sonnet|haiku|fable)$/.test(model)) return "claude";
+  if (/^(opus|sonnet|haiku|fable|mythos)$/.test(model)) return "claude";
   if (model.startsWith("gpt-") || model.startsWith("gpt5")) return "gpt";
   return "unknown";
 }

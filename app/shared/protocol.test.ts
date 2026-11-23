@@ -2,6 +2,8 @@ import { describe, expect, test } from "vitest";
 import {
   applyPatch,
   CLAUDE_SDK_PROVIDER,
+  claudeModelAlias,
+  claudeSdkModelOption,
   OPENAI_COMPATIBLE_PROVIDER_ID,
   PEER_PROMPT_EXCERPT_CHARS,
   peerPromptExcerpt,
@@ -178,4 +180,11 @@ describe("settleBlockedReason", () => {
       "background updates it was given were not handled.",
     );
   });
+});
+
+test("mythos is its own Claude alias, never sonnet", () => {
+  expect(claudeModelAlias("mythos")).toBe("mythos");
+  expect(claudeModelAlias("claude-mythos-5-1")).toBe("mythos");
+  expect(claudeModelAlias("claude-mythos-5-2")).toBe("mythos");
+  expect(claudeSdkModelOption("mythos")?.name).toBe("Claude Mythos");
 });

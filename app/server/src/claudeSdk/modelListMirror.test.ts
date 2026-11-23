@@ -11,6 +11,12 @@ import { CLAUDE_SDK_MODELS } from "./modelSettings.ts";
 test("the shared optimistic Claude list mirrors the server's curated list", () => {
   assert.deepEqual(
     SHARED_CLAUDE_MODELS,
-    CLAUDE_SDK_MODELS.map(({ sdkModelId: _sdkModelId, ...model }) => model),
+    CLAUDE_SDK_MODELS.map(
+      ({
+        sdkModelIds: _sdkModelIds,
+        offeredWhenUnknown: _offeredWhenUnknown,
+        ...model
+      }) => model,
+    ),
   );
 });

@@ -693,6 +693,9 @@ export function trackSessionRunHealth(
       const run = runs.get(sessionId);
       if (run?.runId !== runId) return;
       runs.delete(sessionId);
+      // PA refused this run before the provider was asked: no evidence about
+      // the account either way.
+      if (failure?.localPolicy) return;
       health.failed(run.profileId, failure, run.modelProvider, run.observation);
     }),
     host.subscribeClosed((sessionId, runId, stopReason) => {

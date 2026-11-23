@@ -417,3 +417,35 @@ test("skill dispatch and the skill turn's options reach the driver", async () =>
     { text: "plain", options: {} },
   ]);
 });
+
+test("a driver's local-policy run completion resolves the prompt with those facts", async () => {
+  const { NativeAdapterEventSource } = await import("./nativeEvents.ts");
+  const { createClaudeSdkAdapter } = await import("./claudeSdk.ts");
+  const native = new NativeAdapterEventSource();
+  const local = { kind: "unknown", localPolicy: true } as const;
+  const adapter = createClaudeSdkAdapter("local-policy", {
+    subscribeAdapterEvents: native.subscribe.bind(native),
+    abort: () => {},
+    setModel: () => {},
+    setThinkingLevel: () => {},
+    steer: async () => "refused",
+    prompt: async () => {
+      // The backstop ends a run the turn had opened, as `finishTurn` does.
+      native.messageStarted("local");
+      native.runCompleted(
+        "error",
+        "usage limit 401 account can't run Claude Mythos.",
+        local,
+      );
+    },
+  });
+  try {
+    assert.deepEqual(await adapter.prompt("go"), {
+      stopReason: "error",
+      errorMessage: "usage limit 401 account can't run Claude Mythos.",
+      failure: local,
+    });
+  } finally {
+    await adapter.dispose();
+  }
+});

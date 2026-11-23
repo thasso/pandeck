@@ -775,6 +775,58 @@ test.each(["pi", "claude"])(
   },
 );
 
+test.each(["runCompleted", "messageCompleted", "prompt result"] as const)(
+  "local-policy facts on %s reach the failure report unchanged, never re-classified",
+  async (path) => {
+    const { runtime, adapter } = makeRuntime();
+    const local = { kind: "unknown", localPolicy: true } as const;
+    const text = "usage limit 401 account can't run Claude Mythos.";
+    const reports: import("./liveSession.ts").RunFailureReport[] = [];
+    const off = subscribeSessionRunFailed((report) => reports.push(report));
+    try {
+      const run = runtime.prompt("s1", "go");
+      await tick();
+      if (path === "runCompleted") {
+        adapter.emit({
+          type: "runCompleted",
+          stopReason: "error",
+          errorMessage: text,
+          failure: local,
+        });
+        adapter.finishRun({ stopReason: "error", errorMessage: text });
+      } else if (path === "messageCompleted") {
+        adapter.emit({ type: "messageStarted", streamId: "m1" });
+        adapter.emit({
+          type: "messageCompleted",
+          streamId: "m1",
+          content: [],
+          stopReason: "error",
+          error: text,
+          failure: local,
+        });
+        adapter.emit({
+          type: "runCompleted",
+          stopReason: "error",
+          errorMessage: text,
+        });
+        adapter.finishRun({ stopReason: "error", errorMessage: text });
+      } else
+        adapter.finishRun({
+          stopReason: "error",
+          errorMessage: text,
+          failure: local,
+        });
+      await assert.rejects(() => run, RunFailedError);
+      assert.deepEqual(
+        reports.map((report) => report.failure),
+        [local],
+      );
+    } finally {
+      off();
+    }
+  },
+);
+
 test.each(["thrown", "fallback"])(
   "classifies %s adapter auth errors when no failure facts were emitted",
   async (mode) => {

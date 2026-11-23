@@ -97,6 +97,15 @@ test("a failed or implausible read keeps the last success; a first failure stays
   assert.deepEqual(changes, ["c1"]);
 });
 
+test("a listing naming any candidate is plausible: only the newest fable", async () => {
+  const { cache, calls, changes } = harness();
+  const read = cache.refresh({ profileIds: ["c1"], force: false });
+  calls[0]!.resolve(["claude-fable-5-2"]);
+  await read;
+  assert.deepEqual([...cache.ids("c1")!], ["claude-fable-5-2"]);
+  assert.deepEqual(changes, ["c1"]);
+});
+
 test("no gateway: nothing is read and no attempt counts against the floor", async () => {
   let reads = 0;
   const { cache } = harness({

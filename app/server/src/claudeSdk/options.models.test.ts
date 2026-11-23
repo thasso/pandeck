@@ -37,7 +37,36 @@ test("curated model ids map aliases to concrete --model strings", () => {
     "claude-haiku-5-5",
     "haiku points at the current generation",
   );
-  assert.equal(claudeSdkModelId("fable"), "claude-fable-5-1");
+  // The account-free default is an alias's first candidate.
+  assert.equal(claudeSdkModelId("fable"), "claude-fable-5-2");
+  assert.equal(claudeSdkModelId("mythos"), "claude-mythos-5-2");
+});
+
+test("fable and mythos carry ordered candidates; mythos is offered only where listed", () => {
+  const byId = new Map(CLAUDE_SDK_MODELS.map((model) => [model.id, model]));
+  assert.deepEqual(byId.get("fable")?.sdkModelIds, [
+    "claude-fable-5-2",
+    "claude-fable-5-1",
+  ]);
+  assert.equal(byId.get("fable")?.offeredWhenUnknown, true);
+  const mythos = byId.get("mythos");
+  assert.deepEqual(mythos?.sdkModelIds, [
+    "claude-mythos-5-2",
+    "claude-mythos-5-1",
+  ]);
+  assert.equal(mythos?.name, "Claude Mythos");
+  assert.equal(mythos?.offeredWhenUnknown, false);
+  assert.equal(mythos?.contextWindow, 1_000_000);
+  assert.deepEqual(mythos?.supportedThinkingLevels, [
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+  ]);
+  for (const alias of ["opus", "sonnet", "haiku"])
+    assert.equal(byId.get(alias)?.sdkModelIds.length, 1, alias);
+  assert.equal(knownClaudeSdkModelAlias("claude-mythos-5-2"), "mythos");
+  assert.equal(knownClaudeSdkModelAlias("claude-mythos-5-1"), "mythos");
 });
 
 test("alias normalization distinguishes recognized models from configuration fallbacks", () => {
@@ -130,6 +159,11 @@ test("opus/sonnet/haiku honor off as disabled; fable can never disable", () => {
     thinking: { type: "adaptive", display: "summarized" },
     effort: "low",
   });
+  // Mythos has no `off` level either, so it is always adaptive too.
+  assert.deepEqual(reasoningToThinking("off", "mythos"), {
+    thinking: { type: "adaptive", display: "summarized" },
+    effort: "low",
+  });
 });
 
 test("query options for fable resolve to the concrete model and adaptive thinking", () => {
@@ -140,7 +174,7 @@ test("query options for fable resolve to the concrete model and adaptive thinkin
     thinkingLevel: "medium",
     agentType: "workshop",
   });
-  assert.equal(opts.model, "claude-fable-5-1");
+  assert.equal(opts.model, "claude-fable-5-2");
   assert.deepEqual(opts.thinking, { type: "adaptive", display: "summarized" });
   assert.equal(opts.effort, "medium");
 });

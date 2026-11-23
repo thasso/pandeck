@@ -218,20 +218,48 @@ Four layers, each depending only on the ones below it:
      admission check waits at most 10 seconds (lease and fetch) for an unknown
      account's first read, and after a failure or a stalled read it waits again
      only after 60 seconds. Every read carries a generation, so a read started
-     before a login or deletion never publishes over a later one.
-     `accountLacksModel` is true only when a known listing omits the curated
-     model the run executes: Claude normalizes every id it accepts
-     (`claudeModelAlias`), so another spelling or an older concrete id is judged
-     as its curated model and an unknown id as the default. The account
-     projection's models come from `modelsByAccount`. `pickerModels` offers the
-     union over enabled Claude accounts (curated when none is enabled). The
-     Claude-only curated options sit in `harnesses/curatedModels.ts`, which
-     loads no engine SDK, so row projections and the Claude adapter stay cheap:
-     an option by id, the alias a model id runs as (`claudeModelAlias`) and the
-     curated ids. The usage port (`harnesses/usage.ts`) reads subscription usage
-     per account kind and redeems OpenAI reset credits. It also resolves
-     run-usage attribution, including the protected default used to reopen a
-     legacy unbound session on an install that still has one.
+     before a login or deletion never publishes over a later one. Each curated
+     alias lists ordered concrete candidates, newest first (`fable` =
+     [`claude-fable-5-2`, `claude-fable-5-1`]; `mythos` = [`claude-mythos-5-2`,
+     `claude-mythos-5-1`]; the others one id), and a flag saying whether an
+     unknown account offers it (`mythos` does not). The pure rule
+     `resolveClaudeSdkModel` (`claudeSdk/modelResolution.ts`) picks the concrete
+     id an account runs: a known account runs the first candidate it lists, or a
+     pin only if it lists that pin; an unknown account runs the first candidate
+     of an alias offered without a listing, a pin that is one of the alias's
+     candidates (D1), or the session's own STORED pin of the same family
+     (D1-legacy, an older id such as `claude-opus-5`), and never mythos. Only
+     existing-session checks pass the stored pin: turn admission
+     (`assertSessionModelEntitled` in `session/runtimePrompt.ts`), the
+     `/compact` pre-check, the query open, switches and explicit moves. A new
+     start, helper, one-shot or `setModel` passes none, so a legacy id is
+     refused as a new pin. The bound resolver
+     (`harnesses/claudeModelResolution.ts`, which loads no engine SDK) waits the
+     bounded first read, then resolves on the session's CURRENT account at every
+     query open (the turn and the standalone compact), on `setModel` before
+     anything changes, and for every Claude one-shot; the record keeps the
+     alias, never the concrete id. A refusal names the account and model
+     ("Private can't run Claude Mythos."). `accountLacksModel` is true when the
+     account's resolution finds nothing, with a pin exactly that pin: Claude
+     normalizes every id it accepts (`claudeModelAlias`, `mythos` tested first),
+     so another spelling or an older concrete id is judged as its curated model
+     and an unknown id as the default. A refusal before any provider call is
+     local policy, never provider evidence: a turn or `/compact` refused at
+     admission opens no run, and one refused at the open (a listing that changed
+     in between) ends with `RunFailureFacts`
+     `{kind: "unknown", localPolicy: true}`, carried by `runFailing`,
+     `messageCompleted` and host-command turns alike, which health, benches,
+     switches and failure classification ignore. The account projection's models
+     come from `modelsByAccount`. `pickerModels` offers the union over enabled
+     Claude accounts (curated when none is enabled; `mythos` only where some
+     account lists it). The Claude-only curated options sit in
+     `harnesses/curatedModels.ts`, which loads no engine SDK, so row projections
+     and the Claude adapter stay cheap: an option by id, the alias a model id
+     runs as (`claudeModelAlias`) and the curated ids. The usage port
+     (`harnesses/usage.ts`) reads subscription usage per account kind and
+     redeems OpenAI reset credits. It also resolves run-usage attribution,
+     including the protected default used to reopen a legacy unbound session on
+     an install that still has one.
    - `harnesses/boot.ts` is what the server's composition root (`index.ts`)
      starts in the engines: pi's tool binaries, its model provider sync, each
      account's model runtime, the OpenAI account login, and the one-time import

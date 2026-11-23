@@ -53,6 +53,7 @@ test("only the declared relative-cost labels are accepted", () => {
 
 test("family is inferred only where the mapping is unambiguous", () => {
   expect(peerRuntimeFamilyOf("claude-sdk", "opus")).toBe("claude");
+  expect(peerRuntimeFamilyOf("x", "mythos")).toBe("claude");
   expect(peerRuntimeFamilyOf("openai-codex", "gpt-5.6-terra")).toBe("gpt");
   // A model whose id says nothing about its family stays unknown, even on a
   // provider that usually serves one family.

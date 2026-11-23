@@ -7,6 +7,7 @@
  */
 import type { DisplayMessage, ServerMessage } from "@assistant/shared";
 import type { HostCommandCard } from "@assistant/shared/runtime";
+import type { RunFailureFacts } from "../session/adapters/contract.ts";
 import type { NativeAdapterEventSource } from "../session/adapters/nativeEvents.ts";
 import { updateTool } from "../session/runtime/liveBlocks.ts";
 
@@ -115,13 +116,18 @@ export function discardHostCommandTurn(
   target.adapterEvents.hostCommandDiscarded();
 }
 
-/** End the turn with plain tool output; an error output is the turn's error. */
+/**
+ * End the turn with plain tool output; an error output is the turn's error.
+ * `failure` is that error's classification when the caller knows it (a local
+ * policy refusal), so the runtime never re-reads the text.
+ */
 export function finishHostCommandTool(
   target: HostCommandTurnTarget,
   turn: DisplayMessage,
   toolId: string,
   output: string,
   isError: boolean,
+  failure?: RunFailureFacts,
 ): void {
   const { sessionId, adapterEvents } = target;
   updateTool(turn.blocks, toolId, { output, isError, done: true });
@@ -144,6 +150,7 @@ export function finishHostCommandTool(
   });
   adapterEvents.messageCompleted(turn.id, {
     ...(isError ? { errorMessage: output } : {}),
+    ...(isError && failure ? { failure } : {}),
   });
 }
 

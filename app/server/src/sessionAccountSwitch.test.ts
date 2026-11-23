@@ -17,8 +17,17 @@ import type { AccountSwitchOptions } from "./sessionAccount.ts";
 const offers = vi.hoisted(
   () => new Map<string, { provider: string; id: string }>(),
 );
+/** Per account, the pinned ids its listing lacks. */
+const lacksPin = vi.hoisted(() => new Map<string, string[]>());
 vi.mock("./harnesses/models.ts", () => ({
-  accountLacksModel: async () => false,
+  accountLacksModel: async (
+    id: string,
+    _provider: string,
+    _model: string,
+    pin?: { pinnedModelId?: string },
+  ) =>
+    pin?.pinnedModelId !== undefined &&
+    (lacksPin.get(id)?.includes(pin.pinnedModelId) ?? false),
   modelsForAccount: async ({ id }: { id: string }) =>
     offers.has(id)
       ? [{ ...offers.get(id), name: "Test model", reasoning: false }]
@@ -86,6 +95,7 @@ afterEach(async () => {
     await runtime.disposeSession(id);
   for (const id of created.splice(0))
     profiles.setCredentialProfileEnabled(id, false);
+  lacksPin.clear();
 });
 afterAll(() => {
   untrack.dispose();
@@ -1786,5 +1796,109 @@ test("pi counts the run after an explicit move as moved for its encrypted-reason
       [b, false],
       [b, true],
     ],
+  );
+});
+
+/** A Claude account running `model`; `lacks52` marks it Y (no fable 5-2). */
+function claudeOn(name: string, model: string, lacks52 = false): string {
+  const id = account("claude-sdk", name);
+  offers.set(id, { provider: "claude-sdk", id: model });
+  if (lacks52) lacksPin.set(id, ["claude-fable-5-2"]);
+  return id;
+}
+
+/** The session was spawned from a definition pinned to fable 5-2. */
+function pinFable52(sessionId: string): void {
+  sessionStore.freezeAgent(
+    sessionId,
+    JSON.stringify({
+      name: "pinned-fable",
+      blob: "0".repeat(40),
+      persona: "assistant",
+      provider: "claude-sdk",
+      model: "fable",
+      pinnedModel: "claude-fable-5-2",
+      effort: "high",
+      runtimeSource: "definition",
+      denyTools: [],
+      skills: [],
+      body: "",
+    }),
+  );
+}
+
+test("a 5-2-pinned session moves off a disabled account only to one that runs 5-2", async () => {
+  const x = claudeOn("X", "fable");
+  claudeOn("Y", "fable", true);
+  const z = claudeOn("Z", "fable");
+  const s = setup("claude-sdk", x, [undefined]);
+  pinFable52(s.id);
+  profiles.setCredentialProfileEnabled(x, false);
+  await s.send();
+  assert.deepEqual(s.moves, [z]);
+});
+
+test("a 5-2-pinned session on a disabled account with only Y left is refused, binding kept", async () => {
+  const x = claudeOn("X", "fable");
+  claudeOn("Y", "fable", true);
+  const s = setup("claude-sdk", x, [undefined]);
+  pinFable52(s.id);
+  profiles.setCredentialProfileEnabled(x, false);
+  await assert.rejects(
+    s.send(),
+    /X is disabled and no other eligible account is available/,
+  );
+  assert.deepEqual(s.moves, []);
+  assert.equal(sessionStore.get(s.id)?.credentialProfileId, x);
+});
+
+test("failure recovery of a 5-2-pinned session skips the account without 5-2", async () => {
+  const x = claudeOn("X", "fable");
+  claudeOn("Y", "fable", true);
+  const z = claudeOn("Z", "fable");
+  const s = setup("claude-sdk", x, [{ kind: "quota" }, undefined]);
+  pinFable52(s.id);
+  await s.send().catch(() => {});
+  await vi.waitFor(() => assert.equal(s.driver.credentialProfileId, z));
+  assert.deepEqual(s.moves, [z]);
+});
+
+test("failure recovery of a 5-2-pinned session with only Y left stays and says so", async () => {
+  const x = claudeOn("X", "fable");
+  claudeOn("Y", "fable", true);
+  const s = setup("claude-sdk", x, [{ kind: "quota" }]);
+  pinFable52(s.id);
+  await s.send().catch(() => {});
+  await vi.waitFor(() =>
+    assert.ok(
+      JSON.stringify(messages(s)).includes("No other eligible account"),
+    ),
+  );
+  assert.deepEqual(s.moves, []);
+  assert.equal(sessionStore.get(s.id)?.credentialProfileId, x);
+});
+
+test("the pin no longer applies once the user switched the session to another alias", async () => {
+  const x = claudeOn("X", "opus");
+  const y = claudeOn("Y", "opus", true);
+  const s = setup("claude-sdk", x, [undefined]);
+  pinFable52(s.id);
+  profiles.setCredentialProfileEnabled(x, false);
+  await s.send();
+  assert.deepEqual(s.moves, [y]);
+});
+
+test("a local-policy failure is never switch evidence, whatever its kind", async () => {
+  const x = claudeOn("X", "opus");
+  claudeOn("Z", "opus");
+  const s = setup("claude-sdk", x, [{ kind: "quota", localPolicy: true }]);
+  await s.send().catch(() => {});
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(s.moves, []);
+  assert.equal(s.calls.length, 1);
+  assert.equal(sessionStore.get(s.id)?.credentialProfileId, x);
+  assert.equal(
+    JSON.stringify(messages(s)).includes("No other eligible account"),
+    false,
   );
 });

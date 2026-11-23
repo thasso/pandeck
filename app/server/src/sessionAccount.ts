@@ -14,6 +14,7 @@ import {
 import { credentialProfileById } from "./credentialProfiles.ts";
 import { pickAccount } from "./accountRouter.ts";
 import { sessionStore } from "./db/sessionStore.ts";
+import { sessionClaudePin } from "./harnesses/curatedModels.ts";
 import { accountLacksModel } from "./harnesses/models.ts";
 import {
   assertAccountCanRunModel,
@@ -115,6 +116,11 @@ export async function resolveSessionAccount(
     modelId?: string | undefined;
     thinkingLevel?: ThinkingLevel | undefined;
     requiresEnterprise?: boolean | undefined;
+    /**
+     * The concrete version a new Claude session pins (its agent
+     * definition's): only an account that runs exactly it may take it.
+     */
+    pinnedModelId?: string | undefined;
   },
   options: { inheritedPin?: boolean } = {},
 ): Promise<string> {
@@ -128,13 +134,23 @@ export async function resolveSessionAccount(
     ACCOUNT_KINDS[accountKindForModelProvider(model.provider)].label;
   if (harnessForModelProvider(model.provider) !== harness)
     throw new Error(`Select an enabled ${label} credential profile.`);
+  // A new session: its pin, never a stored one (`claudeSdk/modelResolution.ts`).
+  const modelPin =
+    selection.pinnedModelId !== undefined
+      ? { pinnedModelId: selection.pinnedModelId }
+      : {};
   const stored = selection.credentialProfileId?.trim() || undefined;
   if (stored && options.inheritedPin) {
     const profile = credentialProfileById(stored);
     if (
       profile &&
       accountServesModel(profile, model.provider) &&
-      !(await accountLacksModel(profile.id, model.provider, model.modelId))
+      !(await accountLacksModel(
+        profile.id,
+        model.provider,
+        model.modelId,
+        modelPin,
+      ))
     ) {
       if (selection.requiresEnterprise && !profile.enterprise)
         throw new Error("This session requires an enterprise account.");
@@ -152,11 +168,17 @@ export async function resolveSessionAccount(
       throw new Error(`Select an enabled ${label} credential profile.`);
     if (selection.requiresEnterprise && !profile.enterprise)
       throw new Error("This session requires an enterprise account.");
-    await assertAccountCanRunModel(pin, model.provider, model.modelId);
+    await assertAccountCanRunModel(
+      pin,
+      model.provider,
+      model.modelId,
+      modelPin,
+    );
     return pin;
   }
   const picked = await pickAccount({
     model,
+    ...modelPin,
     ...(selection.thinkingLevel !== undefined
       ? { thinkingLevel: selection.thinkingLevel }
       : {}),
@@ -173,4 +195,27 @@ export async function resolveSessionAccount(
         : `No enabled ${label} account is available.`,
     );
   return picked.profileId;
+}
+
+/**
+ * Refuse an existing session's run when its bound account is not entitled to
+ * its current model ("<account> can't run <model>."), judged with the
+ * session's pin (`sessionClaudePin`). The callers pass the live binding and
+ * selection: turn admission (`session/runtimePrompt.ts`) and `/compact`
+ * (`hostSlashCommands.ts`), both before any run starts, so a refusal is a
+ * local policy decision that never reaches the provider or account health.
+ */
+export async function assertSessionModelEntitled(input: {
+  sessionId: string;
+  credentialProfileId: string | undefined;
+  model: { provider: string; id: string } | undefined;
+}): Promise<void> {
+  const { credentialProfileId, model } = input;
+  if (!credentialProfileId || !model) return;
+  await assertAccountCanRunModel(
+    credentialProfileId,
+    model.provider,
+    model.id,
+    sessionClaudePin(input.sessionId, model.provider, model.id),
+  );
 }

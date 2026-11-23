@@ -13,7 +13,11 @@ import type {
   ModelOption,
 } from "@assistant/shared";
 import { harnessForModelProvider } from "@assistant/shared";
-import { CLAUDE_SDK_MODELS } from "../claudeSdk/modelSettings.ts";
+import {
+  CLAUDE_SDK_MODELS,
+  type CuratedClaudeModel,
+} from "../claudeSdk/modelSettings.ts";
+import { resolveClaudeSdkModel } from "../claudeSdk/modelResolution.ts";
 import {
   credentialProfileById,
   listCredentialProfiles,
@@ -26,6 +30,7 @@ import {
   refreshClaudeAccountModels,
   subscribeClaudeAccountModelsChanged,
 } from "./claudeAccountModels.ts";
+import type { ClaudeModelPin } from "./claudeModelResolution.ts";
 import { claudeModelAlias, curatedModelOption } from "./curatedModels.ts";
 import {
   findModel,
@@ -39,24 +44,25 @@ import {
 import { selectPiModelWithFallback } from "../piSdk/oneShot.ts";
 import { getSettings } from "../settings.ts";
 
-type CuratedClaudeModel = (typeof CLAUDE_SDK_MODELS)[number];
-
 function claudeOption({
-  sdkModelId: _sdkModelId,
+  sdkModelIds: _sdkModelIds,
+  offeredWhenUnknown: _offeredWhenUnknown,
   ...model
 }: CuratedClaudeModel): ModelOption {
   return model;
 }
 
 /**
- * Whether a Claude account offers a curated model: it lists the model's
- * concrete id, or nothing is known of it yet (the curated list, as before).
+ * Whether a Claude account offers a curated model: the per-account resolution
+ * (`claudeSdk/modelResolution.ts`) finds an id for it. A known account offers
+ * what its listing names a candidate of; an unknown one every alias but the
+ * entitlement-gated ones.
  */
 function listedOn(
   model: CuratedClaudeModel,
   listed: ReadonlySet<string> | undefined,
 ): boolean {
-  return !listed || listed.has(model.sdkModelId);
+  return resolveClaudeSdkModel(model.id, listed) !== undefined;
 }
 
 /** The curated models one Claude account offers right now, without waiting. */
@@ -72,20 +78,20 @@ function claudeModelsFor(
 }
 
 /**
- * The union over the enabled Claude accounts, in curated order; the whole
- * curated list while no Claude account is enabled.
+ * The union over the enabled Claude accounts, in curated order; while no
+ * Claude account is enabled, what an unknown account offers.
  */
 function claudePickerModels(settings: AppSettings): ModelOption[] {
   if (!settings.claudeSdk.enabled) return [];
   const accounts = listCredentialProfiles().filter(
     (profile) => profile.provider === "claude" && profile.enabled,
   );
-  return CLAUDE_SDK_MODELS.filter(
-    (model) =>
-      accounts.length === 0 ||
-      accounts.some((account) =>
-        listedOn(model, claudeAccountModelIds(account.id)),
-      ),
+  return CLAUDE_SDK_MODELS.filter((model) =>
+    accounts.length === 0
+      ? listedOn(model, undefined)
+      : accounts.some((account) =>
+          listedOn(model, claudeAccountModelIds(account.id)),
+        ),
   ).map(claudeOption);
 }
 
@@ -97,23 +103,32 @@ export function pickerModels(
 }
 
 /**
- * The concrete version each alias model runs TODAY, for the models one account
- * offers: the Claude SDK's `opus` runs `claude-opus-5-5`. An alias follows new
- * versions; a concrete id names exactly one, so a caller that honours a pinned
- * id may accept it only while it is still what its alias runs.
+ * The concrete versions the accounts can pin per alias model, over all of
+ * them and in candidate order (newest first), whatever the accounts' order.
+ * One account pins the candidates its listing names, or, while it is unknown,
+ * every candidate of an alias an unknown account runs
+ * (`claudeSdk/modelResolution.ts`). An alias follows new versions; a concrete
+ * id names exactly one, so a pinned id is accepted only while it is one of
+ * these.
  */
 export function pinnedModelIdsFor(
-  account: { provider: CredentialProfileProvider },
+  accounts: readonly { id: string; provider: CredentialProfileProvider }[],
   settings: AppSettings = getSettings(),
-): Map<string, string> {
-  if (account.provider !== "claude" || !settings.claudeSdk.enabled)
-    return new Map();
-  return new Map(
-    CLAUDE_SDK_MODELS.map((model) => [
-      `${model.provider}:${model.id}`,
-      model.sdkModelId,
-    ]),
-  );
+): Map<string, string[]> {
+  const pins = new Map<string, string[]>();
+  if (!settings.claudeSdk.enabled) return pins;
+  const listings = accounts
+    .filter((account) => account.provider === "claude")
+    .map((account) => claudeAccountModelIds(account.id));
+  for (const model of CLAUDE_SDK_MODELS) {
+    const ids = model.sdkModelIds.filter((id) =>
+      listings.some(
+        (listed) => resolveClaudeSdkModel(model.id, listed, id) !== undefined,
+      ),
+    );
+    if (ids.length) pins.set(`${model.provider}:${model.id}`, ids);
+  }
+  return pins;
 }
 
 /**
@@ -148,43 +163,67 @@ export async function modelsByAccount(
   );
 }
 
-/** Whether the account offers this exact model; never a fallback. */
+/**
+ * Whether the account offers this exact model; never a fallback. A Claude
+ * model with a pin is offered only where that exact id runs (`pin`,
+ * {@link accountLacksModel}).
+ */
 export async function accountOffersModel(
   profileId: string,
   provider: string,
   modelId: string,
+  pin: ClaudeModelPin = {},
 ): Promise<boolean> {
   if (harnessForModelProvider(provider) === "claude-sdk") {
     await ensureClaudeAccountModels(profileId);
-    return claudeModelsFor(getSettings(), profileId).some(
-      (model) => model.provider === provider && model.id === modelId,
-    );
+    const settings = getSettings();
+    if (
+      !claudeModelsFor(settings, profileId).some(
+        (model) => model.provider === provider && model.id === modelId,
+      )
+    )
+      return false;
+    return claudeModelRuns(profileId, modelId, pin);
   }
   return !!(await findModelForProfile(profileId, provider, modelId));
 }
 
+/** Whether the Claude account's resolution finds an id for the model. */
+function claudeModelRuns(
+  profileId: string,
+  modelId: string,
+  pin: ClaudeModelPin,
+): boolean {
+  return (
+    resolveClaudeSdkModel(
+      claudeModelAlias(modelId),
+      claudeAccountModelIds(profileId),
+      pin.pinnedModelId,
+      pin.persistedPinnedModelId,
+    ) !== undefined
+  );
+}
+
 /**
- * Whether the account is KNOWN not to be entitled to the model: its Claude
- * listing lacks the concrete id of the curated model the run would execute.
- * Claude normalizes every id it accepts (`claudeModelAlias`): another spelling
- * or an older concrete id runs that curated model, and an unknown id runs the
- * default, so that is the model judged. Unknown accounts and other providers
- * are never lacking, so this only ever removes what a real listing proves
- * absent. Routing and every pinned start refuse such an account
+ * Whether the account is not entitled to the model: the per-account
+ * resolution (`claudeSdk/modelResolution.ts`) finds no id for it. A known
+ * account lacks what its listing names no candidate of, or a pin it does not
+ * list; an unknown account lacks an entitlement-gated model (mythos) and a pin
+ * outside what D1 allows. Claude normalizes every id it accepts
+ * (`claudeModelAlias`): another spelling runs that curated model and an
+ * unknown id the default, so that is the model judged. Other providers are
+ * never lacking. Routing and every start refuse such an account
  * (`docs/account-routing.md`).
  */
 export async function accountLacksModel(
   profileId: string,
   provider: string,
   modelId: string,
+  pin: ClaudeModelPin = {},
 ): Promise<boolean> {
   if (harnessForModelProvider(provider) !== "claude-sdk") return false;
-  const alias = claudeModelAlias(modelId);
-  const model = CLAUDE_SDK_MODELS.find((entry) => entry.id === alias);
-  if (!model) return false;
   await ensureClaudeAccountModels(profileId);
-  const listed = claudeAccountModelIds(profileId);
-  return listed !== undefined && !listedOn(model, listed);
+  return !claudeModelRuns(profileId, modelId, pin);
 }
 
 /** The display option of the model a stored session names, when it is known. */

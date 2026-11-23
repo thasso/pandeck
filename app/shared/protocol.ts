@@ -560,6 +560,16 @@ export const CLAUDE_SDK_MODELS: ModelOption[] = [
     supportedThinkingLevels: ["low", "medium", "high", "xhigh"],
     contextWindow: 1_000_000,
   },
+  // Mythos runs only on accounts entitled to it; the server's per-account
+  // lists decide where it is offered. Like Fable it always thinks.
+  {
+    provider: CLAUDE_SDK_PROVIDER,
+    id: "mythos",
+    name: "Claude Mythos",
+    reasoning: true,
+    supportedThinkingLevels: ["low", "medium", "high", "xhigh"],
+    contextWindow: 1_000_000,
+  },
 ];
 
 export function isClaudeSdkModel(
@@ -598,6 +608,8 @@ export function claudeSdkModelOption(
 
 export function claudeModelAlias(id: string | undefined): string {
   const value = (id ?? "sonnet").toLowerCase();
+  // Mythos first, as on the server: any id naming it is Mythos.
+  if (value.includes("mythos")) return "mythos";
   if (value.includes("opus")) return "opus";
   if (value.includes("haiku")) return "haiku";
   if (value.includes("fable")) return "fable";

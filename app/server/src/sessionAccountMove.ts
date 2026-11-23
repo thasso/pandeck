@@ -12,6 +12,7 @@
  */
 import {
   accountServesModel,
+  harnessForModelProvider,
   isSubscriptionAccountKind,
   type SessionAccountMoveTarget,
   type ThinkingLevel,
@@ -28,6 +29,7 @@ import {
 import { sessionStore, type SessionMeta } from "./db/sessionStore.ts";
 import { wakeSessionDelivery } from "./deliveryWake.ts";
 import { formatLocalDateTime } from "./googleTime.ts";
+import { sessionClaudePin } from "./harnesses/curatedModels.ts";
 import { storedSessionModelOption } from "./harnesses/models.ts";
 import {
   assertAccountRecoveryAdmission,
@@ -161,11 +163,12 @@ function benchText(name: string, modelId: string, until: number): string {
 
 /**
  * The model, health and bench rules, judged on the same per-account facts as
- * Automatic (`gatherAccountCandidate`): the account serves and offers the
- * session's model at its thinking level, needs no login, and has no bench on
- * that model.
+ * Automatic (`gatherAccountCandidate`): the account is entitled to the
+ * session's model (with its pinned version), serves and offers it at its
+ * thinking level, needs no login, and has no bench on that model.
  */
 async function modelRefusal(
+  sessionId: string,
   target: CredentialProfile,
   selection: MoveSelection & { model: { provider: string; id: string } },
 ): Promise<string | undefined> {
@@ -174,12 +177,24 @@ async function modelRefusal(
     return `${target.name} cannot run this session's model.`;
   const profile = listCredentialProfiles().find(({ id }) => id === target.id);
   if (!profile) return "The chosen account no longer exists.";
+  const pin = sessionClaudePin(sessionId, model.provider, model.id);
   const candidate = await gatherAccountCandidate(profile, {
     model: { provider: model.provider, modelId: model.id },
     ...(selection.thinkingLevel
       ? { thinkingLevel: selection.thinkingLevel }
       : {}),
+    ...pin,
   });
+  if (candidate.lacksModel)
+    return pin.pinnedModelId !== undefined
+      ? `${target.name} can't run ${pin.pinnedModelId}, the version this session is pinned to.`
+      : `${target.name} can't run ${
+          storedSessionModelOption(
+            harnessForModelProvider(model.provider),
+            model.provider,
+            model.id,
+          )?.name ?? model.id
+        }.`;
   if (!candidate.offersModel)
     return `${target.name} does not offer ${model.id} at this session's effort.`;
   if (candidate.profile.health.state === "needs-login")
@@ -210,7 +225,7 @@ async function accountMoveRefusal(
   const refusal =
     targetRefusal(row, source, target) ?? selectionRefusal(source, selection);
   if (refusal || !target || !selection?.model) return refusal;
-  return modelRefusal(target, { ...selection, model: selection.model });
+  return modelRefusal(row.id, target, { ...selection, model: selection.model });
 }
 
 /**

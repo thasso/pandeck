@@ -21,6 +21,7 @@ import { publishAgentLibrary } from "../agents/agentLibraryList.ts";
 import type { SessionAgent } from "../agents/sessionAgent.ts";
 import {
   AgentSpawnRefusedError,
+  agentListedPin,
   resolveAgentOnRuntime,
   resolveAgentSpawn,
 } from "../agents/agentSpawn.ts";
@@ -253,6 +254,16 @@ async function firstSendAccount(
       ? agentHarnessRefusal(req.harness, agent)
       : undefined;
     if (harnessRefusal) return { refusal: harnessRefusal };
+    // A definition's pinned version decides the account: the resolved
+    // default's, or the listed model a picked runtime matches exactly. A
+    // runtime the user chose that no listed model matches stays unpinned.
+    const picked = pickedRuntime(req);
+    const pinnedModelId = agent
+      ? agent.agent.pinnedModel
+      : req.agent !== undefined && picked
+        ? await agentListedPin(req.agent, picked)
+        : undefined;
+    const pin = pinnedModelId !== undefined ? { pinnedModelId } : {};
     return {
       profileId: await resolveSessionAccount(
         req.harness,
@@ -263,8 +274,9 @@ async function firstSendAccount(
               modelProvider: agent.provider,
               modelId: agent.modelId,
               thinkingLevel: agent.thinkingLevel,
+              ...pin,
             }
-          : req,
+          : { ...req, ...pin },
       ),
     };
   } catch (error) {
@@ -392,6 +404,10 @@ const engines: Record<Harness, FirstSendEngine> = {
             profileId,
             agent?.provider ?? req.modelProvider ?? CLAUDE_SDK_PROVIDER,
             modelId,
+            // A new session: its agent's pin, never a stored one.
+            agent?.agent.pinnedModel !== undefined
+              ? { pinnedModelId: agent.agent.pinnedModel }
+              : {},
           );
         } catch (err) {
           if (err instanceof ModelUnavailableOnAccountError)
