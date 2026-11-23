@@ -144,7 +144,12 @@ const TOOLS: EdgeTools = {
     res.writeHead(200, { "content-type": "text/plain" });
     res.end("mcp-ok");
   },
-  host: { list: () => [], call: () => Promise.reject(new Error("unused")) },
+  host: {
+    list: () => [],
+    callForClient: () => Promise.reject(new Error("unused")),
+    prepare: () => Promise.reject(new Error("unused")),
+    apply: () => Promise.reject(new Error("unused")),
+  },
   integrations: {
     atlassian: {
       parse: () => ({ ok: false }),

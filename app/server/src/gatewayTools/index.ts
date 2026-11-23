@@ -46,7 +46,7 @@ export interface EdgeToolSet {
     res: http.ServerResponse,
     caller: McpCaller,
   ): void;
-  /** The same host, for gateway client 1.0's `tools.*` (Task-1398). */
+  /** The same host, for gateway client 1.x's `tools.*` (Task-1398, Task-1463). */
   host: ToolHost;
   integrations: {
     atlassian: AtlassianIntegration;
