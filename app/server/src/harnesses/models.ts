@@ -19,6 +19,7 @@ import {
   listModels,
   listModelsForProfile,
   refreshModels,
+  subscribePickerModelsChanged,
   toModelOption,
 } from "../piSdk/models.ts";
 import { selectPiModelWithFallback } from "../piSdk/oneShot.ts";
@@ -127,4 +128,14 @@ export function piModelForSlot(
  */
 export function refreshPiModels(): ReturnType<typeof refreshModels> {
   return refreshModels();
+}
+
+/**
+ * Hear when the periodic catalog refresh changed the pi models the pickers
+ * offer ({@link pickerModels}). Returns the unsubscribe.
+ */
+export function subscribePiPickerModelsChanged(
+  listener: () => void,
+): () => void {
+  return subscribePickerModelsChanged(listener);
 }

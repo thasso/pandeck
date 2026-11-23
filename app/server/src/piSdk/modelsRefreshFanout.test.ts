@@ -21,6 +21,10 @@ const refreshCalls: Array<{ authPath: string; force: boolean }> = [];
 const resolvedErrorsByAuthPath = new Map<string, Map<string, Error>>();
 /** A runtime that cannot refresh at all — the only case that rejects. */
 const throwingAuthPaths = new Map<string, string>();
+/** What every registry offers; a refresh may replace it. */
+let availableModels: Array<Record<string, unknown>> = [];
+/** Run inside each `refresh`, as a catalog arriving would change the registry. */
+let onRefresh: (() => void) | undefined;
 
 vi.mock("@earendil-works/pi-coding-agent", () => {
   class FakeModelRuntime {
@@ -46,6 +50,7 @@ vi.mock("@earendil-works/pi-coding-agent", () => {
       });
       const rejection = throwingAuthPaths.get(this.authPath);
       if (rejection) throw new Error(rejection);
+      onRefresh?.();
       return {
         aborted: false,
         errors:
@@ -61,10 +66,10 @@ vi.mock("@earendil-works/pi-coding-agent", () => {
 
   class FakeModelRegistry {
     getAvailable() {
-      return [];
+      return availableModels;
     }
     getAll() {
-      return [];
+      return availableModels;
     }
     registerProvider() {}
     unregisterProvider() {}
@@ -87,7 +92,12 @@ const defaultAuth = join(piAgentDir("default"), "auth.json");
 const secondaryAuth = join(piAgentDir(secondary.id), "auth.json");
 const brokenAuth = join(piAgentDir(broken.id), "auth.json");
 
-const { refreshModels } = await import("./models.ts");
+const {
+  refreshModelCatalogsInBackground,
+  refreshModels,
+  startModelCatalogRefresh,
+  subscribePickerModelsChanged,
+} = await import("./models.ts");
 
 test("the explicit refresh forces a fetch on every OpenAI account's runtime", async () => {
   refreshCalls.length = 0;
@@ -141,6 +151,102 @@ test("a runtime that cannot refresh at all is named too", async () => {
   assert.equal(error, "Secondary: agent directory unreadable");
 
   throwingAuthPaths.delete(secondaryAuth);
+});
+
+function codexModel(id: string) {
+  return {
+    provider: "openai-codex",
+    id,
+    name: id,
+    reasoning: false,
+    contextWindow: 200_000,
+  };
+}
+
+test("the background refresh leaves every runtime's catalog to pi's freshness window", async () => {
+  refreshCalls.length = 0;
+
+  await refreshModelCatalogsInBackground();
+
+  assert.deepEqual(
+    [...refreshCalls].sort((a, b) => a.authPath.localeCompare(b.authPath)),
+    [defaultAuth, secondaryAuth, brokenAuth]
+      .sort((a, b) => a.localeCompare(b))
+      .map((authPath) => ({ authPath, force: false })),
+  );
+});
+
+test("the background refresh logs failures and never rejects", async () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  throwingAuthPaths.set(secondaryAuth, "agent directory unreadable");
+  resolvedErrorsByAuthPath.set(
+    brokenAuth,
+    new Map([["openai-codex", new Error("catalog unreachable")]]),
+  );
+  try {
+    await refreshModelCatalogsInBackground();
+    assert.deepEqual(warn.mock.calls, [
+      [
+        "[models] background catalog refresh:",
+        "Secondary: agent directory unreadable; Broken / openai-codex: catalog unreachable",
+      ],
+    ]);
+  } finally {
+    throwingAuthPaths.delete(secondaryAuth);
+    resolvedErrorsByAuthPath.clear();
+    warn.mockRestore();
+  }
+});
+
+test("subscribers hear a background refresh only when the picker models changed", async () => {
+  let heard = 0;
+  const unsubscribe = subscribePickerModelsChanged(() => heard++);
+  try {
+    availableModels = [codexModel("gpt-5.5")];
+    await refreshModelCatalogsInBackground();
+    assert.equal(heard, 0, "an unchanged catalog is not announced");
+
+    onRefresh = () => {
+      availableModels = [codexModel("gpt-5.5"), codexModel("gpt-6")];
+    };
+    await refreshModelCatalogsInBackground();
+    assert.equal(heard, 1, "a model the catalog brought in is announced");
+
+    await refreshModelCatalogsInBackground();
+    assert.equal(heard, 1, "and only once");
+  } finally {
+    onRefresh = undefined;
+    availableModels = [];
+    unsubscribe();
+  }
+});
+
+test("a background refresh already running is joined, not repeated", async () => {
+  refreshCalls.length = 0;
+  await Promise.all([
+    refreshModelCatalogsInBackground(),
+    refreshModelCatalogsInBackground(),
+  ]);
+  assert.equal(refreshCalls.length, 3);
+});
+
+test("the periodic refresh runs once at start, then hourly, never forced", async () => {
+  vi.useFakeTimers();
+  try {
+    refreshCalls.length = 0;
+    startModelCatalogRefresh();
+    await vi.advanceTimersByTimeAsync(0);
+    assert.equal(refreshCalls.length, 3, "a fresh server checks at once");
+
+    await vi.advanceTimersByTimeAsync(60 * 60_000 - 1);
+    assert.equal(refreshCalls.length, 3);
+    await vi.advanceTimersByTimeAsync(1);
+    assert.equal(refreshCalls.length, 6, "and again an hour later");
+    assert.ok(refreshCalls.every((call) => !call.force));
+  } finally {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  }
 });
 
 afterAll(() => {

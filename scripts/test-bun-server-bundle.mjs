@@ -999,7 +999,15 @@ async function checkParseLinkMemory() {
  */
 async function runRuntimeProbes() {
   assert(which("git"), "The runtime probe needs git on PATH.");
-  const probe = join(temp, "runtime-probe.js");
+  // Beside the package's own package.json, as `server.js` is: a dependency
+  // that looks for its package.json by walking up finds Pandeck's here too.
+  const probeDir = join(temp, "runtime-probe");
+  mkdirSync(probeDir, { recursive: true });
+  writeFileSync(
+    join(probeDir, "package.json"),
+    readFileSync(join(runtimeRoot, "package.json")),
+  );
+  const probe = join(probeDir, "runtime-probe.js");
   await write(
     probe,
     await bundle(
@@ -1010,6 +1018,15 @@ async function runRuntimeProbes() {
   // Every mode runs before any exit is judged, so a failure names each mode
   // it happens in.
   const failures = [];
+  const piPackageVersion = JSON.parse(
+    readFileSync(
+      join(
+        directDependencyRoot("@earendil-works/pi-coding-agent"),
+        "package.json",
+      ),
+      "utf8",
+    ),
+  ).version;
   for (const mode of ["broker", "in-process"]) {
     const probeData = join(temp, `probe-${mode}`);
     const home = join(probeData, "home");
@@ -1061,6 +1078,8 @@ async function runRuntimeProbes() {
       GIT_CONFIG_NOSYSTEM: "1",
       NODE_ENV: "production",
       PA_PROBE_SCRUBBED: "leaked",
+      // What pi's catalog requests must name (`checkPiCatalogUserAgent`).
+      PA_PROBE_PI_VERSION: piPackageVersion,
     };
     // The probe tells its package proxy's traffic from direct traffic; a proxy
     // the check itself inherited would blur that.
