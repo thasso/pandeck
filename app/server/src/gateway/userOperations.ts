@@ -400,6 +400,7 @@ export function createUserOperations(deps: UserOperationsDeps): UserOperations {
   const writing: Record<Integration, Set<string>> = {
     atlassian: new Set(),
     slack: new Set(),
+    github: new Set(),
   };
   const alone = async <T>(
     integration: Integration,

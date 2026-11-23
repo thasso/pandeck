@@ -1,5 +1,5 @@
 /**
- * The edge's `VaultPort` over `gateway-vault/1.2` (plan Task-1394,
+ * The edge's `VaultPort` over `gateway-vault/1.3` (plan Task-1394,
  * `vaultMethods.ts`): a vault in its own process, dialed over mutual TLS
  * with each side's self-signed certificate pinned. The edge then holds no
  * refresh token. It dials at once and again with backoff whenever the link
@@ -33,6 +33,8 @@ import {
   accountTokenFile,
   isAtlassianSite,
   isCloudId,
+  isGithubLogin,
+  isGithubTokenRequest,
   isSlackTeamId,
   isSlackTeamName,
   isPinnedPeer,
@@ -44,6 +46,7 @@ import {
 import type { CredentialProblem } from "./refusals.ts";
 import type {
   ConnectFailure,
+  GithubToken,
   Integration,
   IntegrationConnect,
   IntegrationConnectRequests,
@@ -72,6 +75,14 @@ const CONNECT_TIMEOUT_MS = 10_000;
 const INTEGRATION_WRITE_TIMEOUT_MS = 10_000;
 const INTEGRATION_GET_TIMEOUT_MS = 20_000;
 const INTEGRATION_CONNECT_TIMEOUT_MS = 30_000;
+/**
+ * A `github.token` has 25 s inside the vault (a fresh user check, the
+ * installation lookup, the mint and its proof, 8 s each); a late answer's
+ * token is never cached there either.
+ */
+const INTEGRATION_TOKEN_TIMEOUT_MS = 30_000;
+/** What the edge takes as a token: header-safe and bounded. */
+const TOKEN_RE = /^[\x21-\x7e]{1,8192}$/;
 
 const UNAVAILABLE: VaultCredential = {
   ok: false,
@@ -514,6 +525,34 @@ export function createRemoteVault(
       if (a.team === "mismatch") return { ok: false, team: "mismatch" };
       return connectFailure(a) ?? { ok: false, unavailable: true };
     },
+    github: (body) => {
+      const a = connectAnswer(body);
+      if (!a) return { ok: false, unavailable: true };
+      if (a.ok === true)
+        return isGithubLogin(a.login)
+          ? { ok: true, login: a.login }
+          : { ok: false, unavailable: true };
+      return connectFailure(a) ?? { ok: false, unavailable: true };
+    },
+  };
+  /** A `github.token` answer; any other shape is unavailable. */
+  const decodeGithubToken = (body: Record<string, unknown>): GithubToken => {
+    const answer = body.token;
+    if (typeof answer !== "object" || answer === null)
+      return { ok: false, unavailable: true };
+    const a = answer as Record<string, unknown>;
+    if (a.ok === true)
+      return typeof a.token === "string" &&
+        TOKEN_RE.test(a.token) &&
+        typeof a.expiresAt === "number" &&
+        Number.isFinite(a.expiresAt)
+        ? { ok: true, token: a.token, expiresAt: a.expiresAt }
+        : { ok: false, unavailable: true };
+    if (a.absent === true) return { ok: false, absent: true };
+    if (a.rejected === true) return { ok: false, rejected: true };
+    if (a.denied === true) return { ok: false, denied: true };
+    if (a.locked === true) return { ok: false, locked: true };
+    return { ok: false, unavailable: true };
   };
   const written = (): IntegrationWrite => ({ ok: true });
   /** Each integration's connect over the link. */
@@ -547,6 +586,13 @@ export function createRemoteVault(
           ...(team !== undefined ? { team } : {}),
         },
         decodeConnect.slack,
+        INTEGRATION_CONNECT_TIMEOUT_MS,
+      ),
+    github: (userId, { code, redirectUri }) =>
+      integrationCall(
+        VAULT_METHODS.integrationConnect,
+        { userId, integration: "github", code, redirectUri },
+        decodeConnect.github,
         INTEGRATION_CONNECT_TIMEOUT_MS,
       ),
   };
@@ -658,6 +704,18 @@ export function createRemoteVault(
       ),
     integrationConnect: (userId, integration, request) =>
       connects[integration](userId, request),
+    // A 1.2 vault answers `unknown_method`: unavailable, like any request
+    // error. An invalid request is never sent.
+    githubToken: (userId, request, { signal } = {}) =>
+      isGithubTokenRequest(request)
+        ? integrationCall(
+            VAULT_METHODS.githubToken,
+            { userId, owner: request.owner, repo: request.repo },
+            decodeGithubToken,
+            INTEGRATION_TOKEN_TIMEOUT_MS,
+            signal,
+          )
+        : Promise.resolve({ ok: false, invalid: true }),
     inputsChanged() {
       if (sendQueued) return;
       sendQueued = true;

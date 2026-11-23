@@ -340,7 +340,7 @@ function webClients(operations: UserOperations): GatewayWebClients {
 export class EdgeStartRefusal extends Error {}
 
 /** The OAuth providers whose client the UI config may name. */
-type OAuthProvider = keyof IntegrationClients;
+type OAuthProvider = "atlassian" | "slack";
 
 /**
  * The UI config's OAuth client of `provider` for this vault topology: with

@@ -1,7 +1,7 @@
 /**
  * The vault as its own process (plan Task-1394, ADR-0005): today's
  * `createVault` (renewal, token files, the writer lane, login runs) served to
- * one edge over `gateway-vault/1.2` (`vaultMethods.ts`) on mutual TLS. Each
+ * one edge over `gateway-vault/1.3` (`vaultMethods.ts`) on mutual TLS. Each
  * side trusts exactly the other's self-signed certificate, also checked by
  * fingerprint. A newer edge connection replaces the older one.
  *
@@ -50,6 +50,7 @@ import { RENEW_TICK_MS, type CodexRenewPort } from "./renewal.ts";
 import type { IntegrationClients } from "./integrationClients.ts";
 import { createSealedStore } from "./sealedStore.ts";
 import type { AtlassianEndpoint } from "./vaultAtlassian.ts";
+import type { GithubEndpoint } from "./vaultGithub.ts";
 import type { SlackEndpoint } from "./vaultSlack.ts";
 import { createVault } from "./vault.ts";
 import { startVaultControl, type VaultControl } from "./vaultControl.ts";
@@ -70,6 +71,7 @@ import {
   VAULT_METHODS,
   accountTokenFile,
   isAtlassianSite,
+  isGithubTokenRequest,
   isSlackTeamId,
   isIntegration,
   isPinnedPeer,
@@ -124,6 +126,8 @@ export interface VaultServerOptions {
   atlassianEndpoint?: AtlassianEndpoint;
   /** Test seam: where Slack is reached (`vaultSlack.ts`). */
   slackEndpoint?: SlackEndpoint;
+  /** Test seam: where GitHub is reached (`vaultGithub.ts`). */
+  githubEndpoint?: GithubEndpoint;
 }
 
 export interface RunningVaultServer {
@@ -273,6 +277,7 @@ export async function startVaultServer(
       clients: options.integrationClients,
       atlassianEndpoint: options.atlassianEndpoint,
       slackEndpoint: options.slackEndpoint,
+      githubEndpoint: options.githubEndpoint,
     },
   });
 
@@ -437,8 +442,8 @@ export async function startVaultServer(
     [VAULT_METHODS.integrationPut]: async (body) => {
       const { userId, integration } = integrationOf(body);
       const { credential } = body;
-      // Only a connect writes a Slack record.
-      if (integration === "slack") throw invalid("integration");
+      // Only a connect writes a Slack or GitHub record.
+      if (integration !== "atlassian") throw invalid("integration");
       if (
         typeof credential !== "string" ||
         credential.length === 0 ||
@@ -487,11 +492,31 @@ export async function startVaultServer(
                 redirectUri,
                 ...(team !== undefined ? { team } : {}),
               })
-            : await vault.integrationConnect(userId, "atlassian", {
-                code,
-                redirectUri,
-                ...(site !== undefined ? { site } : {}),
-              }),
+            : integration === "github"
+              ? await vault.integrationConnect(userId, "github", {
+                  code,
+                  redirectUri,
+                })
+              : await vault.integrationConnect(userId, "atlassian", {
+                  code,
+                  redirectUri,
+                  ...(site !== undefined ? { site } : {}),
+                }),
+      };
+    },
+    [VAULT_METHODS.githubToken]: async (body) => {
+      const { userId, ...request } = body;
+      // Nothing but the repository's name: an `access` or any extra is
+      // refused here, before any GitHub call.
+      if (!isVaultId(userId) || !isGithubTokenRequest(request))
+        throw invalid("github token");
+      return {
+        token: locked()
+          ? { ok: false, locked: true }
+          : await vault.githubToken(userId, {
+              owner: request.owner,
+              repo: request.repo,
+            }),
       };
     },
     [VAULT_METHODS.loginStart]: (body) => {

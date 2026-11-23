@@ -1,5 +1,5 @@
 /**
- * `gateway-vault/1.2` (plan Task-1394, ADR-0005): what the edge and a vault
+ * `gateway-vault/1.3` (plan Task-1394, ADR-0005): what the edge and a vault
  * running as its own process send each other over the worker protocol's
  * framing, on mutual TLS where each side trusts exactly the other's
  * self-signed certificate. The edge dials (`remoteVault.ts`); the vault
@@ -19,19 +19,26 @@
  * - `integrations.put {userId, integration, credential}` and
  *   `integrations.clear {userId, integration}` answer `{}`, or fail with
  *   `VAULT_LOCKED`; `integrations.get {userId, integration}` answers
- *   `{record}`, an `IntegrationRecord`. `integration` is `atlassian` or
- *   (1.2) `slack`. A put credential is opaque JSON, at most
- *   `MAX_INTEGRATION_CREDENTIAL` characters (Task-1397); a put for `slack` is
- *   refused as invalid, since only a connect writes a Slack record. For an
- *   OAuth record the vault answers the access view instead, or `rejected`
- *   once the provider refused its refresh (Task-1411, Task-1452).
+ *   `{record}`, an `IntegrationRecord`. `integration` is `atlassian`, (1.2)
+ *   `slack` or (1.3) `github`. A put credential is opaque JSON, at most
+ *   `MAX_INTEGRATION_CREDENTIAL` characters (Task-1397); a put for `slack` or
+ *   `github` is refused as invalid, since only a connect writes those
+ *   records. For an OAuth record the vault answers the access view instead,
+ *   or `rejected` once the provider refused its refresh (Task-1411,
+ *   Task-1452, Task-1444).
  * - `integrations.connect {userId, integration, code, redirectUri, site?,
- *   team?}` (1.1; `slack` and `team` 1.2) answers `{connect}`, an
+ *   team?}` (1.1; `slack` and `team` 1.2, `github` 1.3) answers `{connect}`, an
  *   `IntegrationConnect` of that integration: the vault exchanges the code
  *   with its own OAuth client, picks the Atlassian site (`site`, only with
  *   `atlassian`) or checks the Slack workspace (`team`, only with `slack`)
  *   and stores the sealed record. Never a refresh token or the client
  *   secret. Fails with `VAULT_LOCKED` when locked.
+ * - `github.token {userId, owner, repo}` (1.3) answers `{token}`, a
+ *   `GithubToken`: a READ installation token for that one repository,
+ *   `{contents: read, metadata: read}` and its id proven on GitHub's answer,
+ *   after the user's own token proved access on this call. Any other member
+ *   (an `access`, say) is invalid, before any GitHub call. An older vault
+ *   answers `unknown_method`, which the edge reads as unavailable.
  * - `logins.start {loginId, kind, accountId, tokenFile}` answers `{}`;
  *   `logins.input {loginId, text}` and `logins.cancel {loginId}` answer
  *   `{}`. A cancel also withdraws the run: its credential is never moved in.
@@ -60,7 +67,7 @@ import type {
 } from "../workerProtocol/connection.ts";
 import type { LeaseProvider } from "./leases.ts";
 
-export const GATEWAY_VAULT_VERSION = "gateway-vault/1.2";
+export const GATEWAY_VAULT_VERSION = "gateway-vault/1.3";
 
 const VAULT_VERSION_RE = /^gateway-vault\/(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/;
 
@@ -80,6 +87,8 @@ export const VAULT_METHODS = {
   integrationGet: "integrations.get",
   integrationClear: "integrations.clear",
   integrationConnect: "integrations.connect",
+  /** 1.3: a read installation token for one repository (Task-1444). */
+  githubToken: "github.token",
   loginStart: "logins.start",
   loginInput: "logins.input",
   loginCancel: "logins.cancel",
@@ -145,10 +154,16 @@ export const VAULT_LOCKED = "vault_locked";
 /** The file a user's integration credential lives in, in its directory. */
 export const INTEGRATION_FILE = "integration.json";
 export const MAX_INTEGRATION_CREDENTIAL = 16_384;
-const INTEGRATIONS: ReadonlySet<unknown> = new Set(["atlassian", "slack"]);
+const INTEGRATIONS: ReadonlySet<unknown> = new Set([
+  "atlassian",
+  "slack",
+  "github",
+]);
 
 /** Whether the vault keeps credentials of this integration. */
-export function isIntegration(value: unknown): value is "atlassian" | "slack" {
+export function isIntegration(
+  value: unknown,
+): value is "atlassian" | "slack" | "github" {
   return INTEGRATIONS.has(value);
 }
 
@@ -180,6 +195,46 @@ export function isSlackTeamName(value: unknown): value is string {
     typeof value === "string" &&
     value.length > 0 &&
     value.length <= MAX_SLACK_TEAM_NAME_CHARS
+  );
+}
+
+const GITHUB_LOGIN_RE = /^[A-Za-z0-9-]{1,39}$/;
+const GITHUB_REPO_RE = /^[A-Za-z0-9._-]{1,100}$/;
+
+/** A GitHub user or organization name: a login, or a repository's owner. */
+export function isGithubLogin(value: unknown): value is string {
+  return typeof value === "string" && GITHUB_LOGIN_RE.test(value);
+}
+
+/** A GitHub repository's name, never `.` or `..`. */
+function isGithubRepoName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    GITHUB_REPO_RE.test(value) &&
+    value !== "." &&
+    value !== ".."
+  );
+}
+
+const GITHUB_TOKEN_REQUEST_KEYS: ReadonlySet<string> = new Set([
+  "owner",
+  "repo",
+]);
+
+/**
+ * Whether `value` is a `github.token` request: `owner` and `repo` GitHub
+ * names and no other member, so an `access` or any extra is refused.
+ */
+export function isGithubTokenRequest(
+  value: unknown,
+): value is { owner: string; repo: string } {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return false;
+  const fields = value as Record<string, unknown>;
+  return (
+    Object.keys(fields).every((key) => GITHUB_TOKEN_REQUEST_KEYS.has(key)) &&
+    isGithubLogin(fields.owner) &&
+    isGithubRepoName(fields.repo)
   );
 }
 

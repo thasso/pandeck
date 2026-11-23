@@ -163,6 +163,7 @@ export function createVault(options: VaultOptions): Vault {
     integrationGet: integrations.integrationGet,
     integrationClear: integrations.integrationClear,
     integrationConnect: integrations.integrationConnect,
+    githubToken: integrations.githubToken,
     lane,
     holdRecords: () => table.records(),
     recheck: (profileId) => renewal.recheck(profileId),

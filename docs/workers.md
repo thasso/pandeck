@@ -3059,6 +3059,39 @@ tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
   token); any other `ok: false` or 4xx is `rejected`. Only connect writes a
   Slack record: a put for Slack is refused, and a Slack record of another kind
   is malformed (`unavailable`).
+- **GitHub OAuth records and read tokens** (Task-1444, Task-1440 PR1). The vault
+  holds a GitHub App (`gateway/vaultGithub.ts`): its user OAuth client and its
+  private key. Connect posts the code to
+  `https://github.com/login/oauth/access_token` (form body,
+  `Accept: application/json`); GitHub answers a refused grant as HTTP 200
+  `{error}`, so any `error` member is `rejected`, as are 400, 401 and 403, and
+  the answer needs both tokens and both lifetimes (S1a: 8 hours and 181 days).
+  Then `GET https://api.github.com/user` with the new token names the user. The
+  record is
+  `{kind: "github-oauth", v: 1, login, githubUserId, refreshToken, refreshExpiresAt}`;
+  a get answers `{kind, login, accessToken, expiresAt}` by the Atlassian rule. A
+  refresh must hand back a new refresh token, as for Slack; GitHub refuses a
+  spent one at once. Only connect writes a GitHub record; a put is refused.
+  `github.token {userId, owner, repo}` (`gateway/vaultGithubTokens.ts`) answers
+  a READ installation token for one repository, and nothing else may be asked
+  (an `access` or any other member is `invalid` before any call). Every call
+  first checks with the user's own token that `GET /repos/{owner}/{repo}` names
+  exactly that repository with `pull` (a redirect, 403 or 404 is `denied`); a
+  cached token for that installation and repository id with over 10 minutes left
+  may then be answered. Otherwise the App's JWT (RS256, `iss` the client id, 9
+  minutes, reused until a minute before expiry) finds the installation (cached
+  an hour per repository) and mints with exactly
+  `{repository_ids: [id], permissions: {contents: "read", metadata: "read"}}`.
+  The answer must prove itself: a token the vault may hand on, `permissions`
+  exactly those two reads, `expires_at` a future UTC time, and exactly that
+  repository id, from `repositories` or else the token's own
+  `GET /installation/repositories`. Anything else revokes the token
+  (`DELETE /installation/token`, only for a token that passed the first check)
+  and answers `unavailable`. A connect, clear or refused refresh bumps the
+  record's in-memory generation; a call whose generation moved, whose 25 s
+  budget ran out or whose vault is closing drops the token uncached and
+  unrevoked and answers `unavailable`. GitHub writes never use an installation
+  token (R-ME, ADR-0005).
 - **Rotation recovery.** Sealing is best-effort, as for every vault writer: the
   rename can succeed while the seal fails (logged, the sweep retries), or the
   vault can die between the two. The rotated record then exists only in the
@@ -3068,22 +3101,27 @@ tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
   that the provider answers `rejected` and the user connects again. A Slack
   refresh whose answer is unusable has the same outcome: within the grace period
   the next get's refresh may still succeed with the stored token, after it Slack
-  refuses it and the user reconnects; it never counts as a success.
+  refuses it and the user reconnects; it never counts as a success. GitHub
+  refuses a spent refresh token at once (S1a), so a lost GitHub seal means a
+  reconnect.
 - **OAuth client config.** A remote vault reads its OAuth clients from
   `--integrations-config <file>` (`gateway/integrationClients.ts`), a regular
   0600 JSON file keyed by provider, `atlassian` and `slack`, each
   `{"clientId": "…", "clientSecret": "…"}`: both printable non-empty strings,
   other provider keys ignored, refusals fixed (naming the provider) and holding
-  no value from the file. Without a provider's client its connect answers
-  `notConfigured`. The edge's UI config may carry `atlassian.clientId` and
-  `atlassian.clientSecret`, and `slack.clientId` and `slack.clientSecret`, each
-  checked alone; what they do depends on where the vault runs, per provider
-  (`gatewayEdge.ts` `integrationClientFor`): with the vault in the edge's
-  process both or neither (half a client refuses the start with a fixed text
-  before anything listens) and the pair goes to that vault; with a remote vault
-  the edge keeps only the id, for the page's sign-in link, never passes or uses
-  a secret, and logs one fixed line per provider at start while the file still
-  holds one.
+  no value from the file. `github` is the GitHub App:
+  `{"appId": <positive integer>, "clientId", "clientSecret", "privateKeyFile"}`,
+  the key file (relative to the config file's directory) a regular 0600 file of
+  at most 16 KiB holding an RSA private key. Without a provider's client its
+  connect answers `notConfigured`. The edge's UI config may carry
+  `atlassian.clientId` and `atlassian.clientSecret`, and `slack.clientId` and
+  `slack.clientSecret`, each checked alone; what they do depends on where the
+  vault runs, per provider (`gatewayEdge.ts` `integrationClientFor`): with the
+  vault in the edge's process both or neither (half a client refuses the start
+  with a fixed text before anything listens) and the pair goes to that vault;
+  with a remote vault the edge keeps only the id, for the page's sign-in link,
+  never passes or uses a secret, and logs one fixed line per provider at start
+  while the file still holds one.
 - **Bearer destinations.** On an OAuth view the tools call Jira with
   `Authorization: Bearer` at `https://api.atlassian.com/ex/jira/<cloudId>`
   (`atlassian/atlassianFetch.ts`), and Confluence at
@@ -3563,9 +3601,9 @@ The vault can run as its own process on another machine (Task-1394, M20), so the
 edge holds no refresh token. Renewal, the token files, the writer lane and the
 login runs then execute in the vault process (`gateway/vaultServer.ts`); the
 edge reaches it through `gateway/remoteVault.ts`, a `VaultPort` over
-**`gateway-vault/1.2`** (`gateway/vaultMethods.ts`; any `1.x` peer links, and an
-edge whose vault lacks `integrations.connect` (1.1) or Slack (1.2) gets
-`unavailable` for it, so upgrade the vault first). `startGateway`'s `vault`
+**`gateway-vault/1.3`** (`gateway/vaultMethods.ts`; any `1.x` peer links, and an
+edge whose vault lacks `integrations.connect` (1.1), Slack (1.2) or GitHub (1.3)
+gets `unavailable` for it, so upgrade the vault first). `startGateway`'s `vault`
 option selects it; without it the vault runs in the edge's process, as the
 server's local gateway does.
 
@@ -3588,18 +3626,21 @@ server's local gateway does.
   every change), `credential.for`, `credential.upstream401`, `accounts.discard`,
   `logins.start`, `logins.input`, `logins.cancel`, and `integrations.put`,
   `integrations.get` and `integrations.clear` (a user's integration credential
-  under `integration` `atlassian` or, 1.2, `slack`, at most 16 KiB; an API token
-  stays opaque, an OAuth record answers its access view or `rejected`; a put for
-  `slack` is refused, since only a connect writes a Slack record), and
-  `integrations.connect` (1.1, `slack` 1.2:
+  under `integration` `atlassian` or, 1.2, `slack` or, 1.3, `github`, at most 16
+  KiB; an API token stays opaque, an OAuth record answers its access view or
+  `rejected`; a put for `slack` or `github` is refused, since only a connect
+  writes those records), `github.token` (1.3, `{userId, owner, repo}` and
+  nothing else, answering a read installation token, `denied`, `absent`,
+  `rejected`, `locked` or `unavailable`), and `integrations.connect` (1.1,
+  `slack` 1.2, `github` 1.3:
   `{userId, integration, code, redirectUri, site?, team?}`, the code at most
   8,192 characters, the redirect at most 2,048 and an `https:` URL, `site` only
   with `atlassian` and `team` (a Slack team id) only with `slack`, anything else
   refused before any effect; Atlassian answers `{ok, site, cloudId}` or
   `site: missing|ambiguous`, Slack `{ok, teamId, teamName?}` or
-  `team: mismatch`, both also `rejected`, `unreachable`, `notConfigured`,
-  `locked`, `unavailable`; the edge decodes each integration's answer on its
-  own, and any other shape is `unavailable`). Vault to edge:
+  `team: mismatch`, GitHub `{ok, login}`, all also `rejected`, `unreachable`,
+  `notConfigured`, `locked`, `unavailable`; the edge decodes each integration's
+  answer on its own, and any other shape is `unavailable`). Vault to edge:
   `credential.report`, `logins.event`, `logins.done` (a failure code, never
   driver text) and `logins.commit`.
 - **Rules.** The vault answers an access token and headers only, never a refresh
@@ -3623,12 +3664,13 @@ server's local gateway does.
   told. A login needs the link. No access token is cached on the edge: one round
   trip per forwarded request. Every integration call is bounded: a put or clear
   at 10 s, a get at 20 s (it may wait for a refresh, at most 8 s plus its lane),
-  a connect at 30 s (two 8 s Atlassian or Slack calls plus its lane); a get and
-  a connect also by the caller's signal. No link, the deadline, the abort or any
-  request error answers `unavailable`, and a late reply settles a promise nobody
-  reads. A put or clear that timed out has an unknown result, which the next
-  status shows; a connect or refresh the edge stopped waiting for still finishes
-  in the vault and stores its record.
+  a connect at 30 s (two 8 s Atlassian or Slack calls plus its lane), a
+  `github.token` at 30 s (25 s in the vault); a get, a connect and a
+  `github.token` also by the caller's signal. No link, the deadline, the abort
+  or any request error answers `unavailable`, and a late reply settles a promise
+  nobody reads. A put or clear that timed out has an unknown result, which the
+  next status shows; a connect or refresh the edge stopped waiting for still
+  finishes in the vault and stores its record.
 - **No control.** An edge with a remote vault serves no gateway control 1.4 (its
   holds are the in-process vault's); it is a client-mode edge.
 - **Pairing.**
