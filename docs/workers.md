@@ -1944,7 +1944,8 @@ path above.
   base64url characters, so it never starts with `-`. Ids enrolled before the
   prefix keep their shape; one that starts with `-` goes after `--` on the admin
   command line (`clients revoke -- <id>`), where any option comes before `--`.
-- **`gateway-client/1.0`** (`gateway/clientMethods.ts`), on the worker
+- **`gateway-client/1.1`** (`gateway/clientMethods.ts`; 1.1 adds the two-phase
+  tool methods below, Task-1463, and a peer of any 1.x connects), on the worker
   protocol's framing: `client.hello`, `accounts.list` and the gateway's
   `accounts.changed`, `leases.grant`, `leases.client` (the server's own
   requests, one lease per account and client), `leases.bindSession`,
@@ -3170,7 +3171,60 @@ tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
   a successful reply. A malformed name or non-object `args` fail the call with
   `invalid_params`; without tools both methods fail with `tools_unavailable`.
   The client's `cancel` frame and the connection's end abort the call. No
-  argument or result is logged.
+  argument or result is logged. A write tool is refused here for every client,
+  1.0 included, with `invalid_params` and "This tool runs in two phases on a
+  client connection: tools.prepare, then tools.apply after approval.", before
+  any vault read or request; a hand-built 1.0 client that called
+  `jira_mutate_issue` or `confluence_mutate_page` through `tools.call` must move
+  to the two phases. `/mcp` keeps its one-call writes.
+- **Two-phase writes** (`gateway-client/1.1`, Task-1463 P6a). `tools.list` marks
+  `jira_mutate_issue` and `confluence_mutate_page` `twoPhase: true`.
+  `tools.prepare {name, args}` checks `args` against the tool's schema, runs the
+  Confluence gates, reads the credential and runs the shared prepare under 30 s,
+  writing nothing. It answers `{ok: true, site, items, warnings}`: `site` the
+  credential's, `items` exactly what the shared prepare built (the card data, at
+  most 1,048,576 bytes of JSON, passing the closed proposal check in
+  `jiraMutationCheck.ts` / `confluenceMutationCheck.ts`), and up to 10 vetted
+  warnings of 300 characters, the tenth counting the rest. A refusal is the
+  one-call prepare's D-W2 text, ending "Nothing was written to Jira." (or
+  Confluence); an answer any string or key of which, or whose JSON, would carry
+  any secret form or 16-character piece of one is refused whole. The answer
+  stays within 1,081,344 bytes. `tools.apply {name, site, items}` takes the
+  items the user approved and, before any request, refuses with
+  `effects: "none"`: a Confluence gate, a `site` other than the credential's
+  ("The gateway's Atlassian site changed since this proposal was prepared;
+  nothing was written. Ask for a new proposal.") and items failing the closed
+  check or its size (`invalid_params`, "The approved items are not a valid
+  proposal for this tool; nothing was written."). It then runs the shared apply
+  on a copy under the 45 s deadline. The client's `cancel` aborts no running
+  request; no further item starts, each answering "Not applied: the request
+  ended before this change started." Items past the 7 s stop answer the one-call
+  runner's out-of-time text. The answer is
+  `{ok: true, results, effects, trimmed?}`, one result record per item (the
+  result contract in `jiraMutationResult.ts` / `confluenceMutationResult.ts`:
+  vetted identifiers, links and texts, no input field), or
+  `{ok: false, code, message, effects, itemEffects?, results?, trimmed?}`. A
+  failure after the apply started (the deadline, an unexpected exception)
+  carries the records its working copy shows: items before the running one as
+  they ended, the running one "The request ended while this change was running;
+  check the site before asking again." unless it has its own error, the rest
+  "Not applied: the request ended before this change started." `effects` is
+  `possible` once any write request was handed to `fetch`, whatever Atlassian
+  answered, and `none` otherwise; each record, and `itemEffects` once the items
+  passed their check, give it per item. Neither is ever `none` after a write
+  left, and the root is `possible` whenever a record or item is. While the
+  answer is over 524,288 bytes the result contract's shrink stages run
+  (`trimmed: true`). As sent it is checked for the secret as D-W2 does, each
+  string and key also on its own: failing that, records keep only their
+  outcomes, and failing again the answer is "The changes ran, but their result
+  cannot be shown without revealing the credential; check the site before asking
+  again." (a failure keeps its own text and drops its records). Each form keeps
+  every effects entry. An answer still over the cap is never sent: the edge
+  answers "The gateway's result was too large to return; check the site before
+  asking again." with its effects. The client's decoders (`decodePrepareAnswer`,
+  `decodeApplyAnswer`) refuse an answer over either cap, and an apply answer
+  whose root says `none` beside a `possible` record or item; they read a
+  failure's effects as `possible` unless it says `none`.
 - **Pandeck in client mode** (`remoteIntegrations.ts`, installed by
   `gatewayClientLink.ts`): Settings → Jira sends a newly entered token with the
   email and `JIRA_HOST` through `integrations.set`, a clear through

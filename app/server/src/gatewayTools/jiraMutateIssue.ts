@@ -30,7 +30,19 @@ import {
   type JiraMutationParams,
 } from "../jiraMutate.ts";
 import { applyJiraMutationItems } from "../jiraMutateApply.ts";
+import { checkJiraIssueItems } from "../jiraMutationCheck.ts";
 import { JiraMutationError } from "../jiraMutationErrors.ts";
+import {
+  buildJiraResultRecord,
+  shrinkJiraResults,
+  type JiraResultRecord,
+} from "../jiraMutationResult.ts";
+import {
+  ERROR_FALLBACK,
+  IDENTIFIER_FORMATS,
+  WARNING_FALLBACK,
+  type NestedResults,
+} from "../mutationResultCodec.ts";
 import { jiraConfigOf } from "./atlassian.ts";
 import type {
   AtlassianCredential,
@@ -38,6 +50,13 @@ import type {
   ObjectSchema,
 } from "./descriptor.ts";
 import { edgeReadDeps } from "./jiraRead.ts";
+import { vettingFor } from "./mutationResultVetting.ts";
+import {
+  runApply,
+  runPrepare,
+  type ApplyProduct,
+  type PrepareProduct,
+} from "./twoPhase.ts";
 import { REDACTED } from "./upstreamText.ts";
 import {
   WRITE_DEADLINE_MS,
@@ -73,9 +92,6 @@ const ITEM_WARNING_MAX = 500;
 const SHRUNK_TEXT_MAX = 200;
 const WARNING_WITHHELD = "A warning was withheld.";
 const ITEM_ERROR_FALLBACK = "The change failed.";
-
-const KEY_RE = /^[A-Z][A-Z0-9_]*-[1-9][0-9]*$/;
-const KEY_MAX = 64;
 
 const OPERATIONS = ["edit", "create", "comment", "rank", "sprint"] as const;
 type Operation = (typeof OPERATIONS)[number];
@@ -141,11 +157,7 @@ function vettedKey(
   raw: unknown,
   credential: AtlassianCredential,
 ): string | undefined {
-  return vettedIdentifier(
-    raw,
-    credential,
-    (key) => key.length <= KEY_MAX && KEY_RE.test(key),
-  );
+  return vettedIdentifier(raw, credential, IDENTIFIER_FORMATS.jiraKey);
 }
 
 function operationOf(item: JiraIssueMutationItemDisplay): Operation {
@@ -399,6 +411,60 @@ function jiraPhases(
   };
 }
 
+/** Jira's prepare for `tools.prepare`: the one-call prepare, on its own. */
+const JIRA_PREPARE = (
+  items: JiraMutationParams["items"],
+): PrepareProduct<JiraConfig, JiraIssueMutationItemDisplay> => ({
+  ...JIRA_WRITE,
+  prepare: (config, credential, signal) =>
+    jiraPhases(items)(config, credential).prepare(signal),
+  check: checkJiraIssueItems,
+});
+
+/** A nested result with its texts emptied; outcomes and presence stay. */
+const blanked = (results: NestedResults): NestedResults => ({
+  ok: results.ok,
+  errors: results.errors.map(([index]): [number, string] => [index, ""]),
+});
+
+/**
+ * A record with every text fixed and no identifier, link, order or sprint
+ * result: what `tools.apply` sends when the full records would carry a
+ * secret form once joined.
+ */
+export function jiraOutcomeOf(record: JiraResultRecord): JiraResultRecord {
+  return {
+    effects: record.effects,
+    ...(record.resultIssueKey !== undefined ? { resultIssueKey: null } : {}),
+    ...(record.resultIssueUrl === null ? { resultIssueUrl: null } : {}),
+    ...(record.warning !== undefined ? { warning: WARNING_FALLBACK } : {}),
+    ...(record.error !== undefined ? { error: ERROR_FALLBACK } : {}),
+    ...(record.linkChanges ? { linkChanges: blanked(record.linkChanges) } : {}),
+    ...(record.rankSteps ? { rankSteps: blanked(record.rankSteps) } : {}),
+  };
+}
+
+/** Jira's apply for `tools.apply`: the shared apply and its result contract. */
+const JIRA_APPLY: ApplyProduct<
+  JiraConfig,
+  JiraIssueMutationItemDisplay,
+  JiraResultRecord
+> = {
+  ...JIRA_WRITE,
+  check: checkJiraIssueItems,
+  apply: (config, credential, items, deps) =>
+    applyJiraMutationItems(config, items, {
+      ...deps,
+      fieldMap: callFieldMap(config).apply(deps.signal),
+      describeError: (err) =>
+        describeWriteFailure(err, credential, [deps.signal]),
+    }),
+  vetting: vettingFor,
+  record: buildJiraResultRecord,
+  shrink: shrinkJiraResults,
+  outcomeOf: jiraOutcomeOf,
+};
+
 export const jiraMutateIssue: AtlassianToolDescriptor = {
   name: "jira_mutate_issue",
   description: JIRA_MUTATE_ISSUE_EDGE_DESCRIPTION,
@@ -424,5 +490,10 @@ export const jiraMutateIssue: AtlassianToolDescriptor = {
       },
       credential,
     );
+  },
+  phases: {
+    prepare: (params, ctx) =>
+      runPrepare(ctx, JIRA_PREPARE((params as JiraMutationParams).items)),
+    apply: (request, ctx) => runApply(ctx, JIRA_APPLY, request),
   },
 };

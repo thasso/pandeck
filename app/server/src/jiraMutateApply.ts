@@ -29,9 +29,10 @@ import { JiraMutationError, jiraWrite } from "./jiraMutationErrors.ts";
 import { executeJiraRankItem } from "./jiraRank.ts";
 import { signalTail, stopIfAborted } from "./jiraRead.ts";
 import { executeJiraSprintItem, jiraSprintResultText } from "./jiraSprint.ts";
+import type { ApplyHooks, WriteScope } from "./writeScope.ts";
 
 /** What apply needs besides the config and the approved items. */
-export interface JiraApplyDeps {
+export interface JiraApplyDeps extends ApplyHooks {
   /** Carried by every request; an abort propagates unwrapped and unrecorded. */
   signal?: AbortSignal | undefined;
   fieldMap(): Promise<JiraFieldMap>;
@@ -53,6 +54,7 @@ export async function applyJiraMutationItems(
   let succeeded = 0;
   for (const [index, item] of items.entries()) {
     stopIfAborted(deps.signal);
+    deps.startItem?.(index);
     const stop = deps.stopBefore?.();
     if (stop) {
       for (const rest of items.slice(index)) rest.error = stop;
@@ -138,7 +140,7 @@ async function executeJiraMutationItem(
           },
           ...signalTail(deps.signal),
         ),
-      deps.signal,
+      deps,
     );
     if (!created.key)
       throw new JiraMutationError(
@@ -176,7 +178,7 @@ async function executeJiraMutationItem(
           { body },
           ...signalTail(deps.signal),
         ),
-      deps.signal,
+      deps,
     );
     item.resultIssueUrl = item.issueUrl ?? jiraIssueUrl(config, item.issueKey);
     return;
@@ -201,7 +203,7 @@ async function executeJiraMutationItem(
           },
           ...signalTail(deps.signal),
         ),
-      deps.signal,
+      deps,
     );
   } else if (Object.keys(fields).length || Object.keys(update).length) {
     await jiraWrite(
@@ -212,7 +214,7 @@ async function executeJiraMutationItem(
           { fields, update },
           ...signalTail(deps.signal),
         ),
-      deps.signal,
+      deps,
     );
   }
 
@@ -275,7 +277,7 @@ async function executeLinkChanges(
   const errors: string[] = [];
   for (const change of item.linkChanges ?? []) {
     try {
-      await executeLinkChange(config, item.issueKey, change, deps.signal);
+      await executeLinkChange(config, item.issueKey, change, deps);
       change.resultOk = true;
       delete change.error;
     } catch (err) {
@@ -294,8 +296,9 @@ async function executeLinkChange(
   config: JiraConfig,
   subjectKey: string,
   change: JiraIssueLinkChangeDisplay,
-  signal: AbortSignal | undefined,
+  scope: WriteScope,
 ): Promise<void> {
+  const { signal } = scope;
   if (change.op === "remove") {
     if (!change.linkId)
       throw new JiraMutationError("Missing issue link id for removal.");
@@ -307,7 +310,7 @@ async function executeLinkChange(
           `/rest/api/3/issueLink/${encodeURIComponent(linkId)}`,
           ...signalTail(signal),
         ),
-      signal,
+      scope,
     );
     return;
   }
@@ -328,7 +331,7 @@ async function executeLinkChange(
         },
         ...signalTail(signal),
       ),
-    signal,
+    scope,
   );
 }
 

@@ -552,6 +552,7 @@ const CLASSIFIED: Record<
     exports: pendingApprovals,
     funnel: ["touchSessionRows", "resolveApprovalExclusive", "autoApprove"],
     kinds: {
+      ROUTE_UNSUPPORTED: "read",
       registerApprovalExecutor: "non-projected-write",
       reconcileLegacyAgentDefinitionCard: "read",
       reconcileLegacyPartialApprovalCard: "read",

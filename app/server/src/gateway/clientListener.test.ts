@@ -29,12 +29,31 @@ import {
   WorkerRequestError,
 } from "../workerProtocol/connection.ts";
 import {
+  APPLY_ANSWER_MAX_BYTES,
   CLIENT_METHODS,
   GATEWAY_CLIENT_PROTOCOL,
+  PREPARE_ANSWER_MAX_BYTES,
   decodeAccounts,
+  decodeApplyAnswer,
   decodeIntegrationStatus,
+  decodePrepareAnswer,
   encodeClientMessage,
 } from "./clientMethods.ts";
+import { encodeAtlassianCredential } from "../gatewayTools/atlassian.ts";
+import { createEdgeTools } from "../gatewayTools/index.ts";
+import {
+  PROPOSAL_TOO_LARGE,
+  RESULT_TOO_LARGE,
+  STOPPED,
+  TWO_PHASE_ONLY,
+  applyAnswerWithinCap,
+  prepareAnswerWithinCap,
+} from "../gatewayTools/twoPhase.ts";
+import type { JiraIssueMutationItemDisplay } from "@assistant/shared/jiraMutation";
+import { checkJiraIssueItems } from "../jiraMutationCheck.ts";
+import { checkJiraResult, mergeJiraResult } from "../jiraMutationResult.ts";
+import { stubJiraFetch, type SeenJiraRequest } from "../test/jiraEdgeFetch.ts";
+import { fakeJiraAnswer, isWrite } from "../test/jiraMutateFetch.ts";
 import { decodeLeaseGranted, decodeLeaseRevoked } from "./controlMethods.ts";
 import { startGateway, type RunningGateway } from "./gateway.ts";
 import { socketEndpoint } from "../workerProtocol/unixSocketTransport.ts";
@@ -212,6 +231,7 @@ async function dialClient(
   identity: Identity,
   pushes?: string[],
   payloads?: { method: string; json: unknown }[],
+  protocol = GATEWAY_CLIENT_PROTOCOL,
 ): Promise<WorkerConnection> {
   const socket = tls.connect({
     host: "127.0.0.1",
@@ -226,7 +246,7 @@ async function dialClient(
   });
   const connection = new WorkerConnection(socketEndpoint(socket), {
     handshake: { role: "worker", workerId: "test-client" },
-    protocol: GATEWAY_CLIENT_PROTOCOL,
+    protocol,
     handlers: Object.fromEntries(
       [CLIENT_METHODS.accountsChanged, CLIENT_METHODS.loginEvent].map(
         (method) => [
@@ -854,14 +874,16 @@ test("the page's operations reach clients: a take-over ends the client's login a
 
 // --- tools and integrations (Task-1397) -----------------------------------
 
+const NO_SUCH_TOOL = {
+  ok: false,
+  code: "unknown_tool",
+  message: "No such tool.",
+} as const;
 const NO_HOST: EdgeTools["host"] = {
   list: () => [],
-  call: () =>
-    Promise.resolve({
-      ok: false,
-      code: "unknown_tool",
-      message: "No such tool.",
-    }),
+  callForClient: () => Promise.resolve(NO_SUCH_TOOL),
+  prepare: () => Promise.resolve(NO_SUCH_TOOL),
+  apply: () => Promise.resolve({ ...NO_SUCH_TOOL, effects: "none" }),
 };
 
 /**
@@ -870,14 +892,14 @@ const NO_HOST: EdgeTools["host"] = {
  */
 function fakeTools(
   check: (signal: AbortSignal) => Promise<IntegrationCheck>,
-  host: EdgeTools["host"] = NO_HOST,
+  host: Partial<EdgeTools["host"]> = {},
 ): EdgeTools {
   return {
     handleMcp: (_req, res) => {
       res.writeHead(200, { "content-type": "text/plain" });
       res.end("mcp");
     },
-    host,
+    host: { ...NO_HOST, ...host },
     integrations: {
       atlassian: {
         parse: (input) => {
@@ -1797,7 +1819,7 @@ interface HostCall {
 
 async function gatewayWithHost(
   call: (
-    caller: Parameters<EdgeTools["host"]["call"]>[2],
+    caller: Parameters<EdgeTools["host"]["callForClient"]>[2],
   ) => Promise<ToolAnswer>,
   calls: HostCall[],
 ): Promise<RunningGateway> {
@@ -1807,7 +1829,7 @@ async function gatewayWithHost(
     clients: {},
     tools: fakeTools(() => Promise.resolve({ ok: true }), {
       list: () => STUB_LISTING,
-      call: (name, args, caller) => {
+      callForClient: (name, args, caller) => {
         calls.push({
           name,
           args,
@@ -2652,7 +2674,7 @@ test("D2: with atlassianSignIn, integrations.set is refused with its code and te
       },
       {
         list: () => [],
-        call: async (_name, _args, caller) => {
+        callForClient: async (_name, _args, caller) => {
           const outcome = await caller.credential("atlassian", caller.signal!);
           toolCredential = outcome.ok ? outcome.credential : undefined;
           return { ok: true, text: "ran" };
@@ -2760,4 +2782,268 @@ test("the client decodes kind and connectWith, drops unknown ones, and accepts a
     decode({ connected: true, site: "x.atlassian.net", email: "a@x" }),
     { connected: true, site: "x.atlassian.net", email: "a@x" },
   );
+});
+
+// --- two-phase tools over gateway client 1.1 (Task-1463 P6a) --------------
+
+const TWO_PHASE_SITE = "acme.atlassian.net";
+const TWO_PHASE_CREDENTIAL = encodeAtlassianCredential({
+  site: TWO_PHASE_SITE,
+  email: "me@x.test",
+  token: "FAKE-P6A-TOKEN-0123456789",
+});
+const TWO_PHASE_TOOLS = ["confluence_mutate_page", "jira_mutate_issue"];
+
+/** The real edge tools over a stub vault holding u1's Atlassian credential. */
+async function twoPhaseEdge() {
+  const vault = stubVault();
+  vault.stored.set("u1", TWO_PHASE_CREDENTIAL);
+  const edge = await listenerWith(vault, createEdgeTools({ log: () => {} }));
+  return { vault, edge, identity: await enroll(edge) };
+}
+
+test("P6a: a 1.0 and a 1.1 client's tools.call of a two-phase tool is refused before any vault read or request", async () => {
+  const { vault, edge, identity } = await twoPhaseEdge();
+  const seen = stubJiraFetch();
+  try {
+    for (const version of ["gateway-client/1.0", "gateway-client/1.1"]) {
+      const connection = await dialClient(
+        edge,
+        identity,
+        undefined,
+        undefined,
+        {
+          ...GATEWAY_CLIENT_PROTOCOL,
+          version,
+        },
+      );
+      const listing = (
+        await connection.request(
+          CLIENT_METHODS.toolsList,
+          encodeClientMessage({}),
+        )
+      ).json as { tools: { name: string; twoPhase?: true }[] };
+      assert.deepEqual(
+        listing.tools
+          .filter((tool) => tool.twoPhase)
+          .map((tool) => tool.name)
+          .sort(),
+        TWO_PHASE_TOOLS,
+      );
+      for (const name of TWO_PHASE_TOOLS)
+        assert.deepEqual(
+          (
+            await connection.request(
+              CLIENT_METHODS.toolsCall,
+              encodeClientMessage({
+                name,
+                args: { items: [{ issue: "STAR-1", summary: "x" }] },
+              }),
+            )
+          ).json,
+          { ok: false, code: "invalid_params", message: TWO_PHASE_ONLY },
+          `${version} ${name}`,
+        );
+    }
+  } finally {
+    vi.unstubAllGlobals();
+  }
+  assert.deepEqual(vault.calls, []);
+  assert.deepEqual(seen, []);
+});
+
+test("P6a end to end: prepare and apply over a 1.1 connection against a fake Atlassian; a cancel during apply stops the next item, never a running request", async () => {
+  const { vault, edge, identity } = await twoPhaseEdge();
+  const connection = await dialClient(edge, identity);
+  const request = (method: string, json: object, signal?: AbortSignal) =>
+    connection.request(method, encodeClientMessage(json), signal);
+
+  stubJiraFetch((seen) => fakeJiraAnswer(seen));
+  let proposal;
+  try {
+    proposal = decodePrepareAnswer(
+      await request(CLIENT_METHODS.toolsPrepare, {
+        name: "jira_mutate_issue",
+        args: {
+          items: [
+            {
+              issue: "STAR-1",
+              summary: "Linked summary",
+              linkChanges: [
+                {
+                  op: "add",
+                  type: "Blocks",
+                  direction: "outward",
+                  issue: "STAR-2",
+                },
+              ],
+            },
+            { operation: "comment", issue: "STAR-1", commentBody: "Hi" },
+          ],
+        },
+      }),
+    );
+  } finally {
+    vi.unstubAllGlobals();
+  }
+  assert.ok(proposal.ok, "prepared");
+  assert.equal(proposal.site, TWO_PHASE_SITE);
+  assert.ok(checkJiraIssueItems(proposal.items), "the closed check passes");
+  const sent: JiraIssueMutationItemDisplay[] = proposal.items;
+
+  const cancel = new AbortController();
+  const seen = stubJiraFetch(async (upstream: SeenJiraRequest) => {
+    if (
+      upstream.method === "POST" &&
+      upstream.path === "/rest/api/3/issueLink"
+    ) {
+      cancel.abort();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return fakeJiraAnswer(upstream);
+  });
+  let answer;
+  try {
+    answer = decodeApplyAnswer(
+      await request(
+        CLIENT_METHODS.toolsApply,
+        { name: "jira_mutate_issue", site: proposal.site, items: sent },
+        cancel.signal,
+      ),
+    );
+  } finally {
+    vi.unstubAllGlobals();
+  }
+  const writes = seen.filter(isWrite);
+  assert.deepEqual(
+    writes.map((upstream) => `${upstream.method} ${upstream.path}`),
+    ["POST /rest/api/3/issueLink", "PUT /rest/api/3/issue/STAR-1"],
+  );
+  for (const upstream of writes) assert.equal(upstream.signal?.aborted, false);
+  assert.ok(answer.ok, "applied");
+  assert.equal(answer.effects, "possible");
+  assert.equal(answer.results.length, 2);
+
+  // The client's half: each record passes its contract and merges into the card.
+  const card = structuredClone(sent);
+  answer.results.forEach((record, index) => {
+    assert.ok(checkJiraResult(record, sent[index]!, TWO_PHASE_SITE));
+    mergeJiraResult(card[index]!, record, false);
+  });
+  assert.equal(card[0]!.error, undefined);
+  assert.deepEqual(answer.results[1], { effects: "none", error: STOPPED });
+  assert.equal(card[1]!.error, STOPPED);
+  assert.deepEqual(vault.calls, ["get u1", "get u1"]);
+});
+
+/**
+ * Near-cap answers (P6-F3): text of one kind sized to exactly `bytes` UTF-8
+ * bytes of the answer's JSON, padded with ASCII.
+ */
+function sized<T>(base: (text: string) => T, unit: string, bytes: number): T {
+  const empty = Buffer.byteLength(JSON.stringify(base("")));
+  const per = Buffer.byteLength(JSON.stringify(unit)) - 2;
+  const room = bytes - empty;
+  const count = Math.floor(room / per);
+  const answer = base(unit.repeat(count) + "a".repeat(room - count * per));
+  assert.equal(Buffer.byteLength(JSON.stringify(answer)), bytes);
+  return answer;
+}
+
+const NEAR_CAP_UNITS: Record<string, string> = {
+  "3-byte UTF-8": "\u20ac",
+  "4-byte UTF-8": "\u{1f600}",
+  quote: '"',
+  backslash: "\\",
+  "lone surrogate": "\ud800",
+};
+
+test("P6a near-cap answers travel the codec and the client decoder unchanged; one byte over, the edge's guard answers the fixed failure and the client refuses a hand-built one", async () => {
+  const applyOf = (text: string) => ({
+    ok: true as const,
+    results: [{ effects: "possible" as const, error: text }],
+    effects: "possible" as const,
+  });
+  const prepareOf = (text: string) => ({
+    ok: true as const,
+    site: TWO_PHASE_SITE,
+    items: [{ clientId: "jira_0", summary: text }],
+    warnings: [],
+  });
+  let next: { apply: object; prepare: object; guarded: boolean } | undefined;
+  const edge = await listenerWith(
+    stubVault(),
+    fakeTools(() => Promise.resolve({ ok: true }), {
+      apply: () => {
+        const answer = next!.apply as Parameters<
+          typeof applyAnswerWithinCap
+        >[0];
+        return Promise.resolve(
+          next!.guarded ? applyAnswerWithinCap(answer, () => {}) : answer,
+        );
+      },
+      prepare: () => {
+        const answer = next!.prepare as Parameters<
+          typeof prepareAnswerWithinCap
+        >[0];
+        return Promise.resolve(
+          next!.guarded ? prepareAnswerWithinCap(answer) : answer,
+        );
+      },
+    }),
+  );
+  const connection = await dialClient(edge, await enroll(edge));
+  const both = async () => ({
+    apply: await connection.request(
+      CLIENT_METHODS.toolsApply,
+      encodeClientMessage({ name: "stub_write", site: "a", items: [] }),
+    ),
+    prepare: await connection.request(
+      CLIENT_METHODS.toolsPrepare,
+      encodeClientMessage({ name: "stub_write" }),
+    ),
+  });
+
+  for (const [kind, unit] of Object.entries(NEAR_CAP_UNITS)) {
+    for (const delta of [-1, 0]) {
+      next = {
+        apply: sized(applyOf, unit, APPLY_ANSWER_MAX_BYTES + delta),
+        prepare: sized(prepareOf, unit, PREPARE_ANSWER_MAX_BYTES + delta),
+        guarded: true,
+      };
+      const got = await both();
+      assert.deepEqual(decodeApplyAnswer(got.apply), next.apply, kind);
+      assert.deepEqual(decodePrepareAnswer(got.prepare), next.prepare, kind);
+    }
+    next = {
+      apply: sized(applyOf, unit, APPLY_ANSWER_MAX_BYTES + 1),
+      prepare: sized(prepareOf, unit, PREPARE_ANSWER_MAX_BYTES + 1),
+      guarded: true,
+    };
+    let got = await both();
+    assert.deepEqual(
+      decodeApplyAnswer(got.apply),
+      {
+        ok: false,
+        code: "failed",
+        message: RESULT_TOO_LARGE,
+        effects: "possible",
+        itemEffects: ["possible"],
+      },
+      kind,
+    );
+    assert.deepEqual(
+      decodePrepareAnswer(got.prepare),
+      { ok: false, code: "tool_error", message: PROPOSAL_TOO_LARGE },
+      kind,
+    );
+    next.guarded = false;
+    got = await both();
+    assert.throws(() => decodeApplyAnswer(got.apply), /over its size/, kind);
+    assert.throws(
+      () => decodePrepareAnswer(got.prepare),
+      /over its size/,
+      kind,
+    );
+  }
 });

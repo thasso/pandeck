@@ -30,12 +30,12 @@ export const WRITE_DEADLINE_MS = 45_000;
 /** The part of the deadline prepare never takes: apply's share. */
 const PREPARE_RESERVE_MS = 22_000;
 /** Apply starts no item this close to the deadline. */
-const STOP_CUTOFF_MS = 7_000;
+export const STOP_CUTOFF_MS = 7_000;
 
 export const STOP_TEXT =
   "Not applied: the call ran out of time before this change; nothing was sent for it.";
 /** Above any prepare refusal (D-W2 caps its own texts at 1,000). */
-const PREPARE_REFUSAL_MAX = 1_200;
+export const PREPARE_REFUSAL_MAX = 1_200;
 const ALL_FAILED_MAX = 2_000;
 
 type WriteContext = Parameters<AtlassianToolDescriptor["execute"]>[1];

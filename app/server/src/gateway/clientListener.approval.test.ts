@@ -73,12 +73,9 @@ const tools: EdgeTools = {
   },
   host: {
     list: () => [],
-    call: () =>
-      Promise.resolve({
-        ok: false,
-        code: "unknown_tool",
-        message: "No such tool.",
-      }),
+    callForClient: () => Promise.reject(new Error("unused")),
+    prepare: () => Promise.reject(new Error("unused")),
+    apply: () => Promise.reject(new Error("unused")),
   },
   integrations: {
     atlassian: {

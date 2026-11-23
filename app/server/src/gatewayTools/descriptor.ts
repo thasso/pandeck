@@ -19,6 +19,12 @@
  *   stay fixed.
  */
 import type { SlackAccessView } from "./slack.ts";
+import type {
+  ApplyAnswer,
+  ApplyRequest,
+  PreparedProposal,
+  WriteLedger,
+} from "./twoPhase.ts";
 
 /** An API token the user set for their site. */
 export interface AtlassianTokenCredential {
@@ -163,7 +169,7 @@ export interface ObjectSchema {
   additionalProperties: false;
 }
 
-interface ToolContext<C> {
+export interface ToolContext<C> {
   /** The calling user's credential, read from the vault for this call. */
   credential(): Promise<C>;
   /** Aborts at the host's deadline or when the caller goes away. */
@@ -196,7 +202,33 @@ export type AtlassianToolDescriptor = ToolDescriptorBase & {
     params: Record<string, unknown>,
     ctx: ToolContext<AtlassianCredential>,
   ): Promise<unknown>;
+  /**
+   * The write's two phases for a client connection (Task-1463 P6a,
+   * `twoPhase.ts`); `/mcp` keeps `execute`.
+   */
+  phases?: TwoPhaseTool;
 };
+
+/** What a two-phase tool's apply runs with besides its request deadline. */
+export interface ApplyContext extends ToolContext<AtlassianCredential> {
+  /** Aborts only at the deadline: a cancel never aborts a running request. */
+  signal: AbortSignal;
+  /** The caller's cancel or connection end: no further item starts. */
+  cancel: AbortSignal;
+  /** The call's effects ledger, which the host reads whatever apply does. */
+  ledger: WriteLedger;
+}
+
+/** A write tool's two phases (Task-1463 P6a). */
+export interface TwoPhaseTool {
+  /** Gates, then the credential, then the shared prepare; sends no write. */
+  prepare(
+    params: Record<string, unknown>,
+    ctx: ToolContext<AtlassianCredential>,
+  ): Promise<PreparedProposal>;
+  /** Gates, credential, site, closed check, then the shared apply. */
+  apply(request: ApplyRequest, ctx: ApplyContext): Promise<ApplyAnswer>;
+}
 
 /** A tool run with the user's Slack access view (Task-1454). */
 export type SlackToolDescriptor = ToolDescriptorBase & {
@@ -214,8 +246,21 @@ export type SlackToolDescriptor = ToolDescriptorBase & {
  */
 export type ToolDescriptor = AtlassianToolDescriptor | SlackToolDescriptor;
 
-/** A failure whose fixed, edge-owned text the caller sees. */
-export class ToolError extends Error {}
+/**
+ * A failure whose fixed, edge-owned text the caller sees; `invalid_params`
+ * when the caller's input is at fault (P6a's approved items).
+ */
+export class ToolError extends Error {
+  readonly code: "tool_error" | "invalid_params";
+
+  constructor(
+    message: string,
+    code: "tool_error" | "invalid_params" = "tool_error",
+  ) {
+    super(message);
+    this.code = code;
+  }
+}
 
 /** The error a raced wait throws when its signal aborts. */
 export function abortError(): Error {

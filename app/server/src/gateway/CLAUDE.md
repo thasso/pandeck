@@ -28,11 +28,11 @@ Contract: `docs/workers.md` "Credentials" and ADR-0005.
 - No tool code or package here: only the injected `EdgeTools`, given typed
   credential outcomes, never a gateway-built tool error. `/mcp` needs the
   client's certificate, no `Origin`, and its MCP token (hashed); it and
-  `tools.call` read the registry user's credential per call. An enrollment
-  collect never sets, restores or replaces a token. Every vault integration call
-  is bounded and answers a typed outcome. GitHub hands out only read
-  installation tokens for one proven repository; every GitHub write uses the
-  user's token on the gateway, never an installation token.
+  `tools.*` read the registry user's credential per call. An enrollment collect
+  never sets, restores or replaces a token. Every vault integration call is
+  bounded and answers a typed outcome. GitHub hands out only read installation
+  tokens for one proven repository; every GitHub write uses the user's token on
+  the gateway, never an installation token.
 - Outside the page, only `approveAutomatically` decides an enrollment request,
   after a devbox proof: a Google token for Coder's client that the allow rule
   admits, still before the `notAfter` fixed at token info when the registry lock

@@ -31,9 +31,11 @@
  * edge's MCP endpoint and never reaches the forwarder. It needs the client's
  * certificate, no `Origin` header, and that client's MCP token, kept only as
  * its hash (`clientRegistry.ts`); each tool call reads the user's credential
- * from the vault and keeps nothing. Gateway client 1.0's `tools.list` and
- * `tools.call` (Task-1398) run the same host, with the same per-call vault
- * read for the client's user from the registry.
+ * from the vault and keeps nothing. Gateway client 1.x's `tools.list` and
+ * `tools.call` (Task-1398), and 1.1's `tools.prepare` and `tools.apply`
+ * (Task-1463 P6a), run the same host, with the same per-call vault read for
+ * the client's user from the registry; a client's `tools.call` of a write
+ * tool is refused there before any read.
  *
  * The gateway's CA is the only trust root on both mutual-TLS ports. The
  * client is the common name of its certificate, matched by fingerprint, and
@@ -67,7 +69,9 @@ import {
   decodeIntegration,
   decodeIntegrationSet,
   decodeIntegrationStatusRequest,
+  decodeToolApply,
   decodeToolCall,
+  decodeToolPrepare,
   integrationFailure,
   isIntegrationFailure,
   decodeLoginId,
@@ -839,10 +843,33 @@ export async function startClientListener(
       encodeClientMessage({ tools: toolHost().list() }),
     // The tool's own failure is an answer, not a failed call; the user is
     // the registry's, never a payload's.
+    // A client never writes in one call: the host refuses a write tool here.
     [CLIENT_METHODS.toolsCall]: async (payload, client, signal) => {
       const { name, args } = decodeToolCall(payload);
       return encodeClientMessage(
-        await toolHost().call(name, args, {
+        await toolHost().callForClient(name, args, {
+          clientId: client.id,
+          credential: vaultCredential(client),
+          signal,
+        }),
+      );
+    },
+    [CLIENT_METHODS.toolsPrepare]: async (payload, client, signal) => {
+      const { name, args } = decodeToolPrepare(payload);
+      return encodeClientMessage(
+        await toolHost().prepare(name, args, {
+          clientId: client.id,
+          credential: vaultCredential(client),
+          signal,
+        }),
+      );
+    },
+    // The signal is the client's cancel: the host starts no further item
+    // after it and never aborts a running request.
+    [CLIENT_METHODS.toolsApply]: async (payload, client, signal) => {
+      const { name, request } = decodeToolApply(payload);
+      return encodeClientMessage(
+        await toolHost().apply(name, request, {
           clientId: client.id,
           credential: vaultCredential(client),
           signal,

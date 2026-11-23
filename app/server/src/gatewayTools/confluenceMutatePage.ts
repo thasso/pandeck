@@ -42,7 +42,17 @@ import {
   type ConfluenceMutateParams,
 } from "../confluenceMutate.ts";
 import { applyConfluenceMutationItems } from "../confluenceMutateApply.ts";
+import { checkConfluencePageItems } from "../confluenceMutationCheck.ts";
 import { ConfluenceMutationError } from "../confluenceMutationErrors.ts";
+import {
+  buildConfluenceResultRecord,
+  type ConfluenceResultRecord,
+} from "../confluenceMutationResult.ts";
+import {
+  ERROR_FALLBACK,
+  IDENTIFIER_FORMATS,
+  WARNING_FALLBACK,
+} from "../mutationResultCodec.ts";
 import { confluenceConfigOf } from "./atlassian.ts";
 import {
   ToolError,
@@ -50,6 +60,13 @@ import {
   type AtlassianToolDescriptor,
   type ObjectSchema,
 } from "./descriptor.ts";
+import { vettingFor } from "./mutationResultVetting.ts";
+import {
+  runApply,
+  runPrepare,
+  type ApplyProduct,
+  type PrepareProduct,
+} from "./twoPhase.ts";
 import { REDACTED } from "./upstreamText.ts";
 import {
   WRITE_DEADLINE_MS,
@@ -109,9 +126,6 @@ const VERSION_MAX = 999_999_999;
 const WARNING_WITHHELD = "A warning was withheld.";
 const ITEM_ERROR_FALLBACK = "The change failed.";
 const NAME_WITHHELD = "[withheld]";
-
-const PAGE_ID_RE = /^[0-9]{1,20}$/;
-const ATTACHMENT_ID_RE = /^att[0-9]{1,20}$/;
 
 const OPERATIONS = [
   "create",
@@ -188,7 +202,7 @@ function vettedPageId(
   raw: unknown,
   credential: AtlassianCredential,
 ): string | undefined {
-  return vettedIdentifier(raw, credential, (id) => PAGE_ID_RE.test(id));
+  return vettedIdentifier(raw, credential, IDENTIFIER_FORMATS.pageId);
 }
 
 /** An attachment id as Confluence returned it: whole, vetted, `att` and 1-20 digits. */
@@ -196,7 +210,7 @@ function vettedAttachmentId(
   raw: unknown,
   credential: AtlassianCredential,
 ): string | undefined {
-  return vettedIdentifier(raw, credential, (id) => ATTACHMENT_ID_RE.test(id));
+  return vettedIdentifier(raw, credential, IDENTIFIER_FORMATS.attachmentId);
 }
 
 /** A version: an integer 0-999,999,999, else nothing. */
@@ -457,14 +471,18 @@ function withheldUnlessSafe(
 
 /**
  * The gate (AC4): each item's operation (`edit` when absent), in input
- * order; the first one this edge does not offer refuses the whole call.
+ * order; the first one this edge does not offer refuses the whole call. It
+ * also runs on `tools.apply`'s items before their check, so it reads any
+ * value: a non-string operation is left to the check.
  */
-function gate(
-  params: ConfluenceMutateParams,
-  deletes: ConfluenceDeleteSwitch,
-): void {
-  for (const item of params.items ?? []) {
-    const operation = item.operation ?? "edit";
+function gate(items: unknown, deletes: ConfluenceDeleteSwitch): void {
+  if (!Array.isArray(items)) return;
+  for (const item of items as unknown[]) {
+    const raw: unknown =
+      typeof item === "object" && item !== null
+        ? (item as { operation?: unknown }).operation
+        : undefined;
+    const operation = raw ?? "edit";
     if (operation === "uploadAttachment")
       throw new ToolError(UPLOAD_UNAVAILABLE);
     if (operation === "delete" && !deletes.page)
@@ -537,7 +555,7 @@ export function confluenceMutatePageTool(
     async execute(params, ctx) {
       const requested = params as ConfluenceMutateParams;
       // Before the credential, so a refused call reads and sends nothing.
-      gate(requested, deletes);
+      gate(requested.items, deletes);
       const { credential, prepared, applied } = await runWrite(
         ctx,
         CONFLUENCE_WRITE,
@@ -554,5 +572,78 @@ export function confluenceMutatePageTool(
         credential,
       );
     },
+    phases: {
+      prepare(params, ctx) {
+        const { items } = params as ConfluenceMutateParams;
+        gate(items, deletes);
+        return runPrepare(ctx, CONFLUENCE_PREPARE(items));
+      },
+      apply(request, ctx) {
+        gate(request.items, deletes);
+        return runApply(ctx, CONFLUENCE_APPLY, request);
+      },
+    },
   };
 }
+
+/** Confluence's prepare for `tools.prepare`: the one-call prepare, on its own. */
+const CONFLUENCE_PREPARE = (
+  items: ConfluenceMutateParams["items"],
+): PrepareProduct<ConfluenceConfig, ConfluencePageMutationItemDisplay> => ({
+  ...CONFLUENCE_WRITE,
+  prepare: (config, credential, signal) =>
+    confluencePhases(items)(config, credential).prepare(signal),
+  check: checkConfluencePageItems,
+});
+
+/**
+ * A record with every text fixed and no identifier or link: what
+ * `tools.apply` sends when the full records would carry a secret form once
+ * joined. Versions are numbers and stay.
+ */
+export function confluenceOutcomeOf(
+  record: ConfluenceResultRecord,
+): ConfluenceResultRecord {
+  const { attachment } = record;
+  return {
+    effects: record.effects,
+    ...(record.resultPageId !== undefined ? { resultPageId: null } : {}),
+    ...(record.resultPageUrl === null ? { resultPageUrl: null } : {}),
+    ...(record.resultVersion !== undefined
+      ? { resultVersion: record.resultVersion }
+      : {}),
+    ...(record.warning !== undefined ? { warning: WARNING_FALLBACK } : {}),
+    ...(record.error !== undefined ? { error: ERROR_FALLBACK } : {}),
+    ...(attachment
+      ? {
+          attachment: {
+            ...(attachment.resultId !== undefined ? { resultId: null } : {}),
+            ...(attachment.resultVersion !== undefined
+              ? { resultVersion: attachment.resultVersion }
+              : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+/** Confluence's apply for `tools.apply`: the shared apply and its contract. */
+const CONFLUENCE_APPLY: ApplyProduct<
+  ConfluenceConfig,
+  ConfluencePageMutationItemDisplay,
+  ConfluenceResultRecord
+> = {
+  ...CONFLUENCE_WRITE,
+  check: checkConfluencePageItems,
+  apply: (config, credential, items, deps) =>
+    applyConfluenceMutationItems(config, items, {
+      ...deps,
+      describeError: (err) =>
+        describeConfluenceWriteFailure(err, credential, [deps.signal]),
+    }),
+  vetting: vettingFor,
+  record: buildConfluenceResultRecord,
+  // Item results are small and only the attachment nests: no stage to run.
+  shrink: () => false,
+  outcomeOf: confluenceOutcomeOf,
+};

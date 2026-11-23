@@ -11,6 +11,7 @@ import {
   AtlassianHttpError,
   type AtlassianCallOptions,
 } from "./atlassian/atlassianFetch.ts";
+import type { WriteScope } from "./writeScope.ts";
 
 /**
  * The core's own refusal or failure text. It may embed what the caller's
@@ -52,15 +53,20 @@ export function requireCurrentForDelete(
   );
 }
 
-/** Runs one write request, retyping Confluence's rejection as `ConfluenceWriteHttpError`. */
+/**
+ * Runs one write request: `scope.beforeWrite` first (the edge's effects
+ * ledger, `writeScope.ts`), then the request, retyping Confluence's rejection as
+ * `ConfluenceWriteHttpError`.
+ */
 export async function confluenceWrite<T>(
   call: () => Promise<T>,
-  signal?: AbortSignal,
+  scope: WriteScope = {},
 ): Promise<T> {
+  scope.beforeWrite?.();
   try {
     return await call();
   } catch (err) {
-    if (signal?.aborted) throw err;
+    if (scope.signal?.aborted) throw err;
     if (
       err instanceof AtlassianHttpError &&
       !(err instanceof ConfluenceWriteHttpError)

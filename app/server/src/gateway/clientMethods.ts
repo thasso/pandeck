@@ -46,10 +46,28 @@
  * The edge's tools (Task-1398), run with the client's user's credential:
  *
  * - `tools.list {}` answers `{tools}`: each `{name, description,
- *   inputSchema, effect, actionKey}`.
+ *   inputSchema, effect, actionKey}`, and `twoPhase: true` on a write tool
+ *   that runs as `tools.prepare` and `tools.apply` (1.1, Task-1463 P6a).
  * - `tools.call {name, args}` answers the tool's outcome, `{ok: true, text}`
  *   or `{ok: false, code, message}`; only a malformed request fails the call.
- *   A `cancel` aborts it.
+ *   A `cancel` aborts it. A write tool is refused `invalid_params` before any
+ *   credential read: a client connection writes only in two phases (1.1;
+ *   a 1.0 client gets the same refusal).
+ * - `tools.prepare {name, args}` (1.1) answers `{ok: true, site, items,
+ *   warnings}`, the proposal the shared prepare built for the credential's
+ *   site, or `{ok: false, code, message}`; nothing is written. At most
+ *   `PREPARE_ANSWER_MAX_BYTES`. A `cancel` aborts it.
+ * - `tools.apply {name, site, items}` (1.1) runs the approved items, every
+ *   refusal before any write, and answers `{ok: true, results, effects,
+ *   trimmed?}`, one result record per item, or `{ok: false, code, message,
+ *   effects, itemEffects?, results?, trimmed?}`. `effects` (`none` or
+ *   `possible`) says whether any write request left the edge; `itemEffects`
+ *   says it per item once the items passed their check; a failure after the
+ *   apply started keeps the records its working copy shows. A root `none`
+ *   with any `possible` record or item is undecodable. A `cancel` starts no
+ *   further item and never aborts a running request. At most
+ *   `APPLY_ANSWER_MAX_BYTES`: the edge never sends a larger answer, and the
+ *   client refuses one.
  *
  * Gateway → client: `accounts.changed {accounts}`, the full list after any
  * change, and `logins.event {loginId, accountId, event}`, each answered `{}`.
@@ -64,9 +82,17 @@ import type { LoginEvent, LoginStart } from "./logins.ts";
 import { isLeaseProvider, isProfileId } from "./profiles.ts";
 import { isOwnerId } from "./state.ts";
 import { INVALID_PARAMS } from "./controlMethods.ts";
-import type { ToolAnswer, ToolFailureCode } from "./edgeTools.ts";
+import type {
+  ApplyAnswer,
+  ApplyRequest,
+  Effects,
+  PrepareAnswer,
+  ToolAnswer,
+  ToolFailureCode,
+} from "./edgeTools.ts";
 
-export const GATEWAY_CLIENT_VERSION = "gateway-client/1.0";
+/** 1.1 (Task-1463 P6a) adds `tools.prepare` and `tools.apply`; a 1.0 peer still connects. */
+export const GATEWAY_CLIENT_VERSION = "gateway-client/1.1";
 
 const CLIENT_VERSION_RE =
   /^gateway-client\/(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/;
@@ -93,6 +119,8 @@ export const CLIENT_METHODS = {
   integrationStatus: "integrations.status",
   toolsList: "tools.list",
   toolsCall: "tools.call",
+  toolsPrepare: "tools.prepare",
+  toolsApply: "tools.apply",
   /** Gateway → client. */
   accountsChanged: "accounts.changed",
   loginEvent: "logins.event",
@@ -426,22 +454,167 @@ const TOOL_FAILURE_CODES = new Set<string>([
 ] satisfies ToolFailureCode[]);
 const TOOL_MESSAGE_MAX = 500;
 
-/** A `tools.call` answer, on the client: an unknown code reads as `failed`. */
-export function decodeToolAnswer(payload: Payload): ToolAnswer {
-  const answer = record(payload.json);
-  if (answer?.ok === true && typeof answer.text === "string")
-    return { ok: true, text: answer.text };
-  if (answer?.ok !== false) malformed("tool answer");
-  const message =
-    typeof answer.message === "string"
-      ? answer.message.slice(0, TOOL_MESSAGE_MAX)
-      : "";
+/** A failure answer's code and message, capped; an unknown code is `failed`. */
+function toolFailure(answer: Record<string, unknown>): {
+  ok: false;
+  code: ToolFailureCode;
+  message: string;
+} {
   return {
     ok: false,
     code:
       typeof answer.code === "string" && TOOL_FAILURE_CODES.has(answer.code)
         ? (answer.code as ToolFailureCode)
         : "failed",
-    message,
+    message:
+      typeof answer.message === "string"
+        ? answer.message.slice(0, TOOL_MESSAGE_MAX)
+        : "",
   };
+}
+
+/** A `tools.call` answer, on the client: an unknown code reads as `failed`. */
+export function decodeToolAnswer(payload: Payload): ToolAnswer {
+  const answer = record(payload.json);
+  if (answer?.ok === true && typeof answer.text === "string")
+    return { ok: true, text: answer.text };
+  if (answer?.ok !== false) malformed("tool answer");
+  return toolFailure(answer);
+}
+
+/** `tools.prepare`: as `tools.call`. */
+export function decodeToolPrepare(payload: Payload): {
+  name: string;
+  args: Record<string, unknown>;
+} {
+  return decodeToolCall(payload);
+}
+
+const SITE_MAX = 253;
+
+/**
+ * `tools.apply`: the tool's name, the site the proposal was prepared for and
+ * the approved items, an array; the tool checks the items themselves.
+ */
+export function decodeToolApply(payload: Payload): {
+  name: string;
+  request: ApplyRequest;
+} {
+  const { name, site, items } = record(payload.json) ?? {};
+  if (typeof name !== "string" || !TOOL_NAME_RE.test(name))
+    invalid("tool name");
+  if (typeof site !== "string" || site.length === 0 || site.length > SITE_MAX)
+    invalid("site");
+  if (!Array.isArray(items)) invalid("items");
+  return { name, request: { site, items } };
+}
+
+/**
+ * The answers' ceilings in UTF-8 bytes of their JSON (P6-F3). They mirror
+ * the edge's own (`gatewayTools/twoPhase.ts`), which `clientMethods.test.ts`
+ * pins equal: `gateway/` imports no tool module.
+ */
+export const APPLY_ANSWER_MAX_BYTES = 524_288;
+export const PREPARE_ANSWER_MAX_BYTES = 1_048_576 + 32_768;
+const PHASE_ITEMS_MAX = 10;
+const PREPARE_WARNINGS_MAX = 10;
+
+function withinCap(payload: Payload, max: number, what: string): void {
+  if (Buffer.byteLength(JSON.stringify(payload.json ?? null)) > max)
+    malformed(`${what} (over its size)`);
+}
+
+/** Up to ten plain objects, else undefined. */
+function records(value: unknown): Record<string, unknown>[] | undefined {
+  if (!Array.isArray(value) || value.length > PHASE_ITEMS_MAX) return undefined;
+  const out: Record<string, unknown>[] = [];
+  for (const entry of value) {
+    const object = record(entry);
+    if (!object) return undefined;
+    out.push(object);
+  }
+  return out;
+}
+
+/** Anything but a plain `none` may have written. */
+function effectsOf(value: unknown): Effects {
+  return value === "none" ? "none" : "possible";
+}
+
+/**
+ * A `tools.prepare` answer, on the client: shallow. The client checks the
+ * items with the closed proposal check before it shows them.
+ */
+export function decodePrepareAnswer(payload: Payload): PrepareAnswer {
+  withinCap(payload, PREPARE_ANSWER_MAX_BYTES, "prepare answer");
+  const answer = record(payload.json);
+  if (answer?.ok === false) return toolFailure(answer);
+  const items = records(answer?.items);
+  const warnings = answer?.warnings;
+  if (
+    answer?.ok !== true ||
+    typeof answer.site !== "string" ||
+    !items ||
+    !Array.isArray(warnings) ||
+    warnings.length > PREPARE_WARNINGS_MAX ||
+    !warnings.every((warning) => typeof warning === "string")
+  )
+    malformed("prepare answer");
+  return { ok: true, site: answer.site, items, warnings: [...warnings] };
+}
+
+/**
+ * A `tools.apply` answer, on the client: shallow. The client checks each
+ * record with the product's result contract. A failure's effects read
+ * `possible` unless the edge said `none`; its `itemEffects` and `results`
+ * stay only when well formed. A root `none` beside a `possible` record or
+ * item is undecodable (P6a v03 "Nonblocking precision"): the edge never
+ * sends one.
+ */
+export function decodeApplyAnswer(payload: Payload): ApplyAnswer {
+  withinCap(payload, APPLY_ANSWER_MAX_BYTES, "apply answer");
+  const answer = record(payload.json);
+  if (answer?.ok === false) {
+    const items = answer.itemEffects;
+    const itemEffects =
+      Array.isArray(items) && items.length <= PHASE_ITEMS_MAX
+        ? items.map(effectsOf)
+        : undefined;
+    const results = records(answer.results);
+    const failure: ApplyAnswer = {
+      ...toolFailure(answer),
+      effects: effectsOf(answer.effects),
+      ...(itemEffects ? { itemEffects } : {}),
+      ...(results ? { results } : {}),
+      ...(results && answer.trimmed === true ? { trimmed: true as const } : {}),
+    };
+    return consistent(failure, [
+      ...(itemEffects ?? []),
+      ...(results ?? []).map((result) => result.effects),
+    ]);
+  }
+  const results = records(answer?.results);
+  if (
+    answer?.ok !== true ||
+    !results ||
+    (answer.effects !== "none" && answer.effects !== "possible") ||
+    (answer.trimmed !== undefined && answer.trimmed !== true)
+  )
+    malformed("apply answer");
+  return consistent(
+    {
+      ok: true,
+      results,
+      effects: answer.effects,
+      ...(answer.trimmed ? { trimmed: true as const } : {}),
+    },
+    results.map((result) => result.effects),
+  );
+}
+
+/** `answer`, unless its root says `none` while a record or item says `possible`. */
+function consistent(answer: ApplyAnswer, parts: unknown[]): ApplyAnswer {
+  if (answer.effects === "none" && parts.includes("possible"))
+    malformed("apply answer (its effects disagree)");
+  return answer;
 }

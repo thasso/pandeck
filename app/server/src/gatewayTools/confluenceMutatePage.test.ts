@@ -48,6 +48,7 @@ import type {
 import type { ToolCaller } from "./host.ts";
 import { createEdgeTools } from "./index.ts";
 import { REDACTED } from "./upstreamText.ts";
+import type { ApplyHooks } from "../writeScope.ts";
 import { STOP_TEXT } from "./writeCall.ts";
 import { RESULT_BUDGET } from "./writeResult.ts";
 
@@ -272,6 +273,7 @@ test("AC5: createEdgeTools without scopes fails closed; a page-only list lets a 
 async function referenceRun(
   items: unknown[],
   options: FakeConfluenceOptions = {},
+  hooks: ApplyHooks = {},
 ): Promise<SeenConfluenceWrite[]> {
   const seen = stubConfluenceWriteFetch(undefined, options);
   const config = confluenceConfigOf(FAKE);
@@ -282,6 +284,7 @@ async function referenceRun(
       {},
     );
     await applyConfluenceMutationItems(config, prepared.items, {
+      ...hooks,
       describeError: errorText,
     });
   } finally {
@@ -333,6 +336,31 @@ test("AC6: each operation sends the local core's requests, each with the call's 
       name,
     );
     vi.unstubAllGlobals();
+  }
+});
+
+test("P6a hooks: without them the local core and /mcp send byte-identical requests, and with them nothing changes", async () => {
+  for (const [name, item] of OPERATIONS) {
+    const reference = await referenceRun([item]);
+    const seen = stubConfluenceWriteFetch();
+    resultOf(await mutate([item]));
+    vi.unstubAllGlobals();
+    const bytes = JSON.stringify(shapeOf(reference));
+    assert.equal(JSON.stringify(shapeOf(seen)), bytes, name);
+    const calls: string[] = [];
+    const hooked = await referenceRun([item], undefined, {
+      startItem: (index) => calls.push(`item ${index}`),
+      beforeWrite: () => calls.push("write"),
+    });
+    assert.equal(JSON.stringify(shapeOf(hooked)), bytes, name);
+    assert.deepEqual(
+      calls,
+      [
+        "item 0",
+        ...reference.filter((r) => r.method !== "GET").map(() => "write"),
+      ],
+      `${name}: one mark per write`,
+    );
   }
 });
 

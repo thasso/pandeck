@@ -65,18 +65,71 @@ export function holdsSecret(
 }
 
 /**
+ * Whether the JSON `value` carries a secret form or a piece of 16 or more
+ * characters of one (Task-1463 P6a): in any string or key of it as parsed
+ * (fix-m2-1 F003: JSON escaping hides a secret holding `"` or `\` from its
+ * serialized form), or in that serialized form and its form escaped once
+ * more, where joined strings could make one. Unlike {@link holdsSecret}, an
+ * auth marker alone does not count: this checks card data the user reviews,
+ * such as a page body that says "basic setup", not upstream error text.
+ * The walk is a loop over an explicit stack, one entry pushed at a time
+ * (fix-final-1 F005): no call or argument list grows with the value.
+ */
+export function carriesSecret(
+  value: unknown,
+  credential: AtlassianCredential,
+): boolean {
+  const parts = secretParts(credential);
+  const holds = (text: string) =>
+    secretSpans(text, credential, false, parts).length > 0;
+  const serialized = JSON.stringify(value) ?? "";
+  if (holds(serialized) || holds(JSON.stringify(serialized))) return true;
+  const pending: unknown[] = [value];
+  while (pending.length > 0) {
+    const next = pending.pop();
+    if (typeof next === "string") {
+      if (holds(next)) return true;
+    } else if (Array.isArray(next)) {
+      for (let index = 0; index < next.length; index += 1)
+        pending.push(next[index]);
+    } else if (next !== null && typeof next === "object")
+      for (const [key, entry] of Object.entries(next)) {
+        if (holds(key)) return true;
+        pending.push(entry);
+      }
+  }
+  return false;
+}
+
+/** The call's secret forms and every 16-character piece of them. */
+function secretParts(credential: AtlassianCredential): {
+  secrets: string[];
+  pieces: Set<string>;
+} {
+  const secrets = secretForms(credential);
+  const pieces = new Set<string>();
+  for (const secret of secrets)
+    for (let at = 0; at + MIN_SECRET_FRAGMENT <= secret.length; at += 1)
+      pieces.add(secret.slice(at, at + MIN_SECRET_FRAGMENT));
+  return { secrets, pieces };
+}
+
+/**
  * The spans of `text` that carry credential material, as `[start, end)`
- * pairs in order and possibly overlapping: each auth marker, each whole
- * secret form, and each 16-character window that is a piece of one.
+ * pairs in order and possibly overlapping: each auth marker (unless
+ * `markers` is false), each whole secret form, and each 16-character window
+ * that is a piece of one.
  */
 function secretSpans(
   text: string,
   credential: AtlassianCredential,
+  markers = true,
+  { secrets, pieces } = secretParts(credential),
 ): Array<[number, number]> {
   const spans: Array<[number, number]> = [];
-  for (const match of text.matchAll(new RegExp(AUTH_MARKER, "giu")))
-    spans.push([match.index, match.index + match[0].length]);
-  const secrets = secretForms(credential);
+  if (markers)
+    for (const match of text.matchAll(new RegExp(AUTH_MARKER, "giu")))
+      spans.push([match.index, match.index + match[0].length]);
   for (const secret of secrets)
     for (
       let at = text.indexOf(secret);
@@ -84,10 +137,6 @@ function secretSpans(
       at = text.indexOf(secret, at + 1)
     )
       spans.push([at, at + secret.length]);
-  const pieces = new Set<string>();
-  for (const secret of secrets)
-    for (let at = 0; at + MIN_SECRET_FRAGMENT <= secret.length; at += 1)
-      pieces.add(secret.slice(at, at + MIN_SECRET_FRAGMENT));
   for (let at = 0; at + MIN_SECRET_FRAGMENT <= text.length; at += 1)
     if (pieces.has(text.slice(at, at + MIN_SECRET_FRAGMENT)))
       spans.push([at, at + MIN_SECRET_FRAGMENT]);

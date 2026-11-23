@@ -55,6 +55,7 @@ import {
 } from "./jiraMutateIssue.ts";
 import { REDACTED } from "./upstreamText.ts";
 import { EDGE_TOOLS } from "./tools.ts";
+import type { ApplyHooks } from "../writeScope.ts";
 
 const FAKE: AtlassianTokenCredential = {
   site: "acme.atlassian.net",
@@ -155,10 +156,14 @@ const shapeOf = (seen: SeenJiraRequest[]) =>
   seen.map((r) => [r.method, r.path, r.query, r.body]);
 const writesIn = (seen: SeenJiraRequest[]) => seen.filter(isWrite);
 
-/** The local tool's core for the same input: no signal, its deps' shape. */
+/**
+ * The local tool's core for the same input: no signal, its deps' shape;
+ * `hooks` adds the edge ledger's hooks to the apply deps.
+ */
 async function referenceRun(
   items: unknown[],
   options: FakeJiraOptions = {},
+  hooks: ApplyHooks = {},
 ): Promise<{ seen: SeenJiraRequest[]; outcome: string }> {
   const seen = stubJiraFetch((request) => fakeJiraAnswer(request, options));
   const config = jiraConfigOf(FAKE);
@@ -181,6 +186,7 @@ async function referenceRun(
       },
     );
     const applied = await applyJiraMutationItems(config, prepared.items, {
+      ...hooks,
       fieldMap,
       describeError: errorText,
     });
@@ -264,6 +270,32 @@ test("one call prepares and applies each operation, sending the local core's req
     assert.equal(result.items[0]!.ok, true, name);
     assertNoSecret(answer.text, FAKE);
     vi.unstubAllGlobals();
+  }
+});
+
+test("P6a hooks: without them the local core and /mcp send byte-identical requests, and with them nothing changes", async () => {
+  for (const [name, item] of OPERATIONS) {
+    const reference = await referenceRun([item]);
+    const seen = stubJiraFetch((request) => fakeJiraAnswer(request));
+    assert.ok((await mutate([item])).ok, name);
+    vi.unstubAllGlobals();
+    const bytes = JSON.stringify(shapeOf(reference.seen));
+    assert.equal(JSON.stringify(shapeOf(seen)), bytes, name);
+    const calls: string[] = [];
+    const hooked = await referenceRun([item], undefined, {
+      startItem: (index) => calls.push(`item ${index}`),
+      beforeWrite: () => calls.push("write"),
+    });
+    assert.equal(hooked.outcome, reference.outcome, name);
+    assert.equal(JSON.stringify(shapeOf(hooked.seen)), bytes, name);
+    const writes = writesIn(reference.seen).filter(
+      (request) => request.path !== "/rest/api/3/search/jql",
+    );
+    assert.deepEqual(
+      calls,
+      ["item 0", ...writes.map(() => "write")],
+      `${name}: one mark per write`,
+    );
   }
 });
 
