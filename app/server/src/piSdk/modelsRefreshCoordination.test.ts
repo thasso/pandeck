@@ -4,7 +4,10 @@
  * starts on it and the aborted one resolves like a success, while an unforced
  * refresh inside pi's four-hour window skips the network: a background tick
  * during the Refresh used to leave the user a "fetched" list nobody fetched.
- * Real pi runtimes; `fetch` stubbed, the Codex catalog answered on cue.
+ * Real pi runtimes; `fetch` stubbed, the Codex catalog answered on cue. The
+ * account is an explicit, logged-in OpenAI account: an install makes no
+ * default one, and pi fetches a catalog only for a runtime holding a
+ * credential, so the fetch lands on that account's runtime and is read there.
  */
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
@@ -46,10 +49,15 @@ function catalogResponse(models: unknown[]): Response {
   });
 }
 
-const { piAgentDir } = await import("../credentialProfiles.ts");
-// A current login: the default account offers its Codex models.
+const { createCredentialProfile, piAgentDir } =
+  await import("../credentialProfiles.ts");
+const account = createCredentialProfile({
+  name: "Coordinated",
+  provider: "openai-codex",
+});
+// A current login, so pi treats the account's Codex provider as configured.
 writeFileSync(
-  join(piAgentDir("default"), "auth.json"),
+  join(piAgentDir(account.id), "auth.json"),
   JSON.stringify({
     "openai-codex": {
       type: "oauth",
@@ -61,8 +69,12 @@ writeFileSync(
   }),
 );
 
-const { modelRegistry, refreshModelCatalogsInBackground, refreshModels } =
-  await import("./models.ts");
+const {
+  listModelsForProfile,
+  modelRegistry,
+  refreshModelCatalogsInBackground,
+  refreshModels,
+} = await import("./models.ts");
 
 const template = modelRegistry
   .getAll()
@@ -74,8 +86,11 @@ function catalogWith(id: string): unknown[] {
   return [{ ...template, id, name: id }];
 }
 
-function offers(models: Array<{ id: string }>, id: string): boolean {
-  return models.some((model) => model.id === id);
+/** Whether the account now offers `id`. */
+async function offers(id: string): Promise<boolean> {
+  return (await listModelsForProfile(account.id)).some(
+    (model) => model.id === id,
+  );
 }
 
 /** Hold the next Codex catalog request until the returned answer is given. */
@@ -93,8 +108,9 @@ beforeAll(async () => {
   // A fresh catalog inside pi's window: an unforced refresh now skips the
   // network, which is what made a superseded forced refresh look done.
   catalog = catalogWith("fixture-primed");
-  const { models } = await refreshModels();
-  assert.ok(offers(models, "fixture-primed"), "the primed catalog is offered");
+  const { error } = await refreshModels();
+  assert.equal(error, undefined);
+  assert.ok(await offers("fixture-primed"), "the primed catalog is offered");
 });
 
 test("a background tick during the user's Refresh joins it: the forced fetch is what the user sees", async () => {
@@ -106,13 +122,14 @@ test("a background tick during the user's Refresh joins it: the forced fetch is 
   const background = refreshModelCatalogsInBackground();
   answer(catalogWith("fixture-forced-first"));
 
-  const { models, error } = await manual;
-  await background;
-  assert.equal(error, undefined);
+  const { error } = await manual;
+  // Read when the Refresh answers, before the background run is awaited.
   assert.ok(
-    offers(models, "fixture-forced-first"),
-    "the Refresh answers with the catalog its forced fetch brought",
+    await offers("fixture-forced-first"),
+    "the Refresh answers once its forced fetch has landed",
   );
+  assert.equal(error, undefined);
+  await background;
   assert.equal(catalogRequests, 1, "one fetch, the forced one");
 });
 
@@ -125,13 +142,13 @@ test("the user's Refresh during a background run waits for it, then forces its o
   await arrived.promise;
   answer(catalogWith("fixture-background-first"));
 
-  const { models, error } = await manual;
-  await background;
-  assert.equal(error, undefined);
+  const { error } = await manual;
   assert.ok(
-    offers(models, "fixture-background-first"),
+    await offers("fixture-background-first"),
     "the Refresh ran its own forced fetch after the background run",
   );
+  assert.equal(error, undefined);
+  await background;
   assert.equal(
     catalogRequests,
     1,
@@ -148,7 +165,8 @@ test("concurrent Refreshes share one forced fetch", async () => {
   await arrived.promise;
   answer(catalogWith("fixture-shared"));
 
-  for (const { models } of await Promise.all([first, second]))
-    assert.ok(offers(models, "fixture-shared"));
+  for (const { error } of await Promise.all([first, second]))
+    assert.equal(error, undefined);
+  assert.ok(await offers("fixture-shared"));
   assert.equal(catalogRequests, 1);
 });

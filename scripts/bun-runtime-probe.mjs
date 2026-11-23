@@ -4454,7 +4454,9 @@ async function checkPiOAuthFlows() {
 async function checkPiCatalogUserAgent() {
   const expected = process.env.PA_PROBE_PI_VERSION;
   assert(expected, "The check did not pass pi's version.");
-  const runtime = await modelRuntimeForProfile();
+  // The seeded, logged-in account: pi fetches a catalog only for a provider
+  // its runtime holds a credential for.
+  const runtime = await modelRuntimeForProfile("default");
   const agents = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
