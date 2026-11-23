@@ -183,24 +183,27 @@ export async function processorConfigStatus(): Promise<ProcessorConfigStatus> {
         message:
           "The memory processor is set to Claude SDK, but the Claude SDK integration is disabled.",
       };
+    // Claude runs any configured id as a curated model, so the only per-account
+    // question is entitlement: the slot resolution refuses an account whose
+    // known model listing lacks the model the run would execute. Any other
+    // account failure is the run's own to report, as before.
+    try {
+      await accountForSlot(processor);
+    } catch (err) {
+      if (err instanceof ModelUnavailableOnAccountError)
+        return {
+          configured: false,
+          message: `The configured memory processor model (${processor.provider}/${processor.modelId}) is not available: ${err.message} Pick an available model or account in Memory settings.`,
+        };
+    }
+    return { configured: true };
   }
   // Validate the EXACT configured provider/model — never a silent fallback to a
   // different model, which would run something other than what was configured.
-  // Availability is per account, so this checks the account the slot resolves
-  // to; a pin whose account's model listing lacks the model refuses there.
-  let profileId: string;
-  try {
-    profileId = await accountForSlot(processor);
-  } catch (err) {
-    if (!(err instanceof ModelUnavailableOnAccountError)) throw err;
-    return {
-      configured: false,
-      message: `The configured memory processor model (${processor.provider}/${processor.modelId}) is not available: ${err.message} Pick an available model or account in Memory settings.`,
-    };
-  }
+  // Availability is per account, so this checks the account the slot resolves to.
   if (
     !(await accountOffersModel(
-      profileId,
+      await accountForSlot(processor),
       processor.provider,
       processor.modelId,
     ))

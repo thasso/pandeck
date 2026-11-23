@@ -405,7 +405,8 @@ listing is unknown it offers the whole curated list. pi availability comes from
 each account's isolated SDK runtime.
 
 Entitlement is a hard filter, applied before every ranking tier and fallback: a
-Claude account whose known listing omits the model (`lacksModel`) is never a
+Claude account whose known listing omits the model (`lacksModel`: the curated
+model the run executes, whatever spelling or older id names it) is never a
 candidate, not even a degraded or last-resort one, and an unknown account takes
 part as before. When that filter removed an in-scope account and nothing
 remains, the pick is `model-unavailable` with no account ("No Claude account can

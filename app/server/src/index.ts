@@ -77,7 +77,7 @@ import {
   redeemOpenAiResetCredit,
   usageProfileForSession,
 } from "./harnesses/usage.ts";
-import { modelsForAccount } from "./harnesses/models.ts";
+import { modelsByAccount } from "./harnesses/models.ts";
 import { pickAccount } from "./accountRouter.ts";
 import { startClaudeCredentialStatusChecks } from "./claudeCredentialStatus.ts";
 import {
@@ -926,14 +926,7 @@ async function handleRequest(
       const includeModels =
         requestUrl.searchParams.get("includeModels") === "1";
       const modelsByProfile = includeModels
-        ? Object.fromEntries(
-            await Promise.all(
-              profiles.map(async (profile) => [
-                profile.id,
-                await modelsForAccount(profile).catch(() => []),
-              ]),
-            ),
-          )
+        ? await modelsByAccount(profiles)
         : undefined;
       res.writeHead(200, corsJsonHeaders(req));
       res.end(

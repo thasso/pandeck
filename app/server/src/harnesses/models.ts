@@ -26,7 +26,7 @@ import {
   refreshClaudeAccountModels,
   subscribeClaudeAccountModelsChanged,
 } from "./claudeAccountModels.ts";
-import { curatedModelOption } from "./curatedModels.ts";
+import { claudeModelAlias, curatedModelOption } from "./curatedModels.ts";
 import {
   findModel,
   findModelForProfile,
@@ -129,6 +129,25 @@ export async function modelsForAccount(account: {
   return claudeModelsFor(getSettings(), account.id);
 }
 
+/**
+ * Each account's models, for the account projection
+ * (`GET /api/credential-profiles?includeModels=1`). An account whose models
+ * cannot be read offers none. A Claude account not yet known waits (bounded)
+ * for its first listing, whose success pushes `models` to every client.
+ */
+export async function modelsByAccount(
+  profiles: readonly { id: string; provider: CredentialProfileProvider }[],
+): Promise<Record<string, ModelOption[]>> {
+  return Object.fromEntries(
+    await Promise.all(
+      profiles.map(async (profile) => [
+        profile.id,
+        await modelsForAccount(profile).catch(() => []),
+      ]),
+    ),
+  );
+}
+
 /** Whether the account offers this exact model; never a fallback. */
 export async function accountOffersModel(
   profileId: string,
@@ -146,10 +165,13 @@ export async function accountOffersModel(
 
 /**
  * Whether the account is KNOWN not to be entitled to the model: its Claude
- * listing lacks the model's concrete id. Unknown accounts, other providers and
- * models outside the curated list are never lacking, so this only ever
- * removes what a real listing proves absent. Routing and every pinned start
- * refuse such an account (`docs/account-routing.md`).
+ * listing lacks the concrete id of the curated model the run would execute.
+ * Claude normalizes every id it accepts (`claudeModelAlias`): another spelling
+ * or an older concrete id runs that curated model, and an unknown id runs the
+ * default, so that is the model judged. Unknown accounts and other providers
+ * are never lacking, so this only ever removes what a real listing proves
+ * absent. Routing and every pinned start refuse such an account
+ * (`docs/account-routing.md`).
  */
 export async function accountLacksModel(
   profileId: string,
@@ -157,9 +179,8 @@ export async function accountLacksModel(
   modelId: string,
 ): Promise<boolean> {
   if (harnessForModelProvider(provider) !== "claude-sdk") return false;
-  const model = CLAUDE_SDK_MODELS.find(
-    (entry) => entry.id === modelId || entry.sdkModelId === modelId,
-  );
+  const alias = claudeModelAlias(modelId);
+  const model = CLAUDE_SDK_MODELS.find((entry) => entry.id === alias);
   if (!model) return false;
   await ensureClaudeAccountModels(profileId);
   const listed = claudeAccountModelIds(profileId);

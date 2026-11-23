@@ -523,6 +523,21 @@ test("a Claude processor pinned to an account whose listing lacks its model is n
     assert.equal(lacking.configured, false);
     assert.match(lacking.message ?? "", /Private can't run Claude Haiku\./);
 
+    // An older concrete id runs the same unlisted model; another id the
+    // account does list stays configured, as before, whatever its spelling.
+    const withModel = (modelId: string) =>
+      updateSettings({
+        memory: {
+          ...getSettings().memory,
+          processor: { ...getSettings().memory.processor, modelId },
+        },
+      });
+    withModel("claude-haiku-4-5");
+    assert.equal((await proc.processorConfigStatus()).configured, false);
+    withModel("OPUS");
+    assert.deepEqual(await proc.processorConfigStatus(), { configured: true });
+    withModel("haiku");
+
     // No listing known: configured, as before.
     resetClaudeAccountModelsForTests({ read: async () => undefined });
     assert.deepEqual(await proc.processorConfigStatus(), { configured: true });

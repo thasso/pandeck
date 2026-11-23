@@ -229,6 +229,12 @@ test("a pin whose account's known listing lacks the model refuses and never spen
     });
     await assert.rejects(accountForSlot(slot), ModelUnavailableOnAccountError);
     assert.equal(vi.mocked(pickAccount).mock.calls.length, 0);
+    // An older concrete id or another spelling runs the same unlisted model.
+    for (const modelId of ["claude-haiku-4-5", "HAIKU"])
+      await assert.rejects(
+        resolveSlotAccount({ ...slot, modelId }),
+        ModelUnavailableOnAccountError,
+      );
     // The listed model on the same pin still runs there.
     assert.deepEqual(await resolveSlotAccount({ ...slot, modelId: "opus" }), {
       profileId: pinned.id,

@@ -263,7 +263,7 @@ test("a Claude account offers the curated models its listing names; unknown keep
   assert.equal(
     await accountLacksModel("c2", "claude-sdk", "not-curated"),
     false,
-    "only a curated model can be proven absent",
+    "an unknown id runs as Sonnet, which c2 lists",
   );
   assert.equal(
     await accountLacksModel("o1", "github-copilot", "gpt-test"),
@@ -276,6 +276,43 @@ test("a Claude account offers the curated models its listing names; unknown keep
     await modelsForAccount({ id: "c1", provider: "claude" }),
     [],
   );
+});
+
+test("entitlement judges the model a Claude run executes: case, older concrete ids and unknown input", async () => {
+  // Claude normalizes any accepted id to a curated alias at execution
+  // (`claudeSdkModelAlias`): another spelling or an older concrete id of a
+  // model runs that model, and an unknown id runs Sonnet.
+  await listings({ c2: NO_HAIKU, c4: ["claude-opus-5-5"] });
+  for (const modelId of [
+    "HAIKU",
+    "Haiku",
+    "claude-haiku-4-5",
+    "claude-3-5-haiku-20241022",
+    "CLAUDE-HAIKU-5-5",
+  ]) {
+    assert.equal(
+      await accountLacksModel("c2", "claude-sdk", modelId),
+      true,
+      `${modelId} runs Claude Haiku, which c2 does not list`,
+    );
+    assert.equal(
+      await accountLacksModel("c3", "claude-sdk", modelId),
+      false,
+      `${modelId} on an unknown account`,
+    );
+  }
+  assert.equal(await accountLacksModel("c2", "claude-sdk", "OPUS"), false);
+  assert.equal(
+    await accountLacksModel("c2", "claude-sdk", "claude-opus-4-1"),
+    false,
+  );
+  for (const modelId of ["not-curated", "gpt-x", "sonnet", "claude-sonnet-4"])
+    assert.equal(
+      await accountLacksModel("c4", "claude-sdk", modelId),
+      true,
+      `${modelId} runs Claude Sonnet, which c4 does not list`,
+    );
+  assert.equal(await accountLacksModel("c4", "claude-sdk", "opus"), false);
 });
 
 test("the port waits (bounded) for an account's first listing", async () => {

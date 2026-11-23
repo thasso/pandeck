@@ -314,15 +314,24 @@ const CLAUDE_MODELS_REFRESH_INTERVAL_MS = 60 * 60_000;
 /**
  * Read every enabled Claude account now and then hourly, re-read one at once
  * when its credential changes (login, relogin, enable), and drop a deleted
- * one's snapshot. Unref'd: it never keeps the process alive.
+ * one's snapshot. Unref'd: it never keeps the process alive. Returns the stop,
+ * which ends the timer and both subscriptions.
  */
-export function startClaudeAccountModelRefresh(): void {
+export function startClaudeAccountModelRefresh(): () => void {
   void cache.refresh({ force: false });
-  setInterval(() => {
+  const timer = setInterval(() => {
     void cache.refresh({ force: false });
-  }, CLAUDE_MODELS_REFRESH_INTERVAL_MS).unref();
-  subscribeCredentialProfileChanges((id) => {
+  }, CLAUDE_MODELS_REFRESH_INTERVAL_MS);
+  timer.unref?.();
+  const unsubscribeChanges = subscribeCredentialProfileChanges((id) => {
     if (readableClaudeProfile(id)) cache.credentialChanged(id);
   });
-  subscribeCredentialProfileDeleted((id) => cache.forget(id));
+  const unsubscribeDeleted = subscribeCredentialProfileDeleted((id) =>
+    cache.forget(id),
+  );
+  return () => {
+    clearInterval(timer);
+    unsubscribeChanges();
+    unsubscribeDeleted();
+  };
 }

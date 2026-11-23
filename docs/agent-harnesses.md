@@ -219,16 +219,19 @@ Four layers, each depending only on the ones below it:
      account's first read, and after a failure or a stalled read it waits again
      only after 60 seconds. Every read carries a generation, so a read started
      before a login or deletion never publishes over a later one.
-     `accountLacksModel` is true only for a curated model a known listing omits.
-     `pickerModels` offers the union over enabled Claude accounts (curated when
-     none is enabled). The Claude-only curated options sit in
-     `harnesses/curatedModels.ts`, which loads no engine SDK, so row projections
-     and the Claude adapter stay cheap: an option by id, the alias a model id
-     runs as (`claudeModelAlias`) and the curated ids. The usage port
-     (`harnesses/usage.ts`) reads subscription usage per account kind and
-     redeems OpenAI reset credits. It also resolves run-usage attribution,
-     including the protected default used to reopen a legacy unbound session on
-     an install that still has one.
+     `accountLacksModel` is true only when a known listing omits the curated
+     model the run executes: Claude normalizes every id it accepts
+     (`claudeModelAlias`), so another spelling or an older concrete id is judged
+     as its curated model and an unknown id as the default. The account
+     projection's models come from `modelsByAccount`. `pickerModels` offers the
+     union over enabled Claude accounts (curated when none is enabled). The
+     Claude-only curated options sit in `harnesses/curatedModels.ts`, which
+     loads no engine SDK, so row projections and the Claude adapter stay cheap:
+     an option by id, the alias a model id runs as (`claudeModelAlias`) and the
+     curated ids. The usage port (`harnesses/usage.ts`) reads subscription usage
+     per account kind and redeems OpenAI reset credits. It also resolves
+     run-usage attribution, including the protected default used to reopen a
+     legacy unbound session on an install that still has one.
    - `harnesses/boot.ts` is what the server's composition root (`index.ts`)
      starts in the engines: pi's tool binaries, its model provider sync, each
      account's model runtime, the OpenAI account login, and the one-time import

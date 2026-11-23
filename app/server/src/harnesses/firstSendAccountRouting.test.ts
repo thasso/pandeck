@@ -200,6 +200,39 @@ test("an explicit Claude pin whose listing lacks the model refuses without a ses
   }
 });
 
+test("another spelling or an older id of an unlisted model refuses the same way, at admission and at prepare", async () => {
+  const { privateId, teamId } = entitlementFixture();
+  try {
+    const engine = firstSendEngine("claude-sdk");
+    for (const modelId of ["HAIKU", "claude-haiku-4-5"]) {
+      const send = { ...entitledSend, modelId };
+      const admission = await engine.account({
+        ...send,
+        credentialProfileId: privateId,
+      });
+      assert.ok("refusal" in admission, `${modelId} pinned to Private`);
+      assert.equal(
+        admission.refusal.message,
+        "Private can't run Claude Haiku.",
+      );
+      const prepared = await engine.prepare(send, privateId);
+      assert.ok(
+        "refusal" in prepared && !("create" in prepared),
+        `${modelId} creates no session on Private`,
+      );
+      assert.deepEqual(
+        await engine.account({ ...send, credentialProfileId: teamId }),
+        { profileId: teamId },
+      );
+    }
+    assert.equal(vi.mocked(pickAccount).mock.calls.length, 0);
+  } finally {
+    setCredentialProfileEnabled(privateId, false);
+    setCredentialProfileEnabled(teamId, false);
+    resetClaudeAccountModelsForTests();
+  }
+});
+
 test("an inherited pin on an account lacking the model falls through to Automatic", async () => {
   const { privateId, teamId } = entitlementFixture();
   vi.mocked(pickAccount).mockResolvedValue({ profileId: teamId });
