@@ -832,6 +832,32 @@ test("github.token: a token that expires while the proof's listing is held is dr
   noSecretsIn(lines);
 });
 
+// F006: a refresh refused while a call is in flight voids that call.
+test("github.token: a refresh refused during a held user check answers unavailable, caches nothing; the next call is rejected", async () => {
+  let clock = Date.now();
+  github.expiresInS = 600;
+  const { v, lines } = await tokenVault({ now: () => clock });
+  const held = github.hold("repo");
+  const asking = v.githubToken("u1", REPO);
+  await held.arrived;
+  // Under the five-minute margin: the next read refreshes, and GitHub refuses.
+  clock += 6 * 60_000;
+  github.script.token = githubJson(200, { error: "bad_refresh_token" });
+  assert.deepEqual(await v.integrationGet("u1", "github"), {
+    ok: false,
+    rejected: true,
+  });
+  held.release();
+  assert.deepEqual(await asking, UNAVAILABLE);
+  assert.equal(count("mint"), 0);
+  assert.deepEqual(await v.githubToken("u1", REPO), {
+    ok: false,
+    rejected: true,
+  });
+  assert.equal(count("mint"), 0, "nothing minted, nothing cached");
+  noSecretsIn(lines);
+});
+
 test("github.token: after an identity switch the cached token is not handed to the new identity", async () => {
   const { v } = await tokenVault();
   assert.equal((await v.githubToken("u1", REPO)).ok, true);
