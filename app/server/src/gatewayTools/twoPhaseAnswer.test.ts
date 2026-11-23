@@ -8,6 +8,7 @@ import { describe, expect, test } from "vitest";
 import type { ConfluencePageMutationItemDisplay } from "@assistant/shared/confluenceMutation";
 import type { JiraIssueMutationItemDisplay } from "@assistant/shared/jiraMutation";
 import { checkConfluenceResult } from "../confluenceMutationResult.ts";
+import { decodeApplyAnswer } from "../gateway/clientMethods.ts";
 import { jsonBytes } from "../mutationCheckRules.ts";
 import {
   checkJiraResult,
@@ -332,6 +333,65 @@ describe("the apply answer as sent", () => {
     );
     expect(small).not.toHaveProperty("trimmed");
   });
+});
+
+describe("F006: an answer within RESULT_MAX_BYTES is never shrunk", () => {
+  /**
+   * The success answer, or the failure projection (item 1 throws), whose
+   * first record's text makes it `bytes` long; `stages` counts the shrink
+   * stages run, each of which cuts nothing.
+   */
+  async function sized(bytes: number, failure: boolean) {
+    let stages = 0;
+    const run = async (pad: number) => {
+      const ledger = createWriteLedger();
+      const product = fakeProduct({
+        text: (index) => (index === 0 ? "x".repeat(pad) : ""),
+        shrink: (_records, fits) => {
+          if (fits()) return false;
+          stages += 1;
+          return true;
+        },
+        ...(failure ? { throwAt: 1 } : {}),
+      });
+      if (!failure) return runApply({ ...context(), ledger }, product, THREE);
+      await expect(
+        runApply({ ...context(), ledger }, product, THREE),
+      ).rejects.toThrow("unexpected");
+      return ledger.failed({ ok: false, code: "timeout", message: "late" });
+    };
+    const base = jsonBytes(await run(0))!;
+    stages = 0;
+    const answer = await run(bytes - base);
+    return { answer, stages };
+  }
+
+  for (const failure of [false, true])
+    test(`${failure ? "the failure projection" : "a success"}: at the cap minus one and at the cap, as is through the client decoder; one over, trimmed then guarded`, async () => {
+      for (const bytes of [RESULT_MAX_BYTES - 1, RESULT_MAX_BYTES]) {
+        const { answer, stages } = await sized(bytes, failure);
+        expect(jsonBytes(answer)).toBe(bytes);
+        expect(stages).toBe(0);
+        expect(answer).not.toHaveProperty("trimmed");
+        expect(answer).toMatchObject(
+          failure ? { ok: false, code: "timeout" } : { ok: true },
+        );
+        expect(applyAnswerWithinCap(answer, () => {})).toBe(answer);
+        expect(decodeApplyAnswer({ json: answer })).toEqual(answer);
+      }
+      const { answer, stages } = await sized(RESULT_MAX_BYTES + 1, failure);
+      expect(stages).toBe(1);
+      expect(answer).toMatchObject({ trimmed: true });
+      expect(applyAnswerWithinCap(answer, () => {})).toEqual({
+        ok: false,
+        code: "failed",
+        message: RESULT_TOO_LARGE,
+        effects: "possible",
+        itemEffects: failure
+          ? ["possible", "possible", "none"]
+          : ["possible", "none", "possible"],
+      });
+    });
 });
 
 /** A success answer whose serialized form is exactly `bytes` long. */

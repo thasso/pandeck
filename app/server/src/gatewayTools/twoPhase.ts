@@ -248,7 +248,10 @@ export interface ApplyProduct<
   /** A fresh vetting for this call (`mutationResultVetting.ts`). */
   vetting(credential: AtlassianCredential): ResultVetting;
   record(applied: Item, sent: Item, vet: ResultVetting, effects: Effects): Rec;
-  /** The shrink stages, each only while `fits` is false; answers `trimmed`. */
+  /**
+   * The shrink stages, each only while `fits` is false, a false `fits`
+   * always followed by a stage; answers `trimmed`.
+   */
   shrink(records: Rec[], fits: () => boolean, vet: ResultVetting): boolean;
   /**
    * A record with every text fixed and no identifier or link: its effects,
@@ -400,9 +403,16 @@ function answered<Config, Item extends AppliedItem, Rec extends ApplyRecord>(
       ? { ...failure, effects, itemEffects, ...kept }
       : { ok: true, effects, ...kept };
   };
-  // Measured with `trimmed`, as the answer would leave once a stage ran.
-  const fits = () =>
-    (jsonBytes(answerOf(records, true)) ?? Infinity) <= RESULT_MAX_BYTES;
+  // The answer as it would leave (fix-final-1 F006): without `trimmed` until
+  // `fits` says no, after which the product runs a stage and it says
+  // `trimmed`. An answer within the cap is never shrunk.
+  let staged = false;
+  const fits = () => {
+    const within =
+      (jsonBytes(answerOf(records, staged)) ?? Infinity) <= RESULT_MAX_BYTES;
+    if (!within) staged = true;
+    return within;
+  };
   const trimmed = product.shrink(records, fits, vet);
   const outcomes = () => answerOf(records.map(product.outcomeOf), true);
   try {

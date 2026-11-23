@@ -443,6 +443,22 @@ describe("tools.prepare", () => {
     assertClean(answer, credential);
   });
 
+  test("F005: a permitted opaque array of 150,000 entries, and one near 1 MiB, answers ok", async () => {
+    for (const length of [150_000, 450_000]) {
+      const values = Array.from({ length }, () => 0);
+      stubJiraFetch((request) => fakeJiraAnswer(request));
+      const answer = await host().host.prepare(
+        JIRA,
+        { items: [{ issue: "STAR-1", fields: { customfield_10004: values } }] },
+        client().caller,
+      );
+      const { items } = proposalOf(answer);
+      expect(items).toHaveLength(1);
+      expect(JSON.stringify(items)).toContain(JSON.stringify(values));
+      vi.unstubAllGlobals();
+    }
+  });
+
   test("a prepare read that hangs ends at PREPARE_DEADLINE_MS; a cancel ends it as cancelled", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     stubJiraFetch((request) => pendingUntilAbort(request));
