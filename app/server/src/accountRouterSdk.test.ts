@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, test, vi } from "vitest";
@@ -10,6 +16,7 @@ const tmp = mkdtempSync(join(tmpdir(), "account-router-sdk-"));
 process.env.ASSISTANT_CWD = tmp;
 process.env.DATA_DIR = join(tmp, "data");
 const {
+  claudeConfigDir,
   createCredentialProfile,
   piAgentDir,
   patchCredentialProfile,
@@ -29,6 +36,8 @@ const { SessionRuntime } = await import("./session/runtime/runtime.ts");
 const { SessionLogStore } = await import("./session/log/store.ts");
 const { promptRuntimeSessionWithRuntime, beginRuntimeProviderTurn } =
   await import("./session/runtimePrompt.ts");
+const { resetClaudeAccountModelsForTests } =
+  await import("./harnesses/claudeAccountModels.ts");
 await import("./hub.ts");
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
@@ -395,3 +404,75 @@ test.each(["build", "plan"] as const)(
     }
   },
 );
+
+test("real snapshots: an entitled account needing login beats an unentitled healthy one; all lacking is model-unavailable", async () => {
+  const entitled = createCredentialProfile({
+    name: "Entitled Claude",
+    provider: "claude",
+  });
+  const unentitled = createCredentialProfile({
+    name: "Unentitled Claude",
+    provider: "claude",
+  });
+  // A fake credential file: only its presence makes the account healthy.
+  mkdirSync(claudeConfigDir(unentitled.id), { recursive: true });
+  writeFileSync(
+    join(claudeConfigDir(unentitled.id), ".credentials.json"),
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken: "fake-access",
+        refreshToken: "fake-refresh",
+        expiresAt: Date.now() + 3_600_000,
+      },
+    }),
+  );
+  const all = [
+    "claude-opus-5-5",
+    "claude-sonnet-5-5",
+    "claude-haiku-5-5",
+    "claude-fable-5-1",
+  ];
+  const noHaiku = all.filter((id) => id !== "claude-haiku-5-5");
+  let entitledId: string | undefined = entitled.id;
+  resetClaudeAccountModelsForTests({
+    read: async (id) => (id === entitledId ? all : noHaiku),
+  });
+  const haiku = { model: { provider: "claude-sdk", modelId: "haiku" } };
+  try {
+    assert.ok(
+      !(await modelsForAccount(unentitled)).some((m) => m.id === "haiku"),
+    );
+    assert.deepEqual(await pickAccount(haiku), {
+      profileId: entitled.id,
+      degraded: "no-eligible-account",
+    });
+    // Opus is listed everywhere, so the healthy account wins it as before
+    // (without the hard filter it would have won haiku too: needing login
+    // ranks last in the degraded pool).
+    assert.equal(
+      (
+        await pickAccount({
+          model: { provider: "claude-sdk", modelId: "opus" },
+        })
+      ).profileId,
+      unentitled.id,
+    );
+
+    entitledId = undefined;
+    resetClaudeAccountModelsForTests({
+      read: async (id) => (id === entitledId ? all : noHaiku),
+    });
+    assert.deepEqual(await pickAccount(haiku), {
+      profileId: null,
+      degraded: "model-unavailable",
+    });
+    assert.deepEqual(
+      await pickAccount({ ...haiku, allowDisabledDefault: true }),
+      { profileId: null, degraded: "model-unavailable" },
+    );
+  } finally {
+    setCredentialProfileEnabled(entitled.id, false);
+    setCredentialProfileEnabled(unentitled.id, false);
+    resetClaudeAccountModelsForTests();
+  }
+});

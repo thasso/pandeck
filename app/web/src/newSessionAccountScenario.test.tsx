@@ -1132,6 +1132,37 @@ describe("new-session account choice", () => {
     );
     expect(container!.textContent).not.toContain("Needs login");
   });
+  it("a models push refetches the projection once, and the picker follows each account's models", async () => {
+    // The server pushes `models` when an account's Claude listing changes,
+    // even when the picker's union does not; the per-account lists live only
+    // in the projection.
+    const modelsByProfile: Record<string, ModelOption[]> = {
+      [PERSONAL.id]: [sonnet],
+      [WORK.id]: [sonnet],
+    };
+    const socket = await openNewSession([PERSONAL, WORK], () => PERSONAL.id, {
+      modelsByProfile,
+    });
+    expect(accountCard("Work Enterprise")).toBeTruthy();
+    const projectionReads = () =>
+      vi
+        .mocked(fetch)
+        .mock.calls.filter(([url]) =>
+          String(url).endsWith("/api/credential-profiles?includeModels=1"),
+        ).length;
+    const before = projectionReads();
+
+    modelsByProfile[WORK.id] = [];
+    await act(async () => socket.receive({ type: "models", models: [sonnet] }));
+    await settle();
+    expect(projectionReads()).toBe(before + 1);
+    expect(accountCard("Work Enterprise")).toBeUndefined();
+    expect(accountCard("Personal Max")).toBeTruthy();
+
+    // Nothing further follows on its own: the refetch pushes nothing back.
+    await settle();
+    expect(projectionReads()).toBe(before + 1);
+  });
   it("starts on Automatic and leaves the account to the server", async () => {
     const socket = await openNewSession([PERSONAL, WORK]);
 

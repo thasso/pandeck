@@ -77,7 +77,7 @@ import {
   redeemOpenAiResetCredit,
   usageProfileForSession,
 } from "./harnesses/usage.ts";
-import { modelsForAccount } from "./harnesses/models.ts";
+import { modelsByAccount } from "./harnesses/models.ts";
 import { pickAccount } from "./accountRouter.ts";
 import { startClaudeCredentialStatusChecks } from "./claudeCredentialStatus.ts";
 import {
@@ -112,6 +112,7 @@ import {
 } from "./credentialProfileUsage.ts";
 import {
   modelRuntimeForProfile,
+  startClaudeAccountModelRefresh,
   startModelCatalogRefresh,
   warmCredentialProfileModelRuntimes,
   linkPiToolBinaries,
@@ -925,14 +926,7 @@ async function handleRequest(
       const includeModels =
         requestUrl.searchParams.get("includeModels") === "1";
       const modelsByProfile = includeModels
-        ? Object.fromEntries(
-            await Promise.all(
-              profiles.map(async (profile) => [
-                profile.id,
-                await modelsForAccount(profile).catch(() => []),
-              ]),
-            ),
-          )
+        ? await modelsByAccount(profiles)
         : undefined;
       res.writeHead(200, corsJsonHeaders(req));
       res.end(
@@ -2112,6 +2106,10 @@ server.listen(PORT, HOST, () => {
   // the warm-up's runtimes, then hourly; pi's four-hour window gates the
   // network.
   startModelCatalogRefresh();
+  // Each enabled Claude account's model listing through the gateway: now,
+  // hourly, and again when its login changes. Without a gateway nothing is
+  // read and every account offers the curated list.
+  startClaudeAccountModelRefresh();
   // Turns runtime events into the Sessions inbox's run-start / failure /
   // settlement-reactivation facts for every harness at once.
   installSessionActivityTracking();

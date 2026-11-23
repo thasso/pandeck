@@ -18,6 +18,7 @@ const offers = vi.hoisted(
   () => new Map<string, { provider: string; id: string }>(),
 );
 vi.mock("./harnesses/models.ts", () => ({
+  accountLacksModel: async () => false,
   modelsForAccount: async ({ id }: { id: string }) =>
     offers.has(id)
       ? [{ ...offers.get(id), name: "Test model", reasoning: false }]

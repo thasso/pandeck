@@ -7914,6 +7914,11 @@ export function useAssistant({
           window.dispatchEvent(new Event("credentialProfilesChanged"));
         }
       }
+      // What one account offers can change without its profile changing (a
+      // Claude account's model listing), so every `models` push re-reads the
+      // per-account projection. A refetch of known listings pushes nothing.
+      if (msg.type === "models")
+        window.dispatchEvent(new Event("credentialProfilesChanged"));
       if (msg.type === "accountHealthChanged") {
         window.dispatchEvent(new Event("credentialProfilesChanged"));
         window.dispatchEvent(new Event("accountHealthChanged"));

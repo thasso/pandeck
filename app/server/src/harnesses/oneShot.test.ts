@@ -31,6 +31,7 @@ import {
   type GatewayLink,
 } from "../gatewayLink.ts";
 import { refusalText } from "../gateway/refusals.ts";
+import { resetClaudeAccountModelsForTests } from "./claudeAccountModels.ts";
 import { isLoginDeath } from "../providerErrors.ts";
 import {
   NoHelperModelError,
@@ -288,6 +289,48 @@ test("a Claude model runs on the Claude engine with its usage normalized", async
   assert.equal(call?.credentialProfileId, "profile-1");
   assert.equal(call?.maxTurns, 4);
   assert.equal(vi.mocked(runPiOneShot).mock.calls.length, 0);
+});
+
+test("a pinned Claude one-shot on an account whose listing lacks the model never reaches the SDK or another account", async () => {
+  const actual = await vi.importActual<
+    typeof import("../settingsModelSlots.ts")
+  >("../settingsModelSlots.ts");
+  vi.mocked(resolveSlotAccount).mockImplementation(actual.resolveSlotAccount);
+  vi.mocked(credentialProfileById).mockReturnValue({
+    id: "profile-1",
+    name: "Private",
+    provider: "claude",
+    enabled: true,
+    enterprise: false,
+  } as never);
+  vi.mocked(runClaudeSdkOneShot).mockResolvedValue({ text: "ok", usage: {} });
+  const haiku = request({
+    model: { provider: "claude-sdk", modelId: "haiku" },
+  });
+  try {
+    resetClaudeAccountModelsForTests({
+      read: async () => ["claude-opus-5-5", "claude-sonnet-5-5"],
+    });
+    await assert.rejects(runOneShot(haiku), (err: Error) => {
+      assert.equal(err.name, "ModelUnavailableOnAccountError");
+      assert.equal(err.message, "Private can't run Claude Haiku.");
+      return true;
+    });
+    assert.equal(vi.mocked(runClaudeSdkOneShot).mock.calls.length, 0);
+    assert.equal(vi.mocked(pickAccount).mock.calls.length, 0);
+    assert.equal(vi.mocked(reportAccountRunFailure).mock.calls.length, 0);
+
+    // The same pin on an account with no known listing runs as today.
+    resetClaudeAccountModelsForTests({ read: async () => undefined });
+    assert.equal((await runOneShot(haiku)).text, "ok");
+    assert.equal(vi.mocked(runClaudeSdkOneShot).mock.calls.length, 1);
+    assert.equal(
+      vi.mocked(runClaudeSdkOneShot).mock.calls[0]?.[0].credentialProfileId,
+      "profile-1",
+    );
+  } finally {
+    resetClaudeAccountModelsForTests();
+  }
 });
 
 test("any other model runs on pi through the helper fallback", async () => {

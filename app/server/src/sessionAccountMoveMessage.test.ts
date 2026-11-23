@@ -4,7 +4,7 @@
  * once, with the refusal as its error.
  */
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, test, vi } from "vitest";
 import type { ServerMessage } from "@assistant/shared";
@@ -12,13 +12,26 @@ import type { ServerMessage } from "@assistant/shared";
 const offers = vi.hoisted(
   () => new Map<string, { provider: string; id: string }>(),
 );
-vi.mock("./harnesses/models.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./harnesses/models.ts")>()),
-  modelsForAccount: async ({ id }: { id: string }) =>
-    offers.has(id)
-      ? [{ ...offers.get(id), name: "Test model", reasoning: false }]
-      : [],
-}));
+vi.mock("./harnesses/models.ts", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("./harnesses/models.ts")>();
+  return {
+    ...original,
+    // Claude accounts answer from the real port and its listing snapshots.
+    modelsForAccount: async (account: { id: string; provider: string }) =>
+      account.provider === "claude"
+        ? original.modelsForAccount(account as never)
+        : offers.has(account.id)
+          ? [
+              {
+                ...offers.get(account.id),
+                name: "Test model",
+                reasoning: false,
+              },
+            ]
+          : [],
+  };
+});
 
 const { Connection } = await import("./connection.ts");
 const profiles = await import("./credentialProfiles.ts");
@@ -27,6 +40,9 @@ const { validateClientMessage } = await import("./validateClientMessage.ts");
 const { sessionRuntime } = await import("./session/runtimeInstance.ts");
 const { FakeRuntimeDriver } = await import("./test/fakeRuntimeDriver.ts");
 const { setAccountMoveHostForTests } = await import("./sessionAccountMove.ts");
+const { resetClaudeAccountModelsForTests } =
+  await import("./harnesses/claudeAccountModels.ts");
+const { getSettings, updateSettings } = await import("./settings.ts");
 
 const sessions: string[] = [];
 const accounts: string[] = [];
@@ -206,6 +222,97 @@ test("answers a refusal as the move's error, binding unchanged", async () => {
     assert.equal(answers(sent, "error").length, 0);
   } finally {
     connection.dispose();
+  }
+});
+
+test("a Claude account whose listing lacks the session's model is no target and refuses the move", async () => {
+  const claudeAccount = (name: string): string => {
+    const p = profiles.createCredentialProfile({ name, provider: "claude" });
+    // A fake credential file: only its presence keeps the login healthy.
+    mkdirSync(profiles.claudeConfigDir(p.id), { recursive: true });
+    writeFileSync(
+      join(profiles.claudeConfigDir(p.id), ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "fake-access",
+          refreshToken: "fake-refresh",
+          expiresAt: Date.now() + 86400_000,
+        },
+      }),
+    );
+    accounts.push(p.id);
+    return p.id;
+  };
+  const before = getSettings().claudeSdk;
+  updateSettings({ claudeSdk: { ...before, enabled: true } });
+  const from = claudeAccount("Claude From");
+  const team = claudeAccount("Claude Team");
+  const lacking = claudeAccount("Claude Private");
+  resetClaudeAccountModelsForTests({
+    read: async (id) =>
+      id === lacking
+        ? ["claude-opus-5-5", "claude-sonnet-5-5"]
+        : ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"],
+  });
+  const id = `account-move-message-${sequence++}`;
+  sessionStore.upsert({
+    id,
+    harness: "claude-sdk",
+    agentType: "assistant",
+    credentialProfileId: from,
+  });
+  sessions.push(id);
+  const driver = new FakeRuntimeDriver(id) as InstanceType<
+    typeof FakeRuntimeDriver
+  > & {
+    modelSelection(): {
+      model: { provider: string; id: string };
+      thinkingLevel: "high";
+    };
+    switchAccount(profileId: string, admit: () => void): Promise<void>;
+  };
+  driver.modelSelection = () => ({
+    model: { provider: "claude-sdk", id: "haiku" },
+    thinkingLevel: "high",
+  });
+  driver.switchAccount = async (next, admit) => {
+    admit();
+    sessionStore.switchCredentialProfile(id, from, next);
+  };
+  setAccountMoveHostForTests({
+    runtime: sessionRuntime,
+    resident: async () => driver,
+    acquire: async () => driver,
+    publishRows: async () => {},
+  });
+  const { sent, connection } = connect();
+  try {
+    await connection.handle({
+      type: "listSessionAccountMoveTargets",
+      sessionId: id,
+      requestId: "claude-list",
+    });
+    const listed = answers(sent, "sessionAccountMoveTargets").at(-1)?.accounts;
+    assert.ok(listed?.some((target) => target.id === team));
+    assert.ok(!listed?.some((target) => target.id === lacking));
+
+    await connection.handle({
+      type: "moveSessionAccount",
+      sessionId: id,
+      credentialProfileId: lacking,
+      requestId: "claude-move",
+    });
+    assert.deepEqual(answers(sent, "sessionAccountMoveAnswer").at(-1), {
+      type: "sessionAccountMoveAnswer",
+      requestId: "claude-move",
+      sessionId: id,
+      error: "Claude Private does not offer haiku at this session's effort.",
+    });
+    assert.equal(sessionStore.get(id)?.credentialProfileId, from);
+  } finally {
+    connection.dispose();
+    resetClaudeAccountModelsForTests();
+    updateSettings({ claudeSdk: before });
   }
 });
 

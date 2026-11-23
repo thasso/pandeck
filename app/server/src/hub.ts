@@ -16,7 +16,7 @@ import {
   type PostReloadContinuation,
 } from "./mcp/toolGroups/registry.ts";
 import { harnessRegistry } from "./harnesses/registry.ts";
-import { subscribePiPickerModelsChanged } from "./harnesses/models.ts";
+import { subscribePickerModelsChanged } from "./harnesses/models.ts";
 import { mergedSessionList } from "./harnesses/sessionList.ts";
 import { setWorktreeBroadcaster } from "./worktrees/worktreeEvents.ts";
 import {
@@ -268,8 +268,10 @@ class SessionHub {
     };
     subscribeCredentialProfileChanges(compatibleModelsChanged);
     subscribeCredentialProfileDeleted(compatibleModelsChanged);
-    // So does a catalog the periodic refresh brought in.
-    subscribePiPickerModelsChanged(pushModels);
+    // So does a catalog the periodic refresh brought in, a Claude account's
+    // listing, or a Claude account enabled, disabled or deleted. Clients treat
+    // every `models` push as an invalidation of the per-account projection.
+    subscribePickerModelsChanged(pushModels);
     subscribeHarnessOpened((sessionId) => this.sessionHarnessOpened(sessionId));
   }
 

@@ -328,6 +328,11 @@ export function automaticPreviewHint(
         text: `No enabled enterprise ${provider} account.`,
         warning: true,
       };
+    case "model-unavailable":
+      return {
+        text: `No ${provider} account can run this model.`,
+        warning: true,
+      };
   }
   return undefined;
 }

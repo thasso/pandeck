@@ -63,8 +63,12 @@ const UPSTREAMS: readonly Upstream[] = [
       { method: "POST", pathname: "/v1/messages" },
       { method: "POST", pathname: "/v1/messages/count_tokens" },
     ],
-    // The server's Claude usage read (G4b); never refreshed.
-    serverAllowed: [{ method: "GET", pathname: "/api/oauth/usage" }],
+    // The server's Claude usage read (G4b) and the account's model listing
+    // (the entitlement snapshot, query forwarded verbatim); never refreshed.
+    serverAllowed: [
+      { method: "GET", pathname: "/api/oauth/usage" },
+      { method: "GET", pathname: "/v1/models" },
+    ],
     machinePaths: "open",
   },
   {

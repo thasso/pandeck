@@ -1177,8 +1177,9 @@ ships in phase 2, on the server's host. Its same-host form:
   sends, with no path normalisation; `/compat` allows only
   `POST <base path>/chat/completions`, under the base path the server pushed for
   the lease's account. A server lease also reaches `/anthropic`'s
-  `GET /api/oauth/usage` and `/chatgpt`'s usage routes, which no engine lease
-  does: `GET /backend-api/wham/usage`,
+  `GET /api/oauth/usage` and `GET /v1/models` (its query forwarded unchanged)
+  and `/chatgpt`'s usage routes, which no engine lease does:
+  `GET /backend-api/wham/usage`,
   `GET /backend-api/wham/rate-limit-reset-credits` and the irreversible
   `POST /backend-api/wham/rate-limit-reset-credits/consume`.
 - A lease token is JWT-shaped,
@@ -1597,8 +1598,11 @@ on its own ([deployment.md](deployment.md) "Credential gateway unit").
     marked refusal is thrown as its text, never mapped to a rejected or
     forbidden login.
   - Claude usage sends the lease to `/anthropic`'s usage route; the server reads
-    only `subscriptionType`, and only the gateway renews ("Renewal"). Compatible
-    model discovery stays direct (G5).
+    only `subscriptionType`, and only the gateway renews ("Renewal"). Claude's
+    model listing sends it to `GET /anthropic/v1/models?limit=1000`
+    (`claudeSdk/modelsViaGateway.ts`); the server reads only the listed ids.
+    With the gateway off nothing is read. Compatible model discovery stays
+    direct (G5).
 - **The server's runtimes pair the compatible key with its origin.** Every pi
   runtime `models.ts` creates for sessions is guarded per request whatever the
   switch (`serverCredentialPairing.ts`, over the same `credentialPairing.ts`

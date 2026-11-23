@@ -9,6 +9,7 @@
  * provisioned, and what its session is created with (`create.ts` knows how).
  */
 import {
+  CLAUDE_SDK_PROVIDER,
   harnessForModelProvider,
   type ClientMessage,
   type Harness,
@@ -24,6 +25,10 @@ import {
   resolveAgentSpawn,
 } from "../agents/agentSpawn.ts";
 import { resolveSessionAccount } from "../sessionAccount.ts";
+import {
+  assertAccountCanRunModel,
+  ModelUnavailableOnAccountError,
+} from "../settingsModelSlots.ts";
 import type { LiveSession } from "../harness.ts";
 import { findModelForProfile } from "../piSdk/models.ts";
 import type { SessionPromptEvidence } from "../promptConditions.ts";
@@ -377,6 +382,23 @@ const engines: Record<Harness, FirstSendEngine> = {
       const started = await firstSendAgent(req, profileId);
       if ("refusal" in started) return started;
       const { agent } = started;
+      // Like pi's check above: a model the account's known listing lacks ends
+      // the send before a worktree is provisioned. An agent's is the one it
+      // resolved to.
+      const modelId = agent?.modelId ?? req.modelId;
+      if (modelId) {
+        try {
+          await assertAccountCanRunModel(
+            profileId,
+            agent?.provider ?? req.modelProvider ?? CLAUDE_SDK_PROVIDER,
+            modelId,
+          );
+        } catch (err) {
+          if (err instanceof ModelUnavailableOnAccountError)
+            return { refusal: { message: err.message } };
+          throw err;
+        }
+      }
       const create: CreateFirstSendSession = async ({ worktree, evidence }) => {
         const frozen = await agentAtCreation(req, profileId, agent);
         if ("refusal" in frozen) return frozen;

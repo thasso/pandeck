@@ -28,9 +28,12 @@ const { getSettings, updateSettings } = await import("./settings.ts");
 const {
   accountForSlot,
   listSettingsModelSlots,
+  ModelUnavailableOnAccountError,
   pinnedSlotsForProfile,
   resolveSlotAccount,
 } = await import("./settingsModelSlots.ts");
+const { resetClaudeAccountModelsForTests } =
+  await import("./harnesses/claudeAccountModels.ts");
 const { clearProfilePins, credentialProfileUsage } =
   await import("./credentialProfileUsage.ts");
 
@@ -203,6 +206,62 @@ test("an enabled matching needs-login pin remains explicit instead of spending a
     { profileId: pinned.id },
   );
   assert.equal(vi.mocked(pickAccount).mock.calls.length, 0);
+});
+
+test("a pin whose account's known listing lacks the model refuses and never spends another account", async () => {
+  const pinned = createCredentialProfile({
+    name: "Private",
+    provider: "claude",
+  });
+  const slot = {
+    provider: CLAUDE_SDK_PROVIDER,
+    modelId: "haiku",
+    credentialProfileId: pinned.id,
+  };
+  try {
+    resetClaudeAccountModelsForTests({
+      read: async () => ["claude-opus-5-5", "claude-sonnet-5-5"],
+    });
+    await assert.rejects(resolveSlotAccount(slot), (err: Error) => {
+      assert.ok(err instanceof ModelUnavailableOnAccountError);
+      assert.equal(err.message, "Private can't run Claude Haiku.");
+      return true;
+    });
+    await assert.rejects(accountForSlot(slot), ModelUnavailableOnAccountError);
+    assert.equal(vi.mocked(pickAccount).mock.calls.length, 0);
+    // An older concrete id or another spelling runs the same unlisted model.
+    for (const modelId of ["claude-haiku-4-5", "HAIKU"])
+      await assert.rejects(
+        resolveSlotAccount({ ...slot, modelId }),
+        ModelUnavailableOnAccountError,
+      );
+    // The listed model on the same pin still runs there.
+    assert.deepEqual(await resolveSlotAccount({ ...slot, modelId: "opus" }), {
+      profileId: pinned.id,
+    });
+
+    // No listing known (no gateway): the pin is kept, as today.
+    resetClaudeAccountModelsForTests({ read: async () => undefined });
+    assert.deepEqual(await resolveSlotAccount(slot), { profileId: pinned.id });
+    assert.equal(vi.mocked(pickAccount).mock.calls.length, 0);
+  } finally {
+    resetClaudeAccountModelsForTests();
+  }
+});
+
+test("an unpinned slot whose every account lacks the model says so", async () => {
+  vi.mocked(pickAccount).mockResolvedValueOnce({
+    profileId: null,
+    degraded: "model-unavailable",
+  });
+  await assert.rejects(
+    resolveSlotAccount({ provider: CLAUDE_SDK_PROVIDER, modelId: "haiku" }),
+    (err: Error) => {
+      assert.ok(err instanceof ModelUnavailableOnAccountError);
+      assert.equal(err.message, "No Claude account can run Claude Haiku.");
+      return true;
+    },
+  );
 });
 
 test("background slots retain disabled-default degradation and refuse an empty scope", async () => {
