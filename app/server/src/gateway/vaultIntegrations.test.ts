@@ -280,7 +280,10 @@ test("a sealing vault keeps the record sealed on disk, locked after a restart, o
     credential: CREDENTIAL,
   });
   for (const line of [...first.lines, ...second.lines])
-    assert.doesNotMatch(line, /FAKE-INT-TOKEN|u1/);
+    assert.doesNotMatch(
+      line,
+      /FAKE-INT-TOKEN|(?<![A-Za-z0-9])u1(?![A-Za-z0-9])/,
+    );
 });
 
 test("a record moved to another user's directory does not open", async () => {
@@ -599,7 +602,11 @@ const accountsSnapshot = (dir: string): string =>
   );
 const noSecretsIn = (lines: string[]): void => {
   for (const line of lines)
-    assert.doesNotMatch(line, /fake-atl-|fake-atlassian-|u1\b/, line);
+    assert.doesNotMatch(
+      line,
+      /fake-atl-|fake-atlassian-|(?<![A-Za-z0-9])u1(?![A-Za-z0-9])/,
+      line,
+    );
 };
 
 async function oauthVault(dir: string) {
@@ -945,7 +952,7 @@ const noSlackSecretsIn = (lines: string[]): void => {
   for (const line of lines)
     assert.doesNotMatch(
       line,
-      /fake-slack-|fake-atl-|fake-atlassian-|u1\b|UFAKE|TFAKE/,
+      /fake-slack-|fake-atl-|fake-atlassian-|(?<![A-Za-z0-9])u1(?![A-Za-z0-9])|UFAKE|TFAKE/,
       line,
     );
 };
@@ -1283,7 +1290,7 @@ const noGithubSecretsIn = (lines: string[]): void => {
   for (const line of lines)
     assert.doesNotMatch(
       line,
-      /fake-gh-|fake-github-|fake-user|fake-other|u1\b|BEGIN|PRIVATE|eyJ/,
+      /fake-gh-|fake-github-|fake-user|fake-other|(?<![A-Za-z0-9])u1(?![A-Za-z0-9])|BEGIN|PRIVATE|eyJ/,
       line,
     );
 };

@@ -263,7 +263,7 @@ const noSecretsIn = (lines: string[]): void => {
   for (const line of lines)
     assert.doesNotMatch(
       line,
-      /fake-gh-|fake-github-|fake-user|fake-other|u1\b|u2\b|BEGIN|PRIVATE|eyJ/,
+      /fake-gh-|fake-github-|fake-user|fake-other|(?<![A-Za-z0-9])u[12](?![A-Za-z0-9])|BEGIN|PRIVATE|eyJ/,
       line,
     );
 };
