@@ -71,8 +71,22 @@ interface ApprovalRecord {
   context: Record<string, unknown>;
 }
 
+/**
+ * A card prepared for a route its executor does not declare (Task-1463 P6a,
+ * P6B-F3): it fails with this before any executor code runs.
+ */
+export const ROUTE_UNSUPPORTED =
+  "This change was prepared for a route this server version can't apply. Nothing was written; ask for it again.";
+
 /** A mutation family's server-side executor. `execute` throws on failure. */
 export interface ApprovalExecutor {
+  /**
+   * The routes it applies (a card's persisted `context.via`). A card with a
+   * `via` not listed here fails `ROUTE_UNSUPPORTED` at the start of its
+   * resolution, before `prepare` and `execute`; a card without one runs as
+   * ever. Undeclared, every routed card fails closed.
+   */
+  readonly routes?: readonly string[];
   /**
    * Settle what will actually execute, returning the body to execute. Runs —
    * and is persisted — BEFORE the card leaves `pending`, so a refusal leaves a
@@ -529,6 +543,29 @@ async function resolveApprovalExclusive(
       card: (updated ?? rec).card,
       outcomePrompt: outcomePromptFor((updated ?? rec).card),
     };
+  }
+
+  // A route this server cannot apply fails closed before any executor code:
+  // no `prepare`, no `execute`, no `release`. A grant is still checked first,
+  // so a revoked one leaves the card pending as ever.
+  const via = rec.context.via;
+  if (
+    via !== undefined &&
+    !executors.get(rec.card.kind)?.routes?.includes(via as string)
+  ) {
+    if (options.underGrant) requireGrant(rec.card);
+    const failed = patchCard(approvalId, {
+      status: "failed",
+      decision: "approved",
+      resolvedAt: Date.now(),
+      error: ROUTE_UNSUPPORTED,
+    });
+    emitChange(sessionId);
+    const card = (failed ?? rec).card;
+    const outcomePrompt = outcomePromptFor(card);
+    settled(options, card, outcomePrompt);
+    if (failed) await broadcast(sessionId, failed.card);
+    return { card, outcomePrompt };
   }
 
   // What will execute is settled — and persisted — while the card is still

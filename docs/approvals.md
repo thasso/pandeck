@@ -70,6 +70,15 @@ checks each response: an ignored edit step fails the card and names the steps
 that landed, and a create that lost labels or assignees stays executed with a
 warning, because the issue exists.
 
+A card may record the route it was prepared for in its server-only context
+(`context.via`, Task-1463). An executor lists the routes it applies in `routes`;
+at the start of a resolution, before `prepare` or `execute` runs and whether a
+click or a grant approved it, a card whose route its executor does not list
+fails with "This change was prepared for a route this server version can't
+apply. Nothing was written; ask for it again." A card without a route runs as
+before, and a rejection never consults the executor. No executor lists a route
+yet, so a routed card left behind by a reverted release fails closed.
+
 ## Proposed text
 
 A card that proposes prose (a pull-request or issue description, a comment, a
