@@ -637,6 +637,22 @@ test("connect over the link: a sealed record without the access token; access vi
     }),
     { ok: false, unavailable: true },
   );
+  // A code over 8,192 characters is refused before the vault runs it; one of
+  // 8,192 (Atlassian's grows with the scopes) reaches the exchange.
+  assert.deepEqual(
+    await remote.integrationConnect("u1", "atlassian", {
+      code: "x".repeat(8_193),
+      redirectUri: FAKE_REDIRECT,
+    }),
+    { ok: false, unavailable: true },
+  );
+  assert.deepEqual(
+    await remote.integrationConnect("u1", "atlassian", {
+      code: "x".repeat(8_192),
+      redirectUri: FAKE_REDIRECT,
+    }),
+    { ok: false, rejected: true },
+  );
   // The record cap is 16 KiB.
   assert.deepEqual(
     await remote.integrationPut(

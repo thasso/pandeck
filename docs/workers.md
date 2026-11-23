@@ -3341,7 +3341,8 @@ not offer Slack).
     follows), then needs the session (else `signed_out`), an unexpired entry
     (`expired`), the same cookie and user (`failed`), no `error` parameter
     (`access_denied` is `denied`, any other `failed`, its text never read) and a
-    printable `code` of at most 2,048 characters (`failed`). Only then does the
+    printable `code` of at most 8,192 characters (`failed`; Atlassian's grows
+    with the scopes granted, 2,581 for the 29-scope list). Only then does the
     code go, with the same redirect URI and the preset `site` if any, to the
     vault's connect (`UserOperations.connectAtlassian`, one per user at a time
     with set and clear), while the socket idles up to 40 s (above the remote
@@ -3516,9 +3517,9 @@ server's local gateway does.
   `slack` is refused, since only a connect writes a Slack record), and
   `integrations.connect` (1.1, `slack` 1.2:
   `{userId, integration, code, redirectUri, site?, team?}`, the code at most
-  2,048 characters, the redirect an `https:` URL, `site` only with `atlassian`
-  and `team` (a Slack team id) only with `slack`, anything else refused before
-  any effect; Atlassian answers `{ok, site, cloudId}` or
+  8,192 characters, the redirect at most 2,048 and an `https:` URL, `site` only
+  with `atlassian` and `team` (a Slack team id) only with `slack`, anything else
+  refused before any effect; Atlassian answers `{ok, site, cloudId}` or
   `site: missing|ambiguous`, Slack `{ok, teamId, teamName?}` or
   `team: mismatch`, both also `rejected`, `unreachable`, `notConfigured`,
   `locked`, `unavailable`; the edge decodes each integration's answer on its

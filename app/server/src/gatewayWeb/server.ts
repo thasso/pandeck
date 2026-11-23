@@ -110,8 +110,12 @@ const ATLASSIAN_CALLBACK_PATH = "/auth/atlassian/callback";
 const SLACK_COOKIE = "__Host-pgw_slack";
 const SLACK_CONNECT_PATH = "/api/integrations/slack/connect";
 const SLACK_CALLBACK_PATH = "/auth/slack/callback";
-/** Providers' authorization codes are far shorter; printable ASCII only. */
-const AUTHORIZATION_CODE = /^[\x21-\x7e]{1,2048}$/;
+/**
+ * A provider's authorization code, printable ASCII only. Atlassian's grows with
+ * the scopes granted (2,581 characters for the 29-scope list), so the bound is
+ * the vault's token bound.
+ */
+const AUTHORIZATION_CODE = /^[\x21-\x7e]{1,8192}$/;
 const MAX_CONNECTIONS = 64;
 const MAX_BODY_BYTES = 1_024;
 /** Claude's pasted code: up to 8,192 characters, JSON-quoted. */

@@ -439,6 +439,23 @@ test("the callback connects with the exact code, the public-origin redirect URI 
   assert.equal(fake.connects.length, 1);
 });
 
+test("a 29-scope grant's 2,581-character code connects, up to 8,192 characters", async () => {
+  const { port, fake } = await startUi();
+  const session = await signIn(port);
+  const codes = ["a".repeat(2_581), "b".repeat(8_192)];
+  for (const code of codes) {
+    const { state, pending } = await started(port, session);
+    assert.equal(
+      redirected(await callback(port, { code, state }, [session, pending])),
+      "/",
+    );
+  }
+  assert.deepEqual(
+    fake.connects.map(({ request }) => request),
+    codes.map((code) => ({ code, redirectUri: CALLBACK, site: PRESET_SITE })),
+  );
+});
+
 test("without a preset site the callback passes none; the redirect URI never comes from the Host header", async () => {
   const { port, fake } = await startUi({
     atlassian: {
@@ -573,7 +590,7 @@ test("Atlassian's error answers denied or failed and its text goes nowhere; a mi
     [{ code: "" }, "/?atlassian=failed"],
     [{ code: `${FAKE_CODE} x` }, "/?atlassian=failed"],
     [{ code: `${FAKE_CODE}é` }, "/?atlassian=failed"],
-    [{ code: `${FAKE_CODE}${"x".repeat(2_048)}` }, "/?atlassian=failed"],
+    [{ code: "x".repeat(8_193) }, "/?atlassian=failed"],
   ];
   for (const [query, location] of cases) {
     const { state, pending } = await started(port, session);
