@@ -623,6 +623,51 @@ test("C5: a page delete whose verification read omits status refuses with P5a's 
   assert.equal(deletesIn(seen).length, 0);
 });
 
+test("C5: a page delete refuses when apply's verification read omits status", async () => {
+  let pageReads = 0;
+  const seen = stubConfluenceWriteFetch((request) => {
+    if (request.method !== "GET" || request.path !== "/wiki/api/v2/pages/123")
+      return undefined;
+    pageReads += 1;
+    return pageReads === 2
+      ? fakeConfluenceAnswer(request, { pageStatus: null })
+      : undefined;
+  });
+  const answer = await mutate([DELETE_PAGE]);
+  assert.deepEqual(outcomeOf(answer), {
+    ok: false,
+    code: "tool_error",
+    message:
+      "All 1 Confluence change(s) failed: Page 123 is not confirmed current (status unknown); nothing was deleted.",
+  });
+  assert.equal(pageReads, 2);
+  assert.equal(deletesIn(seen).length, 0);
+});
+
+test("C5: deleteAttachment by id refuses when apply's verification read omits status", async () => {
+  let attachmentReads = 0;
+  const seen = stubConfluenceWriteFetch((request) => {
+    if (
+      request.method !== "GET" ||
+      request.path !== "/wiki/api/v2/attachments/att1"
+    )
+      return undefined;
+    attachmentReads += 1;
+    return attachmentReads === 2
+      ? fakeConfluenceAnswer(request, { attachmentStatus: null })
+      : undefined;
+  });
+  const answer = await mutate([DELETE_ATTACHMENT]);
+  assert.deepEqual(outcomeOf(answer), {
+    ok: false,
+    code: "tool_error",
+    message:
+      "All 1 Confluence change(s) failed: diagram.png is not confirmed current (status unknown); nothing was deleted.",
+  });
+  assert.equal(attachmentReads, 2);
+  assert.equal(deletesIn(seen).length, 0);
+});
+
 test("C5: a deleteAttachment whose verification read omits status refuses with P5a's text and sends no DELETE", async () => {
   for (const item of [
     DELETE_ATTACHMENT,
