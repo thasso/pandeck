@@ -213,6 +213,11 @@ class ClaudeSdkAdapter implements PromptableAdapter {
   }
 
   async setModel(model: SessionConfigModel): Promise<void> {
+    // A model change stays on this harness; moving engines is not a switch.
+    if (model.provider !== PROVIDER)
+      throw new Error(
+        `${model.id} does not run on Claude; start a new session to use it.`,
+      );
     await this.driver.setModel(model.id);
     this.emit({
       type: "sessionConfigChanged",

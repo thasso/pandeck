@@ -48,6 +48,7 @@ import type {
 } from "@assistant/shared";
 import {
   CLAUDE_SDK_PROVIDER,
+  clampThinkingLevelForModel,
   isCodingAgentType,
   sessionModeOrDefault,
   UNLABELED_SESSION_TITLE,
@@ -110,6 +111,7 @@ import {
   generateSessionTitle,
 } from "../sessionNaming.ts";
 import { getSettings } from "../settings.ts";
+import { assertAccountCanRunModel } from "../settingsModelSlots.ts";
 import { CWD } from "../config.ts";
 import { claudeProfileRuntime } from "../credentialProfiles.ts";
 import {
@@ -247,6 +249,7 @@ import {
   claudeSdkModelOption,
   reasoningToThinking,
   knownClaudeSdkModelAlias,
+  type ClaudeSdkModelAlias,
 } from "./modelSettings.ts";
 import type {
   ClaudeQuery,
@@ -593,10 +596,9 @@ export class ClaudeSdkSession implements LiveSession {
   private modelId: string;
   private thinkingLevel: ThinkingLevel;
   /**
-   * Build vs Plan. Deliberately NOT covered by {@link configurationLocked}:
-   * model and thinking are frozen by the first prompt because the SDK fixes
-   * them at query time, but the mode is only a tool policy, and every turn
-   * builds a fresh `query()` from it.
+   * Build vs Plan. Unlike model and effort, which refuse a change while a turn
+   * runs, the mode is only a tool policy read against the live value, so it
+   * may change at any time.
    */
   private mode: SessionMode;
   /** The agentType applied to this session (default workshop). */
@@ -1308,74 +1310,130 @@ export class ClaudeSdkSession implements LiveSession {
 
   /* ------------------------------- configure ------------------------------- */
 
-  get configurationLocked(): boolean {
-    return this.committed.length > 0 || Boolean(this.liveTurn) || this.running;
-  }
-
-  configure(modelId?: string, thinkingLevel?: ThinkingLevel): void {
-    if (this.configurationLocked)
-      throw new Error(
-        "Model and thinking level are locked after the first prompt.",
-      );
-    if (modelId) this.modelId = claudeSdkModelAlias(modelId);
-    if (thinkingLevel) this.thinkingLevel = thinkingLevel;
-    this.broadcastState();
-  }
+  /*
+   * Model and effort change between turns, before or after the first prompt
+   * (`docs/session-runtime-switching.md`). Nothing changes under a running
+   * turn: it refuses, so the turn's assistant entry, context window and native
+   * controls stay those it started with.
+   */
 
   /**
-   * Select the model. Mirrors the `PiLiveSession.setModel` surface the
-   * connection drives; model/thinking are locked once a turn has run (the SDK
-   * fixes them at query time), so this throws after the first prompt.
+   * Select the model, applied at once like pi's switch: a retained process
+   * switches through its native control (pin-aware, as a new query chooses),
+   * and any later query epoch, resume included, opens on it. Only a curated
+   * Claude model the bound account can run is accepted; the effort is clamped
+   * to what the model supports.
    */
   async setModel(modelId: string): Promise<void> {
-    if (
-      this.activeQuery &&
-      this.retainedEpochKey !== undefined &&
-      this.retainedEpochKey === this.queryEpochKey &&
-      this.activeQuery.setModel
-    ) {
-      const alias = claudeSdkModelAlias(modelId);
+    this.assertBetweenTurns("model");
+    const alias = knownClaudeSdkModelAlias(modelId);
+    if (!alias) throw new Error(`${modelId} is not a Claude model.`);
+    if (this.credentialProfileId)
+      await assertAccountCanRunModel(
+        this.credentialProfileId,
+        CLAUDE_SDK_PROVIDER,
+        alias,
+      );
+    // The account check awaited: a turn may have started meanwhile.
+    this.assertBetweenTurns("model");
+    const thinkingLevel = clampThinkingLevelForModel(
+      claudeSdkModelOption(alias),
+      this.thinkingLevel,
+    );
+    const retained = this.retainedQuery();
+    if (retained) {
+      if (!retained.setModel)
+        throw new Error(
+          "This session's Claude process cannot change its model while background work keeps it open.",
+        );
       // The same pin-aware choice a new query makes: back on a pinned
       // agent's alias, the retained process runs the pinned version.
-      await this.activeQuery.setModel(
-        claudeQueryModel(alias, sessionAgent(this.id)),
-      );
-      this.modelId = alias;
-      this.broadcastState();
-      this.onPersist();
-      return;
+      await retained.setModel(claudeQueryModel(alias, sessionAgent(this.id)));
+      // The process runs the new model from here, whatever the effort does.
+      this.selectModel(alias);
+      if (thinkingLevel !== this.thinkingLevel)
+        try {
+          await this.applyRetainedEffort(retained, thinkingLevel, alias);
+        } catch (error) {
+          this.selectionChanged();
+          throw error;
+        }
     }
-    this.configure(modelId, undefined);
+    this.selectModel(alias);
+    this.thinkingLevel = thinkingLevel;
+    this.selectionChanged();
+    // The compaction window a process starts with is clamped to its model's
+    // window, so a retained process may now need a restart to apply it.
+    this.startTimeSettingsChanged();
   }
 
-  /** Select thinking for later turns on a retained process through controls. */
+  /** Select the effort for later turns, clamped to the model; a retained process takes it through controls. */
   async setThinkingLevel(thinkingLevel: ThinkingLevel): Promise<void> {
-    if (
-      this.activeQuery &&
+    this.assertBetweenTurns("effort");
+    const level = this.clampedEffort(thinkingLevel);
+    const retained = this.retainedQuery();
+    if (retained) await this.applyRetainedEffort(retained, level, this.modelId);
+    this.thinkingLevel = level;
+    this.selectionChanged();
+  }
+
+  private assertBetweenTurns(what: "model" | "effort"): void {
+    if (this.liveTurn || this.running)
+      throw new Error(
+        `This session is running; change its ${what} once the turn ends.`,
+      );
+  }
+
+  private clampedEffort(level: ThinkingLevel): ThinkingLevel {
+    return clampThinkingLevelForModel(
+      claudeSdkModelOption(this.modelId),
+      level,
+    );
+  }
+
+  /** A model change drops the window the previous model reported. */
+  private selectModel(alias: ClaudeSdkModelAlias): void {
+    if (alias === this.modelId) return;
+    this.modelId = alias;
+    this.contextWindowTokens = undefined;
+  }
+
+  /** Publish a selection change; a started session persists record and row. */
+  private selectionChanged(): void {
+    this.broadcastState();
+    if (this.committed.length > 0) {
+      this.broadcastContextInfo(true);
+      this.onPersist();
+    }
+  }
+
+  /** The idle process background work keeps open, when one is. */
+  private retainedQuery(): ClaudeQuery | undefined {
+    return this.activeQuery &&
       this.retainedEpochKey !== undefined &&
       this.retainedEpochKey === this.queryEpochKey
-    ) {
-      const controls = reasoningToThinking(thinkingLevel, this.modelId);
-      const thinking = controls.thinking;
-      if (this.activeQuery.setMaxThinkingTokens) {
-        const tokens =
-          thinking?.type === "disabled"
-            ? 0
-            : thinking?.type === "enabled"
-              ? (thinking.budgetTokens ?? null)
-              : null;
-        await this.activeQuery.setMaxThinkingTokens(tokens);
-      }
-      if (this.activeQuery.applyFlagSettings)
-        await this.activeQuery.applyFlagSettings({
-          effortLevel: controls.effort ?? null,
-        });
-      this.thinkingLevel = thinkingLevel;
-      this.broadcastState();
-      this.onPersist();
-      return;
+      ? this.activeQuery
+      : undefined;
+  }
+
+  private async applyRetainedEffort(
+    query: ClaudeQuery,
+    level: ThinkingLevel,
+    modelId: string,
+  ): Promise<void> {
+    const controls = reasoningToThinking(level, modelId);
+    const thinking = controls.thinking;
+    if (query.setMaxThinkingTokens) {
+      const tokens =
+        thinking?.type === "disabled"
+          ? 0
+          : thinking?.type === "enabled"
+            ? (thinking.budgetTokens ?? null)
+            : null;
+      await query.setMaxThinkingTokens(tokens);
     }
-    this.configure(undefined, thinkingLevel);
+    if (query.applyFlagSettings)
+      await query.applyFlagSettings({ effortLevel: controls.effort ?? null });
   }
 
   /* ---------------------------- compaction window --------------------------- */

@@ -174,6 +174,12 @@ range:
   "Applies on the next turn"; that turn starts a fresh process with the stored
   value.
 
+  A model switch between turns (`docs/session-runtime-switching.md`) leaves the
+  stored value alone and is a start-time change like any other: the clamp
+  follows the new model's window, so a retained process whose clamped value
+  changed restarts by the same path, and the next process starts with the new
+  clamp.
+
 - Applied state is per query epoch. It is `confirmed` while the value the epoch
   started with equals the stored one (clamped). Otherwise it is `pending` with
   `process-restart`, or with `next-turn` when no process runs.

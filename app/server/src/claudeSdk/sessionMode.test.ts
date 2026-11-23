@@ -109,7 +109,7 @@ async function main(): Promise<void> {
   for (const t of ["Read", "Write", "Edit", "Bash"])
     assert.ok(buildTools.includes(t), `Build turn exposes ${t}`);
 
-  // 2. Switch mid-conversation: allowed even though model/thinking are locked.
+  // 2. Switch mid-conversation, between turns.
   session.setMode("plan");
   assert.equal(
     session.nativeFacts().mode,

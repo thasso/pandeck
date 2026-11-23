@@ -139,6 +139,11 @@ class FakeQuery implements ClaudeQuery {
     this.flagCalls.push(settings);
   }
 
+  readonly modelCalls: Array<string | undefined> = [];
+  async setModel(model?: string): Promise<void> {
+    this.modelCalls.push(model);
+  }
+
   async getContextUsage(opts?: { detail?: "summary" | "full" }) {
     const detail = opts?.detail ?? "full";
     this.usageReads.push(detail);
@@ -538,6 +543,31 @@ test("a pending start-time setting closes immediately after the last task and th
     h.queries[1]!.output.emit(result("fresh-window"));
     await next;
     assert.equal(h.query.closeCalls, 1, "reentrant turn-end checks close once");
+  } finally {
+    await disposeRetained(h);
+  }
+});
+
+test("a model switch on a retained process keeps the stored window and restarts it at the new model's clamp", async () => {
+  const h = await retainedWindow(900_000);
+  try {
+    assert.equal(startWindow(h.query), 900_000);
+    await h.session.setModel("sonnet");
+    assert.deepEqual(h.query.modelCalls, ["claude-sonnet-5-5"]);
+    assert.equal(sessionStore.get(h.id)?.compactionWindow, 900_000);
+    assert.equal(window(h.session)?.effectiveTokens, 200_000);
+    assert.equal(window(h.session)?.pendingReason, "process-restart");
+    assert.equal(h.query.closeCalls, 0, "background work keeps its host");
+    completeBackgroundShell(h.query);
+    await until(() => h.query.closeCalls === 1);
+    const next = h.adapter.prompt("on the smaller model");
+    await until(() => h.queries.length === 2);
+    const fresh = h.queries[1]!;
+    assert.equal(fresh.params.options?.model, "claude-sonnet-5-5");
+    assert.equal(startWindow(fresh), 200_000);
+    assert.equal(window(h.session)?.applied, "confirmed");
+    fresh.output.emit(result("smaller-model"));
+    await next;
   } finally {
     await disposeRetained(h);
   }

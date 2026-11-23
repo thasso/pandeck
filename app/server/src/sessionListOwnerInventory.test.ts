@@ -269,12 +269,15 @@ const owners: Record<string, Owner> = {
       ),
       group(
         "projected",
-        "setModel setThinkingLevel",
-        "Retained native controls commit model/reasoning after the awaited effect; unlocked configuration is intentionally unlisted.",
+        "setModel setThinkingLevel selectModel selectionChanged applyRetainedEffort",
+        "Between turns a started session persists the selection to its row (retained native controls first, after the awaited effect); before the first prompt it is intentionally unlisted.",
         retained + "Claude.setModel retained control",
         retained + "Claude.setThinkingLevel retained control",
         claude + "Claude.setModel unlocked",
         claude + "Claude.setThinkingLevel unlocked",
+        claude + "Claude.setModel before the first prompt",
+        claude + "Claude.setModel between turns",
+        claude + "Claude.setThinkingLevel between turns",
       ),
       group(
         "projected",
@@ -350,12 +353,6 @@ const owners: Record<string, Owner> = {
       ),
       group(
         "nonprojected",
-        "configure",
-        "Allowed only before any committed/live turn. An empty SDK item is skipped by mergedSessionList.",
-        claude + "Claude.configure",
-      ),
-      group(
-        "nonprojected",
         "applyCompactionWindow lowerCompactionWindow compactContext clearContext compactRetainedQuery",
         "Context thresholds, provider resume id and cumulative billed usage are not list fields; canonical owned transcript remains intact.",
         claude + "Claude.compactContext result usage",
@@ -402,7 +399,7 @@ const owners: Record<string, Owner> = {
       ),
       group(
         "read",
-        "toolAdmissionRefusal assertToolAdmission assertNotDisposed liveMessages timelineEntries committedTimeline messageCount snapshot modelOption nativeFacts contextInfo currentTurnEstimate compactionWindowStatus runningEpochKey compactionWindowStart canQuietClose startTimeSettingsNeedRestart modelSelection assertSkillRegistered answersBeforePrompt answersOnlyContext isProviderTurnContent promptConditions frozenSkillNames committedToolCalls toolLoadingFacts turnOutcome savedProviderTotals blockKey listItem toRecord toRecordMeta",
+        "toolAdmissionRefusal assertToolAdmission assertNotDisposed assertBetweenTurns clampedEffort retainedQuery liveMessages timelineEntries committedTimeline messageCount snapshot modelOption nativeFacts contextInfo currentTurnEstimate compactionWindowStatus runningEpochKey compactionWindowStart canQuietClose startTimeSettingsNeedRestart modelSelection assertSkillRegistered answersBeforePrompt answersOnlyContext isProviderTurnContent promptConditions frozenSkillNames committedToolCalls toolLoadingFacts turnOutcome savedProviderTotals blockKey listItem toRecord toRecordMeta",
         "Read or derive native/canonical/policy/public data without changing a list input.",
       ),
     ],

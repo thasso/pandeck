@@ -495,9 +495,11 @@ enabled account, and a hidden login stays a router candidate with its usual
 degraded answer. Other account surfaces, such as the workflow start sheet, list
 every account offering models.
 
-A started pi session changes model only within its bound account: the picker
+A started session changes model only within its bound account: the picker
 disables models that account does not serve (`startedModelDisabled`), and the
-host refuses them (`docs/agent-harnesses.md` "Account model gate").
+host refuses them (`docs/agent-harnesses.md` "Account model gate"). A Claude
+session refuses a model its account's known listing lacks ("<account> can't run
+<model>."), between turns only (`docs/session-runtime-switching.md`).
 
 `POST /api/account-router/pick` accepts `AccountPickPreviewRequest` and returns
 `AccountPickPreviewResult`, so a selector can show Automatic's current account
