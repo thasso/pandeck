@@ -34,6 +34,7 @@ import {
   isAtlassianSite,
   isCloudId,
   isGithubLogin,
+  isGithubTokenRequest,
   isSlackTeamId,
   isSlackTeamName,
   isPinnedPeer,
@@ -45,6 +46,7 @@ import {
 import type { CredentialProblem } from "./refusals.ts";
 import type {
   ConnectFailure,
+  GithubToken,
   Integration,
   IntegrationConnect,
   IntegrationConnectRequests,
@@ -73,6 +75,14 @@ const CONNECT_TIMEOUT_MS = 10_000;
 const INTEGRATION_WRITE_TIMEOUT_MS = 10_000;
 const INTEGRATION_GET_TIMEOUT_MS = 20_000;
 const INTEGRATION_CONNECT_TIMEOUT_MS = 30_000;
+/**
+ * A `github.token` has 25 s inside the vault (a fresh user check, the
+ * installation lookup, the mint and its proof, 8 s each); a late answer's
+ * token is never cached there either.
+ */
+const INTEGRATION_TOKEN_TIMEOUT_MS = 30_000;
+/** What the edge takes as a token: header-safe and bounded. */
+const TOKEN_RE = /^[\x21-\x7e]{1,8192}$/;
 
 const UNAVAILABLE: VaultCredential = {
   ok: false,
@@ -525,6 +535,25 @@ export function createRemoteVault(
       return connectFailure(a) ?? { ok: false, unavailable: true };
     },
   };
+  /** A `github.token` answer; any other shape is unavailable. */
+  const decodeGithubToken = (body: Record<string, unknown>): GithubToken => {
+    const answer = body.token;
+    if (typeof answer !== "object" || answer === null)
+      return { ok: false, unavailable: true };
+    const a = answer as Record<string, unknown>;
+    if (a.ok === true)
+      return typeof a.token === "string" &&
+        TOKEN_RE.test(a.token) &&
+        typeof a.expiresAt === "number" &&
+        Number.isFinite(a.expiresAt)
+        ? { ok: true, token: a.token, expiresAt: a.expiresAt }
+        : { ok: false, unavailable: true };
+    if (a.absent === true) return { ok: false, absent: true };
+    if (a.rejected === true) return { ok: false, rejected: true };
+    if (a.denied === true) return { ok: false, denied: true };
+    if (a.locked === true) return { ok: false, locked: true };
+    return { ok: false, unavailable: true };
+  };
   const written = (): IntegrationWrite => ({ ok: true });
   /** Each integration's connect over the link. */
   const connects: {
@@ -675,6 +704,18 @@ export function createRemoteVault(
       ),
     integrationConnect: (userId, integration, request) =>
       connects[integration](userId, request),
+    // A 1.2 vault answers `unknown_method`: unavailable, like any request
+    // error. An invalid request is never sent.
+    githubToken: (userId, request, { signal } = {}) =>
+      isGithubTokenRequest(request)
+        ? integrationCall(
+            VAULT_METHODS.githubToken,
+            { userId, owner: request.owner, repo: request.repo },
+            decodeGithubToken,
+            INTEGRATION_TOKEN_TIMEOUT_MS,
+            signal,
+          )
+        : Promise.resolve({ ok: false, invalid: true }),
     inputsChanged() {
       if (sendQueued) return;
       sendQueued = true;

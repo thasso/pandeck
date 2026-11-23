@@ -71,6 +71,7 @@ import {
   VAULT_METHODS,
   accountTokenFile,
   isAtlassianSite,
+  isGithubTokenRequest,
   isSlackTeamId,
   isIntegration,
   isPinnedPeer,
@@ -501,6 +502,21 @@ export async function startVaultServer(
                   redirectUri,
                   ...(site !== undefined ? { site } : {}),
                 }),
+      };
+    },
+    [VAULT_METHODS.githubToken]: async (body) => {
+      const { userId, ...request } = body;
+      // Nothing but the repository's name: an `access` or any extra is
+      // refused here, before any GitHub call.
+      if (!isVaultId(userId) || !isGithubTokenRequest(request))
+        throw invalid("github token");
+      return {
+        token: locked()
+          ? { ok: false, locked: true }
+          : await vault.githubToken(userId, {
+              owner: request.owner,
+              repo: request.repo,
+            }),
       };
     },
     [VAULT_METHODS.loginStart]: (body) => {

@@ -539,6 +539,8 @@ const GATEWAY_VAULT = [
   // The GitHub App's OAuth, identity and read installation tokens, from the
   // vault only (Task-1444).
   "vaultGithub",
+  // `github.token`'s caches, budget and generation fence (Task-1444).
+  "vaultGithubTokens",
   // The one HTTPS call the vault's OAuth clients make (Task-1452).
   "vaultHttps",
   // Users' integration credentials (Task-1397), sealed like token files, and

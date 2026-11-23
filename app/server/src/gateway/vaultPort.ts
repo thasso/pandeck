@@ -69,7 +69,39 @@ export interface VaultPort {
     integration: I,
     request: IntegrationConnectRequests[I],
   ): Promise<IntegrationConnect<I>>;
+  /**
+   * A READ installation token for one repository the user's GitHub record
+   * can pull (Task-1444): `{contents: "read", metadata: "read"}` and that
+   * repository's id, both proven on GitHub's answer, else no token. A request
+   * with any member but `owner` and `repo` is `invalid` before any call. A
+   * caller that stops waiting stops only its own wait; never rejects.
+   */
+  githubToken(
+    userId: string,
+    request: GithubTokenRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<GithubToken>;
 }
+
+/** The repository a `githubToken` asks for; nothing else. */
+export interface GithubTokenRequest {
+  owner: string;
+  repo: string;
+}
+
+/**
+ * A `githubToken`'s answer. `expiresAt` is epoch milliseconds. `denied` is
+ * GitHub not granting this user, or the App, that repository; `absent`,
+ * `rejected` and `locked` are the user's record as a get answers it.
+ */
+export type GithubToken =
+  | { ok: true; token: string; expiresAt: number }
+  | { ok: false; absent: true }
+  | { ok: false; rejected: true }
+  | { ok: false; denied: true }
+  | { ok: false; invalid: true }
+  | { ok: false; locked: true }
+  | { ok: false; unavailable: true };
 
 /** The integrations whose credentials the vault keeps. */
 export type Integration = "atlassian" | "slack" | "github";

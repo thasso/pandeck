@@ -15,10 +15,17 @@
  * spent): an answer without a usable replacement is `unusable`, never a
  * success that keeps the old one.
  *
+ * `github.token`'s steps (`vaultGithubTokens.ts` orders, caches and bounds
+ * them) are here too, all on `api.github.com`: the user's repository check,
+ * the App's JWT, the installation lookup, the read mint and its proof, and
+ * the revoke of a token that failed it. The mint asks for exactly one
+ * repository id and `{contents: "read", metadata: "read"}`; nothing here can
+ * ask for more (R-ME).
+ *
  * Nothing here keeps a token across calls or logs anything; results hold
  * only fixed words, never GitHub's text.
  */
-import type { OAuthClient } from "./integrationClients.ts";
+import type { GithubAppClient, OAuthClient } from "./integrationClients.ts";
 import {
   MAX_EXPIRES_IN_S,
   isToken,
@@ -249,4 +256,234 @@ export async function githubUser(
   return isGithubLogin(body?.login) && isGithubId(body.id)
     ? { kind: "ok", login: body.login, githubUserId: body.id }
     : { kind: "unusable" };
+}
+
+/** What the user's repository check found (AC5 step 3). */
+export type GithubRepoResult =
+  | { kind: "ok"; rid: number }
+  | { kind: "denied" }
+  | { kind: "unavailable"; code: string };
+
+/**
+ * `GET /repos/{owner}/{repo}` with the user's token: the repository's id when
+ * GitHub names it exactly `owner/repo` (any case) and grants the user `pull`.
+ * A redirect (renamed or moved), 404 or 403 is `denied`, as is any other
+ * name, id or permission; every other failure is `unavailable`.
+ */
+export async function githubRepo(
+  accessToken: string,
+  name: { owner: string; repo: string },
+  endpoint: GithubEndpoint | undefined,
+): Promise<GithubRepoResult> {
+  const answer = await githubApi(
+    {
+      method: "GET",
+      path: `/repos/${name.owner}/${name.repo}`,
+      bearer: accessToken,
+    },
+    endpoint,
+  );
+  if (answer.kind === "unreachable")
+    return answer.code === "redirect"
+      ? { kind: "denied" }
+      : { kind: "unavailable", code: answer.code };
+  if (answer.status === 404 || answer.status === 403) return { kind: "denied" };
+  if (answer.status !== 200)
+    return { kind: "unavailable", code: String(answer.status) };
+  const body = jsonObjectOf(answer.body);
+  if (!body) return { kind: "unavailable", code: "bad_response" };
+  const { full_name: fullName, id } = body;
+  return typeof fullName === "string" &&
+    fullName.toLowerCase() === `${name.owner}/${name.repo}`.toLowerCase() &&
+    isGithubId(id) &&
+    objectOf(body.permissions)?.pull === true
+    ? { kind: "ok", rid: id }
+    : { kind: "denied" };
+}
+
+/** The App's JWT lifetime and how much earlier it is replaced. */
+const JWT_BACKDATE_S = 60;
+const JWT_LIFETIME_S = 9 * 60;
+export const JWT_RENEW_MARGIN_MS = 60_000;
+
+const base64url = (text: string): string =>
+  Buffer.from(text, "utf8").toString("base64url");
+
+/**
+ * The App's JWT (RS256): `iat` a minute back for clock drift, `exp` nine
+ * minutes ahead, `iss` the client id. `expiresAt` is epoch milliseconds.
+ */
+export function githubAppJwt(
+  client: GithubAppClient,
+  nowMs: number,
+): { jwt: string; expiresAt: number } {
+  const nowS = Math.floor(nowMs / 1000);
+  const exp = nowS + JWT_LIFETIME_S;
+  const unsigned = `${base64url(JSON.stringify({ alg: "RS256", typ: "JWT" }))}.${base64url(
+    JSON.stringify({ iat: nowS - JWT_BACKDATE_S, exp, iss: client.clientId }),
+  )}`;
+  return {
+    jwt: `${unsigned}.${client.sign(unsigned).toString("base64url")}`,
+    expiresAt: exp * 1000,
+  };
+}
+
+/** `GET /repos/{owner}/{repo}/installation` with the App's JWT. */
+export async function githubInstallation(
+  jwt: string,
+  name: { owner: string; repo: string },
+  endpoint: GithubEndpoint | undefined,
+): Promise<
+  | { kind: "ok"; installationId: number }
+  | { kind: "denied" }
+  | { kind: "unavailable"; code: string }
+> {
+  const answer = await githubApi(
+    {
+      method: "GET",
+      path: `/repos/${name.owner}/${name.repo}/installation`,
+      bearer: jwt,
+    },
+    endpoint,
+  );
+  if (answer.kind === "unreachable")
+    return { kind: "unavailable", code: answer.code };
+  if (answer.status === 404) return { kind: "denied" };
+  if (answer.status !== 200)
+    return { kind: "unavailable", code: String(answer.status) };
+  const id = jsonObjectOf(answer.body)?.id;
+  return isGithubId(id)
+    ? { kind: "ok", installationId: id }
+    : { kind: "unavailable", code: "bad_response" };
+}
+
+/** The only permissions a mint asks for, and the only ones it may answer. */
+const READ_PERMISSIONS = { contents: "read", metadata: "read" } as const;
+
+/**
+ * `POST /app/installations/{id}/access_tokens` asking for exactly the one
+ * repository id and read permissions; the body is built here and nowhere
+ * else. A 2xx answers its JSON object for the proof.
+ */
+export async function mintReadToken(
+  jwt: string,
+  installationId: number,
+  rid: number,
+  endpoint: GithubEndpoint | undefined,
+): Promise<
+  | { kind: "ok"; body: Record<string, unknown> }
+  | { kind: "unavailable"; code: string }
+> {
+  const answer = await githubApi(
+    {
+      method: "POST",
+      path: `/app/installations/${installationId}/access_tokens`,
+      bearer: jwt,
+      json: { repository_ids: [rid], permissions: { ...READ_PERMISSIONS } },
+    },
+    endpoint,
+  );
+  if (answer.kind === "unreachable")
+    return { kind: "unavailable", code: answer.code };
+  if (answer.status < 200 || answer.status >= 300)
+    return { kind: "unavailable", code: String(answer.status) };
+  const body = jsonObjectOf(answer.body);
+  return body
+    ? { kind: "ok", body }
+    : { kind: "unavailable", code: "bad_response" };
+}
+
+const GITHUB_TIME_RE =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|\+00:00)$/;
+
+/** An ISO 8601 UTC time (`Z` or `+00:00`, optional fraction) in epoch ms. */
+function githubTimeOf(value: unknown): number | undefined {
+  if (typeof value !== "string") return undefined;
+  const match = GITHUB_TIME_RE.exec(value);
+  if (!match) return undefined;
+  const [year, month, day, hour, minute, second] = match
+    .slice(1, 7)
+    .map(Number) as [number, number, number, number, number, number];
+  const ms = Date.UTC(year, month - 1, day, hour, minute, second);
+  const back = new Date(ms);
+  // Rejects a day, hour or minute out of range rather than rolling it over.
+  return back.getUTCFullYear() === year &&
+    back.getUTCMonth() === month - 1 &&
+    back.getUTCDate() === day &&
+    back.getUTCHours() === hour &&
+    back.getUTCMinutes() === minute &&
+    back.getUTCSeconds() === second
+    ? ms
+    : undefined;
+}
+
+function isReadPermissions(value: unknown): boolean {
+  const permissions = objectOf(value);
+  if (!permissions) return false;
+  const keys = Object.keys(permissions);
+  return (
+    keys.length === 2 &&
+    permissions.contents === READ_PERMISSIONS.contents &&
+    permissions.metadata === READ_PERMISSIONS.metadata
+  );
+}
+
+/** Whether `value` lists exactly one repository, `rid`. */
+function onlyRepository(value: unknown, rid: number): boolean {
+  return (
+    Array.isArray(value) && value.length === 1 && objectOf(value[0])?.id === rid
+  );
+}
+
+/**
+ * Proves a mint's answer (AC5 step 7), in this order: the token is one the
+ * vault may hand on, the permissions are exactly read, `expires_at` is a UTC
+ * time after `nowMs`, and the token reaches exactly `rid`, by its
+ * `repositories` or else by `GET /installation/repositories` with it. A
+ * failure carries the token only when it passed the first check, so only such
+ * a token is ever revoked (F13).
+ */
+export async function proveReadToken(
+  body: Record<string, unknown>,
+  rid: number,
+  now: () => number,
+  endpoint: GithubEndpoint | undefined,
+): Promise<
+  | { kind: "ok"; token: string; expiresAt: number }
+  | { kind: "failed"; reason: string; token?: string }
+> {
+  const { token } = body;
+  if (!isToken(token)) return { kind: "failed", reason: "token" };
+  if (!isReadPermissions(body.permissions))
+    return { kind: "failed", reason: "permissions", token };
+  const expiresAt = githubTimeOf(body.expires_at);
+  if (expiresAt === undefined || expiresAt <= now())
+    return { kind: "failed", reason: "expiry", token };
+  if (body.repositories !== undefined) {
+    return onlyRepository(body.repositories, rid)
+      ? { kind: "ok", token, expiresAt }
+      : { kind: "failed", reason: "repositories", token };
+  }
+  const answer = await githubApi(
+    { method: "GET", path: "/installation/repositories", bearer: token },
+    endpoint,
+  );
+  const listed =
+    answer.kind === "answer" && answer.status === 200
+      ? jsonObjectOf(answer.body)
+      : undefined;
+  return listed?.total_count === 1 && onlyRepository(listed.repositories, rid)
+    ? { kind: "ok", token, expiresAt }
+    : { kind: "failed", reason: "repository list", token };
+}
+
+/** `DELETE /installation/token`: best-effort; the outcome is not read. */
+export async function revokeInstallationToken(
+  token: string,
+  endpoint: GithubEndpoint | undefined,
+): Promise<void> {
+  await githubApi(
+    { method: "DELETE", path: "/installation/token", bearer: token },
+    endpoint,
+  );
 }

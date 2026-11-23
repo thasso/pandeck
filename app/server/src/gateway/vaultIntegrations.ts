@@ -35,7 +35,7 @@
  *
  * Each record has a generation, in memory only, which a connect, a clear and
  * a refused refresh bump: whatever was checked against one identity is void
- * once it moved (`github.token`, `vaultGithub.ts`).
+ * once it moved (`github.token`, `vaultGithubTokens.ts`).
  *
  * Every write to a record (put, clear, connect, refresh) runs in its lane,
  * one at a time and in order. A refresh is single-flight per record, re-reads
@@ -47,7 +47,8 @@
  * `close()` stops admission at once: every later put, clear, connect or
  * refresh answers unavailable, queued ones are refused unrun, and it resolves
  * once each lane's running item, write and seal included, has ended. Running
- * items are bounded by their own provider deadlines, never aborted.
+ * items are bounded by their own provider deadlines, never aborted. A
+ * `github.token` in flight answers unavailable at once and drops its token.
  *
  * No log line holds a record, token, code or the client secret.
  */
@@ -75,6 +76,7 @@ import {
   refreshGithub,
   type GithubEndpoint,
 } from "./vaultGithub.ts";
+import { createGithubTokens, type GithubAccess } from "./vaultGithubTokens.ts";
 import {
   INTEGRATION_FILE,
   integrationDirId,
@@ -125,6 +127,8 @@ export interface VaultIntegrationOptions {
   slackEndpoint?: SlackEndpoint | undefined;
   /** Test seam: where GitHub is reached (`vaultGithub.ts`). */
   githubEndpoint?: GithubEndpoint | undefined;
+  /** Test seam: `github.token`'s whole budget (`vaultGithubTokens.ts`). */
+  githubTokenBudgetMs?: number | undefined;
 }
 
 export interface VaultIntegrations extends Pick<
@@ -133,6 +137,7 @@ export interface VaultIntegrations extends Pick<
   | "integrationGet"
   | "integrationClear"
   | "integrationConnect"
+  | "githubToken"
 > {
   /**
    * Admits nothing further, refuses what is queued, and resolves once each
@@ -865,7 +870,7 @@ export function createVaultIntegrations(
     },
   };
 
-  return {
+  const api: Omit<VaultIntegrations, "githubToken" | "close"> = {
     integrationPut(userId, integration, credential) {
       if (!stateDir) return Promise.resolve(UNAVAILABLE);
       // Only a connect writes an OAuth record: an edge cannot plant one, and
@@ -920,8 +925,46 @@ export function createVaultIntegrations(
       if (!stateDir) return Promise.resolve(UNAVAILABLE);
       return connects[integration](userId, request);
     },
+  };
+
+  /**
+   * `github.token`'s step 2: the generation noted before the access view is
+   * read, so a clear, connect or refused refresh from here on voids the call.
+   */
+  const githubAccess = async (
+    userId: string,
+    signal: AbortSignal,
+  ): Promise<GithubAccess> => {
+    if (!stateDir) return UNAVAILABLE;
+    const { dirId } = locate(userId, "github");
+    const generation = generations.get(dirId) ?? 0;
+    const record = await api.integrationGet(userId, "github", { signal });
+    if (!record.ok) return record;
+    const accessToken = fieldsOf(record.credential)?.accessToken;
+    if (typeof accessToken !== "string") return UNAVAILABLE;
+    return {
+      ok: true,
+      dirId,
+      accessToken,
+      current: () => !closed && (generations.get(dirId) ?? 0) === generation,
+    };
+  };
+  const githubTokens = createGithubTokens({
+    client: options.clients?.github,
+    endpoint: options.githubEndpoint,
+    access: githubAccess,
+    log,
+    now,
+    budgetMs: options.githubTokenBudgetMs,
+  });
+
+  return {
+    ...api,
+    githubToken: githubTokens.token,
     close() {
       closed = true;
+      // Calls in flight answer unavailable now; their tokens are dropped.
+      githubTokens.close();
       const running: Promise<void>[] = [];
       for (const lane of lanes.values()) {
         for (const item of lane.queue.splice(0)) item.refuse();
