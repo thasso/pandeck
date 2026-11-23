@@ -42,6 +42,10 @@ const { confluenceDelete, confluencePut } =
   await import("./atlassian/confluenceClient.ts");
 const { applyConfluenceMutationItems } =
   await import("./confluenceMutateApply.ts");
+const { MAX_MUTATION_ITEMS, buildConfluenceMutationItems } =
+  await import("./confluenceMutate.ts");
+const { ConfluenceMutationError } =
+  await import("./confluenceMutationErrors.ts");
 const { errorText } = await import("./errors.ts");
 const fetchMock = vi.mocked(atlassianFetch);
 
@@ -65,6 +69,24 @@ describe("confluencePut and confluenceDelete call options (AC5a)", () => {
       [config, "Confluence", "PUT", "/p", { a: 1 }],
       [config, "Confluence", "DELETE", "/d", undefined, undefined],
     ]);
+  });
+});
+
+describe("the item cap the edge's result bound rests on", () => {
+  test("prepare refuses more than MAX_MUTATION_ITEMS items before any request", async () => {
+    expect(MAX_MUTATION_ITEMS).toBe(10);
+    const items = Array.from({ length: MAX_MUTATION_ITEMS + 1 }, () => ({
+      operation: "comment" as const,
+      page: "123",
+      body: "Note",
+    }));
+    fetchMock.mockClear();
+    const refusal = buildConfluenceMutationItems(config, items, {});
+    await expect(refusal).rejects.toBeInstanceOf(ConfluenceMutationError);
+    await expect(refusal).rejects.toThrow(
+      "At most 10 Confluence mutation items are supported per approval.",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

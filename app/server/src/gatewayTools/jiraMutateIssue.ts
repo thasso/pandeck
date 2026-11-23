@@ -7,14 +7,15 @@
  * entries (`remoteTools.ts`).
  *
  * One call, under the tool's own 45 s deadline (derived from Claude Code's
- * measured 60 s MCP tool-call limit): the credential, then prepare under a
- * guarded budget that ends `PREPARE_RESERVE_MS` before the deadline, then
- * apply on the call's own signal, which stops starting items
- * `STOP_CUTOFF_MS` before the deadline. Only after the budget's phase is
- * over, and only through the fence before apply, can a write start. Failures
- * follow D-W2 (`writeFailure.ts`). The result is a compact projection whose
- * serialized size is bounded by construction; identifiers and links pass only
- * when vetted for the call's secret on their raw values.
+ * measured 60 s MCP tool-call limit), run by the shared write runner
+ * (`writeCall.ts`): the credential, then prepare under a guarded budget that
+ * ends before the deadline, then apply on the call's own signal, which stops
+ * starting items shortly before the deadline. Only after the budget's phase
+ * is over, and only through the fence before apply, can a write start.
+ * Failures follow D-W2 (`writeFailure.ts`). The result is a compact
+ * projection whose serialized size is bounded by construction; identifiers
+ * and links pass only when vetted for the call's secret on their raw values
+ * (`writeResult.ts`).
  *
  * A `notifications/cancelled` on another POST does not reach the call (the
  * handler is stateless per POST), so an interrupted write runs to completion
@@ -31,37 +32,35 @@ import {
 import { applyJiraMutationItems } from "../jiraMutateApply.ts";
 import { JiraMutationError } from "../jiraMutationErrors.ts";
 import { jiraConfigOf } from "./atlassian.ts";
-import {
-  ToolError,
-  abortError,
-  raceAbort,
-  type AtlassianCredential,
-  type AtlassianToolDescriptor,
-  type ObjectSchema,
+import type {
+  AtlassianCredential,
+  AtlassianToolDescriptor,
+  ObjectSchema,
 } from "./descriptor.ts";
 import { edgeReadDeps } from "./jiraRead.ts";
-import { holdsSecret, leaks, REDACTED, vettedText } from "./upstreamText.ts";
+import { REDACTED } from "./upstreamText.ts";
+import {
+  WRITE_DEADLINE_MS,
+  runWrite,
+  type WritePhases,
+  type WriteProduct,
+} from "./writeCall.ts";
 import { describeWriteFailure } from "./writeFailure.ts";
+import {
+  RESULT_BUDGET,
+  projectText,
+  sentResult,
+  shrunkToBudget,
+  vettedIdentifier,
+  vettedUrl,
+} from "./writeResult.ts";
 
-/** The call's deadline: the measured 60 s client limit less 15 s. */
-export const WRITE_DEADLINE_MS = 45_000;
-/** The part of the deadline prepare never takes: apply's share. */
-const PREPARE_RESERVE_MS = 22_000;
-/** Apply starts no item this close to the deadline. */
-const STOP_CUTOFF_MS = 7_000;
-/** The projected result's serialized ceiling, under `maxResultChars`. */
-export const RESULT_BUDGET = 55_000;
+export { STOP_TEXT, WRITE_DEADLINE_MS } from "./writeCall.ts";
+export { RESULT_BUDGET } from "./writeResult.ts";
 
 export const PREPARE_TOO_LONG =
   "Preparing the changes took too long; nothing was written to Jira. Send fewer items or fewer issues per item.";
-export const STOP_TEXT =
-  "Not applied: the call ran out of time before this change; nothing was sent for it.";
 const NOTHING_WRITTEN = " Nothing was written to Jira.";
-/** Above any prepare refusal (D-W2 caps its own texts at 1,000). */
-const PREPARE_REFUSAL_MAX = 1_200;
-const PREPARE_REFUSAL_FALLBACK = `Jira refused the change.${NOTHING_WRITTEN}`;
-const ALL_FAILED_MAX = 2_000;
-const ALL_FAILED_FALLBACK = "Every Jira change failed.";
 /** When not even the rows' outcomes can be shown without the credential (R3). */
 export const RESULT_WITHHELD =
   "The changes ran, but their result cannot be shown without revealing the credential; check the issues before retrying.";
@@ -77,10 +76,6 @@ const ITEM_ERROR_FALLBACK = "The change failed.";
 
 const KEY_RE = /^[A-Z][A-Z0-9_]*-[1-9][0-9]*$/;
 const KEY_MAX = 64;
-const URL_MAX = 300;
-/** Printable ASCII without space; `"` and `\` are refused separately. */
-const URL_CHARS_RE = /^[\x21-\x7e]+$/;
-const URL_DECODE_ROUNDS = 3;
 
 const OPERATIONS = ["edit", "create", "comment", "rank", "sprint"] as const;
 type Operation = (typeof OPERATIONS)[number];
@@ -141,66 +136,16 @@ export interface ProjectedResult {
   items: ProjectedItem[];
 }
 
-/**
- * Caller-visible text (`vettedText`): each secret piece as `[redacted]`,
- * controls as spaces, lone surrogates replaced, cut to `max`, and the result
- * itself checked. Its JSON form is at most 2 × max + 2.
- */
-function projectText(
-  text: string,
-  credential: AtlassianCredential,
-  max: number,
-  fallback: string,
-): string {
-  return vettedText(text, credential, { max, fallback });
-}
-
 /** An identifier as Jira returned it, kept only whole, vetted and well-formed. */
 function vettedKey(
   raw: unknown,
   credential: AtlassianCredential,
 ): string | undefined {
-  if (typeof raw !== "string" || holdsSecret(raw, credential)) return undefined;
-  return raw.length <= KEY_MAX && KEY_RE.test(raw) ? raw : undefined;
-}
-
-/**
- * A link, kept only when its backing identifier passed, it lies on the
- * credential's site, its raw form is short printable ASCII without `"` or
- * `\`, and neither it nor any of up to three successive percent-decodings
- * holds the secret. A decoding error, or a form still changing after the
- * third decoding, omits it.
- */
-function vettedUrl(
-  raw: unknown,
-  backingKey: string | undefined,
-  credential: AtlassianCredential,
-): string | undefined {
-  if (backingKey === undefined || typeof raw !== "string") return undefined;
-  if (holdsSecret(raw, credential)) return undefined;
-  if (
-    !raw.startsWith(`https://${credential.site}/`) ||
-    raw.length > URL_MAX ||
-    !URL_CHARS_RE.test(raw) ||
-    raw.includes('"') ||
-    raw.includes("\\")
-  )
-    return undefined;
-  let form = raw;
-  for (let round = 0; round <= URL_DECODE_ROUNDS; round += 1) {
-    let decoded: string;
-    try {
-      decoded = decodeURIComponent(form);
-    } catch {
-      return undefined;
-    }
-    if (decoded === form) return raw;
-    // Past the third decoding the form is still changing: not vetted.
-    if (round === URL_DECODE_ROUNDS) return undefined;
-    if (holdsSecret(decoded, credential)) return undefined;
-    form = decoded;
-  }
-  return undefined;
+  return vettedIdentifier(
+    raw,
+    credential,
+    (key) => key.length <= KEY_MAX && KEY_RE.test(key),
+  );
 }
 
 function operationOf(item: JiraIssueMutationItemDisplay): Operation {
@@ -296,75 +241,78 @@ export function projectMutationResult(
     ...(warnings.length > 0 ? { warnings } : {}),
     items,
   };
-  const kept = shrunk(
+  const kept = shrunkToBudget(
     result,
-    applied.warnings.length,
-    projectText(counts, credential, SUMMARY_MAX, REDACTED),
-    credential,
     budget,
+    jiraShrinkStages(
+      applied.warnings.length,
+      projectText(counts, credential, SUMMARY_MAX, REDACTED),
+      credential,
+    ),
   );
-  // The answer as it is sent, and as the `/mcp` body or `tools.call` frame
-  // escapes it once more (fix-2, fix-4): should joining its strings into JSON
-  // make a secret, only the rows' outcomes remain; should even those (R3), a
-  // fixed text.
-  if (!leaks(JSON.stringify(kept), credential, 1)) return kept;
-  const outcomes: ProjectedResult = {
-    summary: REDACTED,
-    items: kept.items.map(({ operation, ok }) => ({
-      operation,
-      issueKey: null,
-      ok,
-    })),
-  };
-  if (!leaks(JSON.stringify(outcomes), credential, 1)) return outcomes;
-  throw new ToolError(RESULT_WITHHELD);
+  return sentResult(
+    kept,
+    credential,
+    (sent) => ({
+      summary: REDACTED,
+      items: sent.items.map(({ operation, ok }) => ({
+        operation,
+        issueKey: null,
+        ok,
+      })),
+    }),
+    RESULT_WITHHELD,
+  );
 }
 
 /**
- * The guard: each step only when the result is still over the budget. A text
- * it cuts further is vetted again (`projectText`), so a cut never splits a
- * placeholder or makes a secret.
+ * Jira's shrink stages, in order (P4b2): the warnings to one fixed entry; row
+ * texts to 200; the summary to the counts; every link dropped. A row's
+ * operation, key, outcome and created key are never removed.
  */
-function shrunk(
-  result: ProjectedResult,
+function jiraShrinkStages(
   warningCount: number,
   counts: string,
   credential: AtlassianCredential,
-  budget: number,
-): ProjectedResult {
-  const over = (): boolean => JSON.stringify(result).length > budget;
-  if (over() && result.warnings)
-    result.warnings = [
-      projectText(
-        `${warningCount} warning(s) omitted.`,
-        credential,
-        WARNING_MAX,
-        REDACTED,
-      ),
-    ];
-  if (over())
-    for (const item of result.items) {
-      if (item.warning !== undefined)
-        item.warning = projectText(
-          item.warning,
-          credential,
-          SHRUNK_TEXT_MAX,
-          WARNING_WITHHELD,
-        );
-      if (item.error !== undefined)
-        item.error = projectText(
-          item.error,
-          credential,
-          SHRUNK_TEXT_MAX,
-          ITEM_ERROR_FALLBACK,
-        );
-    }
-  if (over()) result.summary = counts;
-  if (over()) {
-    delete result.url;
-    for (const item of result.items) delete item.url;
-  }
-  return result;
+): ((result: ProjectedResult) => void)[] {
+  return [
+    (result) => {
+      if (result.warnings)
+        result.warnings = [
+          projectText(
+            `${warningCount} warning(s) omitted.`,
+            credential,
+            WARNING_MAX,
+            REDACTED,
+          ),
+        ];
+    },
+    (result) => {
+      for (const item of result.items) {
+        if (item.warning !== undefined)
+          item.warning = projectText(
+            item.warning,
+            credential,
+            SHRUNK_TEXT_MAX,
+            WARNING_WITHHELD,
+          );
+        if (item.error !== undefined)
+          item.error = projectText(
+            item.error,
+            credential,
+            SHRUNK_TEXT_MAX,
+            ITEM_ERROR_FALLBACK,
+          );
+      }
+    },
+    (result) => {
+      result.summary = counts;
+    },
+    (result) => {
+      delete result.url;
+      for (const item of result.items) delete item.url;
+    },
+  ];
 }
 
 /**
@@ -397,6 +345,60 @@ function callFieldMap(config: ReturnType<typeof jiraConfigOf>) {
   };
 }
 
+type JiraConfig = ReturnType<typeof jiraConfigOf>;
+type JiraPrepared = Awaited<ReturnType<typeof buildJiraMutationItems>>;
+type JiraApplied = Awaited<ReturnType<typeof applyJiraMutationItems>>;
+
+/** Jira's texts, config and D-W2 mapper for the shared runner. */
+const JIRA_WRITE: WriteProduct<JiraConfig> = {
+  prepareTooLong: PREPARE_TOO_LONG,
+  nothingWritten: NOTHING_WRITTEN,
+  prepareRefusalFallback: `Jira refused the change.${NOTHING_WRITTEN}`,
+  allFailedFallback: "Every Jira change failed.",
+  configOf: jiraConfigOf,
+  describeError: describeWriteFailure,
+  isAllFailed: (err): err is JiraMutationError =>
+    err instanceof JiraMutationError,
+};
+
+/**
+ * One call's phases: prepare's reads on its own signal, apply on the call's;
+ * the field list prepare resolved is kept for apply (`callFieldMap`).
+ */
+function jiraPhases(
+  items: JiraMutationParams["items"],
+): (
+  config: JiraConfig,
+  credential: AtlassianCredential,
+) => WritePhases<JiraPrepared, JiraApplied> {
+  return (config, credential) => {
+    const fieldMap = callFieldMap(config);
+    return {
+      prepare(signal) {
+        const read = edgeReadDeps(config, signal);
+        return buildJiraMutationItems(config, items ?? [], {
+          signal,
+          fieldMap: fieldMap.prepare(signal),
+          issueLinkTypes: read.issueLinkTypes,
+          describeError: (err) =>
+            describeWriteFailure(err, credential, [signal]),
+          matchesHttpStatus: (err, statuses) =>
+            err instanceof AtlassianHttpError && statuses.includes(err.status),
+        });
+      },
+      apply(prepared, signal, stopBefore) {
+        return applyJiraMutationItems(config, prepared.items, {
+          signal,
+          fieldMap: fieldMap.apply(signal),
+          describeError: (err) =>
+            describeWriteFailure(err, credential, [signal]),
+          stopBefore,
+        });
+      },
+    };
+  };
+}
+
 export const jiraMutateIssue: AtlassianToolDescriptor = {
   name: "jira_mutate_issue",
   description: JIRA_MUTATE_ISSUE_EDGE_DESCRIPTION,
@@ -407,84 +409,11 @@ export const jiraMutateIssue: AtlassianToolDescriptor = {
   maxResultChars: 60_000,
   deadlineMs: WRITE_DEADLINE_MS,
   async execute(params, ctx) {
-    // Nothing goes upstream before the credential is here.
-    const credential = await ctx.credential();
-    const config = jiraConfigOf(credential);
-    if (ctx.signal.aborted) throw abortError();
-    const prepareEndsAt = ctx.deadlineAt - PREPARE_RESERVE_MS;
-    const budgetMs = prepareEndsAt - Date.now();
-    if (budgetMs <= 0) throw new ToolError(PREPARE_TOO_LONG);
-
-    const fieldMap = callFieldMap(config);
-    const budget = new AbortController();
-    const prepareSignal = AbortSignal.any([ctx.signal, budget.signal]);
-    const read = edgeReadDeps(config, prepareSignal);
-    let prepared: Awaited<ReturnType<typeof buildJiraMutationItems>>;
-    const timer = setTimeout(() => budget.abort(), budgetMs);
-    try {
-      prepared = await raceAbort(
-        buildJiraMutationItems(
-          config,
-          (params as JiraMutationParams).items ?? [],
-          {
-            signal: prepareSignal,
-            fieldMap: fieldMap.prepare(prepareSignal),
-            issueLinkTypes: read.issueLinkTypes,
-            describeError: (err) =>
-              describeWriteFailure(err, credential, [prepareSignal]),
-            matchesHttpStatus: (err, statuses) =>
-              err instanceof AtlassianHttpError &&
-              statuses.includes(err.status),
-          },
-        ),
-        prepareSignal,
-      );
-    } catch (err) {
-      // By the prepare phase's own signals, the caller's first.
-      if (ctx.signal.aborted) throw err;
-      if (budget.signal.aborted) throw new ToolError(PREPARE_TOO_LONG);
-      // The joined text is what leaves, so it is what is vetted (fix-2).
-      throw new ToolError(
-        projectText(
-          describeWriteFailure(err, credential, [prepareSignal]) +
-            NOTHING_WRITTEN,
-          credential,
-          PREPARE_REFUSAL_MAX,
-          PREPARE_REFUSAL_FALLBACK,
-        ),
-      );
-    } finally {
-      clearTimeout(timer);
-    }
-    // The fence: a prepare that settled at or after its budget never writes,
-    // even when the budget's timer callback has not run yet.
-    if (ctx.signal.aborted) throw abortError();
-    if (budget.signal.aborted || Date.now() >= prepareEndsAt)
-      throw new ToolError(PREPARE_TOO_LONG);
-
-    const stopAt = ctx.deadlineAt - STOP_CUTOFF_MS;
-    let applied: Awaited<ReturnType<typeof applyJiraMutationItems>>;
-    try {
-      applied = await applyJiraMutationItems(config, prepared.items, {
-        signal: ctx.signal,
-        fieldMap: fieldMap.apply(ctx.signal),
-        describeError: (err) =>
-          describeWriteFailure(err, credential, [ctx.signal]),
-        stopBefore: () => (Date.now() > stopAt ? STOP_TEXT : undefined),
-      });
-    } catch (err) {
-      if (ctx.signal.aborted) throw err;
-      if (err instanceof JiraMutationError)
-        throw new ToolError(
-          projectText(
-            err.message,
-            credential,
-            ALL_FAILED_MAX,
-            ALL_FAILED_FALLBACK,
-          ),
-        );
-      throw err;
-    }
+    const { credential, prepared, applied } = await runWrite(
+      ctx,
+      JIRA_WRITE,
+      jiraPhases((params as JiraMutationParams).items),
+    );
     return projectMutationResult(
       {
         items: prepared.items,
