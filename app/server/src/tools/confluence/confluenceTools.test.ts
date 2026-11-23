@@ -872,6 +872,39 @@ describe("confluence_mutate_page execution", () => {
     expect(writes("PUT")).toEqual([]);
     expect(writes("POST")).toEqual([]);
   });
+
+  // Task-1463 P5a: the local executor applies without a signal, so every
+  // request keeps the arguments it always had (PUT 5, DELETE 6, no options
+  // object anywhere naming a signal).
+  test("the local executor applies without a signal, keeping every call's arguments", async () => {
+    const { sessionId } = await stage([
+      {
+        operation: "edit",
+        page: "123",
+        body: "Added line",
+        addLabels: ["new"],
+        removeLabels: ["old"],
+      },
+    ]);
+    fetchMock.mockClear();
+    await resolveApproval(
+      approvalsForSession(sessionId).at(-1)!.id,
+      "approved",
+    );
+    const calls = fetchMock.mock.calls;
+    const byMethod = (method: string) =>
+      calls.filter((call) => call[2] === method);
+    expect(byMethod("PUT").map((call) => call.length)).toEqual([5]);
+    expect(byMethod("DELETE").map((call) => call.length)).toEqual([6]);
+    expect(byMethod("POST")).toHaveLength(1);
+    for (const call of calls)
+      expect(
+        call.some(
+          (arg) => typeof arg === "object" && arg !== null && "signal" in arg,
+        ),
+        `${call[2]} ${String(call[3])}`,
+      ).toBe(false);
+  });
 });
 
 describe("legacy storage pages", () => {
