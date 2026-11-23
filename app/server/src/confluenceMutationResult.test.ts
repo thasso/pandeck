@@ -6,8 +6,9 @@
  * merged onto the sent item rebuilds the applied one; then vetting, the
  * record check and the merge on hand-made items. Every value is fake.
  *
- * Not yet asserted here (M2): the effects ledger; every record carries
- * `possible` as a placeholder.
+ * A recording ledger over the applies' hooks (`writeScope.ts`) certifies each
+ * record's effects, and every non-GET request must reach `fetch` with a mark
+ * of its own.
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type {
@@ -38,6 +39,7 @@ import {
   ERROR_FALLBACK,
   ITEM_ERROR_MAX,
   ITEM_WARNING_MAX,
+  type Effects,
 } from "./mutationResultCodec.ts";
 import {
   json,
@@ -50,6 +52,7 @@ import {
   SITE,
   changedPaths,
   fakeVetting,
+  testLedger,
   wire,
 } from "./test/mutationResultHarness.ts";
 
@@ -90,17 +93,22 @@ async function run(
 ): Promise<{
   sent: ConfluencePageMutationItemDisplay[];
   applied: ConfluencePageMutationItemDisplay[];
+  effects: Effects[];
 }> {
-  let applying = false;
-  stubConfluenceWriteFetch((request) => options.answer?.(request, applying));
+  const ledger = testLedger();
+  stubConfluenceWriteFetch((request) => {
+    ledger.seen(request.method, request.path);
+    return options.answer?.(request, ledger.applying);
+  });
   const prepared = await buildConfluenceMutationItems(config, input, {
     freezeUpload: async () => FROZEN,
   });
   const sent = wire(prepared.items);
   const applied = wire(sent);
-  applying = true;
+  ledger.applying = true;
   try {
     await applyConfluenceMutationItems(config, applied, {
+      ...ledger.hooks,
       describeError: errorText,
       ...(options.withStagedBytes
         ? { stagedBytes: async () => new Uint8Array([1, 2, 3]) }
@@ -110,7 +118,12 @@ async function run(
   } catch (err) {
     if (!(err instanceof ConfluenceMutationError)) throw err;
   }
-  return { sent, applied: wire(applied) };
+  expect(ledger.unmarked).toEqual([]);
+  return {
+    sent,
+    applied: wire(applied),
+    effects: ledger.effects(applied.length),
+  };
 }
 
 const RESULT_PATHS = new Set<string>([
@@ -124,6 +137,7 @@ const reached = new Set<string>();
 function expectContract(
   sent: ConfluencePageMutationItemDisplay[],
   applied: ConfluencePageMutationItemDisplay[],
+  effects: Effects[],
 ): void {
   expect(checkConfluencePageItems(wire(sent))).toBe(true);
   for (const [index, item] of applied.entries()) {
@@ -134,7 +148,7 @@ function expectContract(
     }
     expect(confluenceProposalOf(item)).toEqual(before);
     const record = wire(
-      buildConfluenceResultRecord(item, before, fakeVetting, "possible"),
+      buildConfluenceResultRecord(item, before, fakeVetting, effects[index]!),
     );
     expect(checkConfluenceResult(record, before, SITE)).toBe(true);
     const card = wire(before);
@@ -189,7 +203,7 @@ const status400 = () => json({ message: "Bad request" }, 400);
 
 describe("completeness: apply changes only the contract's result fields", () => {
   test("every operation succeeds", async () => {
-    const { sent, applied } = await run(
+    const { sent, applied, effects } = await run(
       [CREATE, APPEND, RENAME, COMMENT, DELETE, DELETE_ATTACHMENT, UPLOAD],
       {
         withStagedBytes: true,
@@ -204,25 +218,27 @@ describe("completeness: apply changes only the contract's result fields", () => 
       resultId: "att1",
       resultVersion: 3,
     });
-    expectContract(sent, applied);
+    expect(effects).toEqual(Array(7).fill("possible"));
+    expectContract(sent, applied, effects);
   });
 
   test("failed label changes: a warning", async () => {
-    const { sent, applied } = await run([CREATE, APPEND], {
+    const { sent, applied, effects } = await run([CREATE, APPEND], {
       answer: (request) => (isLabelWrite(request) ? status400() : undefined),
     });
     expect(applied[1]!.warning).toMatch(/label changes failed/);
-    expectContract(sent, applied);
+    expectContract(sent, applied, effects);
   });
 
   test("an upload where apply has no staged bytes", async () => {
-    const { sent, applied } = await run([UPLOAD, RENAME]);
+    const { sent, applied, effects } = await run([UPLOAD, RENAME]);
     expect(applied[0]!.error).toMatch(/not available here/);
-    expectContract(sent, applied);
+    expect(effects).toEqual(["none", "possible"]);
+    expectContract(sent, applied, effects);
   });
 
   test("a page whose version moved since the proposal", async () => {
-    const { sent, applied } = await run([APPEND, RENAME], {
+    const { sent, applied, effects } = await run([APPEND, RENAME], {
       answer: (request, applying) =>
         applying && request.method === "GET" && request.path.endsWith("/123")
           ? json({
@@ -237,24 +253,31 @@ describe("completeness: apply changes only the contract's result fields", () => 
           : undefined,
     });
     expect(applied.every((item) => item.error !== undefined)).toBe(true);
-    expectContract(sent, applied);
+    // The version check refuses both before any write.
+    expect(effects).toEqual(["none", "none"]);
+    expectContract(sent, applied, effects);
   });
 
   test("a stop before the first item", async () => {
-    const { sent, applied } = await run([CREATE, DELETE_ATTACHMENT], {
+    const { sent, applied, effects } = await run([CREATE, DELETE_ATTACHMENT], {
       stopBefore: () => "Stopped.",
     });
     expect(applied.map((item) => item.error)).toEqual(["Stopped.", "Stopped."]);
-    expectContract(sent, applied);
+    expect(effects).toEqual(["none", "none"]);
+    expectContract(sent, applied, effects);
   });
 
   test("every write fails", async () => {
-    const { sent, applied } = await run([CREATE, APPEND, COMMENT, DELETE], {
-      answer: (request, applying) =>
-        applying && request.method !== "GET" ? status400() : undefined,
-    });
+    const { sent, applied, effects } = await run(
+      [CREATE, APPEND, COMMENT, DELETE],
+      {
+        answer: (request, applying) =>
+          applying && request.method !== "GET" ? status400() : undefined,
+      },
+    );
     expect(applied.every((item) => item.error !== undefined)).toBe(true);
-    expectContract(sent, applied);
+    expect(effects).toEqual(Array(4).fill("possible"));
+    expectContract(sent, applied, effects);
   });
 
   test("the cases reach every result field", () => {

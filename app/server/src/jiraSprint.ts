@@ -32,6 +32,7 @@ import {
   positiveInteger,
   type JiraSprintResponse,
 } from "./jiraSprintLookup.ts";
+import type { WriteScope } from "./writeScope.ts";
 
 export type JiraSprintItemInput = {
   sprintId?: number;
@@ -42,7 +43,7 @@ export type JiraSprintItemInput = {
 };
 
 /** What staging and applying a sprint item need besides the config. */
-export interface JiraSprintDeps {
+export interface JiraSprintDeps extends WriteScope {
   /** Carried by every request; an abort is never wrapped. */
   signal?: AbortSignal | undefined;
   describeError(err: unknown): string;
@@ -183,7 +184,7 @@ export async function executeJiraSprintItem(
         body,
         ...signalTail(deps.signal),
       ),
-    deps.signal,
+    deps,
   );
   const observed =
     typeof updated?.id === "number"

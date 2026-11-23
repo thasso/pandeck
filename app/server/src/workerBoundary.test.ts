@@ -664,8 +664,9 @@ test("the gateway's edge reaches the vault only through its port", () => {
  * Jira, Confluence and Slack read modules, the shared Jira mutation core
  * (prepare, apply, rank, sprint, permissions and their typed errors), the
  * shared Confluence mutation core (prepare, apply, attachment change and their
- * typed errors) and their helpers, the two-phase proposal checks and result
- * contracts (`CONTRACT_MODULES`), a closed set, plus the three Markdown
+ * typed errors) and their helpers, the applies' import-free write hooks
+ * (`writeScope.ts`), the two-phase proposal checks and result contracts
+ * (`CONTRACT_MODULES`), a closed set, plus the three Markdown
  * packages the ADF converter uses and Turndown, which the Confluence client
  * brings for the storage fallback; never a tool under `tools/`, settings, a
  * cache file, approvals, the session attachment store or `@assistant/shared`
@@ -708,6 +709,7 @@ const GATEWAY_TOOLS_ALLOWED = new Set([
   "slackMetadataCache.ts",
   "slackRead.ts",
   "slackUrls.ts",
+  "writeScope.ts",
   "@assistant/shared/confluenceMutation",
   "@assistant/shared/jiraMutation",
   "@assistant/shared/zonedTime",

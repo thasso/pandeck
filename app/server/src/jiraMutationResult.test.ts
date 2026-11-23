@@ -7,8 +7,9 @@
  * remaining cases pin vetting, the record check, the merge and the shrink
  * stages on hand-made items. Every value is fake.
  *
- * Not yet asserted here (M2): the effects ledger; every record carries
- * `possible` as a placeholder.
+ * A recording ledger over the applies' hooks (`writeScope.ts`) certifies each
+ * record's effects, and every non-GET request but the JQL search must reach
+ * `fetch` with a mark of its own.
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { JiraIssueMutationItemDisplay } from "@assistant/shared/jiraMutation";
@@ -42,6 +43,7 @@ import {
   NESTED_ERROR_OMITTED,
   SHRUNK_NESTED_ERROR_MAX,
   WARNING_FALLBACK,
+  type Effects,
 } from "./mutationResultCodec.ts";
 import {
   json,
@@ -58,6 +60,7 @@ import {
   SITE,
   changedPaths,
   fakeVetting,
+  testLedger,
   wire,
 } from "./test/mutationResultHarness.ts";
 
@@ -87,11 +90,13 @@ async function run(
 ): Promise<{
   sent: JiraIssueMutationItemDisplay[];
   applied: JiraIssueMutationItemDisplay[];
+  effects: Effects[];
 }> {
-  stubJiraFetch(
-    (request) =>
-      options.answer?.(request) ?? fakeJiraAnswer(request, options.fake),
-  );
+  const ledger = testLedger();
+  stubJiraFetch((request) => {
+    ledger.seen(request.method, request.path);
+    return options.answer?.(request) ?? fakeJiraAnswer(request, options.fake);
+  });
   let map: ReturnType<typeof buildFieldMap> | undefined;
   const fieldMap = async () =>
     (map ??= buildFieldMap({
@@ -107,8 +112,10 @@ async function run(
   });
   const sent = wire(prepared.items);
   const applied = wire(sent);
+  ledger.applying = true;
   try {
     await applyJiraMutationItems(config, applied, {
+      ...ledger.hooks,
       fieldMap,
       describeError: errorText,
       ...(options.stopBefore ? { stopBefore: options.stopBefore } : {}),
@@ -116,7 +123,12 @@ async function run(
   } catch (err) {
     if (!(err instanceof JiraMutationError)) throw err;
   }
-  return { sent, applied: wire(applied) };
+  expect(ledger.unmarked).toEqual([]);
+  return {
+    sent,
+    applied: wire(applied),
+    effects: ledger.effects(applied.length),
+  };
 }
 
 /** Every path a pure result field occupies. */
@@ -142,6 +154,7 @@ const reached = new Set<string>();
 function expectContract(
   sent: JiraIssueMutationItemDisplay[],
   applied: JiraIssueMutationItemDisplay[],
+  effects: Effects[],
 ): void {
   expect(checkJiraIssueItems(wire(sent))).toBe(true);
   for (const [index, item] of applied.entries()) {
@@ -157,7 +170,7 @@ function expectContract(
       issueKey: item.issueKey,
     });
     const record = wire(
-      buildJiraResultRecord(item, before, fakeVetting, "possible"),
+      buildJiraResultRecord(item, before, fakeVetting, effects[index]!),
     );
     expect(checkJiraResult(record, before, SITE)).toBe(true);
     const card = wire(before);
@@ -229,7 +242,7 @@ const isWriteRequest = (request: SeenJiraRequest) =>
 
 describe("completeness: apply changes only the contract's result fields", () => {
   test("every operation succeeds", async () => {
-    const { sent, applied } = await run([
+    const { sent, applied, effects } = await run([
       EDIT,
       TRANSITION,
       LINKS,
@@ -246,34 +259,35 @@ describe("completeness: apply changes only the contract's result fields", () => 
     });
     expect(applied[5]!.rankResultOrder).toBeDefined();
     expect(applied[7]!.sprint?.result).toBeDefined();
-    expectContract(sent, applied);
+    expect(effects).toEqual(Array(8).fill("possible"));
+    expectContract(sent, applied, effects);
   });
 
   test("a failed link: an edit's error and a created issue's warning", async () => {
-    const { sent, applied } = await run(
+    const { sent, applied, effects } = await run(
       [LINKS, { ...CREATE, linkChanges: LINKS.linkChanges }],
       { answer: (request) => (isLinkAdd(request) ? status400() : undefined) },
     );
     expect(applied[0]!.error).toBeDefined();
     expect(applied[0]!.linkChanges?.[0]).toMatchObject({ resultOk: false });
     expect(applied[1]!.warning).toMatch(/^Issue created, but/);
-    expectContract(sent, applied);
+    expectContract(sent, applied, effects);
   });
 
   test("a failed rank step, its order still observed", async () => {
-    const { sent, applied } = await run([RANK], {
+    const { sent, applied, effects } = await run([RANK], {
       answer: (request) => (isRankWrite(request) ? status400() : undefined),
     });
     expect(applied[0]!.error).toBeDefined();
     expect(applied[0]!.rankSteps?.[0]).toMatchObject({ resultOk: false });
     expect(applied[0]!.rankResultOrder).toBeDefined();
-    expectContract(sent, applied);
+    expectContract(sent, applied, effects);
   });
 
   test("a rank whose order cannot be observed", async () => {
     // Prepare searches too; only apply's read-back after the rank fails.
     let ranked = false;
-    const { sent, applied } = await run([RANK], {
+    const { sent, applied, effects } = await run([RANK], {
       answer: (request) => {
         if (isRankWrite(request)) ranked = true;
         return isSearch(request) && ranked ? status400() : undefined;
@@ -281,11 +295,11 @@ describe("completeness: apply changes only the contract's result fields", () => 
     });
     expect(applied[0]!.error).toBeUndefined();
     expect(applied[0]!.rankResultOrder).toBeUndefined();
-    expectContract(sent, applied);
+    expectContract(sent, applied, effects);
   });
 
   test("a sprint Jira partly or wholly ignores", async () => {
-    const { sent, applied } = await run(
+    const { sent, applied, effects } = await run(
       [SPRINT, { operation: "sprint", sprintId: 6, sprintName: "Renamed" }],
       {
         // Jira answers the sprint unchanged: the goal lands only for sprint 5.
@@ -307,24 +321,30 @@ describe("completeness: apply changes only the contract's result fields", () => 
     expect(applied[0]!.error).toBeUndefined();
     expect(applied[1]!.error).toMatch(/kept the sprint's/);
     expect(applied[1]!.sprint?.result).toBeDefined();
-    expectContract(sent, applied);
+    expectContract(sent, applied, effects);
   });
 
   test("a stop before the first item", async () => {
-    const { sent, applied } = await run([EDIT, CREATE], {
+    const { sent, applied, effects } = await run([EDIT, CREATE], {
       stopBefore: () => "Stopped.",
     });
     expect(applied.map((item) => item.error)).toEqual(["Stopped.", "Stopped."]);
-    expectContract(sent, applied);
+    expect(effects).toEqual(["none", "none"]);
+    expectContract(sent, applied, effects);
   });
 
   test("every write fails", async () => {
-    const { sent, applied } = await run([EDIT, CREATE, COMMENT, SPRINT], {
-      answer: (request) =>
-        isWriteRequest(request) ? status400("Refused") : undefined,
-    });
+    const { sent, applied, effects } = await run(
+      [EDIT, CREATE, COMMENT, SPRINT],
+      {
+        answer: (request) =>
+          isWriteRequest(request) ? status400("Refused") : undefined,
+      },
+    );
     expect(applied.every((item) => item.error !== undefined)).toBe(true);
-    expectContract(sent, applied);
+    // A refused write was still sent: its item may have changed.
+    expect(effects).toEqual(Array(4).fill("possible"));
+    expectContract(sent, applied, effects);
   });
 
   test("the cases reach every result field, and issueKey", () => {

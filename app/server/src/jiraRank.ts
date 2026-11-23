@@ -46,6 +46,7 @@ import {
   stopIfAborted,
   withSignal,
 } from "./jiraRead.ts";
+import type { WriteScope } from "./writeScope.ts";
 
 /** Jira caps one rank call at 50 issues; the chain honours the same ceiling. */
 const RANK_MAX_ISSUES = 50;
@@ -80,7 +81,8 @@ export interface JiraRankDeps {
 }
 
 /** What applying a rank item needs besides the config. */
-type JiraRankApplyDeps = Pick<JiraRankDeps, "signal" | "describeError">;
+type JiraRankApplyDeps = Pick<JiraRankDeps, "signal" | "describeError"> &
+  WriteScope;
 
 type JiraRankBuildResult = {
   item: JiraIssueMutationItemDisplay;
@@ -233,7 +235,7 @@ export async function executeJiraRankItem(
   let failure: string | null = null;
   for (const [index, step] of steps.entries()) {
     try {
-      await rankOne(config, step, deps.signal);
+      await rankOne(config, step, deps);
       step.resultOk = true;
       delete step.error;
       applied.push(step.issueKey);
@@ -271,8 +273,9 @@ type RankEntry = { issueId?: number; status?: number; errors?: string[] };
 async function rankOne(
   config: JiraConfig,
   step: JiraIssueRankStepDisplay,
-  signal: AbortSignal | undefined,
+  scope: WriteScope,
 ): Promise<void> {
+  const { signal } = scope;
   const response = await jiraWrite(
     () =>
       jiraPut<{ entries?: RankEntry[] }>(
@@ -286,7 +289,7 @@ async function rankOne(
         },
         ...signalTail(signal),
       ),
-    signal,
+    scope,
   );
   // A multi-status reply is a 2xx: the failure only shows up per entry.
   const failed = (response?.entries ?? []).filter(

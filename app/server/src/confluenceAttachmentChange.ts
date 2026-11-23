@@ -47,6 +47,7 @@ import {
   requireCurrentForDelete,
   signalTail,
 } from "./confluenceMutationErrors.ts";
+import type { WriteScope } from "./writeScope.ts";
 
 /** Attachment ids are `att<digits>`; a bare number is taken as the same id. */
 export function normalizeAttachmentId(value: string): string {
@@ -262,7 +263,7 @@ interface V1AttachmentResponse {
 }
 
 /** What applying an attachment item needs besides the config and the item. */
-export interface AttachmentApplyDeps {
+export interface AttachmentApplyDeps extends WriteScope {
   /** Carried by every request; an abort propagates unwrapped. */
   signal?: AbortSignal | undefined;
   /**
@@ -298,7 +299,7 @@ export async function executeAttachmentChange(
           `/wiki/api/v2/attachments/${encodeURIComponent(id)}`,
           ...signalTail(signal),
         ),
-      signal,
+      deps,
     );
     attachment.resultId = id;
   } else {
@@ -336,7 +337,7 @@ export async function executeAttachmentChange(
         confluencePost<
           V1AttachmentResponse & { results?: V1AttachmentResponse[] }
         >(config, path, form, ...signalTail(signal)),
-      signal,
+      deps,
     );
     const written = response.results?.[0] ?? response;
     attachment.resultId = written.id ?? attachment.existingId ?? null;

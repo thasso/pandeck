@@ -6,6 +6,7 @@
  * edge must not repeat raw upstream text.
  */
 import { AtlassianHttpError } from "./atlassian/atlassianFetch.ts";
+import type { WriteScope } from "./writeScope.ts";
 
 /**
  * The core's own refusal or failure text. It may embed what the caller's
@@ -20,15 +21,20 @@ export class JiraMutationError extends Error {}
  */
 export class JiraWriteHttpError extends AtlassianHttpError {}
 
-/** Runs one write request, retyping Jira's rejection as `JiraWriteHttpError`. */
+/**
+ * Runs one write request: `scope.beforeWrite` first (the edge's effects
+ * ledger, `writeScope.ts`), then the request, retyping Jira's rejection as
+ * `JiraWriteHttpError`.
+ */
 export async function jiraWrite<T>(
   call: () => Promise<T>,
-  signal?: AbortSignal,
+  scope: WriteScope = {},
 ): Promise<T> {
+  scope.beforeWrite?.();
   try {
     return await call();
   } catch (err) {
-    if (signal?.aborted) throw err;
+    if (scope.signal?.aborted) throw err;
     if (
       err instanceof AtlassianHttpError &&
       !(err instanceof JiraWriteHttpError)

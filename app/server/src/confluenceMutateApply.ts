@@ -46,9 +46,10 @@ import {
   signalTail,
   stopIfAborted,
 } from "./confluenceMutationErrors.ts";
+import type { ApplyHooks } from "./writeScope.ts";
 
 /** What apply needs besides the config and the approved items. */
-export interface ConfluenceApplyDeps extends AttachmentApplyDeps {
+export interface ConfluenceApplyDeps extends AttachmentApplyDeps, ApplyHooks {
   /** The text a failure becomes as an item error or a label warning. */
   describeError(err: unknown): string;
   /** Checked before each item: text stops that item and every later one, which get it as their error and send nothing. */
@@ -67,6 +68,7 @@ export async function applyConfluenceMutationItems(
   let succeeded = 0;
   for (const [index, item] of items.entries()) {
     stopIfAborted(deps.signal);
+    deps.startItem?.(index);
     const stop = deps.stopBefore?.();
     if (stop) {
       for (const rest of items.slice(index)) rest.error = stop;
@@ -146,7 +148,7 @@ async function executeCreate(
         },
         ...signalTail(signal),
       ),
-    signal,
+    deps,
   );
   const page = normalizeConfluencePage(created, config.host);
   item.resultPageId = page.id;
@@ -175,7 +177,7 @@ async function executeComment(
         },
         ...signalTail(signal),
       ),
-    signal,
+    deps,
   );
   item.resultPageId = item.pageId ?? null;
   item.resultPageUrl =
@@ -249,7 +251,7 @@ async function executeDelete(
         `/wiki/api/v2/pages/${encodeURIComponent(item.pageId ?? "")}`,
         ...signalTail(signal),
       ),
-    signal,
+    deps,
   );
   item.resultPageId = item.pageId ?? null;
   item.resultPageUrl = null;
@@ -304,7 +306,7 @@ async function executeEdit(
           },
           ...signalTail(signal),
         ),
-      signal,
+      deps,
     );
   } else if (item.newTitle?.trim()) {
     await confluenceWrite(
@@ -319,7 +321,7 @@ async function executeEdit(
           },
           ...signalTail(signal),
         ),
-      signal,
+      deps,
     );
   }
   item.resultPageId = item.pageId ?? null;
@@ -377,7 +379,7 @@ async function applyLabels(
             [{ prefix: "global", name }],
             ...signalTail(signal),
           ),
-        signal,
+        deps,
       );
     } catch (err) {
       if (signal?.aborted) throw err;
@@ -393,7 +395,7 @@ async function applyLabels(
             `/wiki/rest/api/content/${encodeURIComponent(pageId)}/label/${encodeURIComponent(name)}`,
             ...signalTail(signal),
           ),
-        signal,
+        deps,
       );
     } catch (err) {
       if (signal?.aborted) throw err;

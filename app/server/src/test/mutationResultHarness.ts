@@ -7,8 +7,10 @@
 import {
   IDENTIFIER_FORMATS,
   siteUrl,
+  type Effects,
   type ResultVetting,
 } from "../mutationResultCodec.ts";
+import type { ApplyHooks } from "../writeScope.ts";
 
 export const SITE = "acme.atlassian.net";
 /** What the fake vetting treats as the call's secret: a plain marker. */
@@ -70,4 +72,51 @@ export function changedPaths(
     );
   }
   return [path];
+}
+
+/** The JQL search: the one non-GET request the applies send that is a read. */
+const SEARCH_PATH = "/rest/api/3/search/jql";
+
+/** A recording effects ledger over the shared applies' hooks (P6-F4). */
+export interface TestLedger {
+  hooks: Required<Pick<ApplyHooks, "beforeWrite" | "startItem">>;
+  /** Set once prepare is done: only apply may write. */
+  applying: boolean;
+  /** Called for every request as it reaches `fetch`. */
+  seen(method: string, path: string): void;
+  /** Each item's certified effects: `possible` once a write was marked for it. */
+  effects(count: number): Effects[];
+  /** Non-GET requests that reached `fetch` without a mark of their own. */
+  unmarked: string[];
+}
+
+export function testLedger(): TestLedger {
+  let item = -1;
+  let marks = 0;
+  const marked = new Set<number>();
+  const unmarked: string[] = [];
+  const ledger: TestLedger = {
+    hooks: {
+      startItem(index) {
+        item = index;
+      },
+      beforeWrite() {
+        marked.add(item);
+        marks += 1;
+      },
+    },
+    applying: false,
+    seen(method, path) {
+      if (method === "GET" || (method === "POST" && path === SEARCH_PATH))
+        return;
+      if (ledger.applying && marks > 0) marks -= 1;
+      else unmarked.push(`${method} ${path}`);
+    },
+    effects: (count) =>
+      Array.from({ length: count }, (_, index) =>
+        marked.has(index) ? "possible" : "none",
+      ),
+    unmarked,
+  };
+  return ledger;
 }
