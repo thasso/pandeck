@@ -85,7 +85,12 @@ const HANDSHAKE_TIMEOUT_MS = 10_000;
 const KEEPALIVE_MS = 15_000;
 const LOGIN_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const MAX_INPUT_CHARS = 8_192;
-/** A connect's authorization code and redirect URI, each at most this. */
+/**
+ * A connect's authorization code: Atlassian's grows with the scopes granted
+ * (2,581 characters for the 29-scope list), so it gets the token bound.
+ */
+const MAX_CONNECT_CODE_CHARS = 8_192;
+/** A connect's redirect URI, at most this. */
 const MAX_CONNECT_FIELD_CHARS = 2_048;
 const CODE_RE = /^[\x21-\x7e]+$/;
 /** A login is withdrawn after this long, as the edge's are (`logins.ts`). */
@@ -461,7 +466,7 @@ export async function startVaultServer(
       const { code, redirectUri, site, team } = body;
       if (
         typeof code !== "string" ||
-        code.length > MAX_CONNECT_FIELD_CHARS ||
+        code.length > MAX_CONNECT_CODE_CHARS ||
         !CODE_RE.test(code) ||
         typeof redirectUri !== "string" ||
         redirectUri.length > MAX_CONNECT_FIELD_CHARS ||

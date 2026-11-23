@@ -667,7 +667,7 @@ test("Slack's error answers denied or failed and its text goes nowhere; a missin
     [{ code: "" }, "/?slack=failed"],
     [{ code: `${FAKE_SLACK_CODE} x` }, "/?slack=failed"],
     [{ code: `${FAKE_SLACK_CODE}é` }, "/?slack=failed"],
-    [{ code: "x".repeat(2_049) }, "/?slack=failed"],
+    [{ code: "x".repeat(8_193) }, "/?slack=failed"],
   ];
   for (const [query, location] of cases) {
     const { state, pending } = await started(port, session);
@@ -677,11 +677,11 @@ test("Slack's error answers denied or failed and its text goes nowhere; a missin
       JSON.stringify(query),
     );
   }
-  // 2,048 printable characters are still a code.
+  // 8,192 printable characters are still a code.
   const { state, pending } = await started(port, session);
   assert.equal(
     redirected(
-      await callback(port, { code: "x".repeat(2_048), state }, [
+      await callback(port, { code: "x".repeat(8_192), state }, [
         session,
         pending,
       ]),
