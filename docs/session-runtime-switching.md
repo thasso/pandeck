@@ -535,9 +535,10 @@ keeps the clean user text.
   model's context window, less what a resumed native session already holds, less
   a reserve of the larger of 16,000 tokens or a quarter of the window. What it
   holds is the context size its last reply reported (walking back the resume
-  chain); when it never reported one, every log record before it was left,
-  estimated, which can only overstate it. When nothing fits, only the note goes.
-  Tokens are estimated at four characters each.
+  chain while a binding still names that native session: one a /clear replaced
+  was resumed no further); when it never reported one, every log record before
+  it was left, estimated, which can only overstate it. When nothing fits, only
+  the note goes. Tokens are estimated at four characters each.
 - **Switch note:** what changed ("moved from GPT-6 · OpenAI to Claude Opus ·
   Work"); that reasoning and tool state did not carry over; the session's own id
   with `session_read({ sessionId, at, includeToolResults: true })` and
@@ -654,11 +655,17 @@ holds what the bindings it resumed (`resumedSeq`) wrote; anchors are read only
 from that chain, so an entry another engine wrote never names the cut. The fork
 runs on that binding's engine, from its native session at its account, model and
 effort; the child gets that binding only. The native session is read where it
-lives now: a return on another Claude account copies the transcript and removes
-the old copy, so the account is the one of the last binding on its `resumedSeq`
-chain of the same engine, never one inferred from equal native ids. An entry
-with no anchor in its owner's chain is refused like any anchorless fork. A
-session that never switched forks exactly as before.
+lives now (`nativeAccount`). A return on another Claude account copies the
+newest Claude binding's native session as it ended and removes the old copy, so
+a return moved a native session on only while the binding it resumed still named
+it; once a /clear gave that binding a new one, later returns moved the new one.
+The account derived along that `resumedSeq` chain is then checked on disk: an
+in-place account move carries only the active binding's current native session,
+so one a clear replaced stays on an account no binding names. When the derived
+account does not hold it, the session's other Claude accounts and then every
+Claude account are asked (the set the delete sweep scans). An entry with no
+anchor in its owner's chain is refused like any anchorless fork. A session that
+never switched forks exactly as before.
 
 ### Task links
 

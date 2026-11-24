@@ -321,6 +321,62 @@ test("a return's budget leaves room for what the resumed native session already 
   assert.doesNotMatch(owedSwitchContext(unknown) ?? "", /pi answered/);
 });
 
+test("a return's budget never takes the size an earlier native session reported once a clear replaced it (F036 sibling)", () => {
+  const window = pickerModels().find(
+    (option) => option.provider === "claude" && option.id === "opus",
+  )?.contextWindow;
+  assert.ok(window);
+  const id = `switch-handoff-${Date.now()}-cleared`;
+  const toClaude = (
+    expectSeq: number,
+    native: string,
+    startedSeq: number,
+    resumedSeq: number,
+  ) =>
+    sessionStore.switchEngineBinding(id, {
+      nativeUsage: null,
+      expectSeq,
+      fields: {
+        harness: "claude-sdk",
+        credentialProfileId: "claude-default",
+        provider: "claude",
+        model: "opus",
+        thinkingLevel: "high",
+        providerSessionId: native,
+      },
+      nativeSessionId: native,
+      startedSeq,
+      resumedSeq,
+      pending: { ...PENDING, model: { provider: "claude", id: "opus" } },
+    });
+  // N reported a light context; the first return resumed it, was cleared and
+  // started M, whose run reported nothing and whose log fills the window.
+  onClaude(id, `native-n-${id}`);
+  append(id, [
+    message(1, "user", "asked on claude"),
+    {
+      ...message(2, "assistant", "claude answered"),
+      usage: { contextTokens: 2_000, contextWindowTokens: window },
+    },
+  ]);
+  toPi(id, 1, 3);
+  append(id, [message(3, "user", "asked on pi")]);
+  toClaude(2, `native-m-${id}`, 5, 1);
+  append(id, [
+    message(5, "user", "x ".repeat(window * 2)),
+    message(6, "assistant", "claude answered after the clear"),
+  ]);
+  toPi(id, 3, 7);
+  append(id, [
+    message(7, "user", "asked on pi again"),
+    message(8, "assistant", "pi answered"),
+  ]);
+  // The return resumes M: what it holds is unknown, so it is estimated from
+  // the log, never taken from N's report.
+  toClaude(4, `native-m-${id}`, 9, 3);
+  assert.doesNotMatch(owedSwitchContext(id) ?? "", /pi answered/);
+});
+
 test("a kind change within pi owes nothing: its transcript resumed holds the whole session", () => {
   const id = `switch-handoff-${Date.now()}-pi-kind`;
   ids.push(id);

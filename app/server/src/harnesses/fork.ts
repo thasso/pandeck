@@ -7,6 +7,7 @@
  */
 import type { AgentType, Harness } from "@assistant/shared";
 import { claudeSdkStore } from "../claudeSdk/claudeSdkStore.ts";
+import { claudeTranscriptHolder } from "../claudeSdk/profileSessionStore.ts";
 import type { SessionEngineBinding } from "../db/sessionEngineBinding.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import {
@@ -145,11 +146,11 @@ const engines: Record<Harness, (request: ForkRequest) => PreparedFork> = {
       };
     const { anchor, entryId: keepThroughEntryId } = cut;
     return {
-      fork: () =>
+      fork: async () =>
         claudeSdkStore.forkSession(id, {
           anchor,
           keepThroughEntryId,
-          ...(binding ? { binding: claudeBindingCut(id, binding) } : {}),
+          ...(binding ? { binding: await claudeBindingCut(id, binding) } : {}),
           forkOrigin: {
             harness: "claude-sdk",
             parentSessionId: id,
@@ -217,38 +218,76 @@ const engines: Record<Harness, (request: ForkRequest) => PreparedFork> = {
 /**
  * What a Claude fork of an earlier binding cuts and runs on, not the record's:
  * its native session, read from the account that holds it now
- * ({@link nativeHolder}), and its model and effort.
+ * ({@link nativeAccount}), and its model and effort.
  */
-function claudeBindingCut(sessionId: string, binding: SessionEngineBinding) {
-  const holder = nativeHolder(sessionId, binding);
+async function claudeBindingCut(
+  sessionId: string,
+  binding: SessionEngineBinding,
+) {
+  const native = binding.nativeSessionId;
+  const account = native
+    ? await nativeAccount(sessionId, binding, native)
+    : binding.credentialProfileId;
   return {
-    ...(binding.nativeSessionId
-      ? { nativeSessionId: binding.nativeSessionId }
-      : {}),
-    ...(holder.credentialProfileId
-      ? { credentialProfileId: holder.credentialProfileId }
-      : {}),
+    ...(native ? { nativeSessionId: native } : {}),
+    ...(account ? { credentialProfileId: account } : {}),
     ...(binding.model ? { modelId: binding.model } : {}),
     ...(binding.thinkingLevel ? { thinkingLevel: binding.thinkingLevel } : {}),
   };
 }
 
 /**
- * The binding whose account holds `binding`'s native Claude transcript now. A
- * return that resumed it on another account copied it there and removed the
- * earlier account's copy (`engineSwitch.ts`), and a same-kind account move
- * rebinds the active binding in place; so the transcript lives with the last
- * binding of the resume chain that continues it. Followed through the
- * recorded `resumedSeq`, never inferred from equal native ids.
+ * The account whose store holds `native`, `binding`'s Claude transcript, now.
+ *
+ * Where it went is derived first ({@link nativeHolder}) and then checked on
+ * disk, because one move is not recorded: an in-place account move carries
+ * only the active binding's CURRENT native session, so one a /clear replaced
+ * stays on an account the binding no longer names. Then the session's other
+ * Claude accounts (newest binding first) and every Claude account are asked,
+ * the set the delete sweep scans. Native ids are the SDK's UUIDs, so a store
+ * holding this one holds this session's transcript. When none does, the
+ * derived account stands and the fork fails at its load as before.
+ */
+async function nativeAccount(
+  sessionId: string,
+  binding: SessionEngineBinding,
+  native: string,
+): Promise<string | undefined> {
+  const derived = nativeHolder(sessionId, binding, native).credentialProfileId;
+  const chain = sessionStore
+    .bindings(sessionId)
+    .filter((other) => other.harness === binding.harness)
+    .sort((a, b) => b.seq - a.seq)
+    .flatMap((other) =>
+      other.credentialProfileId ? [other.credentialProfileId] : [],
+    );
+  return (
+    (await claudeTranscriptHolder(native, [
+      ...(derived ? [derived] : []),
+      ...chain,
+    ])) ?? derived
+  );
+}
+
+/**
+ * The binding whose account `native`, `binding`'s native Claude transcript, was
+ * last moved to. A return resumes the newest Claude binding's native session
+ * as it ended (`planResume` in `engineSwitch.ts`), copying it to the return's
+ * account and removing the earlier copy. So a return (`resumedSeq`) moved
+ * `native` on only while the binding it resumed still named it; once a /clear
+ * gave that binding a new native session, later returns moved the new one and
+ * `native` stayed with it. Never inferred from equal native ids of unrelated
+ * bindings.
  */
 function nativeHolder(
   sessionId: string,
   binding: SessionEngineBinding,
+  native: string,
 ): SessionEngineBinding {
   const all = sessionStore.bindings(sessionId);
   let holder = binding;
   const seen = new Set([binding.seq]);
-  for (;;) {
+  while (holder.nativeSessionId === native) {
     const next = all
       .filter(
         (other) =>
@@ -257,10 +296,11 @@ function nativeHolder(
           !seen.has(other.seq),
       )
       .sort((a, b) => b.seq - a.seq)[0];
-    if (!next) return holder;
+    if (!next) break;
     seen.add(next.seq);
     holder = next;
   }
+  return holder;
 }
 
 /**

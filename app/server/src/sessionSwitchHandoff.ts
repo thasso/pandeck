@@ -58,8 +58,11 @@ function modelFor(end: SwitchEnd) {
 /**
  * What a resumed native session already holds: the context size it last
  * reported, from the newest binding along its resume chain that reported one.
- * Unknown (it never replied): every record it could hold, estimated, which can
- * only overstate it (a compacted session holds less).
+ * The chain is followed only while a binding still names that native session:
+ * one a /clear replaced was resumed no further, so an earlier binding's report
+ * measures another conversation. Unknown (it never replied): every record it
+ * could hold, estimated, which can only overstate it (a compacted session
+ * holds less).
  */
 function resumedContextTokens(
   sessionId: string,
@@ -70,7 +73,7 @@ function resumedContextTokens(
   const logPath = logPathFor(sessionId);
   for (
     let binding: SessionEngineBinding | undefined = resumed;
-    binding;
+    binding && binding.nativeSessionId === resumed.nativeSessionId;
     binding =
       binding.resumedSeq !== undefined
         ? all.find((other) => other.seq === binding?.resumedSeq)
@@ -260,6 +263,7 @@ function estimateKey(
       binding.startedSeq,
       binding.resumedSeq ?? null,
       binding.credentialProfileId ?? null,
+      binding.nativeSessionId ?? null,
     ]),
     active?.seq ?? null,
     target,

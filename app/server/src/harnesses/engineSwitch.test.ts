@@ -1168,12 +1168,13 @@ test("the same engine and account kind is not an engine switch", async () => {
   assert.equal(sessionStore.bindings(id).length, 1);
 });
 
-test("a fork of an earlier Claude binding reads its transcript where a return on another account moved it (F036)", async () => {
-  const id = freshId();
-  // The shared turn seam answers as "provider-store" for every session, an id
-  // only the first session to claim it keeps: this one answers as its own.
-  const native = `native-${id}`;
-  claudeSdkStore.setSeam(() =>
+/**
+ * The turn seam, answering as the native session `native()` names. The shared
+ * one answers as "provider-store" for every session, an id only the first
+ * session to claim it keeps.
+ */
+function answeringAs(native: () => string) {
+  return () =>
     Promise.resolve({
       ...claudeTurnSeam,
       query(...args: Parameters<typeof claudeTurnSeam.query>) {
@@ -1181,12 +1182,48 @@ test("a fork of an earlier Claude binding reads its transcript where a return on
         return {
           async *[Symbol.asyncIterator]() {
             for await (const message of turn)
-              yield { ...message, session_id: native } as typeof message;
+              yield { ...message, session_id: native() } as typeof message;
           },
         };
       },
-    }),
-  );
+    });
+}
+
+/**
+ * A seam whose fork loads the native transcript from the store it was handed,
+ * as the SDK does, and records that store's root.
+ */
+function forkLoadingSeam(roots: Array<string | undefined>) {
+  return () =>
+    Promise.resolve({
+      ...claudeTurnSeam,
+      forkSession: async (
+        nativeId: string,
+        opts: {
+          sessionStore?: {
+            root?: string;
+            load: (key: {
+              projectKey: string;
+              sessionId: string;
+            }) => Promise<unknown>;
+          };
+        },
+      ) => {
+        roots.push(opts.sessionStore?.root);
+        const entries = await opts.sessionStore!.load({
+          projectKey: "p",
+          sessionId: nativeId,
+        });
+        if (!entries) throw new Error("the native transcript is missing");
+        return { sessionId: `fork-${freshId()}` };
+      },
+    } as never);
+}
+
+test("a fork of an earlier Claude binding reads its transcript where a return on another account moved it (F036)", async () => {
+  const id = freshId();
+  const native = `native-${id}`;
+  claudeSdkStore.setSeam(answeringAs(() => native));
   try {
     await onClaude(id);
   } finally {
@@ -1224,32 +1261,8 @@ test("a fork of an earlier Claude binding reads its transcript where a return on
     await vi.waitFor(() => assert.equal(existsSync(oldFile), false));
     assert.equal(existsSync(join(projects(b.id), `${native}.jsonl`)), true);
 
-    let root: string | undefined;
-    claudeSdkStore.setSeam(() =>
-      Promise.resolve({
-        ...claudeTurnSeam,
-        forkSession: async (
-          nativeId: string,
-          opts: {
-            sessionStore?: {
-              root?: string;
-              load: (key: {
-                projectKey: string;
-                sessionId: string;
-              }) => Promise<unknown>;
-            };
-          },
-        ) => {
-          root = opts.sessionStore?.root;
-          const entries = await opts.sessionStore!.load({
-            projectKey: "p",
-            sessionId: nativeId,
-          });
-          if (!entries) throw new Error("the native transcript is missing");
-          return { sessionId: `fork-${freshId()}` };
-        },
-      } as never),
-    );
+    const roots: Array<string | undefined> = [];
+    claudeSdkStore.setSeam(forkLoadingSeam(roots));
     const anchors = {
       entryFound: true,
       seq: answer.seq as number,
@@ -1268,12 +1281,141 @@ test("a fork of an earlier Claude binding reads its transcript where a return on
     assert.ok("fork" in prepared);
     const child = await prepared.fork();
     ids.push(child.sessionId);
-    assert.equal(root, claudeConfigDir(b.id), "read from B, where it lives");
+    assert.deepEqual(
+      roots,
+      [claudeConfigDir(b.id)],
+      "read from B, where it lives",
+    );
     assert.equal(
       sessionStore.get(child.sessionId)?.credentialProfileId,
       b.id,
       "and the fork runs where its transcript was cut",
     );
+  } finally {
+    vi.restoreAllMocks();
+    claudeSdkStore.setSeam(() => Promise.resolve(claudeTurnSeam));
+    setCredentialProfileEnabled(b.id, false);
+  }
+});
+
+test("a clear between returns keeps the earlier native session where it stayed: forks of both read theirs, and a delete sweeps both (F036)", async () => {
+  const id = freshId();
+  const n = `native-n-${id}`;
+  const m = `native-m-${id}`;
+  let native = n;
+  claudeSdkStore.setSeam(answeringAs(() => native));
+  const b = createCredentialProfile({
+    name: "Clear between B",
+    provider: "claude",
+  });
+  const projects = (account: string) =>
+    join(claudeConfigDir(account), "projects", "p");
+  const file = (account: string, which: string) =>
+    join(projects(account), `${which}.jsonl`);
+  try {
+    await onClaude(id);
+    const a = sessionStore.activeBinding(id)!.credentialProfileId!;
+    assert.equal(sessionStore.activeBinding(id)?.nativeSessionId, n);
+    const answers = () =>
+      readFileSync(logPathFor(id), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter((row) => row.type === "message" && row.role === "assistant");
+    const [firstAnswer] = answers();
+    assert.ok(firstAnswer);
+    mkdirSync(projects(a), { recursive: true });
+    writeFileSync(file(a, n), "{}\n");
+    piOpensForReal();
+    (await prepareEngineSwitch(id, TO_PI, PENDING_PI, () => {})).commit();
+    // A return on B moves N there.
+    (
+      await prepareEngineSwitch(
+        id,
+        { ...TO_CLAUDE, credentialProfileId: b.id },
+        PENDING_CLAUDE,
+        () => {},
+      )
+    ).commit();
+    await vi.waitFor(() => assert.equal(existsSync(file(a, n)), false));
+    assert.equal(existsSync(file(b.id, n)), true);
+    // A clear on B, and a run that starts M there.
+    const live = claudeSdkStore.get(id)!;
+    assert.equal((await live.clearContext()).kind, "cleared");
+    native = m;
+    ensureRuntimeSessionWithRuntime(sessionRuntime, live);
+    await sessionRuntime.prompt(id, "after the clear");
+    assert.equal(sessionStore.activeBinding(id)?.nativeSessionId, m);
+    writeFileSync(file(b.id, m), "{}\n");
+    const secondAnswer = answers().at(-1)!;
+    // Back to A through pi: the return moves M alone, and N stays on B.
+    (await prepareEngineSwitch(id, TO_PI, PENDING_PI, () => {})).commit();
+    (
+      await prepareEngineSwitch(
+        id,
+        { ...TO_CLAUDE, credentialProfileId: a },
+        PENDING_CLAUDE,
+        () => {},
+      )
+    ).commit();
+    await vi.waitFor(() => assert.equal(existsSync(file(b.id, m)), false));
+    assert.equal(existsSync(file(a, m)), true);
+    assert.equal(existsSync(file(b.id, n)), true);
+    assert.deepEqual(
+      sessionStore
+        .bindings(id)
+        .filter((binding) => binding.harness === "claude-sdk")
+        .map((binding) => [binding.nativeSessionId, binding.resumedSeq]),
+      [
+        [n, undefined],
+        [m, 1],
+        [m, 3],
+      ],
+    );
+
+    const roots: Array<string | undefined> = [];
+    claudeSdkStore.setSeam(forkLoadingSeam(roots));
+    const { prepareFork } = await import("./fork.ts");
+    const forkAt = async (entry: Record<string, unknown>) => {
+      const anchors = {
+        entryFound: true,
+        seq: entry.seq as number,
+        own: "native-anchor",
+      };
+      const spy = vi
+        .spyOn(sessionRuntime, "forkAnchors")
+        .mockReturnValue(anchors);
+      try {
+        const prepared = prepareFork("claude-sdk", {
+          id,
+          kind: "developer",
+          file: id,
+          entryId: entry.id as string,
+          position: "at",
+          anchors,
+        });
+        assert.ok("fork" in prepared);
+        const child = await prepared.fork();
+        ids.push(child.sessionId);
+        return sessionStore.get(child.sessionId)?.credentialProfileId;
+      } finally {
+        spy.mockRestore();
+      }
+    };
+    assert.equal(await forkAt(firstAnswer), b.id, "N is read on B");
+    assert.equal(await forkAt(secondAnswer), a, "M is read on A");
+    assert.deepEqual(roots, [claudeConfigDir(b.id), claudeConfigDir(a)]);
+
+    // Deleting the session sweeps every copy of both.
+    await harnessRegistry.remove({
+      harness: "claude-sdk",
+      id,
+      agentType: "developer",
+      file: id,
+    });
+    for (const account of [a, b.id])
+      for (const which of [n, m])
+        assert.equal(existsSync(file(account, which)), false);
   } finally {
     vi.restoreAllMocks();
     claudeSdkStore.setSeam(() => Promise.resolve(claudeTurnSeam));

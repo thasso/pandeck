@@ -175,6 +175,27 @@ export async function claudeTranscriptResumable(
   }
 }
 
+/**
+ * The account that holds native transcript `providerSessionId`: the first of
+ * `preferred` that does, else any Claude account (the set the delete sweep
+ * scans, {@link removeClaudeSessionFromAllProfiles}); undefined when none does.
+ */
+export async function claudeTranscriptHolder(
+  providerSessionId: string,
+  preferred: readonly string[],
+): Promise<string | undefined> {
+  const candidates = new Set([
+    ...preferred,
+    ...listCredentialProfiles()
+      .filter((profile) => profile.provider === "claude")
+      .map((profile) => profile.id),
+  ]);
+  for (const profileId of candidates)
+    if (await claudeTranscriptResumable(profileId, providerSessionId))
+      return profileId;
+  return undefined;
+}
+
 /** Stage full native history; commit removes the source, rollback the destination. */
 export async function copyClaudeSessionForAccount(
   previous: string,
