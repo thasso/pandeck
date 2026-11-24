@@ -9,6 +9,7 @@
  * inspection sources. The hub is consulted only to overlay live/running state.
  */
 import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
+import { activeEngine, activeNativeRef } from "../../harnesses/activeEngine.ts";
 import { storedSessionState } from "../../harnesses/storage.ts";
 import { sessionStore, type SessionMeta } from "../../db/sessionStore.ts";
 import { canonicalSessionLogPath } from "../../sessionStorage.ts";
@@ -396,7 +397,7 @@ export function resumableState(
   runtime: RuntimeState,
 ): { resumable: boolean; reason?: string } {
   if (runtime !== "not_loaded") return { resumable: true };
-  const stored = storedSessionState(meta.harness, meta.id);
+  const stored = storedSessionState(activeNativeRef(meta));
   return stored.stored
     ? { resumable: true }
     : { resumable: false, reason: stored.reason };
@@ -420,7 +421,7 @@ export async function sessionMetaProjection(resolved: ResolvedSession) {
   return {
     sessionId: meta.id,
     title: meta.title,
-    harness: meta.harness,
+    harness: activeEngine(meta).harness,
     persona: meta.agentType,
     createdAt: meta.createdAt,
     updatedAt: meta.updatedAt,
@@ -609,6 +610,79 @@ function recordsForRow(row: JsonRow, lineIndex: number): SessionRecord[] {
       });
   }
   return out;
+}
+
+/**
+ * Every inspection record of a session log in log order, each with the `seq`
+ * of the log row it came from, skipping rows at or before `afterSeq`. The
+ * records and their entry ids are exactly what `session_read` reads, so an id
+ * taken from here is a valid `at` anchor. A harness switch builds its handoff
+ * from this (`sessionHandoff.ts`).
+ */
+export function forEachSessionRecord(
+  logPath: string,
+  afterSeq: number,
+  onRecord: (record: SessionRecord, seq: number) => void,
+): void {
+  let lineIndex = 0;
+  forEachJsonlLine(logPath, 0, (line) => {
+    lineIndex++;
+    const row = parseLine(line);
+    if (!row) return "continue";
+    const seq = typeof row.seq === "number" ? row.seq : undefined;
+    if (seq === undefined || seq <= afterSeq) return "continue";
+    for (const record of recordsForRow(row, lineIndex)) onRecord(record, seq);
+    return "continue";
+  });
+}
+
+/**
+ * What the log's range `fromSeq <= seq < beforeSeq` reports of the context its
+ * engine holds now: the size the LAST assistant row after the range's last
+ * `/clear` card reported (its usage's `contextTokens`, else its input-side
+ * token sum, as the session stats read it), undefined when none did, and
+ * whether such a card lies in the range. A report before a clear measured the
+ * conversation the clear dropped, never the one that followed, so it is not
+ * answered. A harness switch's handoff budget reads what a resumed native
+ * session last held from this (`sessionSwitchHandoff.ts`).
+ */
+export function reportedContextSince(
+  logPath: string,
+  fromSeq: number,
+  beforeSeq: number,
+): { tokens: number | undefined; cleared: boolean } {
+  let last: number | undefined;
+  let cleared = false;
+  forEachJsonlLine(logPath, 0, (line) => {
+    const row = parseLine(line);
+    if (!row) return "continue";
+    const seq = typeof row.seq === "number" ? row.seq : undefined;
+    if (seq === undefined || seq < fromSeq || seq >= beforeSeq)
+      return "continue";
+    if (
+      row.type === "command.result" &&
+      isRecord(row.card) &&
+      row.card.kind === "contextClear"
+    ) {
+      cleared = true;
+      last = undefined;
+      return "continue";
+    }
+    if (row.type !== "message" || row.role !== "assistant") return "continue";
+    const usage = isRecord(row.usage) ? row.usage : undefined;
+    if (!usage) return "continue";
+    const count = (value: unknown) =>
+      typeof value === "number" && Number.isFinite(value) ? value : 0;
+    const size =
+      typeof usage.contextTokens === "number"
+        ? count(usage.contextTokens)
+        : count(usage.inputTokens) +
+          count(usage.cacheReadTokens) +
+          count(usage.cacheCreationTokens);
+    if (size > 0) last = size;
+    return "continue";
+  });
+  return { tokens: last, cleared };
 }
 
 /* ---------------------------- windowed reads ------------------------------ */

@@ -893,23 +893,26 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   and the other 0/0. The report therefore computes both (`totals.costMicros`,
   `totals.costMicrosSingleRounding`), reconciles against EITHER, and names the
   one that matched in `persisted.costAccumulation` — exact, and without encoding
-  a per-harness store detail in the comparison. There is no tolerance anywhere:
-  a cost matching neither regime is a real difference and is reported with both
-  candidate values. Character-derived figures are named `estTokens`
-  (`chars / CHARS_PER_TOKEN`) and the static rows (system prompt, tool
-  definitions) are measured against THIS checkout, which every row states in its
-  `basis`. Attachment rows are BYTES (the log stores a reference, not the body):
-  only text-like MIME types convert to `estTokens`, and `binary-attachments` is
-  reported unconverted and out of every share, because a screenshot's bytes say
-  nothing about its image tokens. Calls to names this checkout's catalog does
-  not have are `callsNotInThisCatalog` — harness builtins AND app tools since
-  renamed or removed, which a transcript cannot tell apart and which an
-  instrument for measuring tool removals must not label as builtins.
-  `sessionAuditSources.ts` resolves a session id twice: in-process through
-  `sessionStore` + `resolveInspectableSession` (so the audit inherits the
-  deleted/internal refusal), and for the CLI against any data dir with a
-  READ-ONLY `app.sqlite3` handle — never `getDb()`, which would migrate the
-  user's live database from a checkout.
+  a per-harness store detail in the comparison. A session that moved between
+  engines adds a third, `per-engine` (`totals.costMicrosPerEngine`): pi's runs
+  per entry plus Claude's runs, attributed by their `run.started` engine,
+  rounded once. There is no tolerance anywhere: a cost matching neither regime
+  is a real difference and is reported with both candidate values.
+  Character-derived figures are named `estTokens` (`chars / CHARS_PER_TOKEN`)
+  and the static rows (system prompt, tool definitions) are measured against
+  THIS checkout, which every row states in its `basis`. Attachment rows are
+  BYTES (the log stores a reference, not the body): only text-like MIME types
+  convert to `estTokens`, and `binary-attachments` is reported unconverted and
+  out of every share, because a screenshot's bytes say nothing about its image
+  tokens. Calls to names this checkout's catalog does not have are
+  `callsNotInThisCatalog` — harness builtins AND app tools since renamed or
+  removed, which a transcript cannot tell apart and which an instrument for
+  measuring tool removals must not label as builtins. `sessionAuditSources.ts`
+  resolves a session id twice: in-process through `sessionStore` +
+  `resolveInspectableSession` (so the audit inherits the deleted/internal
+  refusal), and for the CLI against any data dir with a READ-ONLY `app.sqlite3`
+  handle — never `getDb()`, which would migrate the user's live database from a
+  checkout.
 - `knowledgeBasePrompt.ts` owns the harness-independent KB agent-prompt
   guidance: the minimal eager pointer `knowledgeBaseBehaviorGuidance()`
   (triggers KB search, forbids direct writes) injected as a `promptAssets.ts`

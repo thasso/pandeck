@@ -468,12 +468,33 @@ it("gives a panel connection no claim on the main pane's session", () => {
   ).toBe(false);
 });
 
-// Task-1415: the inspector's account move answers once. Its refusal is the
-// session's failure, in place when that session is on screen and otherwise a
-// single toast naming it; a successful move says nothing.
-it("puts a refused account move on its session and keeps a successful one silent", () => {
+// Task-1485: a runtime change for the next turn answers once. Its refusal is
+// the session's failure, in place when that session is on screen and
+// otherwise a single toast naming it; a change that landed says nothing.
+it("puts a refused Continue on its session and keeps a taken one silent", () => {
   const answer = (error?: string) => ({
-    type: "sessionAccountMoveAnswer" as const,
+    type: "continueOnModelAnswer" as const,
+    requestId: "c1",
+    sessionId: "s1",
+    ...(error ? { error } : {}),
+  });
+  expect(arrivalMessage(answer(), nowhere)).toBeNull();
+  expect(sessionFailureFrom(answer())).toBeNull();
+  const refused = answer("This failure no longer offers that model.");
+  expect(arrivalMessage(refused, nowhere)).toEqual({
+    severity: "error",
+    message: "This failure no longer offers that model.",
+    target: { type: "session", id: "s1" },
+  });
+  expect(sessionFailureFrom(refused)).toEqual({
+    sessionId: "s1",
+    message: "This failure no longer offers that model.",
+  });
+});
+
+it("puts a refused runtime change on its session and keeps a landed one silent", () => {
+  const answer = (error?: string) => ({
+    type: "pendingRuntimeAnswer" as const,
     requestId: "r1",
     sessionId: "s1",
     ...(error ? { error } : {}),

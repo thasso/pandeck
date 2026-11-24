@@ -9,6 +9,8 @@
  * Claude's with no CLI child; a gateway that cannot grant one fails the read,
  * never falling back to the account's own token or the CLI.
  */
+import type { RunEngine } from "../session/log/rawEntry.ts";
+import { activeEngine } from "./activeEngine.ts";
 import type { Harness } from "@assistant/shared";
 import { legacyDefaultProfileId } from "../credentialProfiles.ts";
 import type {
@@ -30,15 +32,19 @@ import {
 /**
  * Usage-only attribution mirrors the account used to reopen legacy sessions:
  * an unbound session's is the protected default, where the install has one.
+ * A finished run names the account it ran on (its `run.started` stamp, design
+ * 25); without one the session's active binding answers.
  */
 export function usageProfileForSession(
   session: { harness: Harness; credentialProfileId?: string } | undefined,
+  run?: RunEngine,
 ): string | null {
-  if (!session) return null;
+  const engine = run ?? (session ? activeEngine(session) : undefined);
+  if (!engine) return null;
   return (
-    session.credentialProfileId ??
+    engine.credentialProfileId ??
     legacyDefaultProfileId(
-      session.harness === "claude-sdk" ? "claude" : "openai-codex",
+      engine.harness === "claude-sdk" ? "claude" : "openai-codex",
     ) ??
     null
   );

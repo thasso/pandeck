@@ -1,7 +1,8 @@
 /**
- * The inspector's account picker: `listSessionAccountMoveTargets` answers the
- * eligible accounts, `moveSessionAccount` moves the idle session and answers
- * once, with the refusal as its error.
+ * The inspector's Runtime section: `listSessionAccountMoveTargets` answers the
+ * eligible accounts; `setPendingRuntime` and `clearPendingRuntime` change the
+ * selection the next turn starts on and answer once, with a refusal as the
+ * error. Neither moves the session nor touches its engine.
  */
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -30,6 +31,14 @@ vi.mock("./harnesses/models.ts", async (importOriginal) => {
               },
             ]
           : [],
+    pickerModels: () => [
+      ...original.pickerModels(),
+      ...[...offers.values()].map((model) => ({
+        ...model,
+        name: "Test model",
+        reasoning: false,
+      })),
+    ],
   };
 });
 
@@ -40,6 +49,13 @@ const { validateClientMessage } = await import("./validateClientMessage.ts");
 const { sessionRuntime } = await import("./session/runtimeInstance.ts");
 const { FakeRuntimeDriver } = await import("./test/fakeRuntimeDriver.ts");
 const { setAccountMoveHostForTests } = await import("./sessionAccountMove.ts");
+const { setPendingRuntimeHostForTests } =
+  await import("./sessionPendingRuntime.ts");
+setPendingRuntimeHostForTests({
+  stateChanged: async () => {},
+  publishRows: async () => {},
+  wake: () => {},
+});
 const { resetClaudeAccountModelsForTests } =
   await import("./harnesses/claudeAccountModels.ts");
 const { getSettings, updateSettings } = await import("./settings.ts");
@@ -70,7 +86,11 @@ function account(name: string, enterprise = false): string {
   return p.id;
 }
 
-function session(from: string, scope: "user" | "internal" = "user") {
+function session(
+  from: string,
+  scope: "user" | "internal" = "user",
+  requiresEnterprise = false,
+) {
   const id = `account-move-message-${sequence++}`;
   sessionStore.upsert({
     id,
@@ -78,6 +98,7 @@ function session(from: string, scope: "user" | "internal" = "user") {
     agentType: "assistant",
     scope,
     credentialProfileId: from,
+    ...(requiresEnterprise ? { requiresEnterprise } : {}),
   });
   sessions.push(id);
   const driver = new FakeRuntimeDriver(id) as InstanceType<
@@ -89,22 +110,13 @@ function session(from: string, scope: "user" | "internal" = "user") {
     };
     switchAccount(profileId: string, admit: () => void): Promise<void>;
   };
-  let bound = from;
-  driver.modelSelection = () => ({
-    model: offers.get(from)!,
-    thinkingLevel: "off",
-  });
-  driver.switchAccount = async (next, admit) => {
-    admit();
-    sessionStore.switchCredentialProfile(id, bound, next);
-    bound = next;
+  // The model it runs is fixed at its start, whatever its account offers later.
+  const model = offers.get(from)!;
+  driver.modelSelection = () => ({ model, thinkingLevel: "off" });
+  driver.switchAccount = async () => {
+    throw new Error("setting a pending account never switches");
   };
-  setAccountMoveHostForTests({
-    runtime: sessionRuntime,
-    resident: async () => driver,
-    acquire: async () => driver,
-    publishRows: async () => {},
-  });
+  setAccountMoveHostForTests({ resident: async () => driver });
   return id;
 }
 
@@ -137,7 +149,7 @@ afterEach(async () => {
     profiles.setCredentialProfileEnabled(id, false);
 });
 
-test("lists the eligible accounts and moves the session to the one picked", async () => {
+test("lists the eligible accounts; picking one makes it pending, a reset drops it", async () => {
   const a = account("Picker A");
   const b = account("Picker B");
   const work = account("Picker Work", true);
@@ -164,22 +176,91 @@ test("lists the eligible accounts and moves the session to the one picked", asyn
     );
 
     await connection.handle({
-      type: "moveSessionAccount",
+      type: "setPendingRuntime",
       sessionId: id,
-      credentialProfileId: work,
+      account: { kind: "account", id: work },
       requestId: "move-1",
     });
-    assert.deepEqual(answers(sent, "sessionAccountMoveAnswer"), [
-      { type: "sessionAccountMoveAnswer", requestId: "move-1", sessionId: id },
+    assert.deepEqual(answers(sent, "pendingRuntimeAnswer"), [
+      { type: "pendingRuntimeAnswer", requestId: "move-1", sessionId: id },
     ]);
-    assert.equal(sessionStore.get(id)?.credentialProfileId, work);
+    // Pending until the next turn starts: the binding is unchanged.
+    assert.equal(sessionStore.get(id)?.credentialProfileId, a);
+    assert.deepEqual(sessionStore.get(id)?.pendingRuntime, {
+      model: { provider: "openai-codex", id: "gpt-5.5" },
+      thinkingLevel: "off",
+      account: { kind: "account", id: work },
+      setBy: "user",
+    });
+    await connection.handle({
+      type: "clearPendingRuntime",
+      sessionId: id,
+      requestId: "reset-1",
+    });
+    assert.deepEqual(answers(sent, "pendingRuntimeAnswer").at(-1), {
+      type: "pendingRuntimeAnswer",
+      requestId: "reset-1",
+      sessionId: id,
+    });
+    assert.equal(sessionStore.get(id)?.pendingRuntime, undefined);
     assert.equal(answers(sent, "error").length, 0);
   } finally {
     connection.dispose();
   }
 });
 
-test("answers a refusal as the move's error, binding unchanged", async () => {
+test("the list says whether the bound account itself can run the next turn, by the rules a selection naming it applies with", async () => {
+  const a = account("Bound A");
+  const b = account("Bound B", true);
+  const id = session(a);
+  const { sent, connection } = connect();
+  const verdict = async (sessionId: string, requestId: string) => {
+    await connection.handle({
+      type: "listSessionAccountMoveTargets",
+      sessionId,
+      requestId,
+    });
+    const answer = answers(sent, "sessionAccountMoveTargets").at(-1);
+    assert.equal(answer?.requestId, requestId);
+    assert.equal(answer?.error, undefined);
+    return {
+      boundEligible: answer?.boundEligible,
+      listed: (answer?.accounts ?? [])
+        .map((target) => target.id)
+        .filter((target) => [a, b].includes(target)),
+    };
+  };
+  try {
+    assert.deepEqual(await verdict(id, "ok"), {
+      boundEligible: true,
+      listed: [b],
+    });
+    // Disabled: B is the only account that can run it.
+    profiles.setCredentialProfileEnabled(a, false);
+    assert.deepEqual(await verdict(id, "disabled"), {
+      boundEligible: false,
+      listed: [b],
+    });
+    profiles.setCredentialProfileEnabled(a, true);
+    // Its listing no longer offers the session's model.
+    offers.set(a, { provider: "openai-codex", id: "gpt-other" });
+    assert.deepEqual(await verdict(id, "lacks-model"), {
+      boundEligible: false,
+      listed: [b],
+    });
+    offers.set(a, { provider: "openai-codex", id: "gpt-5.5" });
+    // A session requiring an enterprise account, bound to a personal one.
+    const enterprise = session(a, "user", true);
+    assert.deepEqual(await verdict(enterprise, "enterprise"), {
+      boundEligible: false,
+      listed: [b],
+    });
+  } finally {
+    connection.dispose();
+  }
+});
+
+test("answers a refusal as the change's error, nothing pending", async () => {
   const a = account("Refuse A");
   const off = account("Refuse Off");
   profiles.setCredentialProfileEnabled(off, false);
@@ -191,23 +272,24 @@ test("answers a refusal as the move's error, binding unchanged", async () => {
   try {
     for (const [sessionId, target, error] of [
       [id, off, "Refuse Off is disabled."],
-      [internal, off, "Only a user session can move to another account."],
+      [internal, off, "Only a user session can change its model or account."],
       [deleted, off, "Session does not exist or was deleted."],
     ] as const) {
       await connection.handle({
-        type: "moveSessionAccount",
+        type: "setPendingRuntime",
         sessionId,
-        credentialProfileId: target,
+        account: { kind: "account", id: target },
         requestId: `refuse-${sessionId}`,
       });
-      assert.deepEqual(answers(sent, "sessionAccountMoveAnswer").at(-1), {
-        type: "sessionAccountMoveAnswer",
+      assert.deepEqual(answers(sent, "pendingRuntimeAnswer").at(-1), {
+        type: "pendingRuntimeAnswer",
         requestId: `refuse-${sessionId}`,
         sessionId,
         error,
       });
     }
     assert.equal(sessionStore.get(id)?.credentialProfileId, a);
+    assert.equal(sessionStore.get(id)?.pendingRuntime, undefined);
     await connection.handle({
       type: "listSessionAccountMoveTargets",
       sessionId: internal,
@@ -243,7 +325,7 @@ function claudeAccount(name: string): string {
   return p.id;
 }
 
-test("a Claude account whose listing lacks the session's model is no target and refuses the move", async () => {
+test("a Claude account whose listing lacks the session's model is no target and is refused", async () => {
   const before = getSettings().claudeSdk;
   updateSettings({ claudeSdk: { ...before, enabled: true } });
   const from = claudeAccount("Claude From");
@@ -276,16 +358,10 @@ test("a Claude account whose listing lacks the session's model is no target and 
     model: { provider: "claude-sdk", id: "haiku" },
     thinkingLevel: "high",
   });
-  driver.switchAccount = async (next, admit) => {
-    admit();
-    sessionStore.switchCredentialProfile(id, from, next);
+  driver.switchAccount = async () => {
+    throw new Error("setting a pending account never switches");
   };
-  setAccountMoveHostForTests({
-    runtime: sessionRuntime,
-    resident: async () => driver,
-    acquire: async () => driver,
-    publishRows: async () => {},
-  });
+  setAccountMoveHostForTests({ resident: async () => driver });
   const { sent, connection } = connect();
   try {
     await connection.handle({
@@ -298,18 +374,19 @@ test("a Claude account whose listing lacks the session's model is no target and 
     assert.ok(!listed?.some((target) => target.id === lacking));
 
     await connection.handle({
-      type: "moveSessionAccount",
+      type: "setPendingRuntime",
       sessionId: id,
-      credentialProfileId: lacking,
+      account: { kind: "account", id: lacking },
       requestId: "claude-move",
     });
-    assert.deepEqual(answers(sent, "sessionAccountMoveAnswer").at(-1), {
-      type: "sessionAccountMoveAnswer",
+    assert.deepEqual(answers(sent, "pendingRuntimeAnswer").at(-1), {
+      type: "pendingRuntimeAnswer",
       requestId: "claude-move",
       sessionId: id,
       error: "Claude Private can't run Claude Haiku.",
     });
     assert.equal(sessionStore.get(id)?.credentialProfileId, from);
+    assert.equal(sessionStore.get(id)?.pendingRuntime, undefined);
   } finally {
     connection.dispose();
     resetClaudeAccountModelsForTests();
@@ -336,7 +413,7 @@ test.each([
   },
   { pinned: false, error: undefined },
 ])(
-  "a 5-2-pinned fable session is refused a move to an account without 5-2 (pinned: $pinned)",
+  "a 5-2-pinned fable session is refused an account without 5-2 (pinned: $pinned)",
   async ({ pinned, error }) => {
     const before = getSettings().claudeSdk;
     updateSettings({ claudeSdk: { ...before, enabled: true } });
@@ -384,31 +461,30 @@ test.each([
       model: { provider: "claude-sdk", id: "fable" },
       thinkingLevel: "high",
     });
-    driver.switchAccount = async (next, admit) => {
-      admit();
-      sessionStore.switchCredentialProfile(id, from, next);
+    driver.switchAccount = async () => {
+      throw new Error("setting a pending account never switches");
     };
-    setAccountMoveHostForTests({
-      runtime: sessionRuntime,
-      resident: async () => driver,
-      acquire: async () => driver,
-      publishRows: async () => {},
-    });
+    setAccountMoveHostForTests({ resident: async () => driver });
     const { sent, connection } = connect();
     try {
       await connection.handle({
-        type: "moveSessionAccount",
+        type: "setPendingRuntime",
         sessionId: id,
-        credentialProfileId: y,
+        account: { kind: "account", id: y },
         requestId: "pin-move",
       });
-      assert.deepEqual(answers(sent, "sessionAccountMoveAnswer").at(-1), {
-        type: "sessionAccountMoveAnswer",
+      assert.deepEqual(answers(sent, "pendingRuntimeAnswer").at(-1), {
+        type: "pendingRuntimeAnswer",
         requestId: "pin-move",
         sessionId: id,
         ...(error ? { error } : {}),
       });
-      assert.equal(sessionStore.get(id)?.credentialProfileId, error ? from : y);
+      // Choosing an account never moves the session; the turn applies it.
+      assert.equal(sessionStore.get(id)?.credentialProfileId, from);
+      assert.deepEqual(
+        sessionStore.get(id)?.pendingRuntime?.account,
+        error ? undefined : { kind: "account", id: y },
+      );
     } finally {
       connection.dispose();
       resetClaudeAccountModelsForTests();
@@ -417,7 +493,7 @@ test.each([
   },
 );
 
-test("an opus session pinned to claude-opus-5 lists and moves to an account offering that exact version", async () => {
+test("an opus session pinned to claude-opus-5 lists and can choose an account offering that exact version", async () => {
   const before = getSettings().claudeSdk;
   updateSettings({ claudeSdk: { ...before, enabled: true } });
   const from = claudeAccount("Claude From");
@@ -465,16 +541,10 @@ test("an opus session pinned to claude-opus-5 lists and moves to an account offe
     model: { provider: "claude-sdk", id: "opus" },
     thinkingLevel: "high",
   });
-  driver.switchAccount = async (next, admit) => {
-    admit();
-    sessionStore.switchCredentialProfile(id, from, next);
+  driver.switchAccount = async () => {
+    throw new Error("setting a pending account never switches");
   };
-  setAccountMoveHostForTests({
-    runtime: sessionRuntime,
-    resident: async () => driver,
-    acquire: async () => driver,
-    publishRows: async () => {},
-  });
+  setAccountMoveHostForTests({ resident: async () => driver });
   const { sent, connection } = connect();
   try {
     await connection.handle({
@@ -486,17 +556,20 @@ test("an opus session pinned to claude-opus-5 lists and moves to an account offe
     assert.ok(listed?.some((target) => target.id === legacy));
 
     await connection.handle({
-      type: "moveSessionAccount",
+      type: "setPendingRuntime",
       sessionId: id,
-      credentialProfileId: legacy,
+      account: { kind: "account", id: legacy },
       requestId: "legacy-move",
     });
-    assert.deepEqual(answers(sent, "sessionAccountMoveAnswer").at(-1), {
-      type: "sessionAccountMoveAnswer",
+    assert.deepEqual(answers(sent, "pendingRuntimeAnswer").at(-1), {
+      type: "pendingRuntimeAnswer",
       requestId: "legacy-move",
       sessionId: id,
     });
-    assert.equal(sessionStore.get(id)?.credentialProfileId, legacy);
+    assert.deepEqual(sessionStore.get(id)?.pendingRuntime?.account, {
+      kind: "account",
+      id: legacy,
+    });
   } finally {
     connection.dispose();
     resetClaudeAccountModelsForTests();
@@ -504,30 +577,59 @@ test("an opus session pinned to claude-opus-5 lists and moves to an account offe
   }
 });
 
-test("validates both messages before any effect", () => {
-  assert.ok(
-    validateClientMessage({
-      type: "listSessionAccountMoveTargets",
+test("validates the messages before any effect", () => {
+  for (const valid of [
+    { type: "listSessionAccountMoveTargets", sessionId: "s", requestId: "r" },
+    {
+      type: "setPendingRuntime",
       sessionId: "s",
       requestId: "r",
-    }).ok,
-  );
-  assert.ok(
-    validateClientMessage({
-      type: "moveSessionAccount",
+      account: { kind: "account", id: "cp" },
+    },
+    {
+      type: "setPendingRuntime",
       sessionId: "s",
-      credentialProfileId: "cp",
       requestId: "r",
-    }).ok,
-  );
+      model: { provider: "openai-codex", id: "gpt-5.5" },
+      thinkingLevel: "high",
+      account: { kind: "automatic" },
+    },
+    { type: "clearPendingRuntime", sessionId: "s", requestId: "r" },
+  ])
+    assert.ok(validateClientMessage(valid).ok, JSON.stringify(valid));
   for (const invalid of [
     { type: "listSessionAccountMoveTargets", sessionId: "s" },
     { type: "listSessionAccountMoveTargets", sessionId: 1, requestId: "r" },
-    { type: "moveSessionAccount", sessionId: "s", requestId: "r" },
+    { type: "setPendingRuntime", sessionId: "s", requestId: "r" },
+    {
+      type: "setPendingRuntime",
+      sessionId: "s",
+      requestId: "r",
+      account: { kind: "account" },
+    },
+    {
+      type: "setPendingRuntime",
+      sessionId: "s",
+      requestId: "r",
+      account: { kind: "endpoint", id: "x" },
+    },
+    {
+      type: "setPendingRuntime",
+      sessionId: "s",
+      requestId: "r",
+      model: { provider: "openai-codex" },
+    },
+    {
+      type: "setPendingRuntime",
+      sessionId: "s",
+      requestId: "r",
+      thinkingLevel: "maximal",
+    },
+    { type: "clearPendingRuntime", sessionId: "s" },
     {
       type: "moveSessionAccount",
       sessionId: "s",
-      credentialProfileId: 2,
+      credentialProfileId: "cp",
       requestId: "r",
     },
   ])

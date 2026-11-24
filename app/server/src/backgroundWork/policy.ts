@@ -21,6 +21,7 @@ import type {
   Harness,
   SessionScope,
 } from "@assistant/shared";
+import { activeEngine } from "../harnesses/activeEngine.ts";
 import { harnessSupportsBackgroundWorkBackend } from "@assistant/shared";
 import { sessionStore } from "../db/sessionStore.ts";
 import { workflowOwnershipForExecutor } from "../db/workflowStore.ts";
@@ -128,7 +129,7 @@ export function readBackgroundWorkOwnerEvidence(
   return {
     exists: true,
     scope: session.scope,
-    harness: session.harness,
+    harness: activeEngine(session).harness,
     workflowOwned: workflowOwnershipForExecutor(sessionId).length > 0,
   };
 }

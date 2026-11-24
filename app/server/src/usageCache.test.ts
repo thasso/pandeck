@@ -70,6 +70,23 @@ describe("run usage attribution", () => {
   test("missing session metadata does not guess an account", () => {
     expect(usageProfileForSession(undefined)).toBeNull();
   });
+  test("a run's recorded engine names the account it ran on, over the session's current one", () => {
+    const moved = { harness: "pi" as const, credentialProfileId: "after-move" };
+    expect(
+      usageProfileForSession(moved, {
+        harness: "pi",
+        credentialProfileId: "ran-on",
+      }),
+    ).toBe("ran-on");
+    // An older run marker without a stamp falls back to the session's binding.
+    expect(usageProfileForSession(moved, undefined)).toBe("after-move");
+    expect(
+      usageProfileForSession(undefined, {
+        harness: "claude-sdk",
+        credentialProfileId: "ran-on",
+      }),
+    ).toBe("ran-on");
+  });
 });
 
 function profile(

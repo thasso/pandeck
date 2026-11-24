@@ -481,8 +481,16 @@ export type RuntimeEvent =
    */
   | { type: "runProgress"; progress: RunProgress }
   | { type: "sessionConfigChanged"; config: SessionConfig }
-  /** Transport-only failed/aborted run status (the durable recovery markers are separate). */
-  | { type: "runStatus"; status: "error" | "aborted"; message?: string }
+  /**
+   * Transport-only failed/aborted run status (the durable recovery markers are
+   * separate). `runId` names the run that stopped; viewers never receive it.
+   */
+  | {
+      type: "runStatus";
+      status: "error" | "aborted";
+      message?: string;
+      runId?: string;
+    }
   /** Transport-only verbatim wire envelope (live toolEnd + host-command result cards). */
   | { type: "passthrough"; envelope: ServerMessage };
 

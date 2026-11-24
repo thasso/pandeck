@@ -26,10 +26,13 @@ import type {
   RunFailureFacts,
   SkillDispatch,
 } from "./contract.ts";
-import type { AdapterEventListener } from "./nativeEvents.ts";
+import { runEngineStamp, type AdapterEventListener } from "./nativeEvents.ts";
+import type { RunEngine } from "../log/rawEntry.ts";
 
 export interface ClaudeSdkAdapterDriver {
   modelId?(): string | undefined;
+  /** The account and effort a run opening now uses, for its engine stamp. */
+  runFacts?(): { credentialProfileId?: string; thinkingLevel?: string };
   subscribeAdapterEvents(listener: AdapterEventListener): () => void;
   prompt(
     text: string,
@@ -43,7 +46,7 @@ export interface ClaudeSdkAdapterDriver {
       turnContext?: string;
       titleText?: string;
     },
-  ): Promise<void>;
+  ): Promise<void | "stopped">;
   /** The native plugin command for a frozen library skill: `/<plugin>:<name>`. */
   skillCommand?(name: string): string;
   /**
@@ -129,6 +132,13 @@ class ClaudeSdkAdapter implements PromptableAdapter {
     return this.driver.modelId?.();
   }
 
+  runEngine(): RunEngine {
+    return runEngineStamp("claude-sdk", this.driver.runFacts?.(), {
+      provider: this.modelProvider(),
+      model: this.modelId(),
+    });
+  }
+
   getBinding(): ProviderBinding {
     return {
       provider: PROVIDER,
@@ -180,7 +190,7 @@ class ClaudeSdkAdapter implements PromptableAdapter {
     this.lastError = undefined;
     this.lastFailure = undefined;
     this.lastStopReason = undefined;
-    await this.driver.prompt(text, {
+    const outcome = await this.driver.prompt(text, {
       ...(options.continuation ? { continuation: true } : {}),
       ...(options.clientRequestId
         ? { clientRequestId: options.clientRequestId }
@@ -197,6 +207,8 @@ class ClaudeSdkAdapter implements PromptableAdapter {
         ? { titleText: options.titleText }
         : {}),
     });
+    // Stopped while waiting for admission: no run opened, nothing was sent.
+    if (outcome === "stopped") return { stopReason: "aborted" };
     const stopReason =
       this.lastStopReason ?? (this.lastError ? "error" : "end");
     return this.lastError
@@ -213,6 +225,11 @@ class ClaudeSdkAdapter implements PromptableAdapter {
   }
 
   async setModel(model: SessionConfigModel): Promise<void> {
+    // A model change stays on this harness; moving engines is not a switch.
+    if (model.provider !== PROVIDER)
+      throw new Error(
+        `${model.id} does not run on Claude; start a new session to use it.`,
+      );
     await this.driver.setModel(model.id);
     this.emit({
       type: "sessionConfigChanged",

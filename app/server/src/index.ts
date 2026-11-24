@@ -124,6 +124,7 @@ import {
 } from "./harnesses/gatewayPorts.ts";
 import { claudeLoginDriver } from "./claudeLoginDriver.ts";
 import { harnessRegistry } from "./harnesses/registry.ts";
+import { stampSwitchedBindingRuns } from "./harnesses/engineSwitch.ts";
 import {
   createGoogleOAuthStartUrl,
   handleGoogleOAuthCallback,
@@ -279,6 +280,7 @@ import {
   sweepExpiredLeases,
   sweepPeerPromptRetries,
 } from "./peerPrompt.ts";
+import { installContinueOffers } from "./sessionContinueOffer.ts";
 import {
   installHeldDirectPeerStarts,
   nudgeHeldStartsForChild,
@@ -318,7 +320,11 @@ import {
   subscribeSessionToolCompleted,
 } from "./session/runtime/liveSession.ts";
 import { notifySessionTurnCompleted } from "./webPush.ts";
-import { trackSessionRunHealth } from "./accountHealth.ts";
+import {
+  subscribeAccountHealthChanges,
+  trackSessionRunHealth,
+} from "./accountHealth.ts";
+import { wakePendingRuntimeSessions } from "./sessionPendingRuntime.ts";
 import { serverBuildInfo } from "./buildInfo.ts";
 import { sessionArtifactDeliveryHeaders } from "./sessionArtifactHttp.ts";
 import {
@@ -2116,6 +2122,9 @@ server.listen(PORT, HOST, () => {
   // A delegated child's failed turn becomes a durable notice for the
   // coordinator waiting on it, recorded before the run's closing marker.
   installDelegationFailureNotices();
+  // A terminal quota or rate-limit failure offers "Continue on" another
+  // engine's model, for the user to take (`sessionContinueOffer.ts`).
+  installContinueOffers();
   // A raised peer-turn cap starts the waiting children it now has room for.
   installHeldDirectPeerStarts();
   // An idle session is reminded of the peer requests it has not answered;
@@ -2150,6 +2159,7 @@ server.listen(PORT, HOST, () => {
       console.warn("[package-proxy] start failed:", errorText(err)),
     );
   startMemoryMaintenance();
+  stampSwitchedBindingRuns();
   trackSessionRunHealth({
     session: (sessionId) => sessionStore.get(sessionId),
     subscribeStarted: subscribeSessionRunStarted,
@@ -2158,7 +2168,7 @@ server.listen(PORT, HOST, () => {
   });
   // Declarative Web Push is driven by a real normalized run completion, not a
   // generic idle transition or synthetic host command.
-  subscribeSessionRunCompleted((sessionId, stopReason, origin) => {
+  subscribeSessionRunCompleted((sessionId, stopReason, origin, engine) => {
     void notifySessionTurnCompleted(sessionId, stopReason, {
       ...(origin ? { origin } : {}),
     }).catch((err) => {
@@ -2169,8 +2179,12 @@ server.listen(PORT, HOST, () => {
     });
     // A finished run moved this account's usage. The run completion is the only
     // trigger we take (a session's last turn IS one, and the idle hook is a
-    // superset that would double-fetch); it only marks the account dirty.
-    const profileId = usageProfileForSession(sessionStore.get(sessionId));
+    // superset that would double-fetch); it only marks the account the run
+    // ran on dirty.
+    const profileId = usageProfileForSession(
+      sessionStore.get(sessionId),
+      engine,
+    );
     if (profileId) markUsageProfileDirty(profileId);
   });
   // Each boot recovery is its own step: one that throws (a corrupt row) must
@@ -2254,6 +2268,11 @@ server.listen(PORT, HOST, () => {
   const deliveryBoot = createDeliveryBoot(deliveryScheduler);
   const offerDelivery = deliveryBoot.offer;
   setDeliveryWake(offerDelivery);
+  // A turn held by its pending runtime selection waits on its accounts: when
+  // one is enabled, logged in again or leaves its bench, the held work is
+  // offered again (`sessionPendingRuntime.ts`).
+  subscribeCredentialProfileChanges(() => wakePendingRuntimeSessions());
+  subscribeAccountHealthChanges(() => wakePendingRuntimeSessions());
   setPromptQueueHost({
     live: (sessionId) => {
       const live = hub.getLiveById(sessionId);

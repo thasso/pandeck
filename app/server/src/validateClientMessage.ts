@@ -26,6 +26,9 @@ import {
   isHarness,
   isSessionPeerTurnCap,
   isPeerRuntimeRelativeCost,
+  isThinkingLevel,
+  parseRuntimeAccount,
+  parseRuntimeModel,
   MAX_INBOX_POSITIONS,
   MAX_PEER_RUNTIME_DESCRIPTION_CHARS,
   PULL_REQUEST_CARD_ACTIONS,
@@ -90,6 +93,21 @@ const STRING_ARRAY: FieldSpec = {
   kind: "a string array",
 };
 const ARRAY: FieldSpec = { check: Array.isArray, kind: "an array" };
+/** A `{ provider, id }` model pick. */
+const RUNTIME_MODEL: FieldSpec = {
+  check: (value: unknown) => parseRuntimeModel(value) !== undefined,
+  kind: "a { provider, id } model",
+};
+/** A thinking level this build knows. */
+const THINKING_LEVEL: FieldSpec = {
+  check: isThinkingLevel,
+  kind: "a known thinking level",
+};
+/** Automatic, or one account by id. */
+const RUNTIME_ACCOUNT: FieldSpec = {
+  check: (value: unknown) => parseRuntimeAccount(value) !== undefined,
+  kind: 'an account ({ kind: "automatic" } or { kind: "account", id })',
+};
 /** A map's collapsed epics: bounded Task ids, the server drops what does not apply. */
 const COLLAPSED_EPICS: FieldSpec = {
   check: (value: unknown) =>
@@ -1009,6 +1027,11 @@ const REGISTRY = defineRegistry({
   ),
   updateQueuedPrompt: fields({ sessionId: STRING, id: STRING, text: STRING }),
   removeQueuedPrompt: fields({ sessionId: STRING, id: STRING }),
+  removeHeldInput: fields({
+    sessionId: STRING,
+    id: STRING,
+    requestId: STRING,
+  }),
   moveQueuedPrompt: fields({ sessionId: STRING, id: STRING, toIndex: NUMBER }),
   clearPromptQueue: fields({ sessionId: STRING }),
   sendQueuedPromptNow: fields({ sessionId: STRING, id: STRING }),
@@ -1300,10 +1323,30 @@ const REGISTRY = defineRegistry({
     sessionId: STRING,
     requestId: STRING,
   }),
-  moveSessionAccount: fields({
+  estimateSessionHandoff: fields({
     sessionId: STRING,
-    credentialProfileId: STRING,
     requestId: STRING,
+  }),
+  setPendingRuntime: fields(
+    { sessionId: STRING, requestId: STRING },
+    {
+      model: RUNTIME_MODEL,
+      thinkingLevel: THINKING_LEVEL,
+      account: RUNTIME_ACCOUNT,
+    },
+    (msg) =>
+      msg.model === undefined &&
+      msg.thinkingLevel === undefined &&
+      msg.account === undefined
+        ? "setPendingRuntime needs a model, thinkingLevel or account"
+        : null,
+  ),
+  clearPendingRuntime: fields({ sessionId: STRING, requestId: STRING }),
+  continueOnModel: fields({
+    sessionId: STRING,
+    requestId: STRING,
+    failureAt: NUMBER,
+    model: RUNTIME_MODEL,
   }),
   setSessionPeerTurnCap: fields({
     sessionId: STRING,

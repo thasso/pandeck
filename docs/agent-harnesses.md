@@ -11,7 +11,10 @@ describes the architecture they produced, and "Status" records the steps.
 ## Vocabulary
 
 - **Harness** (`Harness` in `app/shared/harnesses.ts`): which engine runs a
-  session. Persisted on the session row; never changes for a session.
+  session: its active engine binding (`docs/session-runtime-switching.md`
+  "Engine bindings"), projected onto the session row. A session starts on one
+  harness; a runtime switch the user or a coordinator chooses (Task-1485) moves
+  it to the other under a new binding.
 - **Persona** (`AgentType` in `app/shared/protocol.ts`, field `agentType`): the
   system prompt and toolset a session presents (`assistant`, `developer`, …).
   Independent of the harness: every persona runs on either engine.
@@ -87,7 +90,9 @@ compatible account serves display lookups (`findModel`, `listModels`) only.
   not serve, naming the account and pointing at a new session; a hosted engine
   resolves the switch through `findForProfile`. A native fork keeps the parent's
   account, so it is no way across accounts. The web picker disables those models
-  up front (`startedModelDisabled`).
+  up front (`startedModelDisabled`). A started Claude session switches too,
+  between turns, among the curated models its account's listing offers
+  (`docs/session-runtime-switching.md`).
 - **One-shots.** The configured model, then the default helper, then the
   account's first available non-reasoning text model, else its first, each
   through the gate.
@@ -253,11 +258,13 @@ Four layers, each depending only on the ones below it:
      setting even on a Claude login: the fallback then degrades to the low-text
      result with that refusal as its note, with no account health, retry or
      switch. `setModel` judges the model on the account the session has when the
-     change lands: an account move that commits while the resolve waits for a
-     listing is judged again on the new account (bounded), and one that commits
-     during a retained process's control call drops the change with a typed
-     error. `accountLacksModel` is true when the account's resolution finds
-     nothing, with a pin exactly that pin: Claude normalizes every id it accepts
+     change runs: it holds its admission place (`claudeSdk/admissionQueue.ts`)
+     through the resolve and the retained process's control call, and an account
+     switch waits behind it, so the move is judged on the model the change left
+     (`docs/session-runtime-switching.md`). A change whose account still differs
+     after the resolve or the control call is dropped with a typed error.
+     `accountLacksModel` is true when the account's resolution finds nothing,
+     with a pin exactly that pin: Claude normalizes every id it accepts
      (`claudeModelAlias`, `mythos` tested first), so another spelling or an
      older concrete id is judged as its curated model and an unknown id as the
      default. For a pinned request `accountOffersModel` and routing's candidate

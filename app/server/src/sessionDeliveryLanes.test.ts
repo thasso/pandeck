@@ -596,13 +596,17 @@ test("running joinable offers do not await the handoff turn they may steer", asy
   assert.deepEqual(f.errors, []);
 });
 
-test("an explicit account move holds peer and queued prompts until it ends, then they drain", async () => {
+test("a pending selection that cannot apply holds peer and queued prompts, spending nothing; a reset drains them", async () => {
   const { writeFileSync } = await import("node:fs");
   const { join } = await import("node:path");
   const profiles = await import("./credentialProfiles.ts");
-  const { sessionRuntime } = await import("./session/runtimeInstance.ts");
-  const { moveSessionAccount, setAccountMoveHostForTests } =
+  const { setAccountMoveHostForTests } =
     await import("./sessionAccountMove.ts");
+  const {
+    setSessionPendingRuntime,
+    clearSessionPendingRuntime,
+    setPendingRuntimeHostForTests,
+  } = await import("./sessionPendingRuntime.ts");
   const account = (name: string) => {
     const p = profiles.createCredentialProfile({
       name,
@@ -635,48 +639,46 @@ test("an explicit account move holds peer and queued prompts until it ends, then
     agentType: "assistant",
     credentialProfileId: a,
   });
-  const moving = deferred();
-  let entered = false;
-  let bound = a;
+  const switched: string[] = [];
   Object.assign(f.driver, {
     modelSelection: () => ({ model: offers.get(a)!, thinkingLevel: "off" }),
-    switchAccount: async (next: string, admit: () => void) => {
-      admit();
-      entered = true;
-      await moving.promise;
-      admit();
-      sessionStore.switchCredentialProfile(id, bound, next);
-      bound = next;
+    switchAccount: async (next: string) => {
+      switched.push(next);
     },
   });
-  setAccountMoveHostForTests({
-    runtime: sessionRuntime,
-    resident: async () => drivers.get(id),
-    acquire: async () => drivers.get(id),
+  setAccountMoveHostForTests({ resident: async () => drivers.get(id) });
+  setPendingRuntimeHostForTests({
+    stateChanged: async () => {},
     publishRows: async () => {},
+    wake: (sessionId) => void f.scheduler.wake(sessionId),
   });
-  cleanups.push(() => setAccountMoveHostForTests(undefined));
+  cleanups.push(() => {
+    setAccountMoveHostForTests(undefined);
+    setPendingRuntimeHostForTests(undefined);
+  });
 
-  const move = moveSessionAccount({
-    sessionId: id,
-    targetProfileId: b,
-    by: "user",
-    authorize: () => {},
-  });
-  await until(() => entered);
-  const sent = await f.send("peer during move");
-  queue.queuePrompt(id, { text: "queued during move" });
-  await f.scheduler.wake(id);
-  assert.equal(f.driver.promptTexts.length, 0);
-  assert.notEqual(
-    peerPromptStore.getById(sent.message.id)?.status,
-    "completed",
+  await setSessionPendingRuntime(
+    id,
+    { account: { kind: "account", id: b } },
+    "user",
   );
-  assert.equal(promptQueueStore.list(id).length, 1);
+  // The chosen account goes away before the next turn: the selection holds.
+  profiles.setCredentialProfileEnabled(b, false);
+  const sent = await f.send("peer while held");
+  queue.queuePrompt(id, { text: "queued while held" });
+  await f.scheduler.wake(id);
+  assert.equal(f.driver.promptTexts.length, 0, "nothing ran");
+  const peerRow = peerPromptStore.getById(sent.message.id);
+  assert.notEqual(peerRow?.status, "completed");
+  assert.equal(peerRow?.attempts, 0, "a hold spends no delivery attempt");
+  assert.equal(promptQueueStore.list(id).length, 1, "the queued row waits");
+  assert.match(
+    sessionStore.get(id)?.lastError?.message ?? "",
+    /^Couldn't switch to .*Lanes B is disabled\. The change is still pending; change or reset it to continue\.$/,
+  );
+  assert.ok(sessionStore.get(id)?.pendingRuntime);
 
-  moving.resolve();
-  await move;
-  assert.equal(sessionStore.get(id)?.credentialProfileId, b);
+  await clearSessionPendingRuntime(id);
   await until(
     () =>
       f.driver.promptTexts.length === 2 &&
@@ -684,11 +686,13 @@ test("an explicit account move holds peer and queued prompts until it ends, then
     () => JSON.stringify(f.driver.promptTexts),
   );
   assert.ok(
-    f.driver.promptTexts.some((text) => text.includes("queued during move")),
+    f.driver.promptTexts.some((text) => text.includes("queued while held")),
   );
   assert.ok(
-    f.driver.promptTexts.some((text) => text.includes("peer during move")),
+    f.driver.promptTexts.some((text) => text.includes("peer while held")),
   );
   assert.equal(promptQueueStore.list(id).length, 0);
+  assert.equal(sessionStore.get(id)?.credentialProfileId, a);
+  assert.deepEqual(switched, []);
   assert.deepEqual(f.errors, []);
 });

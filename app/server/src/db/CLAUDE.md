@@ -4,16 +4,17 @@
 - Session CONTENT never enters SQLite; conversation bodies live in session logs
   or harness stores. Durable locators are session/provider ids, not derived
   local paths.
-- `sessionStore.upsert` omissions preserve fields; only failover's
-  `switchCredentialProfile` CAS changes bindings. `projectStore.put` replaces
-  child tables/edges, so pass complete records.
+- `sessionStore.upsert` omissions preserve fields; only the CASes
+  `switchCredentialProfile`/`switchEngineBinding` change bindings; all sync
+  `session_engine_binding`. `projectStore.put` replaces child tables/edges, so
+  pass complete records.
 - `session_index.scope` is DEFAULT-CLOSED and INSERT-ONLY: reads without
   explicit `scopes` cover `user` only; live lists use persisted scope
   (`liveDefaultScopeGate`) and exclude unreadable rows; registration claims
   scope FIRST with `claimScope`, which throws on contradiction; later writes
   never reclassify a session.
 - Projects keep stable TEXT slug ids referenced by `in_project` edges and
-  `knowledge/projects/<id>/`; never switch them to integer sequences.
+  `knowledge/projects/<id>/`, never integer sequences.
 - Every `backgroundWorkStore` mutation uses its transaction-aware touched-id
   seam, and capacity takes its limit from the caller. Background work stores no
   vendor address, pid, command, path, env, credential, or output. Boot may call

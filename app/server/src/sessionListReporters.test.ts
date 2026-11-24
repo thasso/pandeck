@@ -180,6 +180,8 @@ const CLASSIFIED: Record<
       subscribeLiveness: "read",
       get: "read",
       getIncludingDeleted: "read",
+      activeBinding: "read",
+      bindings: "read",
       list: "read",
       liveDefaultScopeGate: "read",
       claimScope: "projected-write",
@@ -187,7 +189,10 @@ const CLASSIFIED: Record<
       hasAnySession: "read",
       upsert: "projected-write",
       setPeerTurnCap: "projected-write",
+      setPendingRuntime: "projected-write",
       switchCredentialProfile: "projected-write",
+      switchEngineBinding: "projected-write",
+      stampBindingRun: "non-projected-write",
       requireEnterprise: "projected-write",
       setCompactionWindow: "non-projected-write",
       markDeleted: "projected-write",
@@ -206,6 +211,7 @@ const CLASSIFIED: Record<
       worktreeMissingAck: "read",
       worktreeMissingAckBySession: "read",
       recordRunFailure: "projected-write",
+      recordContinueOffer: "projected-write",
       clearRunFailure: "projected-write",
       dismissRunFailure: "projected-write",
       recordInterruptedRun: "projected-write",
@@ -222,12 +228,14 @@ const CLASSIFIED: Record<
       linkSpawned: "projected-write",
       setSpawnedOwnership: "projected-write",
       spawnedParentsByChildIds: "read",
+      sessionIdsWithPendingRuntime: "read",
       spawnedDescendantIds: "read",
       spawnedParentByChild: "read",
       spawnGrantEdge: "read",
       spawnGrantAncestors: "read",
       recordUsageTurn: "non-projected-write",
       replaceUsage: "non-projected-write",
+      replaceEngineUsage: "non-projected-write",
       // Internal scope: never a list row.
       createInternalUsageSession: "non-projected-write",
     },
@@ -526,7 +534,11 @@ const CLASSIFIED: Record<
   piStoreModule: {
     exports: piStoreModule,
     funnel: ["sessionRowsChanged"],
-    kinds: { PiSessionDeletedError: "read", piStore: "projected-write" },
+    kinds: {
+      PiSessionDeletedError: "read",
+      PiSwitchTranscriptError: "read",
+      piStore: "projected-write",
+    },
   },
   piLiveModule: {
     exports: piLiveModule,
@@ -921,6 +933,31 @@ describe("fan-out", () => {
           "profile-a",
           "profile-b",
         ),
+      [switched],
+    );
+    await assertReported(
+      "engine binding switch",
+      () =>
+        sessionStore.switchEngineBinding(switched, {
+          nativeUsage: null,
+          expectSeq: sessionStore.activeBinding(switched)!.seq,
+          fields: {
+            harness: "claude-sdk",
+            credentialProfileId: "profile-c",
+            provider: "claude",
+            model: "opus",
+            thinkingLevel: "high",
+            providerSessionId: null,
+          },
+          nativeSessionId: null,
+          startedSeq: 0,
+          pending: {
+            model: { provider: "claude", id: "opus" },
+            thinkingLevel: "high",
+            account: { kind: "automatic" },
+            setBy: "user",
+          },
+        }),
       [switched],
     );
     await assertReported(

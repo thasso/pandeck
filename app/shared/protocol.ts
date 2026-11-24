@@ -66,6 +66,10 @@ import {
   supportedThinkingLevelsForModel,
 } from "./thinkingLevels.ts";
 import type { ThinkingLevel } from "./thinkingLevels.ts";
+import type {
+  SessionPendingRuntime,
+  SessionRuntimeAccount,
+} from "./sessionRuntime.ts";
 import { clampInt } from "./memoryValidation.ts";
 import type {
   MemoryListFilter,
@@ -93,6 +97,7 @@ export * from "./peerRuntimes.ts";
 export * from "./approvalGrants.ts";
 export * from "./harnesses.ts";
 export * from "./accountKinds.ts";
+export * from "./sessionRuntime.ts";
 export * from "./compactionWindow.ts";
 export { SESSION_TIMELINE_PROJECTION_VERSION } from "./runtimeEvents.ts";
 export type { TimelineCacheDescriptor } from "./runtimeEvents.ts";
@@ -1707,6 +1712,14 @@ export interface AppSettings {
      */
     openAiResetAutoRedeemHours: number;
   };
+  /** Moving a started session to another harness (`docs/session-runtime-switching.md`). */
+  sessionSwitching: {
+    /**
+     * Most tokens of earlier conversation handed to the new engine, verbatim
+     * (1,000–64,000); the target model's free window may lower it further.
+     */
+    handoffTokenCap: number;
+  };
 }
 
 /** Slash commands offered by the server. */
@@ -1737,6 +1750,11 @@ export interface SlashCommandInfo {
    * /rename). Omitted = refused while the agent is streaming.
    */
   runsWhileStreaming?: boolean;
+  /**
+   * What the command's one argument names, for the composer's argument
+   * autocomplete: one of the session's models, effort levels or accounts.
+   */
+  argument?: "model" | "effort" | "account";
 }
 
 /**
@@ -1815,6 +1833,21 @@ export interface SessionRunFailure {
   at: number;
   /** Bounded, human-readable failure text; never a stack trace. */
   message: string;
+  /**
+   * The models another engine can continue the failed turn on, the default
+   * first: only on a terminal quota or rate-limit failure same-kind failover
+   * could not recover (`docs/session-runtime-switching.md` "Continue on
+   * another model"). Sent back with `continueOnModel`.
+   */
+  continueOn?: SessionContinueChoice[];
+}
+
+/** One model a failed turn can continue on, at the effort it would run. */
+export interface SessionContinueChoice {
+  provider: string;
+  id: string;
+  name: string;
+  thinkingLevel: ThinkingLevel;
 }
 
 /** Why the server process that cut a turn off ended, in its own last words. */
@@ -2064,6 +2097,11 @@ export interface SessionListItem {
   thinkingLevel?: ThinkingLevel;
   /** Current account binding; only a live account switch replaces it. */
   credentialProfileId?: string;
+  /**
+   * The model, effort and account the next turn starts on, when a change is
+   * pending (`docs/session-runtime-switching.md`); absent when none is.
+   */
+  pendingRuntime?: SessionPendingRuntime;
   /** Only enterprise accounts may run this session; absent means no restriction. */
   requiresEnterprise?: boolean;
   /** Explicit concurrent counted peer-turn cap; absent uses the default 4. */
@@ -2753,13 +2791,16 @@ export interface TaskExternalLink {
  */
 export type TaskSessionOrigin = "task-start" | "reference";
 
+/**
+ * A session linked to a Task. It names the session by id only: which engine
+ * runs it is the session's active binding, which a harness switch changes, so
+ * a ref never stores an engine or a native file
+ * (`docs/session-runtime-switching.md`).
+ */
 export interface TaskSessionRef {
-  /** Which engine runs this session (pi / claude-sdk). */
-  harness?: Harness;
   /** Which persona/toolset this session emulates, independent of harness. */
   agentType?: AgentType;
   sessionId: string;
-  sessionFile?: string;
   /** Defaults to `reference` when absent. */
   origin?: TaskSessionOrigin;
   /** When the Task context was attached to this session (for `task-start`). */
@@ -3618,7 +3659,8 @@ export type ApprovalKind =
   | "projectCreate"
   | "agentDefinition"
   | "approvalGrantsRequest"
-  | "settingsInput";
+  | "settingsInput"
+  | "sessionRuntime";
 /**
  * pending → executing → executed | failed (approved path); rejected (declined);
  * superseded (a newer card from the same session replaced it while pending).
@@ -4229,6 +4271,27 @@ export interface ApprovalGrantsRequestBody {
   result?: ApprovalGrantsRequestResult;
 }
 
+/**
+ * A coordinator asking to switch its still-owned direct child to a model its
+ * agent definition does not list, or any model for a child not spawned from
+ * one (`docs/agent-definitions.md` "Switching a child"). Approving sets the
+ * child's pending selection, applied when its next turn starts; the
+ * coordinator must still own the child then. Never granted.
+ */
+export interface SessionRuntimeApprovalBody {
+  kind: "sessionRuntime";
+  targetSessionId: string;
+  targetTitle?: string;
+  /** The definition the child was spawned as, when it was. */
+  agentName?: string;
+  /** What the child runs on now, as display text ("Claude Opus · Work"). */
+  current: string;
+  model: { provider: string; id: string; name: string };
+  thinkingLevel?: ThinkingLevel;
+  /** Absent: the account the selection keeps (Automatic for another kind). */
+  account?: { id: string; name: string };
+}
+
 export type ApprovalBody =
   | GithubPullRequestApprovalBody
   | GithubIssueApprovalBody
@@ -4247,7 +4310,8 @@ export type ApprovalBody =
   | ProjectCreateApprovalBody
   | AgentDefinitionApprovalBody
   | ApprovalGrantsRequestBody
-  | SettingsInputApprovalBody;
+  | SettingsInputApprovalBody
+  | SessionRuntimeApprovalBody;
 
 /**
  * The user's per-row adjustments, sent WITH the approve decision rather than
@@ -4916,6 +4980,11 @@ export interface SessionState {
    * per-turn tool policy the user may flip at any time.
    */
   mode?: SessionMode;
+  /**
+   * The model, effort and account the next turn starts on, when a change is
+   * pending (`docs/session-runtime-switching.md`); absent when none is.
+   */
+  pendingRuntime?: SessionPendingRuntime;
   /** Only enterprise accounts may run this session; absent means no restriction. */
   requiresEnterprise?: boolean;
   /**
@@ -6621,9 +6690,23 @@ export type QueuedPromptAttachment = Omit<PromptAttachment, "data">;
  * turn or a delivery failed: nothing is sent until they resume it or send a
  * message themselves.
  */
+/**
+ * An input a pending runtime selection refused that cannot wait in the queue
+ * (a library skill invocation: Task-1023), kept for the user exactly as they
+ * submitted it. Never sent on its own: it stays until the user puts it back
+ * into the composer or discards it (`docs/session-runtime-switching.md`).
+ */
+export interface HeldInput {
+  id: string;
+  text: string;
+  createdAt: number;
+}
+
 export interface PromptQueueState {
   items: QueuedPrompt[];
   paused: boolean;
+  /** Held inputs, oldest first; absent when there are none. */
+  held?: HeldInput[];
   /**
    * The user stopped this session, so nothing that was waiting — what agents
    * and the app queued (peer prompts, background updates, approval outcomes)
@@ -7668,6 +7751,18 @@ export type ClientMessage =
   /** Replace a queued message's text (it went back into the composer to edit). */
   | { type: "updateQueuedPrompt"; sessionId: string; id: string; text: string }
   | { type: "removeQueuedPrompt"; sessionId: string; id: string }
+  /**
+   * Remove one held input ({@link HeldInput}): the user discarded it, or put
+   * it back into the composer, which sends this once the text is there.
+   * Answered by `heldInputAnswer` with the same `requestId`, which is how the
+   * row that asked settles; an id already gone is an ordinary success.
+   */
+  | {
+      type: "removeHeldInput";
+      sessionId: string;
+      id: string;
+      requestId: string;
+    }
   /** Move one queued message to `toIndex` in send order. */
   | {
       type: "moveQueuedPrompt";
@@ -7765,14 +7860,43 @@ export type ClientMessage =
       requestId: string;
     }
   /**
-   * Move an idle session to another account of the same kind at once, loading
-   * it when it is not resident; answered by `sessionAccountMoveAnswer`.
+   * How many tokens of earlier conversation the session's pending switch to
+   * another engine would hand over if it applied now (Q29); answered by
+   * `sessionHandoffEstimate` with the same `requestId`.
    */
   | {
-      type: "moveSessionAccount";
+      type: "estimateSessionHandoff";
       sessionId: string;
-      credentialProfileId: string;
       requestId: string;
+    }
+  /**
+   * Change the model, effort and/or account a started session's next turn
+   * starts on (`docs/session-runtime-switching.md`). Accepted at any time,
+   * during a turn too; nothing changes until that turn is admitted. Answered
+   * by `pendingRuntimeAnswer`.
+   */
+  | {
+      type: "setPendingRuntime";
+      sessionId: string;
+      requestId: string;
+      model?: { provider: string; id: string };
+      thinkingLevel?: ThinkingLevel;
+      account?: SessionRuntimeAccount;
+    }
+  /** Drop the pending selection; leaves no trace. Answered by `pendingRuntimeAnswer`. */
+  | { type: "clearPendingRuntime"; sessionId: string; requestId: string }
+  /**
+   * The user's "Continue on <model>" on a failure that offers it
+   * (`SessionRunFailure.continueOn`): set the next turn to that model and
+   * continue the failed turn on it now. `failureAt` is the failure the click
+   * saw; a newer one refuses. Answered by `continueOnModelAnswer`.
+   */
+  | {
+      type: "continueOnModel";
+      sessionId: string;
+      requestId: string;
+      failureAt: number;
+      model: { provider: string; id: string };
     }
   /**
    * Set the scope of the session's OWN grants named in `keys`: true also
@@ -7844,6 +7968,11 @@ export type ClientMessage =
       beforeSeq: number;
       limit?: number;
     }
+  /**
+   * Model and effort of the viewed session that has NOT started yet (a draft
+   * on the server). A started session refuses both: its changes are a pending
+   * selection (`setPendingRuntime`).
+   */
   | { type: "setModel"; provider: string; id: string }
   | { type: "setThinkingLevel"; level: ThinkingLevel }
   /**
@@ -8831,21 +8960,73 @@ export type ServerMessage =
     }
   /** Control feedback for a human Stop; the rows themselves travel as events. */
   | ({ type: "backgroundWorkStopAnswer" } & BackgroundWorkStopAnswer)
+  /** The answer to `estimateSessionHandoff`. */
+  | ({
+      type: "sessionHandoffEstimate";
+      requestId: string;
+      sessionId: string;
+    } & (
+      | {
+          /**
+           * The estimate, by the same selection and budget the switch
+           * delivers; null when the pending selection stays on the session's
+           * engine or hands nothing over.
+           */
+          tokens: number | null;
+          error?: undefined;
+        }
+      | { error: string; tokens?: undefined }
+    ))
   /** The answer to `listSessionAccountMoveTargets`. */
   | ({
       type: "sessionAccountMoveTargets";
       requestId: string;
       sessionId: string;
     } & (
-      | { accounts: SessionAccountMoveTarget[]; error?: undefined }
-      | { error: string; accounts?: undefined }
+      | {
+          /** The OTHER accounts the session may move to for its next turn. */
+          accounts: SessionAccountMoveTarget[];
+          /**
+           * Whether the bound account itself can run that next turn (enabled,
+           * enterprise requirement, offers the model at that effort, login,
+           * bench), judged as a selection naming it is applied.
+           */
+          boundEligible: boolean;
+          error?: undefined;
+        }
+      | { error: string; accounts?: undefined; boundEligible?: undefined }
     ))
   /**
-   * The answer to `moveSessionAccount`: no `error` means the session moved
-   * (its row arrives through the session list); `error` is why it did not.
+   * The answer to `removeHeldInput`, to the connection that sent it: no
+   * `error` means the held input is gone (the queue update carries that);
+   * `error` is why it was refused, shown on the held row that asked and
+   * nowhere else.
    */
   | {
-      type: "sessionAccountMoveAnswer";
+      type: "heldInputAnswer";
+      requestId: string;
+      sessionId: string;
+      id: string;
+      error?: string;
+    }
+  /**
+   * The answer to `setPendingRuntime` / `clearPendingRuntime`: no `error`
+   * means it was stored (the session's row and state carry it); `error` is
+   * why it was refused.
+   */
+  | {
+      type: "pendingRuntimeAnswer";
+      requestId: string;
+      sessionId: string;
+      error?: string;
+    }
+  /**
+   * The answer to `continueOnModel`: no `error` means the continuation was
+   * admitted on the chosen model (the transcript shows it run); `error` is
+   * why nothing ran.
+   */
+  | {
+      type: "continueOnModelAnswer";
       requestId: string;
       sessionId: string;
       error?: string;

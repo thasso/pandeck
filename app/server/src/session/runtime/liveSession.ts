@@ -42,6 +42,7 @@ import type {
   ConversationRawEntry,
   HostCommandResultEntry,
   ProviderNoticeEntry,
+  RunEngine,
 } from "../log/rawEntry.ts";
 import type {
   SessionLog,
@@ -175,6 +176,13 @@ export interface RunFailureReport {
   failure: RunFailureFacts | undefined;
   /** When the runtime first saw the failure; a retried report keeps it. */
   at: number;
+  /**
+   * The run whose error the turn ended with, when recovery ran it on in
+   * another run: its last attempt, whose error status the session row shows.
+   * Absent: `runId` itself. A consumer binding something to the row's failure
+   * matches this identity, never a timestamp.
+   */
+  attemptRunId?: string;
 }
 
 /** Isolated best-effort consumers; durable hook retries never repeat these. */
@@ -186,6 +194,21 @@ export function subscribeSessionRunFailed(
 ): () => void {
   runFailureListeners.add(listener);
   return () => runFailureListeners.delete(listener);
+}
+
+/** Best-effort consumers of each TERMINAL failed turn, once it is recorded. */
+const terminalFailureListeners = new Set<(report: RunFailureReport) => void>();
+
+/**
+ * Notified once per terminal failed turn, after {@link runFailureHook} stored
+ * it: recovery's continuation has given up by then, so this is the failure
+ * the turn ends with. Never for an intermediate attempt recovery replaced.
+ */
+export function subscribeSessionRunTerminallyFailed(
+  listener: (report: RunFailureReport) => void,
+): () => void {
+  terminalFailureListeners.add(listener);
+  return () => terminalFailureListeners.delete(listener);
 }
 
 let runFailureHook: ((report: RunFailureReport) => void) | undefined;
@@ -307,19 +330,16 @@ function emitTurnClosed(
  * one to boot silently take the signal away from the others. Each subscriber
  * is isolated: one that throws cannot stop the next from being told.
  */
-const runCompletedListeners = new Set<
-  (
-    sessionId: string,
-    stopReason: AgentStopReason,
-    origin: PromptOrigin | undefined,
-  ) => void
->();
+type RunCompletedListener = (
+  sessionId: string,
+  stopReason: AgentStopReason,
+  origin: PromptOrigin | undefined,
+  /** The engine the run ran on, as its `run.started` marker recorded it. */
+  engine?: RunEngine,
+) => void;
+const runCompletedListeners = new Set<RunCompletedListener>();
 export function subscribeSessionRunCompleted(
-  listener: (
-    sessionId: string,
-    stopReason: AgentStopReason,
-    origin: PromptOrigin | undefined,
-  ) => void,
+  listener: RunCompletedListener,
 ): () => void {
   runCompletedListeners.add(listener);
   return () => runCompletedListeners.delete(listener);
@@ -329,10 +349,11 @@ function emitRunCompleted(
   sessionId: string,
   stopReason: AgentStopReason,
   origin: PromptOrigin | undefined,
+  engine: RunEngine | undefined,
 ): void {
   for (const listener of runCompletedListeners) {
     try {
-      listener(sessionId, stopReason, origin);
+      listener(sessionId, stopReason, origin, engine);
     } catch {
       /* best-effort */
     }
@@ -380,6 +401,12 @@ interface DeferredRunSettlement {
   finished: boolean;
   outcome?: RunOutcome;
   completion?: { origin: PromptOrigin | undefined };
+  /**
+   * The engine of the attempt that finished the logical run. After an account
+   * move that is the replacement's, not the first attempt's: the completion
+   * reports the account the turn ended on.
+   */
+  terminalEngine?: RunEngine;
   publishCompletion?: boolean;
   completionPublished?: boolean;
   finish?: (
@@ -456,8 +483,11 @@ export class LiveRuntimeSession {
           ...terminalFailure,
           runId,
           origin: deferred.failure?.origin ?? terminalFailure.origin,
+          attemptRunId: terminalFailure.attemptRunId ?? terminalFailure.runId,
         });
       deferred.outcome = outcome;
+      const terminalEngine = this.recentEngines.get(terminal.runId);
+      if (terminalEngine) deferred.terminalEngine = terminalEngine;
       deferred.publishCompletion = publishCompletion;
       this.recentOutcomes.set(runId, outcome);
       this.deliverRunOutcome(outcome);
@@ -487,6 +517,7 @@ export class LiveRuntimeSession {
       this.sessionId,
       deferred.outcome.stopReason,
       deferred.completion.origin,
+      deferred.terminalEngine,
     );
   }
 
@@ -556,6 +587,8 @@ export class LiveRuntimeSession {
   private turnContinuation = false;
   /** Identity of the open turn's durable run bracket, while one is open. */
   private turnRunId: string | undefined;
+  /** The engine the open run runs on, stamped on its `run.started` marker. */
+  private turnEngine: RunEngine | undefined;
   /** The run whose failure was last recorded, so one turn records once. */
   private recordedFailureRunId: string | undefined;
   private notifiedFailureRunId: string | undefined;
@@ -581,6 +614,8 @@ export class LiveRuntimeSession {
    * run closed (a withdrawn steer). Bounded: only the newest matter.
    */
   private readonly recentOutcomes = new Map<string, RunOutcome>();
+  /** The engine stamp of each of those runs, bounded the same way. */
+  private readonly recentEngines = new Map<string, RunEngine | undefined>();
   /**
    * Why the open turn is running. A visible human steer takes precedence over
    * its earlier trigger: once the user joins a turn, its result is theirs.
@@ -631,6 +666,31 @@ export class LiveRuntimeSession {
       throw new Error(
         `Session ${this.sessionId} already has an open harness adapter.`,
       );
+    this.swapAdapter(adapter);
+  }
+
+  /**
+   * Hand the session back to rendering only, because its harness is leaving
+   * it for another engine (a harness switch,
+   * `docs/session-runtime-switching.md`). The runtime session, its log and
+   * its viewers stay; the next engine binds through {@link rebindAdapter}.
+   * Legal only between runs: a running turn belongs to the harness that
+   * started it. Answers the released adapter's disposal.
+   */
+  detachAdapter(detached: PromptableAdapter): void | Promise<void> {
+    if (!isDetachedAdapter(detached))
+      throw new Error("Only a detached adapter can replace an open harness.");
+    if (this.isDetached) return;
+    if (this.isRunning)
+      throw new Error(
+        `Session ${this.sessionId} is running; its harness cannot leave it.`,
+      );
+    const released = this.adapter;
+    this.swapAdapter(detached);
+    return released.dispose();
+  }
+
+  private swapAdapter(adapter: PromptableAdapter): void {
     this.unsubscribeAdapter();
     this.adapter = adapter;
     // A new adapter numbers its runs afresh.
@@ -676,6 +736,7 @@ export class LiveRuntimeSession {
     this.turnOrigin = origin;
     this.turnOpen = true;
     this.turnRunId = randomUUID();
+    this.turnEngine = this.adapter.runEngine?.();
     emitRunStarted(
       this.sessionId,
       this.turnRunId,
@@ -687,7 +748,11 @@ export class LiveRuntimeSession {
       runId: this.turnRunId,
       modelProvider: this.adapter.modelProvider?.(),
     });
-    this.log.append({ type: "run.started", runId: this.turnRunId });
+    this.log.append({
+      type: "run.started",
+      runId: this.turnRunId,
+      ...(this.turnEngine ? { engine: this.turnEngine } : {}),
+    });
   }
 
   private noteTurnOrigin(origin: PromptOrigin, hidden: boolean): void {
@@ -745,6 +810,11 @@ export class LiveRuntimeSession {
       for (const old of this.recentOutcomes.keys()) {
         if (this.recentOutcomes.size <= RECENT_OUTCOMES_MAX) break;
         this.recentOutcomes.delete(old);
+      }
+      this.recentEngines.set(runId, this.turnEngine);
+      for (const old of this.recentEngines.keys()) {
+        if (this.recentEngines.size <= RECENT_OUTCOMES_MAX) break;
+        this.recentEngines.delete(old);
       }
       const deferred = this.deferredSettlements.get(runId);
       if (deferred) deferred.nativeOutcome = outcome;
@@ -862,10 +932,19 @@ export class LiveRuntimeSession {
       );
       return false;
     }
+    const first = this.recordedFailureRunId !== report.runId;
     this.recordedFailureRunId = report.runId;
     this.unrecordedFailures = this.unrecordedFailures.filter(
       (r) => r.runId !== report.runId,
     );
+    if (first)
+      for (const listener of terminalFailureListeners) {
+        try {
+          listener(report);
+        } catch {
+          /* Independent best-effort listeners. */
+        }
+      }
     return true;
   }
 
@@ -1619,17 +1698,22 @@ export class LiveRuntimeSession {
           );
         // Clear any streams the provider left dangling on a failed/aborted run.
         if (event.stopReason !== "end") {
+          // The run its failure report names, so the row's failure and the
+          // report share one identity.
+          const failedRunId = this.openRunId();
           this.streaming.clear();
           this.emit({
             type: "runStatus",
             status: event.stopReason,
             ...(event.errorMessage ? { message: event.errorMessage } : {}),
+            ...(failedRunId ? { runId: failedRunId } : {}),
           });
         }
         // Adapter-observed completion is the authoritative end for out-of-band
         // turns; prompt()'s finally also calls this, so the normal path remains
         // idempotent. This is the only end that knows HOW the run stopped.
         const origin = this.turnOrigin;
+        const engine = this.turnEngine;
         const completedRunId = this.turnRunId;
         this.endTurn(
           event.stopReason,
@@ -1644,7 +1728,8 @@ export class LiveRuntimeSession {
         if (deferred) {
           deferred.completion = { origin };
           this.publishDeferredCompletion(deferred);
-        } else emitRunCompleted(this.sessionId, event.stopReason, origin);
+        } else
+          emitRunCompleted(this.sessionId, event.stopReason, origin, engine);
         return;
       }
       case "passthrough": {

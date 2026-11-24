@@ -28,7 +28,34 @@ type State =
   | "streaming"
   | "disabled"
   | "inert"
-  | "dictation";
+  | "dictation"
+  | "runtimePending"
+  | "runtimeEngineSwitch"
+  | "runtimeArgument";
+/** `/model`, as the server registers it (`slashCommands.ts`). */
+const modelCommand = {
+  name: "model",
+  description: "Choose the model this session's next turn starts on",
+  usage: "/model [model]",
+  agentTypes: ["developer" as const],
+  execution: "client" as const,
+  runsWhileStreaming: true,
+  argument: "model" as const,
+};
+const runtimeCommands = [...chatCommands, modelCommand];
+/** What `/model` completes to: every model, this engine's first. */
+const runtimeArguments = () =>
+  chatModels.map((model) => ({ value: model.id, label: model.name }));
+const runtimeChip = {
+  label: "Claude Opus 4.6 · High · Work",
+  onOpen: noop,
+};
+/** A pending model on another engine: the chip adds what it hands over. */
+const engineSwitchChip = {
+  label: "GPT-5.4 · Medium · Automatic",
+  handoff: "Hands over ~12k tokens",
+  onOpen: noop,
+};
 function ComposerPreview({
   state,
   frameWidth,
@@ -99,7 +126,13 @@ function ComposerPreview({
       ? "Keep transcript rows stable when another session broadcasts an update."
       : state === "slash"
         ? "/"
-        : "";
+        : state === "runtimeArgument"
+          ? "/model o"
+          : "";
+  const runtime =
+    state === "runtimePending" ||
+    state === "runtimeEngineSwitch" ||
+    state === "runtimeArgument";
   return (
     <div
       ref={host}
@@ -116,7 +149,12 @@ function ComposerPreview({
         contextInfo={null}
         session={chatSession}
         models={chatModels}
-        slashCommands={chatCommands}
+        slashCommands={runtime ? runtimeCommands : chatCommands}
+        {...(runtime ? { runtimeArguments } : {})}
+        {...(state === "runtimePending" ? { runtimeChip } : {})}
+        {...(state === "runtimeEngineSwitch"
+          ? { runtimeChip: engineSwitchChip }
+          : {})}
         actions={chatActions}
         draft={{ sessionId: chatSession.sessionId, token: 1, text }}
         draftAutoFocus={false}
@@ -145,6 +183,26 @@ export const Disabled = { args: { state: "disabled" } } satisfies Story;
 /** First run: shown, but takes no text until an account works. */
 export const Inert = { args: { state: "inert" } } satisfies Story;
 export const Dictation = { args: { state: "dictation" } } satisfies Story;
+/** A change to the next turn's model, effort or account is pending. */
+export const RuntimePending = {
+  args: { state: "runtimePending" },
+} satisfies Story;
+export const RuntimePendingPhone = {
+  args: { frameWidth: 390, state: "runtimePending" },
+  globals: { viewport: { value: "paPhone", isRotated: false } },
+} satisfies Story;
+/** A pending switch to another engine, with its handoff estimate. */
+export const RuntimeEngineSwitch = {
+  args: { state: "runtimeEngineSwitch" },
+} satisfies Story;
+export const RuntimeEngineSwitchPhone = {
+  args: { frameWidth: 390, state: "runtimeEngineSwitch" },
+  globals: { viewport: { value: "paPhone", isRotated: false } },
+} satisfies Story;
+/** `/model` completing its argument from every model, this engine's first. */
+export const RuntimeArgument = {
+  args: { state: "runtimeArgument" },
+} satisfies Story;
 export const Phone = {
   args: { frameWidth: 390, state: "typed" },
   globals: { viewport: { value: "paPhone", isRotated: false } },

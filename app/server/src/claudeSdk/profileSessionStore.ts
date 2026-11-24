@@ -133,15 +133,14 @@ export function claudeProfileSessionStore(profileId: string | undefined) {
   };
 }
 
-/** Stage full native history; commit removes the source, rollback the destination. */
-export async function copyClaudeSessionForAccount(
-  previous: string,
-  next: string,
+/** The account's project directories holding the native transcript `providerSessionId`. */
+async function transcriptProjectKeys(
+  profileId: string,
   providerSessionId: string,
-): Promise<{ commit: () => Promise<void>; rollback: () => Promise<void> }> {
+): Promise<string[]> {
   if (!/^[a-z0-9][a-z0-9_-]*$/i.test(providerSessionId))
     throw new Error("The Claude session id cannot name a transcript.");
-  const source = join(claudeConfigDir(previous), "projects");
+  const source = join(claudeConfigDir(profileId), "projects");
   const matches: string[] = [];
   for (const key of await readdir(source, { withFileTypes: true })) {
     if (!key.isDirectory()) continue;
@@ -156,12 +155,60 @@ export async function copyClaudeSessionForAccount(
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
   }
+  return matches;
+}
+
+/**
+ * Whether the account holds exactly one native transcript `providerSessionId`,
+ * which a query can resume; false for a missing or unreadable store.
+ */
+export async function claudeTranscriptResumable(
+  profileId: string,
+  providerSessionId: string,
+): Promise<boolean> {
+  try {
+    return (
+      (await transcriptProjectKeys(profileId, providerSessionId)).length === 1
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The account that holds native transcript `providerSessionId`: the first of
+ * `preferred` that does, else any Claude account (the set the delete sweep
+ * scans, {@link removeClaudeSessionFromAllProfiles}); undefined when none does.
+ */
+export async function claudeTranscriptHolder(
+  providerSessionId: string,
+  preferred: readonly string[],
+): Promise<string | undefined> {
+  const candidates = new Set([
+    ...preferred,
+    ...listCredentialProfiles()
+      .filter((profile) => profile.provider === "claude")
+      .map((profile) => profile.id),
+  ]);
+  for (const profileId of candidates)
+    if (await claudeTranscriptResumable(profileId, providerSessionId))
+      return profileId;
+  return undefined;
+}
+
+/** Stage full native history; commit removes the source, rollback the destination. */
+export async function copyClaudeSessionForAccount(
+  previous: string,
+  next: string,
+  providerSessionId: string,
+): Promise<{ commit: () => Promise<void>; rollback: () => Promise<void> }> {
+  const matches = await transcriptProjectKeys(previous, providerSessionId);
   if (matches.length !== 1)
     throw new Error(
       "Cannot locate the complete Claude transcript for this account switch.",
     );
   const projectKey = matches[0]!;
-  const from = join(source, projectKey);
+  const from = join(claudeConfigDir(previous), "projects", projectKey);
   const to = join(claudeConfigDir(next), "projects", projectKey);
   await mkdir(to, { recursive: true });
   if (!(await lstat(to)).isDirectory())

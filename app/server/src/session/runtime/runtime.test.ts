@@ -25,6 +25,7 @@ const {
   subscribeSessionRunFailed,
   setRunFailureHook,
   subscribeSessionRunStarted,
+  subscribeSessionRunTerminallyFailed,
   subscribeSessionToolCompleted,
 } = await import("./liveSession.ts");
 type RunOutcome = import("./liveSession.ts").RunOutcome;
@@ -625,6 +626,56 @@ test("failed run: throw + cleanup", async () => {
   assert.deepEqual(statuses, ["error"], "runStatus error emitted");
 });
 
+test("a failed run's error status names the run its failure report names, for the server only", async () => {
+  const { RuntimeTransport } = await import("../transport/gateway.ts");
+  const { runtime, adapter } = makeRuntime();
+  const statusRuns: Array<string | undefined> = [];
+  runtime.openSessionStream("s1", (e) => {
+    if (e.type === "runStatus") statusRuns.push(e.runId);
+  });
+  const viewed: unknown[] = [];
+  const transport = new RuntimeTransport(
+    "s1",
+    runtime.get("s1")!,
+    {
+      send: (m) => {
+        if (m.type === "event" && m.event.type === "runStatus")
+          viewed.push(m.event);
+      },
+    },
+    {
+      buildState: () => ({ sessionId: "s1" }) as never,
+      buildContextInfo: () => ({ sessionId: "s1" }) as never,
+    },
+  );
+  transport.attach();
+  const reported: string[] = [];
+  const off = subscribeSessionRunFailed((report) =>
+    reported.push(report.runId),
+  );
+  try {
+    const run = runtime.prompt("s1", "boom");
+    await tick();
+    adapter.emit({
+      type: "runCompleted",
+      stopReason: "error",
+      errorMessage: "kaboom",
+    });
+    adapter.finishRun({ stopReason: "error", errorMessage: "kaboom" });
+    await assert.rejects(() => run, RunFailedError);
+    assert.equal(reported.length, 1);
+    assert.deepEqual(statusRuns, reported, "one identity for both");
+    assert.deepEqual(
+      viewed,
+      [{ type: "runStatus", status: "error", message: "kaboom" }],
+      "a viewer never receives the run id",
+    );
+  } finally {
+    off();
+    transport.detach();
+  }
+});
+
 test("failure subscribers are isolated, removable and once per run even when the durable hook retries", async () => {
   const { runtime, adapter } = makeRuntime();
   const reports: import("./liveSession.ts").RunFailureReport[] = [];
@@ -678,6 +729,43 @@ test("failure subscribers are isolated, removable and once per run even when the
   } finally {
     unbroken();
     broken();
+    setRunFailureHook(undefined);
+  }
+});
+
+test("terminal failure subscribers hear a turn once, only after its failure was stored", async () => {
+  const { runtime, adapter } = makeRuntime();
+  let hookCalls = 0;
+  let stored = 0;
+  const heard: Array<{ kind: string | undefined; storedBefore: number }> = [];
+  const off = subscribeSessionRunTerminallyFailed((report) =>
+    heard.push({ kind: report.failure?.kind, storedBefore: stored }),
+  );
+  setRunFailureHook(() => {
+    hookCalls++;
+    if (hookCalls === 1) throw new Error("disk failed");
+    stored++;
+  });
+  try {
+    const run = runtime.prompt("s1", "limit");
+    await tick();
+    adapter.finishRun({
+      stopReason: "error",
+      errorMessage: "You've hit your usage limit.",
+    });
+    await assert.rejects(() => run, RunFailedError);
+    const next = runtime.prompt("s1", "after");
+    await tick();
+    adapter.finishRun({ stopReason: "end" });
+    await next;
+    assert.ok(hookCalls >= 2, "the failed store was retried");
+    assert.deepEqual(
+      heard,
+      [{ kind: "quota", storedBefore: 1 }],
+      "once, after the hook stored it",
+    );
+  } finally {
+    off();
     setRunFailureHook(undefined);
   }
 });
@@ -1152,6 +1240,52 @@ test("disposeSession: frees the session + allows a fresh re-create", async () =>
   await runtime.disposeSession("s1");
 });
 
+test("detachHarness keeps the runtime session and its subscribers for the next engine", async () => {
+  const runtime = new SessionRuntime(new SessionLogStore(true), 5);
+  const first = new ScriptedAdapter();
+  const live = runtime.createSession("s1", first);
+  const seen: string[] = [];
+  live.subscribe((event) => seen.push(event.type));
+
+  // A running turn belongs to the engine that started it.
+  const running = runtime.prompt("s1", "go");
+  await tick();
+  assert.throws(() => runtime.detachHarness("s1"), /is running/);
+  first.finishRun({ stopReason: "end" });
+  await running;
+
+  await runtime.detachHarness("s1");
+  assert.equal(
+    first.disposed,
+    true,
+    "the leaving engine's adapter is disposed",
+  );
+  assert.equal(runtime.get("s1"), live, "the same runtime session stays");
+  assert.equal(live.isDetached, true);
+  await runtime.detachHarness("s1"); // already detached: nothing to do
+
+  // The next engine binds the same instance; a subscriber from before the
+  // switch sees its run, and nothing reaches the old adapter.
+  const next = new ScriptedAdapter();
+  live.rebindAdapter(next);
+  seen.length = 0;
+  const again = runtime.prompt("s1", "again");
+  await tick();
+  assert.equal(next.promptCount, 1);
+  assert.equal(first.promptCount, 1);
+  next.finishRun({ stopReason: "end" });
+  await again;
+  assert.ok(seen.length > 0, "the earlier subscriber still hears the session");
+  // Bound again before the view-release grace ran out: it is kept.
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(runtime.get("s1"), live);
+
+  // Detached and never bound again, an unviewed session goes after the grace.
+  await runtime.detachHarness("s1");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(runtime.get("s1"), undefined);
+});
+
 /* -------------- semantic completion hook excludes generic idle ---------- */
 test("semantic completion hook excludes generic idle", async () => {
   const { runtime, adapter } = makeRuntime();
@@ -1253,8 +1387,10 @@ test("fork anchor resolution", async () => {
   const ids = timeline.map((entry) => entry.id);
   const [u1, a1, u2, a2] = ids as [string, string, string, string];
 
+  const { seq, ...anchors } = runtime.forkAnchors("s1", a2);
+  assert.equal(typeof seq, "number", "and the entry's log position");
   assert.deepEqual(
-    runtime.forkAnchors("s1", a2),
+    anchors,
     {
       entryFound: true,
       own: "native-a2",

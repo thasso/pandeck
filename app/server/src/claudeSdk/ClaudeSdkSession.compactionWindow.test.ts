@@ -35,6 +35,10 @@ const { sessionStore } = await import("../db/sessionStore.ts");
 const { backgroundWorkStore } = await import("../db/backgroundWorkStore.ts");
 const { updateSettings } = await import("../settings.ts");
 const { sessionSkills } = await import("../sessionSkills.ts");
+const { SessionRuntime } = await import("../session/runtime/runtime.ts");
+const { SessionLogStore } = await import("../session/log/store.ts");
+const { promptRuntimeSessionWithRuntime } =
+  await import("../session/runtimePrompt.ts");
 const { inProcessWorkerEnginesForTests } =
   await import("../workers/inProcessWorker.ts");
 
@@ -141,6 +145,11 @@ class FakeQuery implements ClaudeQuery {
 
   async applyFlagSettings(settings: Record<string, unknown>): Promise<void> {
     this.flagCalls.push(settings);
+  }
+
+  readonly modelCalls: Array<string | undefined> = [];
+  async setModel(model?: string): Promise<void> {
+    this.modelCalls.push(model);
   }
 
   async getContextUsage(opts?: { detail?: "summary" | "full" }) {
@@ -542,6 +551,456 @@ test("a pending start-time setting closes immediately after the last task and th
     h.queries[1]!.output.emit(result("fresh-window"));
     await next;
     assert.equal(h.query.closeCalls, 1, "reentrant turn-end checks close once");
+  } finally {
+    await disposeRetained(h);
+  }
+});
+
+test("a model switch on a retained process keeps the stored window and restarts it at the new model's clamp", async () => {
+  const h = await retainedWindow(900_000);
+  try {
+    assert.equal(startWindow(h.query), 900_000);
+    await h.session.setModel("sonnet");
+    assert.deepEqual(h.query.modelCalls, ["claude-sonnet-5-5"]);
+    assert.equal(sessionStore.get(h.id)?.compactionWindow, 900_000);
+    assert.equal(window(h.session)?.effectiveTokens, 200_000);
+    assert.equal(window(h.session)?.pendingReason, "process-restart");
+    assert.equal(h.query.closeCalls, 0, "background work keeps its host");
+    completeBackgroundShell(h.query);
+    await until(() => h.query.closeCalls === 1);
+    const next = h.adapter.prompt("on the smaller model");
+    await until(() => h.queries.length === 2);
+    const fresh = h.queries[1]!;
+    assert.equal(fresh.params.options?.model, "claude-sonnet-5-5");
+    assert.equal(startWindow(fresh), 200_000);
+    assert.equal(window(h.session)?.applied, "confirmed");
+    fresh.output.emit(result("smaller-model"));
+    await next;
+  } finally {
+    await disposeRetained(h);
+  }
+});
+
+const usageEntry = (work: number, contextWindow: number) => ({
+  inputTokens: work,
+  outputTokens: 0,
+  cacheReadInputTokens: 0,
+  cacheCreationInputTokens: 0,
+  costUSD: 0,
+  contextWindow,
+});
+
+test("F001: after a retained switch, the epoch's cumulative report keeps the new model's window and its pending restart", async () => {
+  const h = await retainedWindow(900_000);
+  try {
+    await h.session.setModel("sonnet");
+    const next = h.adapter.prompt("on sonnet");
+    await until(() => h.query.inputs.length === 2);
+    // The running total still leads with the Opus work before the switch.
+    h.query.output.emit({
+      ...result("mixed-models"),
+      modelUsage: {
+        "claude-opus-5-5": usageEntry(100_000, 1_000_000),
+        "claude-sonnet-5-5": usageEntry(1_000, 200_000),
+      },
+    } as unknown as ClaudeSdkMessage);
+    await next;
+    assert.equal(h.session.compactionWindowStatus().contextWindow, 200_000);
+    assert.equal(window(h.session)?.effectiveTokens, 200_000);
+    assert.equal(window(h.session)?.pendingReason, "process-restart");
+  } finally {
+    await disposeRetained(h);
+  }
+});
+
+test("F001 sibling: a retained switch drops the old model's reported threshold, so lowering reads it again", async () => {
+  const h = await retainedWindow();
+  try {
+    await h.session.setModel("sonnet");
+    const next = h.adapter.prompt("on sonnet");
+    await until(() => h.query.inputs.length === 2);
+    const reads = h.query.usageReads.length;
+    h.query.summary = async (usage) => ({
+      ...usage,
+      autoCompactThreshold: 150_000,
+    });
+    const outcome = await h.session.lowerCompactionWindow(180_000, () => {
+      throw new Error("must not store");
+    });
+    assert.deepEqual(h.query.usageReads.slice(reads), ["summary"]);
+    assert.equal(!outcome.ok && outcome.largestAcceptable, 162_999);
+    h.query.output.emit(result("after-lowering"));
+    await next;
+  } finally {
+    await disposeRetained(h);
+  }
+});
+
+test("F002: a prompt waits for a retained model change's native controls, then runs on the new selection", async () => {
+  const h = await retainedWindow();
+  try {
+    await h.session.setThinkingLevel("off");
+    const ack = deferred<void>();
+    let started = false;
+    h.query.setModel = async (model?: string) => {
+      h.query.modelCalls.push(model);
+      started = true;
+      await ack.promise;
+    };
+    const effortWhileRunning: boolean[] = [];
+    h.query.applyFlagSettings = async (settings) => {
+      h.query.flagCalls.push(settings);
+      effortWhileRunning.push(h.session.isRunning);
+    };
+    const change = h.session.setModel("fable");
+    await until(() => started);
+    const turn = h.adapter.prompt("racing the change");
+    assert.throws(
+      () => h.session.beginSyntheticTool("compact", {}),
+      /model, effort or account changes/,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(h.session.isRunning, false, "admission waits");
+    assert.equal(h.query.inputs.length, 1);
+    ack.resolve();
+    await change;
+    await until(() => h.query.inputs.length === 2);
+    assert.deepEqual(effortWhileRunning, [false]);
+    assert.equal(h.session.modelSelection().model?.id, "fable");
+    assert.equal(h.session.toRecord().thinkingLevel, "low");
+    h.query.output.emit(result("after-change"));
+    await turn;
+  } finally {
+    await disposeRetained(h);
+  }
+});
+
+test("F002: a change queues behind one in flight and applies to the new model", async () => {
+  const h = await retainedWindow();
+  try {
+    const ack = deferred<void>();
+    const controls: string[] = [];
+    h.query.setModel = async (model?: string) => {
+      controls.push(`model ${model}`);
+      await ack.promise;
+    };
+    h.query.applyFlagSettings = async (settings) => {
+      controls.push(`effort ${String(settings.effortLevel)}`);
+    };
+    const first = h.session.setModel("sonnet");
+    const second = h.session.setThinkingLevel("high");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(controls, ["model claude-sonnet-5-5"], "second waits");
+    ack.resolve();
+    await Promise.all([first, second]);
+    assert.deepEqual(controls, ["model claude-sonnet-5-5", "effort high"]);
+    assert.equal(h.session.toRecord().modelId, "sonnet");
+    assert.equal(h.session.toRecord().thinkingLevel, "high");
+  } finally {
+    await disposeRetained(h);
+  }
+});
+
+test("F002 (a): a prompt queued behind two changes opens only after both settle, never under their controls", async () => {
+  const h = await retainedWindow();
+  try {
+    const modelAck = deferred<void>();
+    const effortAck = deferred<void>();
+    h.query.setModel = async (model?: string) => {
+      h.query.modelCalls.push(model);
+      await modelAck.promise;
+    };
+    const runningDuringControls: boolean[] = [];
+    h.query.applyFlagSettings = async (settings) => {
+      h.query.flagCalls.push(settings);
+      await effortAck.promise;
+      runningDuringControls.push(h.session.isRunning);
+    };
+    const first = h.session.setModel("sonnet");
+    const second = h.session.setThinkingLevel("high");
+    const turn = h.adapter.prompt("behind both changes");
+    modelAck.resolve();
+    await first;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(h.session.isRunning, false, "the effort control is pending");
+    assert.equal(h.query.inputs.length, 1);
+    effortAck.resolve();
+    await second;
+    await until(() => h.query.inputs.length === 2);
+    assert.ok(runningDuringControls.length > 0);
+    assert.ok(runningDuringControls.every((running) => !running));
+    assert.equal(h.session.toRecord().thinkingLevel, "high");
+    h.query.output.emit(result("after-both"));
+    assert.equal((await turn).stopReason, "end");
+  } finally {
+    await disposeRetained(h);
+  }
+});
+
+test("F002 (b): queued changes apply in request order without overlapping controls, and the latest wins", async () => {
+  const h = await retainedWindow();
+  try {
+    const modelAck = deferred<void>();
+    const highAck = deferred<void>();
+    h.query.setModel = async (model?: string) => {
+      h.query.modelCalls.push(model);
+      await modelAck.promise;
+    };
+    const calls: string[] = [];
+    let inFlight = 0;
+    let overlap = false;
+    h.query.applyFlagSettings = async (settings) => {
+      const level = String(settings.effortLevel);
+      calls.push(level);
+      inFlight += 1;
+      if (inFlight > 1) overlap = true;
+      if (level === "high") await highAck.promise;
+      inFlight -= 1;
+    };
+    const changes = [
+      h.session.setModel("sonnet"),
+      h.session.setThinkingLevel("high"),
+      h.session.setThinkingLevel("low"),
+    ];
+    modelAck.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(calls.slice(-1), ["high"], "low waits behind high");
+    highAck.resolve();
+    await Promise.all(changes);
+    assert.equal(overlap, false);
+    assert.deepEqual(calls.slice(-2), ["high", "low"]);
+    assert.equal(h.session.toRecord().modelId, "sonnet");
+    assert.equal(h.session.toRecord().thinkingLevel, "low");
+  } finally {
+    await disposeRetained(h);
+  }
+});
+
+test("F004: Stop cancels a prompt waiting for admission; it ends stopped and never reaches the process", async () => {
+  const h = await retainedWindow();
+  try {
+    const ack = deferred<void>();
+    h.query.setModel = async (model?: string) => {
+      h.query.modelCalls.push(model);
+      await ack.promise;
+    };
+    const change = h.session.setModel("sonnet");
+    const turn = h.adapter.prompt("stop before admission", {
+      clientRequestId: "stopped-waiter",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    void h.adapter.abort();
+    // Stopped at once, while the change still holds the queue.
+    assert.deepEqual(await turn, { stopReason: "aborted" });
+    ack.resolve();
+    await change;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(h.query.inputs.length, 1, "the stopped prompt was never sent");
+    assert.equal(h.session.isRunning, false);
+    // The queue moved on: the next prompt (even the same request) runs.
+    const next = h.adapter.prompt("after the stop", {
+      clientRequestId: "stopped-waiter",
+    });
+    await until(() => h.query.inputs.length === 2);
+    h.query.output.emit(result("after-stop"));
+    assert.equal((await next).stopReason, "end");
+  } finally {
+    await disposeRetained(h);
+  }
+});
+
+test("F004: the runtime's Stop cancels a prompt that passed runtime admission and waits behind a change", async () => {
+  const h = await retainedWindow();
+  try {
+    const runtime = new SessionRuntime(new SessionLogStore(true));
+    const driver = h.session as unknown as Parameters<
+      typeof promptRuntimeSessionWithRuntime
+    >[1];
+    const ack = deferred<void>();
+    h.query.setModel = async (model?: string) => {
+      h.query.modelCalls.push(model);
+      await ack.promise;
+    };
+    const change = h.session.setModel("sonnet");
+    const turn = promptRuntimeSessionWithRuntime(runtime, driver, "held");
+    await until(() => runtime.isRunning(h.id));
+    const live = runtime.get(h.id)!;
+    const stopsBefore = live.stopGeneration;
+    await live.abort();
+    assert.equal(live.stopGeneration, stopsBefore + 1);
+    await turn;
+    assert.equal(runtime.isRunning(h.id), false);
+    ack.resolve();
+    await change;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(h.query.inputs.length, 1, "never reached native input");
+    assert.equal(h.session.isRunning, false);
+    const entries = live.getSnapshot().entries;
+    assert.deepEqual(
+      entries.map((entry) => entry.role),
+      ["user"],
+      "the prompt stays in the log; no assistant turn ran",
+    );
+  } finally {
+    await disposeRetained(h);
+  }
+});
+
+test("F002: a provider-started turn waits for a change in flight, then opens on its model", async () => {
+  const h = await retainedWindow();
+  try {
+    const ack = deferred<void>();
+    h.query.setModel = async (model?: string) => {
+      h.query.modelCalls.push(model);
+      await ack.promise;
+    };
+    const change = h.session.setModel("sonnet");
+    h.query.output.emit({
+      type: "stream_event",
+      session_id: "provider-window",
+      uuid: "provider-turn",
+      event: { type: "message_start", message: { id: "provider-start" } },
+    } as unknown as ClaudeSdkMessage);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(h.session.isRunning, false);
+    ack.resolve();
+    await change;
+    await until(() => h.session.isRunning);
+    assert.equal(h.session.modelSelection().model?.id, "sonnet");
+    // A change asked for now finds the provider turn running.
+    await assert.rejects(
+      h.session.setThinkingLevel("high"),
+      /running; change its effort/,
+    );
+    h.query.output.emit(result("provider-finished"));
+    await until(() => !h.session.isRunning);
+  } finally {
+    await disposeRetained(h);
+  }
+});
+
+test("F002: a failed change releases the queue for the changes and prompt behind it", async () => {
+  const h = await retainedWindow();
+  try {
+    const ack = deferred<void>();
+    h.query.setModel = async () => {
+      await ack.promise;
+      throw new Error("model control failed");
+    };
+    const failing = h.session.setModel("sonnet");
+    const effort = h.session.setThinkingLevel("high");
+    const turn = h.adapter.prompt("behind a failure");
+    ack.resolve();
+    await assert.rejects(failing, /model control failed/);
+    await effort;
+    await until(() => h.query.inputs.length === 2);
+    assert.equal(h.session.toRecord().modelId, "opus");
+    assert.equal(h.session.toRecord().thinkingLevel, "high");
+    h.query.output.emit(result("after-failure"));
+    assert.equal((await turn).stopReason, "end");
+  } finally {
+    await disposeRetained(h);
+  }
+});
+
+test("F002: disposal releases every waiter behind a change that never settles", async () => {
+  const h = await retainedWindow();
+  const ack = deferred<void>();
+  try {
+    h.query.setModel = async () => ack.promise;
+    void h.session.setModel("sonnet").catch(() => undefined);
+    const effort = h.session.setThinkingLevel("high");
+    const turn = h.adapter.prompt("behind a hung control");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    h.session.dispose();
+    await assert.rejects(effort, /released from memory/);
+    await assert.rejects(turn, /released from memory/);
+    assert.equal(h.query.inputs.length, 1);
+  } finally {
+    ack.resolve();
+    vi.useRealTimers();
+    if (h.query.closeCalls > 0)
+      await until(() => !backgroundWorkStore.hostForOwner(h.id));
+  }
+});
+
+test("F002: while an account switch runs, the session opens no prompt or host-command turn", async () => {
+  const h = makeHarness();
+  h.session.dispose();
+  // Bound to an account, so the switch reaches its admission checks.
+  const session = new ClaudeSdkSession(h.id, {
+    seam: async () => ({
+      query(params) {
+        const query = new FakeQuery(params);
+        h.queries.push(query);
+        return query;
+      },
+    }),
+    agentType: "developer",
+    modelId: "opus",
+    providerSessionId: "provider-window",
+    credentialProfileId: "bound-account",
+  });
+  h.session = session;
+  const adapter = session.createRuntimeAdapter();
+  try {
+    let during: Promise<unknown> | undefined;
+    let slash: unknown;
+    const switching = h.session.switchAccount("no-such-account", () => {
+      if (during) return;
+      during = adapter.prompt("during the switch");
+      try {
+        h.session.beginSyntheticTool("compact", {});
+      } catch (error) {
+        slash = error;
+      }
+    });
+    await switching.catch(() => undefined);
+    assert.ok(during, "the switch reached its admission check");
+    await assert.rejects(during, /account is changing/);
+    assert.match(String(slash), /account changes/);
+    assert.equal(h.queries.length, 0, "no process opened for the prompt");
+  } finally {
+    h.session.dispose();
+  }
+});
+
+test("F003: a failed effort control after the model switched stores model and clamped effort together and restarts the process once quiet", async () => {
+  const h = await retainedWindow();
+  try {
+    await h.session.setThinkingLevel("off");
+    h.query.applyFlagSettings = async () => {
+      throw new Error("control failed");
+    };
+    await assert.rejects(
+      h.session.setModel("fable"),
+      /did not take the low effort \(control failed\)/,
+    );
+    // No listing is known: fable runs its newest candidate (`modelResolution.ts`).
+    assert.deepEqual(h.query.modelCalls, ["claude-fable-5-2"]);
+    assert.equal(h.session.toRecord().modelId, "fable");
+    assert.equal(h.session.toRecord().thinkingLevel, "low");
+    assert.equal(h.query.closeCalls, 0, "background work keeps its host");
+    // No start-time setting changed; only the stale effort restarts it.
+    completeBackgroundShell(h.query);
+    await until(() => h.query.closeCalls === 1);
+  } finally {
+    await disposeRetained(h);
+  }
+});
+
+test("F003 sibling: a failed effort control keeps the stored effort and restarts the process once quiet", async () => {
+  const h = await retainedWindow();
+  try {
+    h.query.applyFlagSettings = async () => {
+      throw new Error("control failed");
+    };
+    const before = h.session.toRecord().thinkingLevel;
+    await assert.rejects(h.session.setThinkingLevel("xhigh"), /control failed/);
+    assert.notEqual(before, "xhigh");
+    assert.equal(h.session.toRecord().thinkingLevel, before);
+    completeBackgroundShell(h.query);
+    await until(() => h.query.closeCalls === 1);
   } finally {
     await disposeRetained(h);
   }

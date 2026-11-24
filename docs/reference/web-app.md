@@ -17,11 +17,11 @@ tasks/projects and browser-side helpers.
   composition; the three-pane layout itself is owned by `components/shell/` per
   `../docs/ui-shell.md`. New-session model choices come from the selected
   credential profile's server-projected model list, never the
-  global/default-account list; established sessions retain the global list for
-  immutable model display. First send stays blocked until that projection is
-  authoritative, and profile-load failures replace Quick Start with an explicit
-  error + retry rather than silently falling back to pi/default. The same
-  profile projection also feeds Settings as `accountModels`
+  global/default-account list; established sessions retain the global list, with
+  models their bound account cannot run disabled. First send stays blocked until
+  that projection is authoritative, and profile-load failures replace Quick
+  Start with an explicit error + retry rather than silently falling back to
+  pi/default. The same profile projection also feeds Settings as `accountModels`
   (`lib/credentialProfiles.ts` `accountModelOptions`), so configured agents are
   pinned to an account/model combination rather than the default account's
   catalog; the account list itself is passed alongside only to explain a

@@ -12,6 +12,7 @@ import {
   type AgentQuestionResponse,
   type CredentialProfileProvider,
   type EntrySummary,
+  type HeldInput,
   type ModelOption,
   type PromptAttachment,
   type SessionListItem,
@@ -55,6 +56,19 @@ import {
   spawnedSessionsView,
 } from "../lib/sessionInbox.ts";
 import type { AssistantActions, UIState } from "./useAssistant.ts";
+import {
+  handoffEstimateText,
+  runtimeTargetLabel,
+  type SessionRuntimeControl,
+} from "../components/SessionRuntimeSection.tsx";
+import {
+  isRuntimeCommand,
+  resolveRuntimeCommand,
+  RUNTIME_COMMAND_NAMES,
+  runtimeArgumentOptions,
+  type RuntimeCommandName,
+} from "../lib/runtimeSlashCommand.ts";
+import { runtimeCommandContext } from "../lib/sessionRuntimeControl.ts";
 import type { TranscriptFocus } from "./useTranscriptFocus.ts";
 import {
   usePendingChatComments,
@@ -173,6 +187,40 @@ export interface SessionChatInput {
   canCreateDrafts?: boolean;
   /** `/review`: only a host that can start the review session offers it. */
   onReviewCommand?: (rawArgs: string) => string | null;
+  /**
+   * `/model`, `/effort`, `/account` and the composer's runtime chip, for a
+   * started session (`lib/runtimeSlashCommand.ts`). Without it the commands
+   * are not offered.
+   */
+  runtimeCommands?:
+    | {
+        control: SessionRuntimeControl;
+        /** Accounts `/account` may name; offered only when more than one. */
+        accountChoices: readonly { id: string; name: string }[];
+        /** Open the inspector at its Runtime section. */
+        open: () => void;
+      }
+    | undefined;
+}
+
+/**
+ * What the composer's "Next turn" chip says, or undefined without a pending
+ * selection: the content its memo is keyed on.
+ */
+function runtimeChipText(
+  commands: SessionChatInput["runtimeCommands"],
+): { label: string; handoff?: string } | undefined {
+  const pending = commands?.control.pending;
+  if (!commands || !pending) return undefined;
+  // A pending engine switch carries the size of its handoff, once known.
+  const estimate = commands.control.engineSwitch?.handoff;
+  const tokens = estimate ? dataOf(estimate) : undefined;
+  return {
+    label: runtimeTargetLabel(pending, commands.control.models, (id) =>
+      commands.control.accounts?.nameOf(id),
+    ),
+    ...(tokens !== undefined ? { handoff: handoffEstimateText(tokens) } : {}),
+  };
 }
 
 /** Submitting follows the answer, wherever in the conversation it was sent from. */
@@ -251,6 +299,7 @@ export function useSessionChat({
   onForkSession = actions.forkSession,
   canCreateDrafts = true,
   onReviewCommand,
+  runtimeCommands,
 }: SessionChatInput) {
   const {
     sessions,
@@ -644,7 +693,47 @@ export function useSessionChat({
   // screen; the permanent Assistant queues its intake on its own.
   const queueSessionId = surface === "session" ? session?.sessionId : undefined;
   const sendPromptQueue = actions.promptQueue;
+  const removeHeldInput = actions.removeHeldInput;
   const shownPromptQueue = queueSessionId ? session?.promptQueue : undefined;
+  // Put back (a held input, `PromptQueueLedge`): the text goes into this
+  // session's composer first, and the server lets go of it only once the
+  // composer reports it in the field and stored (`onInserted`). A reload, a
+  // session switch or a failure in between leaves it held, never lost.
+  const [putBacks, setPutBacks] = useState<
+    readonly { token: number; sessionId: string; id: string; text: string }[]
+  >([]);
+  const putBacksRef = useRef(putBacks);
+  putBacksRef.current = putBacks;
+  const putBackTokenRef = useRef(0);
+  const putBackHeldInput = useCallback(
+    (input: HeldInput) => {
+      if (!queueSessionId) return;
+      if (putBacksRef.current.some((request) => request.id === input.id))
+        return;
+      const token = ++putBackTokenRef.current;
+      setPutBacks((current) => [
+        ...current,
+        { token, sessionId: queueSessionId, id: input.id, text: input.text },
+      ]);
+    },
+    [queueSessionId],
+  );
+  // One at a time, and only into the session it was put back from.
+  const composerInsert =
+    putBacks.find((request) => request.sessionId === queueSessionId) ?? null;
+  const onComposerInserted = useCallback(
+    (token: number) => {
+      const done = putBacksRef.current.find(
+        (request) => request.token === token,
+      );
+      if (!done) return;
+      setPutBacks((current) =>
+        current.filter((request) => request.token !== token),
+      );
+      removeHeldInput(done.sessionId, done.id);
+    },
+    [removeHeldInput],
+  );
   // Alt+Enter queues a message AND steers it in at once, so it is seen in the
   // queue on its way. The server names the row, so the steer waits for the
   // queue update that brings a new row with exactly this text.
@@ -778,6 +867,13 @@ export function useSessionChat({
     surface === "assistant" && (assistantHeld || shownUnhandledBackground > 0)
       ? session?.sessionId
       : undefined;
+  // This session's held-input removals, each settling only its own row
+  // (read defensively: hand-built partial states predate the field).
+  const heldRemovals = queueSessionId
+    ? (state.heldInputRemovals as UIState["heldInputRemovals"] | undefined)?.[
+        queueSessionId
+      ]
+    : undefined;
   const promptQueueLedge = useMemo(
     () =>
       heldAssistantSessionId ? (
@@ -872,9 +968,17 @@ export function useSessionChat({
             })
           }
           onOpenSession={onOpenSession}
+          onPutBackHeld={putBackHeldInput}
+          onDiscardHeld={(id) => removeHeldInput(queueSessionId, id)}
+          connected={state.connected}
+          heldRemovals={heldRemovals}
         />
       ) : undefined,
     [
+      putBackHeldInput,
+      state.connected,
+      heldRemovals,
+      removeHeldInput,
       heldAssistantSessionId,
       assistantHeld,
       shownPromptQueue,
@@ -994,9 +1098,29 @@ export function useSessionChat({
     },
     [actions, pinTranscriptToBottom, worktreeMissing],
   );
+  // `runtimeCommands` is rebuilt whenever App rebuilds the Runtime control:
+  // another session's change, an account projection or an estimate refresh.
+  // The composer is handed only its CONTENT (CLAUDE.md): handlers read the
+  // latest through a ref, and what it draws is memoized on content keys.
+  const runtimeCommandsRef = useRef(runtimeCommands);
+  runtimeCommandsRef.current = runtimeCommands;
   const runClientSlashCommand = useCallback(
     (name: string, rawArgs: string): string | null => {
       if (name === "review" && onReviewCommand) return onReviewCommand(rawArgs);
+      if (isRuntimeCommand(name)) {
+        const commands = runtimeCommandsRef.current;
+        if (!commands || !sessionId)
+          return `/${name} is available once the session has started.`;
+        const resolved = resolveRuntimeCommand(
+          name,
+          rawArgs,
+          runtimeCommandContext(commands),
+        );
+        if (resolved.kind === "error") return resolved.message;
+        if (resolved.kind === "open") commands.open();
+        else actions.setPendingRuntime(sessionId, resolved.change);
+        return null;
+      }
       if (name === "rename") {
         // Only "is there a session" is decided here: the loaded transcript is a
         // window that may open mid-turn with no user row, so whether there is a
@@ -1008,6 +1132,58 @@ export function useSessionChat({
       return `/${name} is not available here.`;
     },
     [actions, sessionId, onReviewCommand],
+  );
+  const hasRuntimeCommands = runtimeCommands !== undefined;
+  const offersAccount =
+    runtimeCommands !== undefined && runtimeCommands.accountChoices.length > 1;
+  // The registry this composer offers: the runtime commands only for a
+  // started session, and `/account` only when it has an account to choose.
+  const slashCommands = useMemo(
+    () =>
+      state.slashCommands.filter((command) =>
+        !isRuntimeCommand(command.name)
+          ? true
+          : hasRuntimeCommands && (command.name !== "account" || offersAccount),
+      ),
+    [state.slashCommands, hasRuntimeCommands, offersAccount],
+  );
+  // The arguments each runtime command offers, keyed on the lists themselves:
+  // a new function reaches the composer only when what it returns changed.
+  const runtimeArgumentsKey = runtimeCommands
+    ? JSON.stringify(
+        RUNTIME_COMMAND_NAMES.map((name) =>
+          runtimeArgumentOptions(name, runtimeCommandContext(runtimeCommands)),
+        ),
+      )
+    : undefined;
+  const runtimeArguments = useMemo(
+    () =>
+      runtimeArgumentsKey === undefined
+        ? undefined
+        : (name: RuntimeCommandName) => {
+            const commands = runtimeCommandsRef.current;
+            return commands
+              ? runtimeArgumentOptions(name, runtimeCommandContext(commands))
+              : [];
+          },
+    [runtimeArgumentsKey],
+  );
+  const runtimeChipContent = runtimeChipText(runtimeCommands);
+  const runtimeChipLabel = runtimeChipContent?.label;
+  const runtimeChipHandoff = runtimeChipContent?.handoff;
+  const openRuntime = useCallback(() => runtimeCommandsRef.current?.open(), []);
+  const runtimeChip = useMemo(
+    () =>
+      runtimeChipLabel === undefined
+        ? undefined
+        : {
+            label: runtimeChipLabel,
+            ...(runtimeChipHandoff !== undefined
+              ? { handoff: runtimeChipHandoff }
+              : {}),
+            onOpen: openRuntime,
+          },
+    [runtimeChipLabel, runtimeChipHandoff, openRuntime],
   );
   // Live peer-prompt card lifecycle patches (Task 90/89 in-place reconciliation)
   // overlaid onto the rendered messages regardless of their source above.
@@ -1033,6 +1209,28 @@ export function useSessionChat({
     ? null // the unavailable panel already says it, in the transcript's place
     : failureOnViewedSession(state.sessionFailures, sessionId);
 
+  // A terminal quota or rate-limit failure's "Continue on" offer, kept on the
+  // session's row so it survives a reload; shown with the failure it belongs
+  // to, above the composer (`docs/session-runtime-switching.md`).
+  function continueOfferOf() {
+    const lastError = sessionRow?.lastError;
+    const choices = lastError?.continueOn;
+    if (failureShownElsewhere || !sessionId || !lastError || !choices?.length)
+      return null;
+    const outcomeRevision = sessionRow?.outcomeAttention?.revision ?? 0;
+    return {
+      message: failure ?? lastError.message,
+      choices,
+      busy: sessionId in state.continueOnPending,
+      onContinue: (choice: { provider: string; id: string }) =>
+        actions.continueOnModel(sessionId, lastError.at, choice),
+      onDismiss: () => {
+        actions.clearChatError(sessionId);
+        onDismissSessionFailure(sessionId, lastError.at, outcomeRevision);
+      },
+    };
+  }
+
   return {
     sessionId,
     commentSelection: chatCommentSelection,
@@ -1047,6 +1245,7 @@ export function useSessionChat({
     onDismissFailure: () => {
       if (sessionId) actions.clearChatError(sessionId);
     },
+    continueOffer: continueOfferOf(),
     taskLiveSource: host.taskLiveSource,
     composer: {
       onSend: onSend ?? sendToSession,
@@ -1060,8 +1259,10 @@ export function useSessionChat({
         state.contextInfo?.sessionId === sessionId ? state.contextInfo : null,
       session,
       models,
-      slashCommands: state.slashCommands,
+      slashCommands,
       onClientSlashCommand: runClientSlashCommand,
+      ...(runtimeArguments ? { runtimeArguments } : {}),
+      ...(runtimeChip ? { runtimeChip } : {}),
       skillSummaries: skillSummariesCache.current.value,
       actions,
       draftStorageKey,
@@ -1070,6 +1271,8 @@ export function useSessionChat({
       onCommentDraftChange: setChatCommentDraft,
       draft: stagedDraft ?? forkDraft,
       onDraftConsumed: retireStagedDraft,
+      insert: composerInsert,
+      onInserted: onComposerInserted,
       hideRuntimeControls: surface === "assistant",
       ledge: composerLedge,
       dictation,

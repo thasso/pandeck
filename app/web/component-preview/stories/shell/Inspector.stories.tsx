@@ -12,6 +12,14 @@ import {
   InspectorFacts,
   InspectorSection,
 } from "../../../src/components/shell/Inspector.tsx";
+import type { SessionRuntimeControl } from "../../../src/components/SessionRuntimeSection.tsx";
+import {
+  failed,
+  loading,
+  ready,
+  type LoadState,
+} from "../../../src/lib/loadState.ts";
+import { chatModels } from "../../fixtures/chat.ts";
 import { attentionFixture } from "../../fixtures/shell.ts";
 
 const noop = () => {};
@@ -30,11 +38,106 @@ function Panel({ children }: { children: ReactNode }) {
 
 type InspectedObject = "session" | "task" | "worktree";
 
+type RuntimeState =
+  | "none"
+  | "current"
+  | "pending"
+  | "coordinator"
+  | "accountsLoading"
+  | "accountsFailed"
+  | "fixedAccount"
+  | "engineSwitch"
+  | "engineSwitchEstimating"
+  | "engineSwitchEstimateFailed"
+  | "engineSwitchNothing";
+
+/** The Runtime section's control in each state it shows. */
+function runtimeControl(
+  state: RuntimeState,
+): SessionRuntimeControl | undefined {
+  if (state === "none") return undefined;
+  const accounts: SessionRuntimeControl["accounts"] = {
+    targets:
+      state === "accountsLoading"
+        ? loading()
+        : state === "accountsFailed"
+          ? failed("The accounts could not be read.")
+          : ready([
+              { id: "cp-work", name: "Work", enterprise: true },
+              { id: "cp-team", name: "Team", enterprise: false },
+            ]),
+    onOpen: noop,
+    nameOf: (id: string) => ({ "cp-work": "Work", "cp-team": "Team" })[id],
+  };
+  const handoff: Partial<Record<RuntimeState, LoadState<number | null>>> = {
+    engineSwitch: ready(12_400),
+    engineSwitchEstimating: loading(),
+    engineSwitchEstimateFailed: failed("The estimate could not be computed."),
+    engineSwitchNothing: ready(null),
+  };
+  if (state in handoff)
+    return {
+      current: {
+        model: chatModels[0],
+        thinkingLevel: "medium",
+        accountName: "Personal",
+      },
+      // A model of another engine, on Automatic within its kind.
+      pending: {
+        model: { provider: "openai-codex", id: "gpt-5.4" },
+        thinkingLevel: "medium",
+        account: { kind: "automatic" },
+        setBy: "user",
+      },
+      models: chatModels,
+      accounts: {
+        targets: ready([{ id: "cp-codex", name: "Codex", enterprise: false }]),
+        onOpen: noop,
+        nameOf: (id: string) => (id === "cp-codex" ? "Codex" : undefined),
+      },
+      engineSwitch: {
+        kindLabel: "OpenAI",
+        handoff: handoff[state],
+        onEstimate: noop,
+      },
+      busy: false,
+      onChange: noop,
+      onReset: noop,
+    };
+  return {
+    current: {
+      model: chatModels[0],
+      thinkingLevel: "medium",
+      accountName: "Personal",
+    },
+    pending:
+      state === "pending" || state === "coordinator"
+        ? {
+            model: { provider: "claude-sdk", id: "opus" },
+            thinkingLevel: "high",
+            account: { kind: "account", id: "cp-work" },
+            setBy: state === "coordinator" ? "coordinator" : "user",
+          }
+        : undefined,
+    models: chatModels,
+    accounts: state === "fixedAccount" ? undefined : accounts,
+    busy: false,
+    onChange: noop,
+    onReset: noop,
+  };
+}
+
 /**
  * The production per-object inspectors (`objectInspectors.tsx`) over one
  * wire-level fixture: a coordinator session, its Task and its worktree.
  */
-function ObjectInspectorStory({ object }: { object: InspectedObject }) {
+function ObjectInspectorStory({
+  object,
+  runtime = "none",
+}: {
+  object: InspectedObject;
+  runtime?: RuntimeState;
+}) {
   const [fixture] = useState(() => attentionFixture(Date.now()));
   const worktree = fixture.worktrees[0]!;
   // What the coordinator's spawn tree made beyond the checkout it runs in: one
@@ -87,6 +190,7 @@ function ObjectInspectorStory({ object }: { object: InspectedObject }) {
           worktreeStatus={fixture.worktreeStatuses[worktree.id]}
           worktrees={treeWorktrees}
           openers={openers}
+          runtime={runtimeControl(runtime)}
         />
       ) : object === "task" ? (
         <TaskInspector
@@ -120,6 +224,22 @@ const meta = {
       control: "inline-radio",
       options: ["session", "task", "worktree"],
     },
+    runtime: {
+      control: "select",
+      options: [
+        "none",
+        "current",
+        "pending",
+        "coordinator",
+        "accountsLoading",
+        "accountsFailed",
+        "fixedAccount",
+        "engineSwitch",
+        "engineSwitchEstimating",
+        "engineSwitchEstimateFailed",
+        "engineSwitchNothing",
+      ],
+    },
   },
 } satisfies Meta<typeof ObjectInspectorStory>;
 
@@ -129,6 +249,58 @@ type Story = StoryObj<typeof meta>;
 export const Session: Story = {};
 
 export const SessionDark: Story = { globals: { theme: "dark" } };
+
+/** A started session's Runtime section: what its next turn starts on. */
+export const SessionRuntime: Story = { args: { runtime: "current" } };
+
+/** A change pending for the next turn, with Reset. */
+export const SessionRuntimePending: Story = { args: { runtime: "pending" } };
+
+export const SessionRuntimePendingDark: Story = {
+  args: { runtime: "pending" },
+  globals: { theme: "dark" },
+};
+
+/** The coordinating session chose the change (`session_control`). */
+export const SessionRuntimeByCoordinator: Story = {
+  args: { runtime: "coordinator" },
+};
+
+export const SessionRuntimeAccountsLoading: Story = {
+  args: { runtime: "accountsLoading" },
+};
+
+export const SessionRuntimeAccountsFailed: Story = {
+  args: { runtime: "accountsFailed" },
+};
+
+/** An account that cannot move (an endpoint) shows as text. */
+export const SessionRuntimeFixedAccount: Story = {
+  args: { runtime: "fixedAccount" },
+};
+
+/** A model on another engine: Automatic within its kind, and the handoff estimate. */
+export const SessionRuntimeEngineSwitch: Story = {
+  args: { runtime: "engineSwitch" },
+};
+
+export const SessionRuntimeEngineSwitchDark: Story = {
+  args: { runtime: "engineSwitch" },
+  globals: { theme: "dark" },
+};
+
+export const SessionRuntimeEngineSwitchEstimating: Story = {
+  args: { runtime: "engineSwitchEstimating" },
+};
+
+export const SessionRuntimeEngineSwitchEstimateFailed: Story = {
+  args: { runtime: "engineSwitchEstimateFailed" },
+};
+
+/** Returning to an engine whose own history is complete hands over nothing. */
+export const SessionRuntimeEngineSwitchNothing: Story = {
+  args: { runtime: "engineSwitchNothing" },
+};
 
 export const Task: Story = { args: { object: "task" } };
 

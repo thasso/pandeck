@@ -259,8 +259,11 @@ test("Claude acquisition, configure, prompt, native fork and failed fork compens
   });
   assert.equal(claudeSdkStore.get(parent.id), parent);
   await oracle(
-    "Claude.configure",
-    () => parent.configure("claude-opus-4-6", "high"),
+    "Claude.setModel before the first prompt",
+    async () => {
+      await parent.setModel("claude-opus-4-6");
+      await parent.setThinkingLevel("high");
+    },
     {
       equal:
         "configuration is local on an empty, intentionally unlisted conversation",
@@ -368,6 +371,18 @@ test("Claude account transfer, model/reasoning selection and failed prompt use p
   assert.equal(live.credentialProfileId, to);
   assert.equal(sessionStore.get(live.id)?.credentialProfileId, to);
   assert.equal(existsSync(sourceFile), false);
+  await oracle(
+    "Claude.setModel between turns",
+    () => live.setModel("claude-sonnet-4-6"),
+    { changed: [live.id] },
+  );
+  assert.equal(sessionStore.get(live.id)?.model, "sonnet");
+  await oracle(
+    "Claude.setThinkingLevel between turns",
+    () => live.setThinkingLevel("low"),
+    { changed: [live.id] },
+  );
+  assert.equal(sessionStore.get(live.id)?.thinkingLevel, "low");
   failure = true;
   await oracle(
     "Claude failed prompt terminal",
@@ -544,4 +559,41 @@ test("a resting live Claude row is a digest member, already at rest", async () =
   assert.equal(row.isStreaming, false);
   assert.equal(row.awaitingInput, false);
   assert.deepEqual(sessionListItemAtRest(row), row);
+});
+
+test("Claude engine-switch release and open on a binding report the live overlay", async () => {
+  installSeam();
+  const profile = account();
+  const live = await freshClaude(profile);
+  ensureRuntimeSessionWithRuntime(sessionRuntime, live);
+  await sessionRuntime.prompt(live.id, "before the switch");
+  await oracle(
+    "ClaudeStore.releaseForSwitch",
+    () => claudeSdkStore.releaseForSwitch(live.id, () => {}),
+    { changed: [live.id] },
+  );
+  assert.equal(claudeSdkStore.get(live.id), undefined);
+  assert.equal(sessionRuntime.get(live.id)?.isDetached, true);
+  const row = sessionStore.get(live.id)!;
+  const reopened = await oracle(
+    "ClaudeStore.openForBinding",
+    () =>
+      claudeSdkStore.openForBinding(live.id, {
+        bindingSeq: sessionStore.activeBinding(live.id)!.seq + 1,
+        model: "claude-opus-4-6",
+        thinkingLevel: "high",
+        credentialProfileId: profile,
+        providerSessionId: row.providerSessionId,
+        agentType: "assistant",
+        mode: "build",
+        title: row.title,
+        createdAt: row.createdAt,
+      }),
+    { changed: [live.id] },
+  );
+  assert.equal(claudeSdkStore.get(live.id), reopened);
+  assert.equal(
+    reopened.timelineEntries().length,
+    live.timelineEntries().length,
+  );
 });

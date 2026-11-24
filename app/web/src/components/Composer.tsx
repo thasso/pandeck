@@ -78,6 +78,10 @@ import {
 } from "./DictationControls.tsx";
 import { AGENT_TYPE_DISPLAY } from "./agentTypeDisplay.ts";
 import { Button } from "./ui/button.tsx";
+import type {
+  RuntimeArgumentOption,
+  RuntimeCommandName,
+} from "../lib/runtimeSlashCommand.ts";
 import { Input } from "./ui/input.tsx";
 import {
   InputGroup,
@@ -166,6 +170,22 @@ interface Props {
    */
   onClientSlashCommand?: (name: string, rawArgs: string) => string | null;
   /**
+   * The arguments `/model`, `/effort` and `/account` complete to, for a
+   * started session (`lib/runtimeSlashCommand.ts`). Stable by content.
+   */
+  runtimeArguments?: (name: RuntimeCommandName) => RuntimeArgumentOption[];
+  /**
+   * Shown only while a change to the next turn's model, effort or account is
+   * pending: what it starts on, and the way to the inspector's Runtime
+   * section (`docs/session-runtime-switching.md`).
+   */
+  runtimeChip?: {
+    label: string;
+    /** "Hands over ~12k tokens", while a pending engine switch has an estimate. */
+    handoff?: string;
+    onOpen: () => void;
+  };
+  /**
    * The current skills library scan, read only for the frozen
    * `session.activeSkills`: each one's description, argument hint and whether
    * the user may invoke it as `/<name>`. Kept stable by content
@@ -184,6 +204,18 @@ interface Props {
   onDraftConsumed?: (token: number) => void;
   /** Whether a newly supplied draft should focus the textarea. Disable for touch-first staging flows. */
   draftAutoFocus?: boolean;
+  /**
+   * Text to put INTO the field without replacing it (a held input's Put back,
+   * `PromptQueueLedge`): as is into an empty field, else above what is there,
+   * on its own line. Applied once per token, to the field loaded for the
+   * current `draftStorageKey`.
+   */
+  insert?: { token: number; text: string } | null;
+  /**
+   * The `insert` with this token is in the field and stored in this
+   * browser's draft: only now may its source let go of it.
+   */
+  onInserted?: (token: number) => void;
   branchInfo?: BranchPanelInfo | null;
   /**
    * Keep the fixed hint slot above the card, where a send-blocking hint can
@@ -200,12 +232,7 @@ interface Props {
   /** Disable Send without adding a second narration for a source described elsewhere. */
   sendBlocked?: boolean;
   isModelDisabled?: (model: ModelOption) => boolean;
-  modelLocked?: boolean;
-  thinkingLocked?: boolean;
-  /**
-   * The account the session runs on, for the runtime line under the card once
-   * model and thinking are locked (a started session).
-   */
+  /** The account the session runs on, for the runtime line under the card. */
   accountName?: string | undefined;
   /** Hide runtime model/thinking controls for server-configured special sessions. */
   hideRuntimeControls?: boolean;
@@ -545,8 +572,6 @@ function RuntimeSettingsPanel({
   level,
   actions,
   isModelDisabled,
-  modelLocked = false,
-  thinkingLocked = false,
   agentType,
   availableAgentTypes,
   onAgentTypeChange,
@@ -557,8 +582,6 @@ function RuntimeSettingsPanel({
   level: ThinkingLevel;
   actions: AssistantActions;
   isModelDisabled?: ((model: ModelOption) => boolean) | undefined;
-  modelLocked?: boolean;
-  thinkingLocked?: boolean;
   // Present only for a fresh, unprompted session — the agent type is fixed once
   // the first prompt is sent.
   agentType?: AgentType | undefined;
@@ -596,7 +619,6 @@ function RuntimeSettingsPanel({
           models={models}
           value={model}
           variant="field"
-          locked={modelLocked}
           isModelDisabled={isModelDisabled}
           onChange={setModelAndClampThinking}
         />
@@ -610,7 +632,6 @@ function RuntimeSettingsPanel({
           model={model}
           value={level}
           variant="field"
-          locked={thinkingLocked}
           onChange={(lvl) => actions.setThinkingLevel(lvl)}
         />
       </section>
@@ -739,12 +760,13 @@ interface SlashState {
   items: SlashMenuItem[];
 }
 
-function slashState(
+export function slashState(
   text: string,
   commands: SlashCommandInfo[],
   skills: readonly ComposerSkill[],
   agentType: AgentType | undefined,
   harness: Harness | undefined,
+  runtimeArguments?: (name: RuntimeCommandName) => RuntimeArgumentOption[],
 ): SlashState {
   if (!text.startsWith("/") || text.startsWith("//") || text.includes("\n")) {
     return { active: false, items: [] };
@@ -763,8 +785,46 @@ function slashState(
   const match = body.match(/^(\S*)(?:\s+([\s\S]*))?$/);
   const token = match?.[1] ?? "";
   const hasArgs = match?.[2] !== undefined;
+  if (hasArgs) {
+    // A runtime command's one argument completes from the session's own
+    // models, levels or accounts once the user starts typing it: a bare
+    // `/model ` still sends on Enter and opens the Runtime section. A typed
+    // value that already names one closes the menu, so Enter sends the command
+    // instead of completing it again.
+    const argument = allowed.some((cmd) => cmd.name === token)
+      ? commands.find((cmd) => cmd.name === token)?.argument
+      : undefined;
+    const typed = (match?.[2] ?? "").trim().toLowerCase();
+    if (!argument || !runtimeArguments || !typed)
+      return { active: false, items: [] };
+    const options = runtimeArguments(argument).filter(
+      (option) => !option.disabled,
+    );
+    if (options.some((option) => option.value.toLowerCase() === typed))
+      return { active: false, items: [] };
+    const items = options
+      .filter(
+        (option) =>
+          // A `provider/id` value (an id two providers offer) also completes
+          // from its bare id, itself possibly `vendor/model`: from the text
+          // after any slash.
+          option.value
+            .toLowerCase()
+            .split("/")
+            .some((_, at, parts) =>
+              parts.slice(at).join("/").startsWith(typed),
+            ) || option.label.toLowerCase().startsWith(typed),
+      )
+      .slice(0, 8)
+      .map((option) => ({
+        name: `${token} ${option.value}`,
+        description: option.label,
+        usage: option.detail ?? "",
+      }));
+    return { active: true, items };
+  }
   const items = allowed.filter((cmd) => cmd.name.startsWith(token)).slice(0, 8);
-  return { active: !hasArgs, items };
+  return { active: true, items };
 }
 
 /**
@@ -911,19 +971,21 @@ export const Composer = memo(function Composer({
   models,
   slashCommands,
   onClientSlashCommand,
+  runtimeArguments,
+  runtimeChip,
   skillSummaries,
   actions,
   focusToken,
   draft,
   onDraftConsumed,
+  insert,
+  onInserted,
   draftAutoFocus = true,
   branchInfo,
   reserveHintSlot = false,
   sendBlockedReason,
   sendBlocked = false,
   isModelDisabled,
-  modelLocked = false,
-  thinkingLocked = false,
   accountName,
   hideRuntimeControls: hideRuntimeControlsProp = false,
   inertPlaceholder,
@@ -951,7 +1013,7 @@ export const Composer = memo(function Composer({
   const inert = inertPlaceholder !== undefined;
   const disabled = disabledProp || inert;
   const hideRuntimeControls = hideRuntimeControlsProp || inert;
-  const [text, setText] = useBrowserDraft(draftStorageKey);
+  const [text, setText, textKey] = useBrowserDraft(draftStorageKey);
   const [attachments, setAttachments] = useState<AttachmentDraft[]>([]);
   // Deliberately independent from `text`: leaving comment mode must restore the
   // prompt byte-for-byte, including whitespace the user has not sent yet.
@@ -1114,6 +1176,40 @@ export const Composer = memo(function Composer({
     onDraftConsumedRef.current?.(staged.token);
   }, [draftToken, draftAutoFocus, setText]);
 
+  // Put back: the text joins the field, never replaces it. It goes first, on
+  // its own line, because a slash command only runs from the start. Applied
+  // only once the field holds THIS key's text: for one render after a session
+  // switch it still holds the previous session's. Its source lets go only
+  // after the merged text is committed and the draft persistence (declared
+  // above, so it runs first) has stored it.
+  const insertRef = useRef(insert);
+  insertRef.current = insert;
+  const onInsertedRef = useRef(onInserted);
+  onInsertedRef.current = onInserted;
+  const insertToken = insert?.token ?? null;
+  const textRef = useRef(text);
+  textRef.current = text;
+  const appliedInsertRef = useRef<number | null>(null);
+  const insertedRef = useRef<{ token: number; text: string } | null>(null);
+  useEffect(() => {
+    const request = insertRef.current;
+    if (!request || textKey !== draftStorageKey) return;
+    if (appliedInsertRef.current === request.token) return;
+    appliedInsertRef.current = request.token;
+    const current = textRef.current;
+    const next = current.trim() ? `${request.text}\n${current}` : request.text;
+    insertedRef.current = { token: request.token, text: next };
+    setText(next);
+    requestAnimationFrame(() => ref.current?.focus({ preventScroll: true }));
+  }, [insertToken, textKey, draftStorageKey, setText]);
+  useEffect(() => {
+    const inserted = insertedRef.current;
+    if (!inserted || text !== inserted.text || textKey !== draftStorageKey)
+      return;
+    insertedRef.current = null;
+    onInsertedRef.current?.(inserted.token);
+  }, [text, textKey, draftStorageKey]);
+
   const activeComposerDraft = commentMode ? commentBody : text;
   useLayoutEffect(() => {
     const el = ref.current;
@@ -1193,6 +1289,7 @@ export const Composer = memo(function Composer({
     skills,
     session?.agentType,
     session?.harness,
+    runtimeArguments,
   );
   const selectedSlash =
     slash.items[Math.min(slashIndex, Math.max(0, slash.items.length - 1))];
@@ -1739,10 +1836,9 @@ export const Composer = memo(function Composer({
         : {}),
     });
   // The composer picks no runtime: a new session chooses agent, account,
-  // model and effort on its landing (`NewSessionQuickStart`), a started one
-  // has them fixed. Either way one quiet line under the card states it:
-  // account, model, effort — the same composer before and after the first
-  // message.
+  // model and effort on its landing (`NewSessionQuickStart`). Before and
+  // after the first message one quiet line under the card states it:
+  // account, model, effort.
   const runtimeShown = !hideRuntimeControls;
   // Model and effort are what the reader checks; the account is what gives
   // way, so the strip truncates only the account (`runtimeAccount`).
@@ -2033,8 +2129,6 @@ export const Composer = memo(function Composer({
             level={thinkingLevel}
             actions={actions}
             isModelDisabled={isModelDisabled}
-            modelLocked={modelLocked}
-            thinkingLocked={thinkingLocked}
             agentType={selectedAgentType}
             availableAgentTypes={availableAgentTypes}
             onAgentTypeChange={onAgentTypeChange}
@@ -2333,6 +2427,29 @@ export const Composer = memo(function Composer({
                           mode={sessionMode}
                           onChange={(mode) => actions.setSessionMode(mode)}
                         />
+                      ) : null}
+                      {runtimeChip ? (
+                        <Button
+                          variant="outline"
+                          size="xs"
+                          className={
+                            runtimeChip.handoff
+                              ? "min-w-0 max-w-72"
+                              : "min-w-0 max-w-48"
+                          }
+                          title={`Next turn: ${runtimeChip.label}${runtimeChip.handoff ? `. ${runtimeChip.handoff}` : ""}`}
+                          aria-label={`Next turn: ${runtimeChip.label}.${runtimeChip.handoff ? ` ${runtimeChip.handoff}.` : ""} Open the Runtime section.`}
+                          onClick={runtimeChip.onOpen}
+                        >
+                          <span className="truncate">
+                            Next turn: {runtimeChip.label}
+                            {runtimeChip.handoff ? (
+                              <span className="text-muted-foreground">
+                                {` · ${runtimeChip.handoff}`}
+                              </span>
+                            ) : null}
+                          </span>
+                        </Button>
                       ) : null}
                     </div>
                   ) : null}

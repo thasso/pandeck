@@ -647,11 +647,11 @@ test("claude-sdk session tool server exposes persona tools and links tasks", asy
     assert.ok(
       (detail?.sessionRefs ?? []).some(
         (ref) =>
-          ref.harness === "claude-sdk" &&
+          !("harness" in ref) &&
           ref.agentType === "workshop" &&
           ref.sessionId === ID,
       ),
-      "detail sessionRef harness is claude-sdk",
+      "detail sessionRef names the session, not its engine",
     );
     assert.deepEqual(
       probe.sessionRefs,

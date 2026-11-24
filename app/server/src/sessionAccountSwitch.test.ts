@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { afterAll, afterEach, test, vi } from "vitest";
-import type { Harness } from "@assistant/shared";
+import { afterAll, afterEach, beforeEach, test, vi } from "vitest";
+import type { Harness, ThinkingLevel } from "@assistant/shared";
 import type { RuntimePromptDriver } from "./session/runtimePrompt.ts";
 import type {
   RunOutcome,
@@ -17,6 +17,8 @@ import type { AccountSwitchOptions } from "./sessionAccount.ts";
 const offers = vi.hoisted(
   () => new Map<string, { provider: string; id: string }>(),
 );
+/** Accounts whose listing now lacks every model (an entitlement lost). */
+const lacksAll = vi.hoisted(() => new Set<string>());
 /** Per account, the pinned ids its listing lacks. */
 const lacksPin = vi.hoisted(() => new Map<string, string[]>());
 /**
@@ -24,6 +26,28 @@ const lacksPin = vi.hoisted(() => new Map<string, string[]>());
  * catalog offers nothing there, the pin's own option does.
  */
 const pinOnly = vi.hoisted(() => new Map<string, string>());
+/**
+ * Every account that offers its first model also offers a second, reasoning
+ * one, for pending model and effort changes: "Big model".
+ */
+const second = vi.hoisted(
+  () => (provider: string) =>
+    provider === "claude-sdk" ? "claude-opus-4-7" : "gpt-5.4",
+);
+const offered = vi.hoisted(
+  () => (id: string) =>
+    offers.has(id)
+      ? [
+          { ...offers.get(id)!, name: "Test model", reasoning: false },
+          {
+            provider: offers.get(id)!.provider,
+            id: second(offers.get(id)!.provider),
+            name: "Big model",
+            reasoning: true,
+          },
+        ]
+      : [],
+);
 vi.mock("./harnesses/models.ts", () => ({
   accountLacksModel: async (
     id: string,
@@ -31,16 +55,16 @@ vi.mock("./harnesses/models.ts", () => ({
     _model: string,
     pin?: { pinnedModelId?: string },
   ) =>
-    pin?.pinnedModelId !== undefined &&
-    (lacksPin.get(id)?.includes(pin.pinnedModelId) ?? false),
+    lacksAll.has(id) ||
+    (pin?.pinnedModelId !== undefined &&
+      (lacksPin.get(id)?.includes(pin.pinnedModelId) ?? false)),
   modelsForAccount: async ({ id }: { id: string }) =>
-    offers.has(id) && !pinOnly.has(id)
-      ? [{ ...offers.get(id), name: "Test model", reasoning: false }]
-      : [],
+    pinOnly.has(id) ? [] : offered(id),
   accountOffersModel: async (id: string, provider: string, model: string) =>
     !pinOnly.has(id) &&
-    offers.get(id)?.provider === provider &&
-    offers.get(id)?.id === model,
+    offered(id).some(
+      (option) => option.provider === provider && option.id === model,
+    ),
   // A pinned pick is offered by its pin: what the account offers, unless its
   // listing lacks that pin.
   pinnedModelOption: async (
@@ -51,11 +75,12 @@ vi.mock("./harnesses/models.ts", () => ({
   ) =>
     pin.pinnedModelId !== undefined &&
     !(lacksPin.get(id)?.includes(pin.pinnedModelId) ?? false) &&
-    (!pinOnly.has(id) || pinOnly.get(id) === pin.pinnedModelId) &&
-    offers.get(id)?.provider === provider &&
-    offers.get(id)?.id === model
-      ? { ...offers.get(id), name: "Test model", reasoning: false }
+    (!pinOnly.has(id) || pinOnly.get(id) === pin.pinnedModelId)
+      ? offered(id).find(
+          (option) => option.provider === provider && option.id === model,
+        )
       : undefined,
+  pickerModels: () => [...offers.keys()].flatMap(offered),
   // A stored session's model, as the session list reads it without a harness.
   storedSessionModelOption: (
     _harness: string,
@@ -88,7 +113,6 @@ const { formatLocalDateTime } = await import("./googleTime.ts");
 const usageCache = await import("./usageCache.ts");
 const { usageProfileForSession } = await import("./harnesses/usage.ts");
 const health = await import("./accountHealth.ts");
-const { setDeliveryWake } = await import("./deliveryWake.ts");
 const { installGatewayLink } = await import("./gatewayLink.ts");
 type GatewayLink = import("./gatewayLink.ts").GatewayLink;
 health.initializeAccountHealth({
@@ -108,10 +132,17 @@ const untrack = health.trackSessionRunHealth({
 const created: string[] = [];
 const runtimes: { runtime: InstanceType<typeof SessionRuntime>; id: string }[] =
   [];
+// Claude targets need the integration on; it is off by default.
+beforeEach(async () => {
+  const { enableClaudeSdkForTests } =
+    await import("./test/claudeSdkEnabled.ts");
+  await enableClaudeSdkForTests();
+});
 afterEach(async () => {
   vi.restoreAllMocks();
-  // The explicit-move section's seams (declared with it, below).
+  // The pending-selection section's seams (declared with it, below).
   setAccountMoveHostForTests(undefined);
+  setPendingRuntimeHostForTests(undefined);
   leases.resetSessionRunLeasesForTests();
   for (const { runtime, id } of runtimes.splice(0))
     await runtime.disposeSession(id);
@@ -178,10 +209,16 @@ function setup(
     ...(bound ? { credentialProfileId: first } : {}),
     requiresEnterprise: enterprise,
   });
-  const runtime = new SessionRuntime(new SessionLogStore(true));
+  const logs = new SessionLogStore(true);
+  const runtime = new SessionRuntime(logs);
   runtimes.push({ runtime, id });
   const events = new NativeAdapterEventSource();
-  const model = offers.get(first)!;
+  // The account's model as the fixture offers it, until a turn applies another.
+  const offered = offers.get(first)!;
+  let chosen: string | undefined;
+  let thinkingLevel: ThinkingLevel = "off";
+  /** Native model and effort changes, in order: none until a turn applies one. */
+  const native: string[] = [];
   let profileId = first;
   let running = false;
   const calls: { text: string; continuation: boolean; profileId: string }[] =
@@ -210,19 +247,31 @@ function setup(
       failure ? "failed attempt" : "continued answer",
     );
     events.messageCompleted(stream, {
-      model: model.id,
+      model: chosen ?? offered.id,
       ...(failure
         ? { errorMessage: "provider rejected request", failure }
         : {}),
     });
   }
   const common = {
-    modelProvider: () => model.provider,
-    modelId: () => model.id,
+    // As the production drivers report it: each run's stamp names the account
+    // the run opened on.
+    runFacts: () => ({
+      ...(bound ? { credentialProfileId: profileId } : {}),
+      thinkingLevel,
+    }),
+    modelProvider: () => offered.provider,
+    modelId: () => chosen ?? offered.id,
     subscribeAdapterEvents: events.subscribe.bind(events),
     abort: () => {},
-    setModel: () => {},
-    setThinkingLevel: () => {},
+    setModel: (next: unknown) => {
+      chosen = typeof next === "string" ? next : (next as { id: string }).id;
+      native.push(`model:${chosen}`);
+    },
+    setThinkingLevel: (level: string) => {
+      thinkingLevel = level as ThinkingLevel;
+      native.push(`effort:${level}`);
+    },
   };
   const driver: RuntimePromptDriver = {
     id,
@@ -238,20 +287,27 @@ function setup(
       return running;
     },
     canSteer: true,
-    modelSelection: () => ({ model, thinkingLevel: "off" }),
+    modelSelection: () => ({
+      model: { ...offered, id: chosen ?? offered.id },
+      thinkingLevel,
+    }),
     contextInfo: () => ({}) as ReturnType<RuntimePromptDriver["contextInfo"]>,
     broadcastState: () => {},
     createRuntimeAdapter: () => {
       const adapter =
         harness === "pi"
-          ? createPiAdapter(id, {
-              ...common,
-              sessionFile: undefined,
-              prompt: (text, _attachments, options) => ({
-                outcome: "started",
-                completed: drive(text, options?.continuation === true),
-              }),
-            })
+          ? createPiAdapter(
+              id,
+              {
+                ...common,
+                sessionFile: undefined,
+                prompt: (text, _attachments, options) => ({
+                  outcome: "started",
+                  completed: drive(text, options?.continuation === true),
+                }),
+              },
+              { resolveModel: (next) => next },
+            )
           : createClaudeSdkAdapter(id, {
               ...common,
               prompt: (text, options) =>
@@ -286,9 +342,11 @@ function setup(
   return {
     id,
     runtime,
+    logs,
     driver,
     calls,
     moves,
+    native,
     switchOptions,
     gate: (fn: () => Promise<void>) => {
       moveGate = fn;
@@ -696,12 +754,16 @@ for (const harness of engines) {
       const dirty = vi
         .spyOn(usageCache, "markUsageProfileDirty")
         .mockImplementation(() => {});
-      // The boot completion subscriber marks the current account, while recovery
-      // must also dirty all moved-from accounts before this deferred completion.
+      // The boot completion subscriber (`index.ts`) marks the account its
+      // run's engine stamp names: the logical completion must carry the
+      // terminal attempt's, while recovery dirties every moved-from account.
       const unsubscribe = lifecycle.subscribeSessionRunCompleted(
-        (sessionId) => {
+        (sessionId, _stopReason, _origin, engine) => {
           if (sessionId !== s.id) return;
-          const profile = usageProfileForSession(sessionStore.get(sessionId));
+          const profile = usageProfileForSession(
+            sessionStore.get(sessionId),
+            engine,
+          );
           if (profile) usageCache.markUsageProfileDirty(profile);
         },
       );
@@ -715,6 +777,17 @@ for (const harness of engines) {
         assert.deepEqual(
           dirty.mock.calls.map(([profile]) => profile).sort(),
           accounts.sort(),
+        );
+        // Each native attempt, the failed ones included, keeps its own
+        // account on its own `run.started` stamp for history readers.
+        const started = s.logs
+          .open(s.id)
+          .rawEntries()
+          .filter((entry) => entry.type === "run.started")
+          .map((entry) => ("engine" in entry ? entry.engine : undefined));
+        assert.deepEqual(
+          started.map((engine) => engine?.credentialProfileId),
+          s.calls.map((call) => call.profileId),
         );
       } finally {
         unsubscribe();
@@ -1158,50 +1231,56 @@ test("pi keeps a refused turn's move for the encrypted-reasoning retry of the ne
 });
 
 /* ------------------------------------------------------------------------ *
- * An explicit move (Task-1415): the user's pick in the inspector, or an
- * owning coordinator's `move_account`, through `moveSessionAccount`.
+ * The pending runtime selection (Task-1485): a model, effort or account the
+ * user or an owning coordinator picks is applied when the next turn of any
+ * origin is admitted, and held, never dropped, while it cannot apply.
  * ------------------------------------------------------------------------ */
 
-const { moveSessionAccount, accountMoveTargets, setAccountMoveHostForTests } =
+const { accountMoveTargets, setAccountMoveHostForTests } =
   await import("./sessionAccountMove.ts");
-const { assertAccountRecoveryAdmission, reserveAccountRecovery: reserve } =
+const {
+  setSessionPendingRuntime,
+  clearSessionPendingRuntime,
+  setPendingRuntimeHostForTests,
+  PendingRuntimeHeldError,
+} = await import("./sessionPendingRuntime.ts");
+const { AutomaticTurnsHeldError } = await import("./automaticTurnHold.ts");
+const { AccountSwitchBlockedError, reserveAccountRecovery: reserve } =
   await import("./session/runtime/accountRecoveryAdmission.ts");
 const leases = await import("./session/sessionRunLease.ts");
-const { beginRuntimeProviderTurn } = await import("./session/runtimePrompt.ts");
 
-/** Route the move through this fixture's runtime; `acquire` opens it. */
-function host(
-  s: ReturnType<typeof setup>,
-  acquire: () => Promise<RuntimePromptDriver | undefined> = async () =>
-    s.driver,
-) {
+/** Route list reads through this fixture's runtime; record re-offers. */
+function host(s: ReturnType<typeof setup>): string[] {
+  const wakes: string[] = [];
   setAccountMoveHostForTests({
-    runtime: s.runtime,
     resident: async () => (s.runtime.get(s.id) ? s.driver : undefined),
-    acquire,
-    publishRows: async () => {},
   });
+  setPendingRuntimeHostForTests({
+    stateChanged: async () => {},
+    publishRows: async () => {},
+    wake: (id) => wakes.push(id),
+  });
+  return wakes;
 }
 
-function pick(
+function choose(
   s: ReturnType<typeof setup>,
   target: string,
-  over: Partial<Parameters<typeof moveSessionAccount>[0]> = {},
+  setBy: "user" | "coordinator" = "user",
 ) {
-  return moveSessionAccount({
-    sessionId: s.id,
-    targetProfileId: target,
-    by: "user",
-    authorize: () => {},
-    ...over,
-  });
+  return setSessionPendingRuntime(
+    s.id,
+    { account: { kind: "account", id: target } },
+    setBy,
+  );
 }
 
-const RUNNING = "This session is running; move it once its turn ends.";
-const BUSY =
-  "This session is starting a turn or already moving; try again once it is idle.";
+function bigModel(harness: Harness) {
+  const provider = harness === "pi" ? "openai-codex" : "claude-sdk";
+  return { provider, id: second(provider) };
+}
 
-/** Nothing the move held is still held: a new turn and a new move may start. */
+/** Nothing the turn held is still held: a new turn may start. */
 function released(s: ReturnType<typeof setup>) {
   assert.equal(s.runtime.isBusy(s.id), false, "harness admission released");
   assertAccountRecoveryAdmission(s.id);
@@ -1230,131 +1309,361 @@ function stored(s: ReturnType<typeof setup>, account: string) {
 const otherKind = (harness: Harness): Harness =>
   harness === "pi" ? "claude-sdk" : "pi";
 
+const { assertAccountRecoveryAdmission } =
+  await import("./session/runtime/accountRecoveryAdmission.ts");
+
 for (const harness of engines) {
-  test(`${harness} an explicit move rebinds an idle loaded session at once`, async () => {
+  test(`${harness} a pending account applies when the next turn starts, not before`, async () => {
     const a = account(harness, "A");
     const b = account(harness, "B");
     const s = setup(harness, a, [undefined, undefined]);
     host(s);
     await s.send();
-    assert.deepEqual(await pick(s, b), { from: "A", to: "B" });
+    const pending = await choose(s, b);
+    assert.deepEqual(pending?.account, { kind: "account", id: b });
+    // Setting it changes nothing about the engine.
+    assert.equal(sessionStore.get(s.id)?.credentialProfileId, a);
+    assert.deepEqual(s.moves, []);
+    assert.deepEqual(markers(s), []);
+    assert.deepEqual(sessionStore.get(s.id)?.pendingRuntime, pending);
+    await s.send();
     assert.equal(sessionStore.get(s.id)?.credentialProfileId, b);
     assert.deepEqual(s.moves, [b]);
     assert.deepEqual(s.switchOptions, [{ allowWithoutHistory: true }]);
     assert.deepEqual(markers(s), ["Switched from A to B — chosen by you."]);
-    released(s);
-    await s.send();
     assert.deepEqual(
       s.calls.map((call) => call.profileId),
       [a, b],
     );
+    assert.equal(sessionStore.get(s.id)?.pendingRuntime, undefined);
+    assert.deepEqual(s.native, []);
+    released(s);
   });
 
-  test(`${harness} a coordinator's move says so in its marker`, async () => {
+  test(`${harness} a coordinator's pending move says so in its marker`, async () => {
     const a = account(harness, "A");
     const b = account(harness, "B");
-    const s = setup(harness, a, []);
+    const s = setup(harness, a, [undefined]);
     host(s);
-    await pick(s, b, { by: "coordinator" });
+    stored(s, a);
+    await choose(s, b, "coordinator");
+    await s.send();
     assert.deepEqual(markers(s), [
       "Switched from A to B — chosen by its coordinating session.",
     ]);
   });
 
-  test(`${harness} a session that is not loaded is opened for the move`, async () => {
+  test(`${harness} model and effort apply at admission through the adapter; Automatic keeps the bound account`, async () => {
     const a = account(harness, "A");
-    const b = account(harness, "B");
-    const s = setup(harness, a, [undefined]);
-    let opened = 0;
-    host(s, async () => {
-      opened += 1;
-      return s.driver;
-    });
-    assert.equal(s.runtime.get(s.id), undefined);
-    await pick(s, b);
-    assert.equal(opened, 1);
-    assert.equal(sessionStore.get(s.id)?.credentialProfileId, b);
-    released(s);
+    account(harness, "B");
+    const s = setup(harness, a, [undefined, undefined]);
+    host(s);
     await s.send();
-    assert.deepEqual(
-      s.calls.map((call) => call.profileId),
-      [b],
+    const pending = await setSessionPendingRuntime(
+      s.id,
+      { model: bigModel(harness), thinkingLevel: "high" },
+      "user",
     );
+    assert.deepEqual(pending, {
+      model: bigModel(harness),
+      thinkingLevel: "high",
+      account: { kind: "automatic" },
+      setBy: "user",
+    });
+    assert.deepEqual(s.native, [], "no native trace before the turn");
+    await s.send();
+    assert.deepEqual(s.native, [
+      `model:${bigModel(harness).id}`,
+      "effort:high",
+    ]);
+    assert.deepEqual(s.driver.modelSelection?.(), {
+      model: bigModel(harness),
+      thinkingLevel: "high",
+    });
+    assert.deepEqual(
+      s.moves,
+      [],
+      "Automatic stays on an account that can run it",
+    );
+    assert.equal(sessionStore.get(s.id)?.pendingRuntime, undefined);
   });
 
-  test.each(["missing", "throws", "released"] as const)(
-    `${harness} a session that cannot be opened is refused and holds nothing; acquisition %s`,
-    async (failure) => {
-      const a = account(harness, "A");
-      const b = account(harness, "B");
-      const s = setup(harness, a, [undefined]);
-      host(s, async () => {
-        if (failure === "throws") throw new Error("disk is gone");
-        return failure === "missing"
-          ? undefined
-          : ({ ...s.driver, released: true } as RuntimePromptDriver);
-      });
-      await assert.rejects(pick(s, b), {
-        message: "This session could not be loaded for the move.",
-      });
-      assert.equal(sessionStore.get(s.id)?.credentialProfileId, a);
-      released(s);
-      host(s);
-      await pick(s, b);
-      assert.equal(sessionStore.get(s.id)?.credentialProfileId, b);
-    },
-  );
-
-  test(`${harness} the move marker is display only: its failure changes nothing`, async () => {
+  test(`${harness} Automatic routes only when the bound account cannot run the target`, async () => {
     const a = account(harness, "A");
     const b = account(harness, "B");
     const s = setup(harness, a, [undefined, undefined]);
     host(s);
     await s.send();
-    const live = s.runtime.get(s.id)!;
-    vi.spyOn(live, "appendNotice").mockImplementation(() => {
-      throw new Error("log is full");
-    });
-    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
-    assert.deepEqual(await pick(s, b), { from: "A", to: "B" });
-    assert.equal(sessionStore.get(s.id)?.credentialProfileId, b);
-    assert.deepEqual(warning.mock.calls, [
-      ["[account-move] Could not append the move marker."],
-    ]);
-    released(s);
+    await setSessionPendingRuntime(s.id, { model: bigModel(harness) }, "user");
+    health.reportAccountRunFailure(
+      a,
+      {
+        kind: "quota",
+        limitModel: bigModel(harness).id,
+        resetAtMs: Date.now() + 3_600_000,
+      },
+      offers.get(a)!.provider,
+      health.observeAccountHealth(a),
+    );
+    await s.send();
+    assert.deepEqual(s.moves, [b]);
+    assert.equal(s.driver.modelSelection?.().model?.id, bigModel(harness).id);
   });
 
-  test(`${harness} moves between personal and enterprise accounts without touching the requirement`, async () => {
+  test(`${harness} effort is clamped to the target model; a target equal to now clears`, async () => {
     const a = account(harness, "A");
-    const e = account(harness, "Work", true);
+    const s = setup(harness, a, [undefined]);
+    host(s);
+    await s.send();
+    // The session's model has no thinking budget: "high" clamps to "off",
+    // which is what it runs now, so nothing is pending.
+    assert.equal(
+      await setSessionPendingRuntime(s.id, { thinkingLevel: "high" }, "user"),
+      undefined,
+    );
+    assert.equal(sessionStore.get(s.id)?.pendingRuntime, undefined);
+    await setSessionPendingRuntime(s.id, { model: bigModel(harness) }, "user");
+    assert.ok(sessionStore.get(s.id)?.pendingRuntime);
+    await setSessionPendingRuntime(s.id, { model: offers.get(a)! }, "user");
+    assert.equal(sessionStore.get(s.id)?.pendingRuntime, undefined);
+  });
+
+  test(`${harness} a reset leaves no trace: no native change, no move`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    const s = setup(harness, a, [undefined, undefined]);
+    const wakes = host(s);
+    await s.send();
+    await setSessionPendingRuntime(
+      s.id,
+      {
+        model: bigModel(harness),
+        thinkingLevel: "high",
+        account: { kind: "account", id: b },
+      },
+      "user",
+    );
+    await clearSessionPendingRuntime(s.id);
+    assert.equal(sessionStore.get(s.id)?.pendingRuntime, undefined);
+    await s.send();
+    assert.deepEqual(s.native, []);
+    assert.deepEqual(s.moves, []);
+    assert.deepEqual(markers(s), []);
+    assert.deepEqual(wakes, [s.id, s.id], "each change re-offers held work");
+  });
+
+  test(`${harness} a steer into a running turn never applies it`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    const s = setup(harness, a, [undefined, undefined]);
+    host(s);
+    await s.send();
+    await choose(s, b);
+    const running = Object.create(s.driver, {
+      isRunning: { get: () => true },
+    }) as RuntimePromptDriver;
+    await promptRuntimeSessionWithRuntime(s.runtime, running, "steer", {
+      steer: true,
+    }).catch(() => {});
+    assert.deepEqual(s.moves, []);
+    assert.ok(sessionStore.get(s.id)?.pendingRuntime, "still pending");
+  });
+
+  test(`${harness} every new turn applies it, whatever its origin`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    const origins: Parameters<ReturnType<typeof setup>["send"]>[0][] = [
+      { clientRequestId: "queued:row" },
+      { origin: { kind: "agent", agentId: "peer-session" } },
+      {
+        hidden: true,
+        origin: { kind: "system", source: "background-work" },
+      },
+      {
+        hidden: true,
+        continuation: true,
+        origin: { kind: "system", source: "post-reload" },
+      },
+    ];
+    for (const options of origins) {
+      const s = setup(harness, a, [undefined]);
+      host(s);
+      stored(s, a);
+      await choose(s, b);
+      await s.send(options);
+      assert.deepEqual(s.moves, [b], JSON.stringify(options));
+      assert.equal(sessionStore.get(s.id)?.pendingRuntime, undefined);
+    }
+  });
+
+  test(`${harness} an account-recovery continuation leaves it pending`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    const s = setup(harness, a, [undefined, undefined]);
+    host(s);
+    stored(s, a);
+    await choose(s, b);
+    const ticket = reserve(s.id);
+    await s
+      .send({ continuation: true, hidden: true, accountRecovery: ticket })
+      .catch(() => {});
+    assert.deepEqual(s.moves, []);
+    assert.ok(sessionStore.get(s.id)?.pendingRuntime);
+  });
+
+  test(`${harness} a target that cannot run holds the turn: pending kept, reason shown, nothing runs`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    const s = setup(harness, a, [undefined, undefined]);
+    const wakes = host(s);
+    await s.send();
+    await choose(s, b);
+    health.reportAccountRunFailure(
+      b,
+      { kind: "auth", loginDeath: true },
+      offers.get(b)!.provider,
+      health.observeAccountHealth(b),
+    );
+    const held = await s.send().catch((error: unknown) => error);
+    assert.ok(held instanceof PendingRuntimeHeldError);
+    // A Stop's hold class: every lane keeps its work and spends no attempt.
+    assert.ok(held instanceof AutomaticTurnsHeldError);
+    assert.equal(
+      held.message,
+      "Couldn't switch to Test model · B: B needs login. The change is still pending; change or reset it to continue.",
+    );
+    assert.equal(sessionStore.get(s.id)?.lastError?.message, held.message);
+    assert.ok(sessionStore.get(s.id)?.pendingRuntime, "still pending");
+    assert.equal(sessionStore.get(s.id)?.credentialProfileId, a);
+    assert.equal(s.calls.length, 1, "nothing ran, on neither account");
+    assert.deepEqual(s.moves, []);
+    released(s);
+    // A reset offers the held work again; it runs where the session is.
+    wakes.length = 0;
+    await clearSessionPendingRuntime(s.id);
+    assert.deepEqual(wakes, [s.id]);
+    await s.send();
+    assert.deepEqual(
+      s.calls.map((call) => call.profileId),
+      [a, a],
+    );
+  });
+
+  test(`${harness} background work holding the engine holds the switch with its reason`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    const s = setup(harness, a, [undefined]);
+    host(s);
+    stored(s, a);
+    await choose(s, b);
+    s.driver.switchAccount = async () => {
+      throw new AccountSwitchBlockedError(
+        "Background work still holds this session's Claude host. Stop it before switching accounts.",
+      );
+    };
+    const held = await s.send().catch((error: unknown) => error);
+    assert.ok(held instanceof PendingRuntimeHeldError);
+    assert.equal(
+      held.message,
+      `Waiting for background work on ${harness === "pi" ? "OpenAI" : "Claude"}; stop it to switch now.`,
+    );
+    assert.equal(s.calls.length, 0);
+    assert.ok(sessionStore.get(s.id)?.pendingRuntime);
+  });
+
+  test(`${harness} a target that could never run is refused when set, and another engine's only without an account`, async () => {
+    const a = account(harness, "A");
+    const disabled = account(harness, "Off");
+    profiles.setCredentialProfileEnabled(disabled, false);
+    const other = account(otherKind(harness), "Other kind");
+    const unoffered = account(harness, "No model");
+    offers.delete(unoffered);
     const s = setup(harness, a, []);
     host(s);
-    await pick(s, e);
-    assert.equal(sessionStore.get(s.id)?.credentialProfileId, e);
-    assert.equal(sessionStore.get(s.id)?.requiresEnterprise, undefined);
-    await pick(s, a);
-    assert.equal(sessionStore.get(s.id)?.credentialProfileId, a);
-    assert.deepEqual(s.switchOptions, [
-      { allowWithoutHistory: true },
-      { allowWithoutHistory: true },
-    ]);
+    stored(s, a);
+    for (const [target, reason] of [
+      ["cp_missing", /^The chosen account no longer exists\.$/],
+      [disabled, /^Off is disabled\.$/],
+      [other, /^Other kind is not the same kind of account as A\.$/],
+      [unoffered, /^No model does not offer Test model\.$/],
+    ] as const) {
+      await assert.rejects(choose(s, target), { message: reason }, target);
+      assert.equal(sessionStore.get(s.id)?.pendingRuntime, undefined);
+    }
+    // Another harness's model is an engine switch: refused while no enabled
+    // account of its kind offers it, accepted (on Automatic) once one does.
+    const crossModel = bigModel(otherKind(harness));
+    profiles.setCredentialProfileEnabled(other, false);
+    await assert.rejects(
+      setSessionPendingRuntime(s.id, { model: crossModel }, "user"),
+      {
+        message: `No enabled ${harness === "pi" ? "Claude" : "OpenAI"} account offers Big model.`,
+      },
+    );
+    assert.equal(sessionStore.get(s.id)?.pendingRuntime, undefined);
+    profiles.setCredentialProfileEnabled(other, true);
+    const cross = await setSessionPendingRuntime(
+      s.id,
+      { model: crossModel },
+      "user",
+    );
+    assert.deepEqual(cross?.model, crossModel);
+    assert.deepEqual(cross?.account, { kind: "automatic" });
+    // The account list follows the target's kind: the other kind's accounts,
+    // never the bound one.
+    const listed = (await accountMoveTargets(s.id)).map(({ id }) => id);
+    assert.ok(listed.includes(other), "the target kind's account is listed");
+    assert.ok(!listed.includes(a), "the bound account cannot run it");
+    assert.ok(!listed.includes(disabled));
+    await assert.rejects(
+      setSessionPendingRuntime(
+        s.id,
+        { account: { kind: "account", id: a } },
+        "user",
+      ),
+      { message: "A cannot run Big model." },
+    );
+    const chosen = await setSessionPendingRuntime(
+      s.id,
+      { account: { kind: "account", id: other } },
+      "user",
+    );
+    assert.deepEqual(chosen?.account, { kind: "account", id: other });
+    // Picking a model of the bound kind again drops the other kind's account.
+    const back = await setSessionPendingRuntime(
+      s.id,
+      { model: { provider: offers.get(a)!.provider, id: offers.get(a)!.id } },
+      "user",
+    );
+    assert.notDeepEqual(back?.account, { kind: "account", id: other });
+    await clearSessionPendingRuntime(s.id);
+    await assert.rejects(
+      setSessionPendingRuntime(
+        s.id,
+        { model: { provider: offers.get(a)!.provider, id: "no-such-model" } },
+        "user",
+      ),
+      { message: "no-such-model is not an available model." },
+    );
+    assert.deepEqual(s.moves, []);
   });
 
-  test(`${harness} an enterprise-only session moves only to enterprise accounts`, async () => {
+  test(`${harness} an enterprise-only session takes only enterprise accounts`, async () => {
     const e1 = account(harness, "Work", true);
     const e2 = account(harness, "Work 2", true);
     const personal = account(harness, "Personal");
-    const s = setup(harness, e1, [], true);
+    const s = setup(harness, e1, [undefined], true);
     stored(s, e1);
     host(s);
     const listed = (await accountMoveTargets(s.id)).map(({ id }) => id);
     assert.ok(listed.includes(e2));
     assert.ok(!listed.includes(personal));
-    await assert.rejects(pick(s, personal), {
+    await assert.rejects(choose(s, personal), {
       message:
         "This session requires an enterprise account, and Personal is not one.",
     });
-    await pick(s, e2);
+    await choose(s, e2);
+    await s.send();
     assert.equal(sessionStore.get(s.id)?.credentialProfileId, e2);
     assert.equal(sessionStore.get(s.id)?.requiresEnterprise, true);
     assert.deepEqual(s.switchOptions, [
@@ -1362,299 +1671,34 @@ for (const harness of engines) {
     ]);
   });
 
-  test(`${harness} each ineligible target is refused with its own reason, binding unchanged`, async () => {
-    const a = account(harness, "A");
-    const disabled = account(harness, "Off");
-    profiles.setCredentialProfileEnabled(disabled, false);
-    const other = account(otherKind(harness), "Other kind");
-    const unoffered = account(harness, "No model");
-    offers.delete(unoffered);
-    const login = account(harness, "Logged out");
-    health.reportAccountRunFailure(
-      login,
-      { kind: "auth", loginDeath: true },
-      offers.get(login)!.provider,
-      health.observeAccountHealth(login),
-    );
-    const benched = account(harness, "Benched");
-    health.reportAccountRunFailure(
-      benched,
-      { kind: "quota" },
-      offers.get(benched)!.provider,
-      health.observeAccountHealth(benched),
-    );
-    const s = setup(harness, a, []);
-    host(s);
-    const model = offers.get(a)!.id;
-    for (const [target, reason] of [
-      [a, /^This session already runs on A\.$/],
-      ["cp_missing", /^The chosen account no longer exists\.$/],
-      [disabled, /^Off is disabled\.$/],
-      [other, /^Other kind is not the same kind of account as A\.$/],
-      [unoffered, new RegExp(`^No model does not offer ${model} at`)],
-      [login, /^Logged out needs login\.$/],
-      [benched, new RegExp(`^Benched has reached its ${model} limit until `)],
-    ] as const) {
-      await assert.rejects(pick(s, target), { message: reason }, target);
-      assert.equal(sessionStore.get(s.id)?.credentialProfileId, a);
-      released(s);
-    }
-    assert.deepEqual(s.moves, []);
-    const listed = (await accountMoveTargets(s.id)).map(({ id }) => id);
-    for (const excluded of [a, disabled, other, unoffered, login, benched])
-      assert.ok(!listed.includes(excluded), excluded);
-  });
-
-  test(`${harness} a disabled source may still move off`, async () => {
+  test(`${harness} the move list is judged against the pending model`, async () => {
     const a = account(harness, "A");
     const b = account(harness, "B");
-    const s = setup(harness, a, []);
-    host(s);
-    profiles.setCredentialProfileEnabled(a, false);
-    await pick(s, b);
-    assert.equal(sessionStore.get(s.id)?.credentialProfileId, b);
-  });
-
-  test(`${harness} benches judge the session's own model, as Automatic does`, async () => {
-    const a = account(harness, "A");
-    const [own, unrelated] =
-      harness === "pi" ? ["gpt-5.5", "gpt-5.4-mini"] : ["sonnet", "opus"];
-    const bench = (
-      id: string,
-      limitModel: string | undefined,
-      resetAtMs: number,
-    ) =>
-      health.reportAccountRunFailure(
-        id,
-        { kind: "quota", resetAtMs, ...(limitModel ? { limitModel } : {}) },
-        offers.get(id)!.provider,
-        health.observeAccountHealth(id),
-      );
-    const now = Date.now();
-    // The session model's bench ends sooner than another model's: the
-    // account's single displayed bench names the other, yet it is excluded.
-    const hidden = account(harness, "Hidden");
-    bench(hidden, own, now + 3_600_000);
-    bench(hidden, unrelated, now + 7_200_000);
-    const elsewhere = account(harness, "Elsewhere");
-    bench(elsewhere, unrelated, now + 3_600_000);
-    const whole = account(harness, "Whole");
-    bench(whole, undefined, now + 3_600_000);
-    const expired = account(harness, "Expired");
-    bench(expired, own, now + 40);
-    await new Promise((resolve) => setTimeout(resolve, 80));
     const s = setup(harness, a, []);
     stored(s, a);
     host(s);
-    const listed = (await accountMoveTargets(s.id)).map(({ id }) => id);
-    assert.ok(!listed.includes(hidden), "hidden matching bench");
-    assert.ok(listed.includes(elsewhere), "unrelated bench only");
-    assert.ok(!listed.includes(whole), "account-wide bench");
-    assert.ok(listed.includes(expired), "expired bench");
-    await assert.rejects(pick(s, hidden), /limit until/);
-    await pick(s, elsewhere);
-    assert.equal(sessionStore.get(s.id)?.credentialProfileId, elsewhere);
-  });
-
-  test(`${harness} a busy session is refused: running, or a prompt admitted but not yet running`, async () => {
-    const a = account(harness, "A");
-    const b = account(harness, "B");
-    const s = setup(harness, a, []);
-    host(s);
-    const admitted = s.runtime.admitPrompt(s.id);
-    await assert.rejects(pick(s, b), { message: BUSY });
-    admitted();
-    assert.equal(sessionStore.get(s.id)?.credentialProfileId, a);
-    released(s);
-    host(s, async () => ({ ...s.driver, isRunning: true }));
-    await assert.rejects(pick(s, b), { message: RUNNING });
-    assert.equal(sessionStore.get(s.id)?.credentialProfileId, a);
-    released(s);
-    host(s);
-    await pick(s, b);
-    assert.equal(sessionStore.get(s.id)?.credentialProfileId, b);
-  });
-
-  test(`${harness} while a move holds the session, no turn starts; queued work waits for its idle edge`, async () => {
-    const a = account(harness, "A");
-    const b = account(harness, "B");
-    const s = setup(harness, a, [undefined, undefined]);
-    host(s);
-    await s.send();
-    let release!: () => void;
-    let entered = false;
-    s.gate(() => {
-      entered = true;
-      return new Promise<void>((resolve) => {
-        release = resolve;
-      });
-    });
-    const moving = pick(s, b);
-    await vi.waitFor(() => assert.ok(entered));
-    const before = s.runtime.get(s.id)!.clientTimeline().length;
-    await assert.rejects(s.send(), (error: unknown) => {
-      assert.ok(error instanceof SessionBusyError);
-      assert.equal((error as Error).name, "AccountSwitchInProgressError");
-      return true;
-    });
-    await assert.rejects(
-      beginRuntimeProviderTurn(s.driver, {
-        kind: "system",
-        source: "account-switch",
-      }),
-      { name: "AccountSwitchInProgressError" },
+    assert.ok((await accountMoveTargets(s.id)).some(({ id }) => id === b));
+    await setSessionPendingRuntime(s.id, { model: bigModel(harness) }, "user");
+    health.reportAccountRunFailure(
+      b,
+      {
+        kind: "quota",
+        limitModel: bigModel(harness).id,
+        resetAtMs: Date.now() + 3_600_000,
+      },
+      offers.get(b)!.provider,
+      health.observeAccountHealth(b),
     );
-    // Slash commands open their synthetic turn behind this same typed-busy
-    // check, and a queued row stays queued on SessionBusyError.
-    assert.throws(() => assertAccountRecoveryAdmission(s.id), SessionBusyError);
-    // A second move finds the first one's admission, which is no run.
-    await assert.rejects(pick(s, b), { message: BUSY });
-    assert.equal(s.runtime.get(s.id)!.clientTimeline().length, before);
-    assert.equal(s.calls.length, 1);
-    const idle = vi.spyOn(s.runtime.get(s.id)!, "notifyIdle");
-    release();
-    await moving;
-    assert.equal(idle.mock.calls.length, 1, "idle re-offered after release");
-    released(s);
-    await s.send();
-    assert.deepEqual(
-      s.calls.map((call) => call.profileId),
-      [a, b],
-    );
+    assert.ok(!(await accountMoveTargets(s.id)).some(({ id }) => id === b));
   });
 
-  test(`${harness} a failover reservation refuses the move and stays its owner's`, async () => {
-    const a = account(harness, "A");
-    const b = account(harness, "B");
-    const s = setup(harness, a, []);
-    host(s);
-    const ticket = reserve(s.id);
-    try {
-      await assert.rejects(pick(s, b), {
-        name: "AccountSwitchInProgressError",
-      });
-      assertAccountRecoveryAdmission(s.id, ticket);
-      assert.equal(s.runtime.isBusy(s.id), false);
-    } finally {
-      const { releaseAccountRecovery } =
-        await import("./session/runtime/accountRecoveryAdmission.ts");
-      releaseAccountRecovery(s.id, ticket);
-    }
-    assert.equal(sessionStore.get(s.id)?.credentialProfileId, a);
-  });
-
-  test(`${harness} a model or effort change during the move refuses it`, async () => {
-    const a = account(harness, "A");
-    const b = account(harness, "B");
-    const s = setup(harness, a, []);
-    host(s);
-    const original = s.driver.modelSelection!;
-    s.gate(async () => {
-      s.driver.modelSelection = () => ({
-        ...original(),
-        thinkingLevel: "high",
-      });
-    });
-    await assert.rejects(pick(s, b), {
-      message: "This session's model or effort changed during the move.",
-    });
-    assert.equal(sessionStore.get(s.id)?.credentialProfileId, a);
-    released(s);
-  });
-
-  test(`${harness} a target that loses its login mid-move keeps the binding`, async () => {
-    const a = account(harness, "A");
-    const b = account(harness, "B");
-    const s = setup(harness, a, []);
-    host(s);
-    s.gate(async () =>
-      health.reportAccountRunFailure(
-        b,
-        { kind: "auth", loginDeath: true },
-        offers.get(b)!.provider,
-        health.observeAccountHealth(b),
-      ),
-    );
-    await assert.rejects(pick(s, b), { message: "B needs login." });
-    assert.equal(sessionStore.get(s.id)?.credentialProfileId, a);
-    released(s);
-  });
-
-  test(`${harness} losing authority before the commit refuses the move`, async () => {
-    const a = account(harness, "A");
-    const b = account(harness, "B");
-    const s = setup(harness, a, []);
-    host(s);
-    let owned = true;
-    s.gate(async () => {
-      owned = false;
-    });
-    await assert.rejects(
-      pick(s, b, {
-        by: "coordinator",
-        authorize: () => {
-          if (!owned) throw new Error("taken over");
-        },
-      }),
-      { message: "taken over" },
-    );
-    assert.equal(sessionStore.get(s.id)?.credentialProfileId, a);
-    assert.deepEqual(s.moves, []);
-    released(s);
-  });
-
-  test(`${harness} a worktree hold refuses the move, and nothing leaks once it lifts`, async () => {
-    const a = account(harness, "A");
-    const b = account(harness, "B");
-    const s = setup(harness, a, [undefined]);
-    host(s);
-    leases.setSessionWorktreeResolverForTests((id) =>
-      id === s.id ? "wt-move" : undefined,
-    );
-    const lift = leases.reserveWorktreeForRemoval(
-      "wt-move",
-      "This worktree is being removed.",
-    )!;
-    await assert.rejects(pick(s, b), {
-      message: "This worktree is being removed.",
-    });
-    assert.equal(s.runtime.isBusy(s.id), false);
-    assertAccountRecoveryAdmission(s.id);
-    lift();
-    await s.send();
-    await pick(s, b);
-    assert.equal(sessionStore.get(s.id)?.credentialProfileId, b);
-    released(s);
-    // The lease the move held is gone: a removal may take the worktree again.
-    const again = leases.reserveWorktreeForRemoval("wt-move", "again");
-    assert.ok(again);
-    again();
-  });
-
-  test(`${harness} a throwing engine switch is refused and releases everything`, async () => {
-    const a = account(harness, "A");
-    const b = account(harness, "B");
-    const s = setup(harness, a, [undefined]);
-    host(s);
-    s.gate(async () => {
-      throw new Error("Background work still holds this session's host.");
-    });
-    await assert.rejects(pick(s, b), {
-      message: "Background work still holds this session's host.",
-    });
-    assert.equal(sessionStore.get(s.id)?.credentialProfileId, a);
-    released(s);
-    s.gate(async () => {});
-    await pick(s, b);
-    assert.equal(sessionStore.get(s.id)?.credentialProfileId, b);
-  });
-
-  test(`${harness} a session of another scope, deleted, unbound or on an endpoint cannot move`, async () => {
+  test(`${harness} a session of another scope, deleted, unbound or on an endpoint cannot take an account`, async () => {
     const a = account(harness, "A");
     const b = account(harness, "B");
     const unbound = setup(harness, a, [], false, false);
+    stored(unbound, a);
     host(unbound);
-    await assert.rejects(pick(unbound, b), {
+    await assert.rejects(choose(unbound, b), {
       message: "This session has no account to move from.",
     });
     await assert.rejects(accountMoveTargets(unbound.id), {
@@ -1667,136 +1711,22 @@ for (const harness of engines) {
     created.push(endpoint.id);
     offers.set(endpoint.id, { provider: endpoint.id, id: "llama3" });
     const onEndpoint = setup("pi", endpoint.id, []);
+    stored(onEndpoint, endpoint.id);
     host(onEndpoint);
-    await assert.rejects(pick(onEndpoint, b), {
+    await assert.rejects(choose(onEndpoint, b), {
       message:
         "Team LLM is the only account that serves this session's model, so the session cannot move.",
     });
     const deleted = setup(harness, a, []);
     host(deleted);
     sessionStore.markDeleted(deleted.id);
-    await assert.rejects(pick(deleted, b), {
+    await assert.rejects(choose(deleted, b), {
       message: "Session does not exist or was deleted.",
     });
   });
-
-  // Work refused as busy while the move held the session (a queued row, a peer
-  // delivery) waits for one re-offer at release, however the move ended: the
-  // bound runtime's idle edge, or a wake by id when no live runtime remains.
-  test.each([
-    "success",
-    "acquisition missing",
-    "acquisition throws",
-    "released driver",
-    "no switchAccount",
-    "engine switch throws",
-    "model change",
-    "authority loss",
-    "target needs login",
-    "harness torn down mid-move",
-  ] as const)(
-    `${harness} every exit after the holds re-offers delivery exactly once: %s`,
-    async (exit) => {
-      const a = account(harness, "A");
-      const b = account(harness, "B");
-      const s = setup(harness, a, []);
-      let owned = true;
-      host(s, async () => {
-        if (exit === "acquisition throws") throw new Error("disk is gone");
-        if (exit === "acquisition missing") return undefined;
-        if (exit === "released driver")
-          return { ...s.driver, released: true } as RuntimePromptDriver;
-        if (exit === "no switchAccount") {
-          const { switchAccount: _unused, ...rest } = s.driver;
-          return rest;
-        }
-        return s.driver;
-      });
-      s.gate(async () => {
-        if (exit === "engine switch throws") throw new Error("engine refused");
-        if (exit === "model change")
-          s.driver.modelSelection = () => ({
-            model: offers.get(a),
-            thinkingLevel: "high",
-          });
-        if (exit === "authority loss") owned = false;
-        if (exit === "target needs login")
-          health.reportAccountRunFailure(
-            b,
-            { kind: "auth", loginDeath: true },
-            offers.get(b)!.provider,
-            health.observeAccountHealth(b),
-          );
-        if (exit === "harness torn down mid-move") {
-          // What a harness store does when its engine is lost: the session
-          // stays, its runtime goes.
-          s.runtime.closeForTeardown(s.id);
-          await s.runtime.releaseHarness(s.id);
-          throw new Error("engine lost");
-        }
-      });
-      const wakes: string[] = [];
-      lifecycle.setSessionIdleHook((id) => {
-        if (id === s.id) wakes.push("idle");
-      });
-      setDeliveryWake((id, reminders) => {
-        if (id === s.id) wakes.push(`wake reminders=${reminders}`);
-      });
-      try {
-        const moving = pick(s, b, {
-          authorize: () => {
-            if (!owned) throw new Error("taken over");
-          },
-        });
-        if (exit === "success") await moving;
-        else await assert.rejects(moving);
-        released(s);
-        assert.equal(
-          sessionStore.get(s.id)?.credentialProfileId,
-          exit === "success" ? b : a,
-        );
-        assert.deepEqual(
-          wakes,
-          exit.startsWith("acquisition") ||
-            exit === "released driver" ||
-            exit === "no switchAccount" ||
-            exit === "harness torn down mid-move"
-            ? ["wake reminders=true"]
-            : ["idle"],
-        );
-      } finally {
-        lifecycle.setSessionIdleHook(undefined);
-        setDeliveryWake(undefined);
-      }
-    },
-  );
-
-  test(`${harness} a move refused before its holds wakes nothing, and a deleted session is not woken`, async () => {
-    const a = account(harness, "A");
-    const b = account(harness, "B");
-    const s = setup(harness, a, []);
-    const wakes: string[] = [];
-    setDeliveryWake((id) => {
-      if (id === s.id) wakes.push("wake");
-    });
-    try {
-      const admitted = s.runtime.admitPrompt(s.id);
-      host(s);
-      await assert.rejects(pick(s, b), { message: BUSY });
-      admitted();
-      host(s, async () => {
-        sessionStore.markDeleted(s.id);
-        return undefined;
-      });
-      await assert.rejects(pick(s, b));
-      assert.deepEqual(wakes, []);
-    } finally {
-      setDeliveryWake(undefined);
-    }
-  });
 }
 
-test("pi counts the run after an explicit move as moved for its encrypted-reasoning retry", async () => {
+test("pi counts the run after a pending move as moved for its encrypted-reasoning retry", async () => {
   const a = account("pi", "A");
   const b = account("pi", "B");
   const s = setup("pi", a, [
@@ -1810,7 +1740,8 @@ test("pi counts the run after an explicit move as moved for its encrypted-reason
     return true;
   };
   host(s);
-  await pick(s, b);
+  stored(s, a);
+  await choose(s, b);
   await s.send();
   assert.equal(drops, 1);
   assert.deepEqual(
@@ -1911,6 +1842,90 @@ test("the pin no longer applies once the user switched the session to another al
   assert.deepEqual(s.moves, [y]);
 });
 
+test("a final entitlement refusal of a pending target holds the turn like every other refusal of it (F035)", async () => {
+  const a = account("pi", "Late entitlement A");
+  const b = account("pi", "Late entitlement B");
+  const s = setup("pi", a, [undefined, undefined]);
+  host(s);
+  await s.send();
+  const pending = await choose(s, b);
+  const accountChecks = await import("./sessionAccount.ts");
+  const entitled = accountChecks.assertSessionModelEntitled;
+  // B stops listing the model after the selection's own last check, before
+  // the facade's final entitlement check.
+  const spy = vi
+    .spyOn(accountChecks, "assertSessionModelEntitled")
+    .mockImplementationOnce(async (input) => {
+      lacksAll.add(b);
+      try {
+        await entitled(input);
+      } finally {
+        lacksAll.delete(b);
+      }
+    });
+  try {
+    const held = await s.send().catch((error: unknown) => error);
+    assert.equal(spy.mock.calls.length, 1, "the final check ran");
+    assert.ok(
+      held instanceof PendingRuntimeHeldError,
+      `a hold, not ${String(held)}`,
+    );
+    assert.match(
+      held.message,
+      /^Couldn't switch to .*The change is still pending; change or reset it to continue\.$/,
+    );
+    assert.deepEqual(sessionStore.get(s.id)?.pendingRuntime, pending);
+    assert.equal(sessionStore.get(s.id)?.lastError?.message, held.message);
+    assert.equal(s.calls.length, 1, "nothing reached the provider");
+    released(s);
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+test("a pending selection on Automatic judges a 5-2-pinned session by its pin: it leaves an account without 5-2 only for one that runs it", async () => {
+  const pending = (s: ReturnType<typeof setup>) =>
+    sessionStore.setPendingRuntime(s.id, {
+      model: { provider: "claude-sdk", id: "fable" },
+      thinkingLevel: "off",
+      account: { kind: "automatic" },
+      setBy: "user",
+    });
+  const y = claudeOn("Y", "fable", true);
+  claudeOn("W", "fable", true);
+  // Unpinned, the bound account runs fable: the turn stays there.
+  const plain = setup("claude-sdk", y, [undefined]);
+  host(plain);
+  stored(plain, y);
+  pending(plain);
+  await plain.send();
+  assert.deepEqual(plain.moves, []);
+  // Pinned to 5-2, neither Y nor W runs it: the router, asked with the pin,
+  // has no account to offer, and the turn is held on Y's own refusal.
+  const held = setup("claude-sdk", y, [undefined]);
+  pinFable52(held.id);
+  host(held);
+  stored(held, y);
+  pending(held);
+  await assert.rejects(
+    held.send(),
+    /no eligible account can run it \(Y can't run claude-fable-5-2, the version this session is pinned to\.\)/,
+  );
+  assert.deepEqual(held.moves, []);
+  assert.ok(sessionStore.get(held.id)?.pendingRuntime, "still pending");
+  // Once Z runs 5-2, the router's pick is Z.
+  const z = claudeOn("Z", "fable");
+  const s = setup("claude-sdk", y, [undefined]);
+  pinFable52(s.id);
+  host(s);
+  stored(s, y);
+  pending(s);
+  await s.send();
+  assert.deepEqual(s.moves, [z]);
+  assert.equal(sessionStore.get(s.id)?.credentialProfileId, z);
+  assert.equal(sessionStore.get(s.id)?.pendingRuntime, undefined);
+});
+
 test("a local-policy failure is never switch evidence, whatever its kind", async () => {
   const x = claudeOn("X", "opus");
   claudeOn("Z", "opus");
@@ -1983,4 +1998,277 @@ test("an unpinned opus session is not offered an account listing only legacy opu
     /X is disabled and no other eligible account is available/,
   );
   assert.deepEqual(s.moves, []);
+});
+
+/* ---------------------------------------------------------------------------
+ * The selection stays pending until its turn is admitted on it (R2-A2 F006),
+ * and its sets and resets are linearizable per session (F007).
+ * ------------------------------------------------------------------------ */
+
+for (const harness of engines) {
+  test(`${harness} a chosen account that loses its login after the move commits holds the turn and stays pending`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    const s = setup(harness, a, [undefined]);
+    host(s);
+    stored(s, a);
+    await choose(s, b);
+    s.afterMove(async () => {
+      health.reportAccountRunFailure(
+        b,
+        { kind: "auth", loginDeath: true },
+        offers.get(b)!.provider,
+        health.observeAccountHealth(b),
+      );
+    });
+    const held = await s.send().catch((error: unknown) => error);
+    assert.ok(held instanceof PendingRuntimeHeldError);
+    assert.match(held.message, /B needs login/);
+    assert.equal(sessionStore.get(s.id)?.lastError?.message, held.message);
+    assert.equal(s.calls.length, 0, "nothing ran on the ineligible target");
+    assert.deepEqual(sessionStore.get(s.id)?.pendingRuntime?.account, {
+      kind: "account",
+      id: b,
+    });
+    released(s);
+  });
+
+  test(`${harness} a chosen account disabled after the move commits holds the turn; nothing moves off it`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    account(harness, "C");
+    const s = setup(harness, a, [undefined]);
+    host(s);
+    stored(s, a);
+    await choose(s, b);
+    s.afterMove(async () => {
+      profiles.setCredentialProfileEnabled(b, false);
+    });
+    const held = await s.send().catch((error: unknown) => error);
+    assert.ok(held instanceof PendingRuntimeHeldError);
+    assert.match(held.message, /B is disabled/);
+    assert.equal(s.calls.length, 0);
+    assert.deepEqual(s.moves, [b], "no fallback move to another account");
+    assert.ok(sessionStore.get(s.id)?.pendingRuntime, "a refusal keeps it");
+    released(s);
+  });
+
+  test(`${harness} a chosen account that stops offering the model while it applies holds the turn`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    const s = setup(harness, a, [undefined]);
+    host(s);
+    stored(s, a);
+    await choose(s, b);
+    s.afterMove(async () => {
+      offers.delete(b);
+    });
+    const held = await s.send().catch((error: unknown) => error);
+    assert.ok(held instanceof PendingRuntimeHeldError);
+    assert.match(held.message, /B does not offer/);
+    assert.equal(s.calls.length, 0);
+    assert.ok(sessionStore.get(s.id)?.pendingRuntime);
+  });
+
+  test(`${harness} a turn refused at its final admission keeps the selection; the admitted one spends it`, async () => {
+    const a = account(harness, "A");
+    const s = setup(harness, a, [undefined]);
+    host(s);
+    stored(s, a);
+    await setSessionPendingRuntime(s.id, { model: bigModel(harness) }, "user");
+    await assert.rejects(
+      s.send({
+        admit: () => {
+          throw new Error("the delivery's reservation is gone");
+        },
+      }),
+      /reservation is gone/,
+    );
+    assert.equal(s.calls.length, 0);
+    assert.deepEqual(
+      sessionStore.get(s.id)?.pendingRuntime?.model,
+      bigModel(harness),
+      "not spent by a turn that was never admitted",
+    );
+    await s.send();
+    assert.equal(s.calls.length, 1);
+    assert.equal(sessionStore.get(s.id)?.pendingRuntime, undefined);
+  });
+
+  test(`${harness} concurrent partial changes both land, in request order`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    const s = setup(harness, a, []);
+    host(s);
+    stored(s, a);
+    await Promise.all([
+      setSessionPendingRuntime(s.id, { model: bigModel(harness) }, "user"),
+      choose(s, b),
+      setSessionPendingRuntime(s.id, { thinkingLevel: "high" }, "user"),
+    ]);
+    const pending = sessionStore.get(s.id)?.pendingRuntime;
+    assert.deepEqual(pending?.model, bigModel(harness));
+    assert.deepEqual(pending?.account, { kind: "account", id: b });
+    assert.equal(pending?.thinkingLevel, "high");
+  });
+
+  test(`${harness} a reset is never undone by a set asked for before it`, async () => {
+    const a = account(harness, "A");
+    const s = setup(harness, a, []);
+    host(s);
+    stored(s, a);
+    let entered!: () => void;
+    const reading = new Promise<void>((resolve) => (entered = resolve));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    setAccountMoveHostForTests({
+      resident: async () => {
+        entered();
+        await gate;
+        return undefined;
+      },
+    });
+    const setting = setSessionPendingRuntime(
+      s.id,
+      { model: bigModel(harness) },
+      "user",
+    );
+    await reading;
+    const reset = clearSessionPendingRuntime(s.id);
+    release();
+    await Promise.all([setting, reset]);
+    assert.equal(sessionStore.get(s.id)?.pendingRuntime, undefined);
+  });
+
+  test(`${harness} a set racing the admission that spent the selection computes from what the session now runs`, async () => {
+    const a = account(harness, "A");
+    const s = setup(harness, a, []);
+    host(s);
+    stored(s, a);
+    await setSessionPendingRuntime(s.id, { model: bigModel(harness) }, "user");
+    let reads = 0;
+    setAccountMoveHostForTests({
+      resident: async () => {
+        // The first read races a turn's admission: it applies the pending
+        // big model and spends the selection.
+        if (reads++ === 0) {
+          sessionStore.upsert({
+            id: s.id,
+            harness,
+            agentType: "assistant",
+            provider: bigModel(harness).provider,
+            model: bigModel(harness).id,
+          });
+          sessionStore.setPendingRuntime(s.id, null);
+        }
+        return undefined;
+      },
+    });
+    // Back to the model it ran before: from the big model, that is a change.
+    await setSessionPendingRuntime(s.id, { model: offers.get(a)! }, "user");
+    assert.deepEqual(
+      sessionStore.get(s.id)?.pendingRuntime?.model,
+      offers.get(a),
+    );
+  });
+}
+
+test("stopping the background work a pending switch waits for offers the held turn again", async () => {
+  const { BackgroundCompletionDelivery } =
+    await import("./backgroundWork/completionDelivery.ts");
+  const { completionDisposition } =
+    await import("./backgroundCompletionNotices.ts");
+  const { setDeliveryWake } = await import("./deliveryWake.ts");
+  const a = account("claude-sdk", "A");
+  const b = account("claude-sdk", "B");
+  const s = setup("claude-sdk", a, [undefined]);
+  host(s);
+  stored(s, a);
+  await choose(s, b);
+  let backgroundActive = true;
+  const switchAccount = s.driver.switchAccount!;
+  s.driver.switchAccount = async (...args) => {
+    if (backgroundActive)
+      throw new AccountSwitchBlockedError(
+        "Background work still holds this session's Claude host. Stop it before switching accounts.",
+      );
+    await switchAccount(...args);
+  };
+  const held = await s.send().catch((error: unknown) => error);
+  assert.ok(held instanceof PendingRuntimeHeldError);
+  assert.match(held.message, /stop it to switch now/);
+
+  const wakes: string[] = [];
+  setDeliveryWake((id) => {
+    wakes.push(id);
+  });
+  const delivery = new BackgroundCompletionDelivery({
+    disposition: completionDisposition,
+    offer: async () => "busy",
+  });
+  try {
+    // The user stops it from the background UI: a requester Stop, which the
+    // policy defers (no turn of its own).
+    const stopped = {
+      itemId: "held-host-job",
+      revision: 1,
+      label: "background job",
+      state: "stopped" as const,
+      backend: "claude-query" as const,
+      stopRequested: true,
+      stopOrigin: "requester" as const,
+      ownerTurnRunning: false,
+      humanLink: "/background-tasks/held-host-job",
+    };
+    assert.equal(completionDisposition(stopped), "defer");
+    backgroundActive = false;
+    delivery.enqueue(s.id, stopped);
+    assert.deepEqual(wakes, [s.id], "the held turn is offered again");
+    // Offered again, it switches and runs.
+    await s.send();
+    assert.deepEqual(
+      s.calls.map((call) => call.profileId),
+      [b],
+    );
+    assert.equal(sessionStore.get(s.id)?.pendingRuntime, undefined);
+  } finally {
+    delivery.stop();
+    setDeliveryWake(undefined);
+  }
+});
+
+test("an account change offers every session with a pending selection its turn again", async () => {
+  const { wakePendingRuntimeSessions } =
+    await import("./sessionPendingRuntime.ts");
+  const a = account("claude-sdk", "A");
+  const b = account("claude-sdk", "B");
+  const waiting = setup("claude-sdk", a, []);
+  const idle = setup("claude-sdk", a, []);
+  const wakes = host(waiting);
+  stored(waiting, a);
+  stored(idle, a);
+  await choose(waiting, b);
+  wakes.length = 0;
+  wakePendingRuntimeSessions();
+  // Other tests' sessions may still hold one; this pair decides.
+  assert.ok(wakes.includes(waiting.id), "a session with a selection");
+  assert.ok(!wakes.includes(idle.id), "never a session without one");
+
+  // A login restored (or lost) is a health change: its listeners hear it.
+  let heard = 0;
+  const unsubscribe = health.subscribeAccountHealthChanges(() => {
+    heard += 1;
+  });
+  try {
+    health.reportAccountRunFailure(
+      b,
+      { kind: "auth", loginDeath: true },
+      offers.get(b)!.provider,
+      health.observeAccountHealth(b),
+    );
+    profiles.listCredentialProfiles();
+    assert.ok(heard > 0, "a health change reaches the listener");
+  } finally {
+    unsubscribe();
+  }
 });

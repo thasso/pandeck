@@ -154,16 +154,10 @@ async function main(): Promise<void> {
     "removed session is gone from hub.listSessions()",
   );
 
-  // A re-acquire of the tombstoned id starts CLEAN (the old record is not resurrected).
-  const reacquired = claudeSdkStore.acquire(ID);
-  assert.deepEqual(
-    reacquired.snapshot(),
-    [],
-    "re-acquired tombstoned id has no resurrected history",
-  );
-  // Note: the tombstone forbids reading the old record; the fresh session is
-  // tracked again, so clean up after ourselves.
-  claudeSdkStore.remove(ID);
+  // A tombstoned id is never opened again: its row cannot come back, so a
+  // re-acquire would only drive a session nobody lists (Q18).
+  assert.throws(() => claudeSdkStore.acquire(ID), /was deleted/);
+  assert.equal(claudeSdkStore.get(ID), undefined);
   cleanup();
 
   console.log("claude-sdk plumbing test: PASS");

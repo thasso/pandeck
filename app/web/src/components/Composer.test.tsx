@@ -36,6 +36,7 @@ import {
   ModeSelector,
   composerSkills,
   resolveSlashSubmit,
+  slashState,
 } from "./Composer.tsx";
 
 stubMatchMedia();
@@ -621,6 +622,171 @@ describe("Composer busy mode", () => {
       text: "/compact",
       command: { name: "compact", rawArgs: "" },
     });
+  });
+});
+
+describe("Composer runtime commands", () => {
+  const commands: SlashCommandInfo[] = [
+    {
+      name: "model",
+      description: "Choose the model this session's next turn starts on",
+      usage: "/model [model]",
+      agentTypes: ["developer"],
+      execution: "client",
+      runsWhileStreaming: true,
+      argument: "model",
+    },
+  ];
+  const runtimeArguments = () => [
+    { value: "claude-opus", label: "Claude Opus" },
+    { value: "claude-sonnet", label: "Claude Sonnet" },
+    {
+      value: "gpt-5.5",
+      label: "GPT-5.5",
+      detail: "Not offered here",
+      disabled: true,
+    },
+  ];
+
+  it("completes an argument once one is typed, never a refused one", () => {
+    const state = (text: string) =>
+      slashState(
+        text,
+        commands,
+        [],
+        "developer",
+        "claude-sdk",
+        runtimeArguments,
+      );
+    expect(state("/model ").active).toBe(false);
+    expect(state("/model claude").items.map((item) => item.name)).toEqual([
+      "model claude-opus",
+      "model claude-sonnet",
+    ]);
+    expect(state("/model gpt").items).toEqual([]);
+    expect(state("/model Claude Son").items).toEqual([
+      {
+        name: "model claude-sonnet",
+        description: "Claude Sonnet",
+        usage: "",
+      },
+    ]);
+    // A complete value closes the menu so Enter sends it.
+    expect(state("/model claude-opus ").active).toBe(false);
+    // An id two endpoints offer completes, from its bare id, to each
+    // provider/id (F024).
+    expect(
+      slashState("/model llama3", commands, [], "developer", "pi", () => [
+        { value: "openai-compatible-a/llama3", label: "Llama 3" },
+        { value: "openai-compatible-b/llama3", label: "Llama 3" },
+      ]).items.map((item) => item.name),
+    ).toEqual([
+      "model openai-compatible-a/llama3",
+      "model openai-compatible-b/llama3",
+    ]);
+    // A slash id behind its provider completes from the id itself (F026).
+    expect(
+      slashState("/model openai/gp", commands, [], "developer", "pi", () => [
+        { value: "gpt-5.5", label: "GPT 5.5" },
+        { value: "openai-compatible-b/openai/gpt-5.5", label: "Proxy GPT" },
+      ]).items.map((item) => item.name),
+    ).toEqual(["model openai-compatible-b/openai/gpt-5.5"]);
+    expect(
+      slashState("/model claude", commands, [], "developer", "claude-sdk")
+        .active,
+    ).toBe(false);
+  });
+
+  let root: Root | null = null;
+  let container: HTMLDivElement | null = null;
+
+  afterEach(() => {
+    act(() => root?.unmount());
+    root = null;
+    container = null;
+    window.localStorage.clear();
+  });
+
+  function renderComposer(
+    runtimeChip?: ComponentProps<typeof Composer>["runtimeChip"],
+  ) {
+    const onSend = vi.fn();
+    const onQueue = vi.fn();
+    const onClientSlashCommand = vi.fn(() => null);
+    ({ container, root } = mount());
+    act(() =>
+      root!.render(
+        <Composer
+          onSend={onSend}
+          onQueue={onQueue}
+          onAbort={() => {}}
+          streaming
+          disabled={false}
+          contextInfo={null}
+          session={
+            {
+              agentType: "developer",
+              harness: "claude-sdk",
+              canSteer: true,
+            } as never
+          }
+          models={[]}
+          slashCommands={commands}
+          onClientSlashCommand={onClientSlashCommand}
+          runtimeArguments={runtimeArguments}
+          {...(runtimeChip ? { runtimeChip } : {})}
+          actions={{ runSlashCommand: vi.fn() } as unknown as AssistantActions}
+        />,
+      ),
+    );
+    const textarea = container.querySelector("textarea")!;
+    return { textarea, onSend, onQueue, onClientSlashCommand };
+  }
+
+  function type(textarea: HTMLTextAreaElement, value: string) {
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )?.set;
+    act(() => {
+      setter?.call(textarea, value);
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+
+  function press(textarea: HTMLTextAreaElement) {
+    act(() => {
+      textarea.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
+    });
+  }
+
+  it("sets the model at once mid-turn, never queueing it", () => {
+    const { textarea, onSend, onQueue, onClientSlashCommand } =
+      renderComposer();
+    type(textarea, "/model claude-s");
+    // Enter completes the argument, then sends the complete command.
+    press(textarea);
+    expect(textarea.value).toBe("/model claude-sonnet ");
+    press(textarea);
+    expect(onClientSlashCommand).toHaveBeenCalledWith("model", "claude-sonnet");
+    expect(onQueue).not.toHaveBeenCalled();
+    expect(onSend).not.toHaveBeenCalled();
+    expect(textarea.value).toBe("");
+  });
+
+  it("shows the chip only while a change is pending, and opens Runtime from it", () => {
+    renderComposer();
+    expect(container!.textContent).not.toContain("Next turn:");
+    act(() => root?.unmount());
+    const onOpen = vi.fn();
+    renderComposer({ label: "Claude Sonnet · High", onOpen });
+    const chip = [...container!.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Next turn: Claude Sonnet · High"),
+    )!;
+    act(() => chip.click());
+    expect(onOpen).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -1842,6 +2008,110 @@ describe("Composer staged drafts", () => {
     act(() => root!.render(<Host mounted={false} />));
     act(() => root!.render(<Host />));
     expect(textarea().value).toBe("my own prompt");
+  });
+});
+
+describe("Composer insert (a held input put back)", () => {
+  // Put back hands the composer a held input's exact text. It joins the field,
+  // never replaces it, and is acknowledged only once it is in the field AND in
+  // this browser's draft, so the server never lets go of a command the field
+  // does not hold.
+  const KEY_A = composerDraftStorageKey("s-held-a", false);
+  const KEY_B = composerDraftStorageKey("s-held-b", false);
+  const HELD = "/review-pr 412 --focus security";
+  const actions = {} as unknown as AssistantActions;
+  const inserted: { token: number; stored: string | null }[] = [];
+
+  function Host({
+    storageKey = KEY_A,
+    insert = null,
+  }: {
+    storageKey?: string;
+    insert?: { token: number; text: string } | null;
+  }) {
+    return (
+      <Composer
+        onSend={() => {}}
+        onAbort={() => {}}
+        streaming={false}
+        disabled={false}
+        contextInfo={null}
+        session={{ agentType: "developer", harness: "claude-sdk" } as never}
+        models={[]}
+        slashCommands={[]}
+        draftStorageKey={storageKey}
+        insert={insert}
+        onInserted={(token) =>
+          inserted.push({
+            token,
+            stored: window.localStorage.getItem(storageKey),
+          })
+        }
+        actions={actions}
+      />
+    );
+  }
+
+  let root: Root | null = null;
+  let container: HTMLDivElement | null = null;
+
+  afterEach(() => {
+    act(() => root?.unmount());
+    root = null;
+    container = null;
+    inserted.length = 0;
+    window.localStorage.clear();
+  });
+
+  function render(node: React.ReactElement): HTMLTextAreaElement {
+    ({ container, root } = mount());
+    act(() => root!.render(node));
+    return textarea();
+  }
+
+  function textarea(): HTMLTextAreaElement {
+    const field = container?.querySelector("textarea");
+    if (!field) throw new Error("composer textarea did not render");
+    return field;
+  }
+
+  it("puts the text into an empty field as is, and acknowledges it once stored", () => {
+    render(<Host />);
+    act(() => root!.render(<Host insert={{ token: 1, text: HELD }} />));
+    expect(textarea().value).toBe(HELD);
+    expect(inserted).toEqual([{ token: 1, stored: HELD }]);
+    // The same request again (a re-render) is not a second insert.
+    act(() => root!.render(<Host insert={{ token: 1, text: HELD }} />));
+    expect(textarea().value).toBe(HELD);
+    expect(inserted).toHaveLength(1);
+  });
+
+  it("puts the text above what is typed, on its own line, never replacing it", () => {
+    window.localStorage.setItem(KEY_A, "newer text typed since");
+    render(<Host />);
+    act(() => root!.render(<Host insert={{ token: 2, text: HELD }} />));
+    const merged = `${HELD}\nnewer text typed since`;
+    expect(textarea().value).toBe(merged);
+    expect(inserted).toEqual([{ token: 2, stored: merged }]);
+  });
+
+  it("lands in the destination's own stored draft when the session key changes in the same commit", () => {
+    // R2-A2-res2 path 4: for one render after a key change the field still
+    // holds the previous session's text. The insert must wait for the
+    // destination's text, never merge into (or overwrite with) the old one.
+    window.localStorage.setItem(KEY_A, "session A draft");
+    window.localStorage.setItem(KEY_B, "session B draft");
+    render(<Host storageKey={KEY_A} />);
+    act(() =>
+      root!.render(
+        <Host storageKey={KEY_B} insert={{ token: 3, text: HELD }} />,
+      ),
+    );
+    const merged = `${HELD}\nsession B draft`;
+    expect(textarea().value).toBe(merged);
+    expect(window.localStorage.getItem(KEY_B)).toBe(merged);
+    expect(window.localStorage.getItem(KEY_A)).toBe("session A draft");
+    expect(inserted).toEqual([{ token: 3, stored: merged }]);
   });
 });
 

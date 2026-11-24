@@ -442,6 +442,11 @@ page's `/api/credential-profiles` routes call:
   status carries a server-written note pointing at its Settings page, which
   shows the error to the user.
 
+How much earlier conversation a session hands a new engine when its runtime
+switches (`sessionSwitching.handoffTokenCap`, Settings → Models, default 16,000
+tokens, 1,000–64,000) is an ordinary registry setting; the handoff it caps is
+`docs/session-runtime-switching.md` "Handoff".
+
 A fourth, `models_read`, lists the models each enabled, signed-in account
 offers, each with its `provider:modelId` key and whether the model picker shows
 it (not in `models.hidden`), plus the Personal Assistant's own model key. An

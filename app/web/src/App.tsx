@@ -1,4 +1,10 @@
 import {
+  accountTargetsRefreshKey,
+  handoffEstimateRefreshKey,
+  runtimeAccountChoices,
+  sessionRuntimeControl,
+} from "./lib/sessionRuntimeControl.ts";
+import {
   lazy,
   startTransition,
   Suspense,
@@ -188,7 +194,6 @@ import type { BacklogState } from "./hooks/useBacklog.ts";
 import { UserTimeZoneContext } from "./hooks/useUserTimeZone.ts";
 import {
   isOptimisticHarness,
-  locksModelAfterStart,
   startedModelDisabled,
 } from "./lib/sessionCapabilities.ts";
 import { createClientId } from "./lib/clientId.ts";
@@ -2540,6 +2545,21 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     }),
     [mobileLayout, openKnowledgeFile, openKnowledgeInSidePanel],
   );
+  /**
+   * The composer's runtime chip and `/model`, `/effort`, `/account` without an
+   * argument open the inspector at its Runtime section: the right panel's
+   * Inspector tab on a desktop, the object dock on a phone. Each request is a
+   * new nonce, so asking again scrolls to it again.
+   */
+  const [runtimeRevealNonce, setRuntimeRevealNonce] = useState(0);
+  const openRuntimeSection = useCallback(() => {
+    setInspectorOpen(true);
+    setRightPanelOpenRequest((current) => ({
+      panel: "inspector",
+      nonce: (current?.nonce ?? 0) + 1,
+    }));
+    setRuntimeRevealNonce((current) => current + 1);
+  }, [setInspectorOpen]);
   // What a transcript Task card reads to learn whether its recorded status
   // suggestion has been answered since (`TaskLiveState.tsx`).
   const taskLiveSource = useTaskLiveSourceValue(
@@ -4604,6 +4624,15 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     () => ({
       ...actions,
       setModel: (provider, id) => {
+        // A started session changes from its next turn: the pick becomes its
+        // pending selection (`docs/session-runtime-switching.md`), and nothing
+        // here touches what new chats default to.
+        if (runtimeHasStarted && displayCurrentId) {
+          actions.setPendingRuntime(displayCurrentId, {
+            model: { provider, id },
+          });
+          return;
+        }
         // Keep the new-session account aligned even when this was an existing
         // session's model picker: an explicit account that does not serve this
         // model cannot run it, so the staged choice goes back to Automatic. An
@@ -4662,6 +4691,10 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         actions.setModel(provider, id);
       },
       setThinkingLevel: (level) => {
+        if (runtimeHasStarted && displayCurrentId) {
+          actions.setPendingRuntime(displayCurrentId, { thinkingLevel: level });
+          return;
+        }
         // Remember this explicit pick as the default for future new chats.
         update({ lastThinkingLevel: level });
         if (isNewChatRoute && !runtimeHasStarted) {
@@ -4720,6 +4753,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       actions,
       isNewChatRoute,
       runtimeHasStarted,
+      displayCurrentId,
       displayHarness,
       currentThinkingLevel,
       startStagedSession,
@@ -4791,12 +4825,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   };
   const draftRuntimeRef = useRef(draftRuntime);
   draftRuntimeRef.current = draftRuntime;
-  // Capability-driven picker locking: non-pi harnesses pin model/thinking after
-  // their first turn (see lib/sessionCapabilities.locksModelAfterStart).
-  const modelLocked = displaySession
-    ? locksModelAfterStart(displaySession) && runtimeHasStarted
-    : false;
-  const thinkingLocked = modelLocked;
   // The account the shown session runs on: fixed at its first prompt, the
   // staged pick before that. The inspector's Profile and the composer's
   // runtime line both state it.
@@ -4860,18 +4888,27 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     }
   };
   // A started session changes model only on its harness and bound account.
+  const displayAccountModels =
+    displayCredentialProfileId != null
+      ? credentialProfileModels[displayCredentialProfileId]
+      : undefined;
   const isModelDisabled = useCallback(
     (model: ModelOption) =>
-      modelLocked ||
       startedModelDisabled(
         {
           harness: displayHarness,
           started: runtimeHasStarted,
           account: displayCredentialProfile,
+          accountModels: displayAccountModels,
         },
         model,
       ),
-    [modelLocked, displayHarness, runtimeHasStarted, displayCredentialProfile],
+    [
+      displayHarness,
+      runtimeHasStarted,
+      displayCredentialProfile,
+      displayAccountModels,
+    ],
   );
   const sessionTasks = displaySession?.tasks ?? [];
   const relatedGlobalTasks = displaySession?.relatedGlobalTasks ?? [];
@@ -5586,6 +5623,122 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     () => ({ open: backgroundLedgeOpen, onToggle: toggleBackgroundLedge }),
     [backgroundLedgeOpen, toggleBackgroundLedge],
   );
+  // The Runtime section's control for the started session on screen, shared
+  // by the inspector and the composer's chip and `/model` `/effort` `/account`.
+  const displayPendingRuntime = displaySession?.pendingRuntime;
+  // A boolean, not the row: the row changes on every list broadcast, and the
+  // control reaches the composer, whose props stay stable by content.
+  const runtimeListed = displaySessionListItem !== undefined;
+  // This session's slices only: the maps are replaced for any session's change.
+  const runtimeTargets =
+    state.accountMoveTargets &&
+    state.accountMoveTargets.sessionId === displayCurrentId
+      ? state.accountMoveTargets
+      : undefined;
+  const runtimeHandoff =
+    state.handoffEstimate &&
+    state.handoffEstimate.sessionId === displayCurrentId
+      ? state.handoffEstimate.estimate
+      : undefined;
+  const runtimeBusy =
+    displayCurrentId !== undefined &&
+    displayCurrentId in state.runtimeChangePending;
+  const sessionRuntime = useMemo(
+    () =>
+      sessionRuntimeControl({
+        sessionId: displayCurrentId,
+        started: runtimeHasStarted && runtimeListed,
+        harness: displayHarness,
+        model: displaySession?.model,
+        thinkingLevel: displaySession?.thinkingLevel,
+        pending: displayPendingRuntime,
+        account: displayCredentialProfile,
+        accounts: credentialProfiles,
+        models: pickerModels,
+        targets: runtimeTargets?.targets,
+        handoff: runtimeHandoff,
+        busy: runtimeBusy,
+        actions,
+      }),
+    [
+      displayCurrentId,
+      runtimeHasStarted,
+      runtimeListed,
+      displayHarness,
+      displaySession?.model,
+      displaySession?.thinkingLevel,
+      displayPendingRuntime,
+      displayCredentialProfile,
+      credentialProfiles,
+      pickerModels,
+      runtimeTargets?.targets,
+      runtimeHandoff,
+      runtimeBusy,
+      actions,
+    ],
+  );
+  const runtimeCommands = useMemo(
+    () =>
+      sessionRuntime
+        ? {
+            control: sessionRuntime,
+            // The server's judgement of the next turn's target, the same
+            // list the inspector's account picker shows.
+            accountChoices: runtimeAccountChoices(
+              displayCredentialProfile,
+              displayPendingRuntime?.model ?? displaySession?.model,
+              sessionRuntime.accounts ? runtimeTargets : undefined,
+            ),
+            open: openRuntimeSection,
+          }
+        : undefined,
+    [
+      sessionRuntime,
+      displayCredentialProfile,
+      displayPendingRuntime?.model,
+      displaySession?.model,
+      runtimeTargets,
+      openRuntimeSection,
+    ],
+  );
+  // `/account`'s choices come from that server list, so it is asked for
+  // whenever anything it judges changes (`accountTargetsRefreshKey`).
+  const requestAccountTargets = sessionRuntime?.accounts?.onOpen;
+  const accountTargetsKey = requestAccountTargets
+    ? accountTargetsRefreshKey({
+        sessionId: displayCurrentId,
+        boundAccountId: displayCredentialProfile?.id,
+        model: displayPendingRuntime?.model ?? displaySession?.model,
+        thinkingLevel:
+          displayPendingRuntime?.thinkingLevel ?? displaySession?.thinkingLevel,
+        requiresEnterprise: displaySession?.requiresEnterprise === true,
+        profiles: credentialProfiles,
+        modelListings: credentialProfileModels,
+      })
+    : undefined;
+  const requestAccountTargetsRef = useRef(requestAccountTargets);
+  requestAccountTargetsRef.current = requestAccountTargets;
+  useEffect(() => {
+    if (accountTargetsKey !== undefined) requestAccountTargetsRef.current?.();
+  }, [accountTargetsKey]);
+  // The handoff estimate, while a change that switches engines is pending:
+  // asked again when what it measures changes, the log once per turn
+  // (`handoffEstimateRefreshKey`).
+  const requestHandoffEstimate = sessionRuntime?.engineSwitch?.onEstimate;
+  const handoffEstimateKey = requestHandoffEstimate
+    ? handoffEstimateRefreshKey({
+        sessionId: displayCurrentId,
+        pending: displayPendingRuntime,
+        messageCount: displaySessionListItem?.messageCount,
+        streaming: displaySessionListItem?.isStreaming === true,
+        profiles: credentialProfiles,
+      })
+    : undefined;
+  const requestHandoffEstimateRef = useRef(requestHandoffEstimate);
+  requestHandoffEstimateRef.current = requestHandoffEstimate;
+  useEffect(() => {
+    if (handoffEstimateKey !== undefined) requestHandoffEstimateRef.current?.();
+  }, [handoffEstimateKey]);
   const chat = useSessionChat({
     state,
     actions,
@@ -5614,6 +5767,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       pendingWorktreeReview?.draft ?? sessionReviewDraft ?? undefined,
     failureShownElsewhere: routeSessionFailure !== null,
     onReviewCommand: startReviewSessionForSession,
+    runtimeCommands,
   });
   const { queuePrompt, sessionCanSteer } = chat;
   const chatCommentSelection = chat.commentSelection;
@@ -6328,8 +6482,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         onRequestDictation: mobileLayout ? requestDictation : undefined,
         transcript: dictationTranscript,
         isModelDisabled,
-        modelLocked,
-        thinkingLocked,
         accountName: displayAccountName,
         selectedAgentType: showAgentTypePicker ? agentTypeForPicker : undefined,
         availableAgentTypes: showAgentTypePicker
@@ -6946,18 +7098,13 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         onRequireEnterprise={
           displaySessionListItem ? actions.requireSessionEnterprise : undefined
         }
-        accountMove={
-          displaySessionListItem && displayCurrentId
+        runtime={
+          sessionRuntime
             ? {
-                targets:
-                  state.accountMoveTargets?.sessionId === displayCurrentId
-                    ? state.accountMoveTargets.targets
-                    : undefined,
-                pending: displayCurrentId in state.accountMovePending,
-                onOpen: () =>
-                  actions.listSessionAccountMoveTargets(displayCurrentId),
-                onPick: (profileId) =>
-                  actions.moveSessionAccount(displayCurrentId, profileId),
+                ...sessionRuntime,
+                ...(runtimeRevealNonce
+                  ? { revealNonce: runtimeRevealNonce }
+                  : {}),
               }
             : undefined
         }

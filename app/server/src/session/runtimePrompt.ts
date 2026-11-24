@@ -52,6 +52,8 @@ import {
   moveOffDisabledAccount,
   prepareAccountRecoveryTurn,
 } from "../sessionAccountSwitch.ts";
+import { applyPendingRuntime } from "../sessionPendingRuntime.ts";
+import { owedSwitchContext } from "../sessionSwitchHandoff.ts";
 import {
   assertAccountRecoveryAdmission,
   type AccountRecoveryTicket,
@@ -408,42 +410,87 @@ async function deliverWithRuntime(
       await assertSkillInvocation(options, frozenSkills);
     assertTurnAllowed(driver.sessionId, options.resumeHold);
     assertRecoveryAdmission();
-    // An account recovery continuation has already chosen its account, and a
-    // steer-only message starts no turn.
-    const accountMove =
-      accountRecovery || options.steerOnly
-        ? undefined
-        : await moveOffDisabledAccount(driver, () => {
+    // The pending runtime selection applies to a NEW turn of any origin, ahead
+    // of the disabled-account move so the chosen account wins. A held target
+    // throws, keeping the selection and every lane's work.
+    const pendingSwitch = appliesPendingRuntime(
+      driver,
+      options,
+      accountRecovery,
+    )
+      ? await applyPendingRuntime(
+          driver,
+          () => {
             assertTurnAllowed(driver.sessionId, options.resumeHold);
             assertRecoveryAdmission();
+          },
+          () => ensureRuntimeSessionWithRuntime(runtime, driver),
+        )
+      : undefined;
+    // A selection naming another engine moved the session there; the turn
+    // runs on that engine's driver, and every refusal up to its commit puts
+    // the session back on its old binding.
+    const turnDriver = pendingSwitch?.driver ?? driver;
+    let accountMove: Awaited<ReturnType<typeof moveOffDisabledAccount>>;
+    try {
+      assertTurnAllowed(driver.sessionId, options.resumeHold);
+      assertRecoveryAdmission();
+      // An account recovery continuation has already chosen its account, and a
+      // steer-only message starts no turn. An applied pending selection already
+      // chose an eligible account; a move off it now would replace the chosen
+      // account, so its final check holds the turn instead.
+      accountMove =
+        accountRecovery || options.steerOnly || pendingSwitch
+          ? undefined
+          : await moveOffDisabledAccount(driver, () => {
+              assertTurnAllowed(driver.sessionId, options.resumeHold);
+              assertRecoveryAdmission();
+            });
+      // The settled account must be entitled to the session's model (and its
+      // pinned version) on the engine the turn runs on: refused here, before
+      // any run, the refusal is a local policy decision that never reaches
+      // the provider or account health. A target an applied selection chose
+      // is held instead, like every other refusal of it.
+      if (!options.steerOnly)
+        try {
+          await assertSessionModelEntitled({
+            sessionId: driver.sessionId,
+            credentialProfileId: turnDriver.credentialProfileId,
+            model: turnDriver.modelSelection?.()?.model,
           });
-    // The settled account must be entitled to the session's model (and its
-    // pinned version): refused here, before any run, the refusal is a local
-    // policy decision that never reaches the provider or account health.
-    if (!options.steerOnly)
-      await assertSessionModelEntitled({
-        sessionId: driver.sessionId,
-        credentialProfileId: driver.credentialProfileId,
-        model: driver.modelSelection?.()?.model,
-      });
-    assertTurnAllowed(driver.sessionId, options.resumeHold);
-    assertRecoveryAdmission();
-    // Nothing below awaits before the append. The enterprise check runs before
-    // `admit`, which must stay the last check: a peer admission reserves its
-    // delivery, and a refusal after that reservation could strand the prompt.
-    accountMove?.usable();
-    assertSessionEnterpriseAccount(driver);
-    // Setup may have finished while this send awaited above.
-    assertNotFinishedSetup(driver.sessionId);
-    admit?.();
-    const live = ensureRuntimeSessionWithRuntime(runtime, driver);
+        } catch (error) {
+          throw pendingSwitch ? pendingSwitch.refused(error) : error;
+        }
+      assertTurnAllowed(driver.sessionId, options.resumeHold);
+      assertRecoveryAdmission();
+      // Nothing below awaits before the append. The enterprise check runs before
+      // `admit`, which must stay the last check: a peer admission reserves its
+      // delivery, and a refusal after that reservation could strand the prompt.
+      pendingSwitch?.usable();
+      accountMove?.usable();
+      try {
+        assertSessionEnterpriseAccount(turnDriver);
+      } catch (error) {
+        throw pendingSwitch ? pendingSwitch.refused(error) : error;
+      }
+      // Setup may have finished while this send awaited above.
+      assertNotFinishedSetup(driver.sessionId);
+      admit?.();
+      // Admitted on the target: only now is the pending selection spent.
+      pendingSwitch?.commit();
+    } catch (error) {
+      await pendingSwitch?.abandon?.();
+      throw error;
+    }
+    const live = ensureRuntimeSessionWithRuntime(runtime, turnDriver);
+    if (pendingSwitch?.notice) live.appendNotice(pendingSwitch.notice);
     if (accountMove) live.appendNotice(accountMove.notice);
     prepareAccountRecoveryTurn(live, accountRecovery);
     return await runPromptWithRuntime(
       runtime,
-      driver,
+      turnDriver,
       text,
-      withHumanResume(options, receipt),
+      withHumanResume(withSwitchContext(turnDriver, options), receipt),
       excludedFromMemoryCapture,
       receipt,
     );
@@ -451,6 +498,44 @@ async function deliverWithRuntime(
     releaseAdmission();
     releaseRun();
   }
+}
+
+/**
+ * A new turn on an engine the session switched to carries the switch's
+ * handoff (`sessionSwitchHandoff.ts`) until that engine has replied once,
+ * ahead of any other model-only context. A steer joins a turn that already
+ * has it.
+ */
+function withSwitchContext<T extends RuntimePromptOptions>(
+  driver: RuntimePromptDriver,
+  options: T,
+): T {
+  if (options.steerOnly || (options.steer && driver.isRunning)) return options;
+  const handoff = owedSwitchContext(driver.sessionId);
+  if (!handoff) return options;
+  return {
+    ...options,
+    contextBlock: options.contextBlock
+      ? `${handoff}\n\n${options.contextBlock}`
+      : handoff,
+  };
+}
+
+/**
+ * Whether this prompt may apply the session's pending runtime selection
+ * (`sessionPendingRuntime.ts`). Every new turn does, whatever its origin,
+ * continuations included. Excluded by kind: a message into a RUNNING turn
+ * (a steer stays on the engine that turn started on), a steer-only message
+ * (it starts no turn), and the account-recovery continuation (failover
+ * finishing the same turn on another account of the same kind). A turn the
+ * provider starts itself (`beginRuntimeProviderTurn`) never comes here.
+ */
+function appliesPendingRuntime(
+  driver: RuntimePromptDriver,
+  options: RuntimePromptOptions,
+  accountRecovery: AccountRecoveryTicket | undefined,
+): boolean {
+  return !driver.isRunning && !options.steerOnly && !accountRecovery;
 }
 
 /**
@@ -481,7 +566,9 @@ async function assertSkillInvocation(
  * A message the user is sending right now lifts the Stop it was sent under
  * once it is APPENDED as a turn of its own: a refused send resumed nothing. A
  * steer does not count — a held session runs only the turn being stopped, and
- * a message aimed at that turn is not a resume. The token leaves the options
+ * a message aimed at that turn is not a resume. The user's "Continue on"
+ * (`sessionContinueOffer.ts`) is a continuation, which appends no row: it
+ * resumes once its turn reaches the provider. The token leaves the options
  * here, so it never reaches the runtime or the adapter.
  */
 function withHumanResume(
@@ -490,8 +577,9 @@ function withHumanResume(
 ): RuntimePromptFacadeOptions {
   const { resumeHold, ...rest } = options;
   if (!resumeHold || options.steer) return rest;
+  const resumesOn = options.continuation ? "provider-called" : "appended";
   receipt.observe((event) => {
-    if (event.type !== "appended") return;
+    if (event.type !== resumesOn) return;
     try {
       spendHumanResume(resumeHold);
     } catch (err) {

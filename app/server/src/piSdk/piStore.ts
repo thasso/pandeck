@@ -9,6 +9,7 @@
  */
 import {
   AGENT_TYPE_IDS,
+  isThinkingLevel,
   sessionModeOrDefault,
   type AgentType,
   type SessionMode,
@@ -32,10 +33,8 @@ import { subscribeIntegrationToolChanges } from "../integrationToolChanges.ts";
 import { registerSessionToolExposure } from "../tools/sessionToolExposure.ts";
 import type { LiveListInfo } from "../sessions.ts";
 import { sessionRuntime } from "../session/runtimeInstance.ts";
-import {
-  canonicalPiSessionPath,
-  migrateFileToCanonical,
-} from "../sessionStorage.ts";
+import { migrateFileToCanonical } from "../sessionStorage.ts";
+import { piSessionFile } from "../piSessionFile.ts";
 import {
   findLegacySessionFile,
   openExistingSession,
@@ -66,7 +65,8 @@ import { compatProviderFeed } from "./compatProviderFeed.ts";
 import { createPiHostedEngineFactory } from "./piEngineHosted.ts";
 import { serverPiModelPort } from "./piModelPort.ts";
 import { openRemotePiEngine } from "./remotePiEngine.ts";
-import { SessionHeldElsewhereError, type HarnessHost } from "../harness.ts";
+import { SessionSettlingError, type HarnessHost } from "../harness.ts";
+import { wakeSessionDelivery } from "../deliveryWake.ts";
 import {
   credentialProfileById,
   legacyDefaultProfileId,
@@ -90,6 +90,38 @@ export class PiSessionDeletedError extends Error {
     super(`Session ${sessionId} was deleted while it was opening.`);
     this.name = "PiSessionDeletedError";
   }
+}
+
+/**
+ * A harness switch found the session's earlier pi transcript but could not
+ * read it as this session's. The switching turn holds with this message rather than starting
+ * the session over on a fresh pi transcript.
+ */
+export class PiSwitchTranscriptError extends Error {
+  constructor(
+    readonly sessionId: string,
+    cause: unknown,
+  ) {
+    super(
+      `This session's earlier OpenAI transcript can't be opened (${cause instanceof Error ? cause.message : String(cause)}). Choose another model, or reset the change.`,
+      { cause },
+    );
+    this.name = "PiSwitchTranscriptError";
+  }
+}
+
+/** The pi binding a harness switch opens a session on. */
+interface PiSwitchBinding {
+  kind: AgentType;
+  /** The binding the switch's commit starts, which the session writes as. */
+  bindingSeq: number;
+  /** Resolved in the account's own registry when the engine opens. */
+  model: { provider: string; id: string };
+  thinkingLevel: ThinkingLevel;
+  credentialProfileId: string;
+  mode: SessionMode;
+  /** Where a first pi binding runs when the session has no worktree edge. */
+  cwd?: string;
 }
 
 /**
@@ -121,13 +153,14 @@ function sameIntegrationGates(
  */
 function piToolSessionFromHandle(
   kind: AgentType,
+  appId: string,
   engine: PiEngineHandle,
   cwd: string,
 ): ToolSession {
   const sessionFile = engine.sessionFile;
   const title = engine.sessionName;
   return {
-    sessionId: engine.sessionId,
+    sessionId: appId,
     harness: "pi",
     agentType: kind,
     cwd,
@@ -143,6 +176,8 @@ function piToolSessionFromHandle(
  */
 class PiSessionStore {
   private live = new Map<string, PiLiveSession>();
+  /** Sessions a switch could not release while they named themselves. */
+  private readonly wakeWhenSettled = new Set<string>();
   /**
    * Reopens in flight, by canonical file: two concurrent acquisitions of one
    * session (a rapid A→B→A, two tabs) must share ONE open. Without this both
@@ -166,8 +201,16 @@ class PiSessionStore {
     spec,
   ) => openRemotePiEngine(spec, (engine) => this.onEngineLost(engine));
   private host: HarnessHost | undefined;
-  /** Whether another engine holds an id resident; registration refuses it. */
-  private heldElsewhere: (id: string) => boolean = () => false;
+  /**
+   * Why an id may not register here now (`harnessRegistry`): another engine
+   * holds it, a switch is moving it, it is deleted. Asked after the open's
+   * last await, so nothing that changed while it opened is missed;
+   * `forSwitch` is the switch's own open, which the fence admits.
+   */
+  private registrationRefusal: (
+    id: string,
+    forSwitch: boolean,
+  ) => Error | undefined = () => undefined;
 
   constructor() {
     // Every live engine applies the gates the server sends it; it reads none.
@@ -184,9 +227,11 @@ class PiSessionStore {
     this.host = host;
   }
 
-  /** How to tell an id another engine holds resident (`harnessRegistry`). */
-  setHeldElsewhere(check: (id: string) => boolean): void {
-    this.heldElsewhere = check;
+  /** How to tell an id this store may not register now (`harnessRegistry`). */
+  setRegistrationCheck(
+    check: (id: string, forSwitch: boolean) => Error | undefined,
+  ): void {
+    this.registrationRefusal = check;
   }
 
   /**
@@ -194,7 +239,7 @@ class PiSessionStore {
    * legacy per-persona one a continuation could still reopen.
    */
   hasTranscript(id: string): boolean {
-    if (existsSync(canonicalPiSessionPath(id))) return true;
+    if (existsSync(piSessionFile(id))) return true;
     return LEGACY_KINDS.some(
       (kind) => findLegacySessionFile(kind, id) !== undefined,
     );
@@ -315,7 +360,7 @@ class PiSessionStore {
     // continuations survive after the legacy file has been folded away.
     const candidateId =
       expectedId ?? readSessionHeaderId(file) ?? sessionIdFromFile(file);
-    const canonical = candidateId ? canonicalPiSessionPath(candidateId) : file;
+    const canonical = candidateId ? piSessionFile(candidateId) : file;
 
     for (const ls of this.live.values()) {
       if (
@@ -350,6 +395,22 @@ class PiSessionStore {
         : undefined;
       const record = candidateId ? sessionStore.get(candidateId) : undefined;
       const profileId = record?.credentialProfileId ?? unboundPiProfileId();
+      // The current row binding beats the transcript's own last selection
+      // for a binding a harness switch started: until the new binding's
+      // first reply, the transcript still names the earlier pi binding's
+      // model. A first binding reopens on what its transcript selected.
+      const switched =
+        candidateId !== undefined &&
+        (sessionStore.activeBinding(candidateId)?.seq ?? 0) > 1;
+      const bound =
+        switched && record?.provider && record.model
+          ? {
+              model: { provider: record.provider, id: record.model },
+              ...(isThinkingLevel(record.thinkingLevel)
+                ? { thinkingLevel: record.thinkingLevel }
+                : {}),
+            }
+          : {};
       // A durable server record decides the mode; an unrecorded session is Build.
       const mode = sessionModeOrDefault(record?.mode);
       // The stored start records; an id-less legacy file freezes after.
@@ -367,6 +428,7 @@ class PiSessionStore {
           ...(candidateId !== undefined ? { expectedId: candidateId } : {}),
           ...(edgeCwd !== undefined ? { cwd: edgeCwd } : {}),
         },
+        ...bound,
         ...started,
         mode,
       });
@@ -382,13 +444,6 @@ class PiSessionStore {
         await opened.engine.discard({});
         throw new PiSessionDeletedError(id);
       }
-      // An id belongs to one engine: one the Claude store took while this
-      // transcript was opening stays Claude's. Only a reopen registers an id
-      // it did not mint, so this is the one place pi has to ask.
-      if (this.heldElsewhere(id)) {
-        await opened.engine.discard({});
-        throw new SessionHeldElsewhereError(id);
-      }
       // A file whose id was unreadable before the open freezes what it
       // resolved, under the id the open found; its transcript stays.
       if (candidateId === undefined) {
@@ -398,6 +453,16 @@ class PiSessionStore {
           await opened.engine.discard({});
           throw err;
         }
+      }
+      // An id belongs to one engine: one the Claude store took, a switch
+      // began moving, or the row's binding moved to Claude while this
+      // transcript was opening is not pi's to register. Only a reopen
+      // registers an id it did not mint, so this is the one place pi has to
+      // ask, after its last await.
+      const refused = this.registrationRefusal(id, false);
+      if (refused) {
+        await opened.engine.discard({});
+        throw refused;
       }
       this.sessionModes.set(id, mode);
       // Inside the shared open, so every owner of it waits for the catch-up.
@@ -436,10 +501,137 @@ class PiSessionStore {
             : agentType === "workflow-coordinator"
               ? "workflow-coordinator"
               : "assistant";
-    const canonical = canonicalPiSessionPath(id);
+    const canonical = piSessionFile(id);
     if (existsSync(canonical)) return this.acquireExisting(kind, canonical, id);
     const legacy = findLegacySessionFile(kind, id);
     return legacy ? this.acquireExisting(kind, legacy, id) : undefined;
+  }
+
+  /**
+   * Open `id` on the pi binding a harness switch chose
+   * (`docs/session-runtime-switching.md`), after the engine it leaves has
+   * released it. pi's native id is the app id for every pi binding: a return
+   * reopens the transcript an earlier pi binding wrote, and a first pi binding
+   * starts one under the app id. Prompt conditions, skills and the agent
+   * definition come from the session's frozen records, so pi builds its own
+   * prompt and tool surface from the same facts its earlier engine used. A
+   * transcript that is there but cannot be opened refuses with
+   * {@link PiSwitchTranscriptError}: the switch holds rather than start over.
+   */
+  async openForBinding(
+    id: string,
+    binding: PiSwitchBinding,
+  ): Promise<{ session: PiLiveSession; resumed: boolean }> {
+    if (this.getLiveById(id))
+      throw new Error(`Session ${id} is already open on pi.`);
+    const early = this.registrationRefusal(id, true);
+    if (early) throw early;
+    const { kind, credentialProfileId, mode } = binding;
+    const file = piSessionFile(id);
+    const resumes = existsSync(file);
+    const edgeCwd = await withCheckedCheckout(id, undefined, (checked) =>
+      worktreeCwdForSession(id, checked),
+    );
+    // A return must reopen this session's own transcript: one whose header
+    // cannot be read, or names another session, holds the switch instead of
+    // being started over. Model and account refusals surface as they are.
+    if (resumes && readSessionHeaderId(file) !== id)
+      throw new PiSwitchTranscriptError(
+        id,
+        new Error("its header is missing or names another session"),
+      );
+    const started = await resolvePiEngineStart({
+      kind,
+      credentialProfileId,
+      knownId: id,
+    });
+    const opened = await this.openEngine({
+      kind,
+      credentialProfileId,
+      transcript: resumes
+        ? {
+            type: "open",
+            file,
+            expectedId: id,
+            ...(edgeCwd !== undefined ? { cwd: edgeCwd } : {}),
+          }
+        : { type: "new", cwd: edgeCwd ?? binding.cwd ?? CWD, id },
+      model: { provider: binding.model.provider, id: binding.model.id },
+      thinkingLevel: binding.thinkingLevel,
+      ...started,
+      mode,
+      ...(resumes ? {} : { canonicalize: true }),
+    });
+    if (opened.info.sessionId !== id) {
+      await opened.engine.discard(resumes ? {} : { removeFile: {} });
+      throw new Error(
+        `pi opened session ${opened.info.sessionId} for ${id}; it was not switched.`,
+      );
+    }
+    if (sessionStore.getIncludingDeleted(id)?.deletedAt !== undefined) {
+      closeToolGroupSession(id);
+      await opened.engine.discard(resumes ? {} : { removeFile: {} });
+      throw new PiSessionDeletedError(id);
+    }
+    // Asked again after the open's awaits: Claude may have taken the id back
+    // meanwhile, or pi registered it through another path.
+    const late = this.getLiveById(id)
+      ? new Error(`Session ${id} is already open on pi.`)
+      : this.registrationRefusal(id, true);
+    if (late) {
+      await opened.engine.discard(resumes ? {} : { removeFile: {} });
+      throw late;
+    }
+    this.sessionModes.set(id, mode);
+    return {
+      session: await this.catchUpIntegrationGates(
+        this.track(
+          kind,
+          opened,
+          credentialProfileId,
+          sessionStore.get(id)?.scope,
+          undefined,
+          binding.bindingSeq,
+        ),
+        started.integrationGates,
+      ),
+      // What the open did, not what the plan expected: a transcript that was
+      // gone started over, and gets the whole handoff.
+      resumed: resumes,
+    };
+  }
+
+  /**
+   * Release a session a harness switch moves to another engine. pi's
+   * background work does not hold it: it runs on under its frozen identity and
+   * reaches the session on its next engine. The runtime session stays,
+   * DETACHED, for that engine (`SessionRuntime.detachHarness`). `admit` is the
+   * switching turn's admission, whose reservation is the one thing allowed to
+   * keep the session busy. Nothing resident: nothing to do.
+   */
+  async releaseForSwitch(id: string, admit: () => void): Promise<void> {
+    const ls = this.getLiveById(id);
+    if (!ls) return;
+    admit();
+    if (ls.isRunning || ls.engine.isStreaming)
+      throw new Error(
+        "The pi session is still running a turn; it was not switched.",
+      );
+    if (ls.isNaming) {
+      // Work of the session's own that ends by itself: the switching turn
+      // holds, and its end offers the held work again. Released now, the
+      // naming run would append to a transcript the next engine reopens.
+      this.wakeWhenSettled.add(id);
+      throw new SessionSettlingError(id);
+    }
+    // A run opened in the meantime refuses here, before anything is dropped.
+    const detached = sessionRuntime.detachHarness(ls.key);
+    this.live.delete(ls.key);
+    this.requireHost().sessionRowsChanged([ls.key]);
+    ls.dispose();
+    this.closeAppTools(ls.key);
+    this.sessionModes.delete(ls.key);
+    await detached;
   }
 
   /**
@@ -455,10 +647,10 @@ class PiSessionStore {
 
   /** A resident live session for our id, without loading anything from disk. */
   getLiveById(id: string): PiLiveSession | undefined {
-    // pi live sessions are keyed by id, not by our id directly,
-    // so scan for a resident one whose pi sessionId matches.
+    // pi live sessions are keyed by file, not by our id directly,
+    // so scan for a resident one whose app id matches.
     for (const ls of this.live.values()) {
-      if (ls.engine.sessionId === id) return ls;
+      if (ls.appId === id) return ls;
     }
     return undefined;
   }
@@ -480,6 +672,11 @@ class PiSessionStore {
     nativeEntryId: string,
     position: "before" | "at",
     originEntryId: string,
+    /**
+     * For a session that switched engines, the account of the pi binding
+     * being cut, in place of the row's (the active binding's).
+     */
+    cut: { credentialProfileId?: string | undefined } = {},
   ): Promise<PiLiveSession> {
     for (const ls of this.live.values()) {
       if (ls.kind === kind && ls.engine.sessionFile === file && ls.isRunning) {
@@ -494,7 +691,9 @@ class PiSessionStore {
       throw new Error("Cannot fork: source session has no id.");
     const parentMeta = sessionStore.getIncludingDeleted(parentSessionId);
     const credentialProfileId =
-      parentMeta?.credentialProfileId ?? unboundPiProfileId();
+      ("credentialProfileId" in cut
+        ? cut.credentialProfileId
+        : parentMeta?.credentialProfileId) ?? unboundPiProfileId();
     const requiresEnterprise = sourceRequiresEnterprise([parentSessionId]);
     const ensureEnterpriseAccount = () => {
       if (
@@ -662,9 +861,14 @@ class PiSessionStore {
     credentialProfileId: string,
     scope?: SessionScope,
     requiresEnterprise?: boolean,
+    /** A switch's target writes as the binding its commit starts. */
+    switchBindingSeq?: number,
   ): PiLiveSession {
     const { engine, info } = opened;
     const id = info.sessionId;
+    // The binding this instance runs: the active one, or a session's first.
+    const bindingSeq =
+      switchBindingSeq ?? sessionStore.activeBinding(id)?.seq ?? 1;
     // The scope is claimed BEFORE the live map can hand this session to the
     // session list: a not-yet-persisted live row is treated as the user's
     // everywhere, so a session that is not may never reach the registry first.
@@ -730,7 +934,11 @@ class PiSessionStore {
           dispose: () => replacement.discard({}),
         };
       },
+      bindingSeq,
     );
+    ls.onNamingSettled = () => {
+      if (this.wakeWhenSettled.delete(id)) wakeSessionDelivery(id);
+    };
     this.live.set(ls.key, ls);
     // A live row overlays the persisted one (`listInfo`).
     this.requireHost().sessionRowsChanged([ls.key]);
@@ -835,7 +1043,7 @@ class PiSessionStore {
       piAppToolBinding(
         withoutDeniedTools(AGENT_TYPES[kind].tools(), sessionAgent(id)),
         {
-          session: () => piToolSessionFromHandle(kind, engine, cwd),
+          session: () => piToolSessionFromHandle(kind, id, engine, cwd),
           unavailableReason: (tool) =>
             (this.sessionModes.get(id) ?? "build") === "plan" &&
             !isPlanModeToolAllowed(tool)
@@ -909,7 +1117,7 @@ class PiSessionStore {
       entries = live.engine.transcript.getEntries() as typeof entries;
     } else {
       try {
-        const file = canonicalPiSessionPath(sessionId);
+        const file = piSessionFile(sessionId);
         if (!existsSync(file)) return undefined;
         const sm = await openExistingSession(kind, file, {
           expectedId: sessionId,

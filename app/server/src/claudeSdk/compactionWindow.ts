@@ -119,6 +119,15 @@ export class ClaudeCompactionWindow {
     this.epoch = undefined;
   }
 
+  /**
+   * The selected model changed. A retained process's reported threshold was
+   * the old model's, so it is dropped: the agent path reads it again before
+   * bounding a lower window by it. The start value and switch still hold.
+   */
+  modelChanged(): void {
+    if (this.epoch) delete this.epoch.trigger;
+  }
+
   /** The CLI's context report for an epoch: display and the agent's check. */
   usageReported(epochKey: string, usage: ContextUsage): void {
     const epoch = this.epoch;

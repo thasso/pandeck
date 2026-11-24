@@ -20,6 +20,8 @@ import {
   type AgentType,
   DEFAULT_SESSION_SCOPE,
   isSessionPeerTurnCap,
+  parsePendingRuntime,
+  samePendingRuntime,
   sessionModeOrDefault,
   sessionScopeOrFailClosed,
   type Harness,
@@ -28,13 +30,28 @@ import {
   type SessionMode,
   type SessionOutcomeAttention,
   type SessionOutcomeKind,
+  type SessionContinueChoice,
+  type SessionPendingRuntime,
+  type SessionRunFailure,
   type SessionScope,
   type SettableSpawnOwnership,
   type SpawnOwnership,
+  THINKING_LEVELS,
 } from "@assistant/shared";
 import type { AgentUsage } from "@assistant/shared/session";
 import { randomUUID } from "node:crypto";
-import { getDb } from "./index.ts";
+import { getDb, inDbTransaction } from "./index.ts";
+import {
+  activeBinding,
+  bindings,
+  combineUsage,
+  stampBindingRun,
+  startNextBinding,
+  syncActiveBinding,
+  syncActiveBindingAccount,
+  type ActiveBindingFields,
+  type UsageCounters,
+} from "./sessionEngineBinding.ts";
 import { touchSessionRows } from "./sessionListChanges.ts";
 
 /**
@@ -135,6 +152,11 @@ export interface SessionMeta {
    */
   compactionWindow?: number;
   compactionWindowNote?: string;
+  /**
+   * The model, effort and account the next turn starts on. Only
+   * {@link setPendingRuntime} writes it (`docs/session-runtime-switching.md`).
+   */
+  pendingRuntime?: SessionPendingRuntime;
   archivedAt?: number;
   /**
    * When the user last settled this session out of the Sessions inbox working
@@ -153,8 +175,12 @@ export interface SessionMeta {
    * directly owned session raises revisions ({@link recordSessionOutcome}).
    */
   outcomeAttention?: SessionOutcomeAttention;
-  /** The last run failure, cleared the moment a new run starts. */
-  lastError?: { at: number; message: string };
+  /**
+   * The last run failure, cleared the moment a new run starts, with the
+   * "Continue on" offer a terminal quota or rate-limit failure carries
+   * (`sessionContinueOffer.ts`).
+   */
+  lastError?: SessionRunFailure;
   /**
    * When a turn was cut off mid-flight by the process dying. NOT a failure: the
    * work is waiting to be continued. Cleared the moment a new run starts.
@@ -173,7 +199,10 @@ export interface SessionMeta {
  * (`id`, `harness`, `agentType`) is required; every other field is MERGED —
  * omitting one preserves the stored value rather than nulling it. This is the
  * key contract that lets, say, a title refresh not wipe the model, and a learned
- * provider binding not wipe the title.
+ * provider binding not wipe the title. The active binding's native id, model and
+ * effort also take `null`, which CLEARS the stored value: an engine whose
+ * session no longer has one (a Claude `/clear` forgets its native session) says
+ * so, or the binding would hand the old one back on reopen.
  */
 interface SessionUpsert {
   id: string;
@@ -192,18 +221,26 @@ interface SessionUpsert {
   updatedAt?: number;
   messageCount?: number;
   provider?: string;
-  providerSessionId?: string;
-  model?: string;
-  thinkingLevel?: string;
+  providerSessionId?: string | null;
+  model?: string | null;
+  thinkingLevel?: string | null;
   credentialProfileId?: string;
   requiresEnterprise?: boolean;
   peerTurnCap?: number;
   mode?: SessionMode;
   forkOrigin?: SessionForkOrigin;
   forkAutoRenamePending?: boolean;
+  /**
+   * The engine binding (`seq`) the writing engine instance was opened for.
+   * A write for any binding but the active one is foreign: a switch's target
+   * before its commit (the next seq), or an instance of the binding a switch
+   * left (an older seq), even on the same harness. Absent for writes that are
+   * not an engine instance's, and for a session's first write.
+   */
+  bindingSeq?: number;
 }
 
-interface SessionUsageTotals {
+export interface SessionUsageTotals {
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
@@ -242,6 +279,7 @@ interface DbSessionRow {
   mode: string;
   compaction_window: number | null;
   compaction_window_note: string | null;
+  pending_runtime: string | null;
   archived_at_ms: number | null;
   settled_at_ms: number | null;
   inbox_position: number | null;
@@ -251,12 +289,41 @@ interface DbSessionRow {
   attention_at_ms: number | null;
   last_error_at_ms: number | null;
   last_error_text: string | null;
+  last_error_continue_json: string | null;
+  last_error_run_id: string | null;
   interrupted_run_at_ms: number | null;
   interrupted_run_json: string | null;
   read_at_ms: number;
   fork_origin_json: string | null;
   fork_auto_rename_pending: number;
   deleted_at_ms: number | null;
+}
+
+/** A stored offer, or nothing: an unreadable one offers no choice. */
+function continueChoicesField(raw: string | null): {
+  continueOn?: SessionContinueChoice[];
+} {
+  if (!raw) return {};
+  try {
+    const value = JSON.parse(raw) as unknown;
+    if (
+      Array.isArray(value) &&
+      value.length > 0 &&
+      value.every(
+        (choice: Partial<SessionContinueChoice> | null) =>
+          typeof choice?.provider === "string" &&
+          typeof choice.id === "string" &&
+          typeof choice.name === "string" &&
+          (THINKING_LEVELS as readonly unknown[]).includes(
+            choice.thinkingLevel,
+          ),
+      )
+    )
+      return { continueOn: value as SessionContinueChoice[] };
+  } catch {
+    // An unreadable offer is no offer.
+  }
+  return {};
 }
 
 function fromRow(row: DbSessionRow): SessionMeta {
@@ -291,6 +358,7 @@ function fromRow(row: DbSessionRow): SessionMeta {
     ...(row.compaction_window_note !== null
       ? { compactionWindowNote: row.compaction_window_note }
       : {}),
+    ...pendingRuntimeFields(row.pending_runtime),
     ...(row.archived_at_ms !== null ? { archivedAt: row.archived_at_ms } : {}),
     ...(row.settled_at_ms !== null ? { settledAt: row.settled_at_ms } : {}),
     ...(row.inbox_position !== null
@@ -301,7 +369,11 @@ function fromRow(row: DbSessionRow): SessionMeta {
       : {}),
     ...(row.last_error_at_ms !== null && row.last_error_text
       ? {
-          lastError: { at: row.last_error_at_ms, message: row.last_error_text },
+          lastError: {
+            at: row.last_error_at_ms,
+            message: row.last_error_text,
+            ...continueChoicesField(row.last_error_continue_json),
+          },
         }
       : {}),
     ...interruptedRunFields(row),
@@ -449,48 +521,100 @@ function upsert(input: SessionUpsert): boolean {
       input.forkOrigin !== undefined
         ? JSON.stringify(input.forkOrigin)
         : (prev?.fork_origin_json ?? null);
-    getDb()
-      .prepare(upsertSql)
-      .run(
-        input.id,
-        // Scope is INSERT-ONLY, like createdAt: the
-        // first stored value owns the row for its life. A later write can never
-        // reclassify a session — not by stating a different scope, and not by
-        // omitting one — because the access policy built on it (Task-477) would
-        // otherwise be one stray metadata refresh away from being wrong.
-        prev
-          ? sessionScopeOrFailClosed(prev.scope)
-          : (input.scope ?? DEFAULT_SESSION_SCOPE),
-        pick(input.purpose, prev?.purpose, "chat"),
-        input.harness,
-        input.agentType,
-        pick(input.title, prev?.title, "New chat"),
-        // createdAt is insert-only: the first stored value always wins so an update
-        // can never move a session's creation time.
-        prev?.created_at_ms ?? input.createdAt ?? now,
-        pick(input.updatedAt, prev?.updated_at_ms, now),
-        pick(input.messageCount, prev?.message_count, 0),
-        input.provider !== undefined
-          ? input.provider
-          : (prev?.provider ?? null),
-        input.providerSessionId !== undefined
-          ? input.providerSessionId
-          : (prev?.provider_session_id ?? null),
-        input.model !== undefined ? input.model : (prev?.model ?? null),
-        input.thinkingLevel !== undefined
-          ? input.thinkingLevel
-          : (prev?.thinking_level ?? null),
-        // Ordinary metadata refreshes cannot change the current binding.
-        // Live failover uses switchCredentialProfile's compare-and-set.
-        prev?.credential_profile_id ?? input.credentialProfileId ?? null,
-        prev?.requires_enterprise ?? (input.requiresEnterprise ? 1 : 0),
-        sessionModeOrDefault(input.mode ?? prev?.mode),
-        forkOriginJson,
-        (input.forkAutoRenamePending ?? Boolean(prev?.fork_auto_rename_pending))
-          ? 1
-          : 0,
-        input.peerTurnCap ?? prev?.peer_turn_cap ?? null,
-      );
+    // An engine instance that does not hold the session's active binding (a
+    // late persist from the engine a harness switch closed, or the target
+    // before the switch commits, whatever their harness) keeps its other
+    // fields but never rewrites the projection: only the switch itself moves
+    // a session between engines (`docs/session-runtime-switching.md` "Engine
+    // bindings").
+    const foreign =
+      prev !== undefined &&
+      (prev.harness !== input.harness ||
+        (input.bindingSeq !== undefined &&
+          input.bindingSeq !== activeBinding(input.id)?.seq));
+    // The active engine binding's projection, merged once and written to both
+    // the row and the binding in one transaction (`sessionEngineBinding.ts`).
+    const binding: ActiveBindingFields = foreign
+      ? {
+          harness: prev.harness,
+          provider: prev.provider,
+          providerSessionId: prev.provider_session_id,
+          model: prev.model,
+          thinkingLevel: prev.thinking_level,
+          credentialProfileId: prev.credential_profile_id,
+        }
+      : {
+          harness: input.harness,
+          provider:
+            input.provider !== undefined
+              ? input.provider
+              : (prev?.provider ?? null),
+          providerSessionId:
+            input.providerSessionId !== undefined
+              ? input.providerSessionId
+              : (prev?.provider_session_id ?? null),
+          model:
+            input.model !== undefined ? input.model : (prev?.model ?? null),
+          thinkingLevel:
+            input.thinkingLevel !== undefined
+              ? input.thinkingLevel
+              : (prev?.thinking_level ?? null),
+          // Ordinary metadata refreshes cannot change the current account.
+          // Live failover uses switchCredentialProfile's compare-and-set.
+          credentialProfileId:
+            prev?.credential_profile_id ?? input.credentialProfileId ?? null,
+        };
+    const createdAt = prev?.created_at_ms ?? input.createdAt ?? now;
+    // A foreign engine's figures describe only its own native stretch, so its
+    // title, activity and message count stay as they are. The active engine
+    // after a switch counts only what it ran, so it may raise the count but
+    // never lower it: 0 would hide a started session from the list.
+    const messageCount = foreign
+      ? prev.message_count
+      : input.messageCount !== undefined &&
+          prev !== undefined &&
+          input.messageCount < prev.message_count &&
+          (activeBinding(input.id)?.seq ?? 1) > 1
+        ? prev.message_count
+        : input.messageCount;
+    inDbTransaction(() => {
+      getDb()
+        .prepare(upsertSql)
+        .run(
+          input.id,
+          // Scope is INSERT-ONLY, like createdAt: the
+          // first stored value owns the row for its life. A later write can never
+          // reclassify a session — not by stating a different scope, and not by
+          // omitting one — because the access policy built on it (Task-477) would
+          // otherwise be one stray metadata refresh away from being wrong.
+          prev
+            ? sessionScopeOrFailClosed(prev.scope)
+            : (input.scope ?? DEFAULT_SESSION_SCOPE),
+          pick(input.purpose, prev?.purpose, "chat"),
+          binding.harness,
+          input.agentType,
+          pick(foreign ? undefined : input.title, prev?.title, "New chat"),
+          // createdAt is insert-only: the first stored value always wins so an update
+          // can never move a session's creation time.
+          createdAt,
+          pick(foreign ? undefined : input.updatedAt, prev?.updated_at_ms, now),
+          pick(messageCount, prev?.message_count, 0),
+          binding.provider,
+          binding.providerSessionId,
+          binding.model,
+          binding.thinkingLevel,
+          binding.credentialProfileId,
+          prev?.requires_enterprise ?? (input.requiresEnterprise ? 1 : 0),
+          sessionModeOrDefault(input.mode ?? prev?.mode),
+          forkOriginJson,
+          (input.forkAutoRenamePending ??
+            Boolean(prev?.fork_auto_rename_pending))
+            ? 1
+            : 0,
+          input.peerTurnCap ?? prev?.peer_turn_cap ?? null,
+        );
+      if (!foreign) syncActiveBinding(input.id, binding, createdAt);
+    });
     if (!prev) noteLiveness([input.id]);
     else touchSessionRows([input.id]);
     return true;
@@ -543,17 +667,94 @@ function switchCredentialProfile(
   next: string,
   options: { requireEnterprise?: true } = {},
 ): void {
-  const result = getDb()
-    .prepare(
-      options.requireEnterprise
-        ? "UPDATE session_index SET credential_profile_id = ?, requires_enterprise = 1 WHERE id = ? AND credential_profile_id = ? AND deleted_at_ms IS NULL"
-        : "UPDATE session_index SET credential_profile_id = ? WHERE id = ? AND credential_profile_id = ? AND deleted_at_ms IS NULL",
-    )
-    .run(next, id, previous);
-  if (result.changes !== 1)
-    throw new Error(
-      "The session's account changed or the session was deleted during the switch.",
+  inDbTransaction(() => {
+    const result = getDb()
+      .prepare(
+        options.requireEnterprise
+          ? "UPDATE session_index SET credential_profile_id = ?, requires_enterprise = 1 WHERE id = ? AND credential_profile_id = ? AND deleted_at_ms IS NULL"
+          : "UPDATE session_index SET credential_profile_id = ? WHERE id = ? AND credential_profile_id = ? AND deleted_at_ms IS NULL",
+      )
+      .run(next, id, previous);
+    if (result.changes !== 1)
+      throw new Error(
+        "The session's account changed or the session was deleted during the switch.",
+      );
+    syncActiveBindingAccount(id, next);
+  });
+  touchSessionRows([id]);
+}
+
+/** What {@link switchEngineBinding} commits. */
+interface EngineBindingSwitch {
+  /** The active binding the switch started from. */
+  expectSeq: number;
+  /** The new binding, projected onto the row. */
+  fields: ActiveBindingFields;
+  /** The engine's own id for it: pi's app id, Claude's resumed id or none. */
+  nativeSessionId: string | null;
+  /** The session log's seq cursor at the switch. */
+  startedSeq: number;
+  /** The earlier binding whose native session the open reopened; none when fresh. */
+  resumedSeq?: number;
+  /** The pending selection the switch applied, cleared when still stored. */
+  pending: SessionPendingRuntime;
+  /**
+   * What the target engine's own counter already holds when that engine
+   * reports its running native total (Claude: the record it opened, a
+   * return's earlier usage included); null when it counts run by run (pi).
+   * The new binding then counts on top of the session's totals less this.
+   */
+  nativeUsage: UsageCounters | null;
+}
+
+/**
+ * The cross-harness switch's commit (`docs/session-runtime-switching.md`):
+ * end the active binding, start the next one, project it onto the row and
+ * compare-and-clear the pending selection the switch applied, in ONE
+ * transaction. Throws, changing nothing, when the session was deleted or its
+ * active binding is no longer `expectSeq`.
+ */
+function switchEngineBinding(id: string, change: EngineBindingSwitch): void {
+  const { fields } = change;
+  inDbTransaction(() => {
+    const row = getDb()
+      .prepare(
+        "SELECT pending_runtime FROM session_index WHERE id = ? AND deleted_at_ms IS NULL",
+      )
+      .get(id) as { pending_runtime: string | null } | undefined;
+    if (!row) throw new Error("The session was not found or has been deleted.");
+    startNextBinding(
+      id,
+      change.expectSeq,
+      fields,
+      change.nativeSessionId,
+      change.startedSeq,
+      change.resumedSeq ?? null,
+      change.nativeUsage
+        ? combineUsage(getUsageTotals(id) ?? NO_USAGE, change.nativeUsage, -1)
+        : null,
+      Date.now(),
     );
+    const stored = pendingRuntimeFields(row.pending_runtime).pendingRuntime;
+    getDb()
+      .prepare(
+        `UPDATE session_index
+            SET harness = ?, credential_profile_id = ?, provider = ?, model = ?,
+                thinking_level = ?, provider_session_id = ?,
+                pending_runtime = CASE WHEN ? THEN NULL ELSE pending_runtime END
+          WHERE id = ?`,
+      )
+      .run(
+        fields.harness,
+        fields.credentialProfileId,
+        fields.provider,
+        fields.model,
+        fields.thinkingLevel,
+        fields.providerSessionId,
+        samePendingRuntime(stored, change.pending) ? 1 : 0,
+        id,
+      );
+  });
   touchSessionRows([id]);
 }
 
@@ -574,6 +775,48 @@ function setCompactionWindow(
     .run(tokens, note ?? null, id);
   if (result.changes !== 1)
     throw new Error("The session was not found or has been deleted.");
+}
+
+/** A stored pending selection; an unreadable one reads as none. */
+function pendingRuntimeFields(json: string | null): {
+  pendingRuntime?: SessionPendingRuntime;
+} {
+  if (json === null) return {};
+  try {
+    const pendingRuntime = parsePendingRuntime(JSON.parse(json));
+    return pendingRuntime ? { pendingRuntime } : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * The one writer of the pending runtime selection (`null` clears it),
+ * THROWING when no live row changed. Reports the row to the session list.
+ */
+function setPendingRuntime(
+  id: string,
+  pending: SessionPendingRuntime | null,
+): void {
+  const result = getDb()
+    .prepare(
+      "UPDATE session_index SET pending_runtime = ? WHERE id = ? AND deleted_at_ms IS NULL",
+    )
+    .run(pending ? JSON.stringify(pending) : null, id);
+  if (result.changes !== 1)
+    throw new Error("The session was not found or has been deleted.");
+  touchSessionRows([id]);
+}
+
+/** Live sessions that have a pending runtime selection. */
+function sessionIdsWithPendingRuntime(): string[] {
+  return (
+    getDb()
+      .prepare(
+        "SELECT id FROM session_index WHERE pending_runtime IS NOT NULL AND deleted_at_ms IS NULL",
+      )
+      .all() as { id: string }[]
+  ).map(({ id }) => id);
 }
 
 /**
@@ -999,8 +1242,15 @@ function isSettled(id: string): boolean {
  * Record the last run failure so a failed session is visible in the Sessions
  * inbox without opening it. The message is bounded here (not at the call site)
  * so no caller can persist a whole stack trace into the list projection.
+ * `runId` names the run whose error this is; a failure no run owns (a pending
+ * selection's hold) has none, so no run's offer can attach to it.
  */
-function recordRunFailure(id: string, message: string, ts = Date.now()): void {
+function recordRunFailure(
+  id: string,
+  message: string,
+  ts = Date.now(),
+  runId?: string,
+): void {
   try {
     const text = message
       .trim()
@@ -1008,9 +1258,9 @@ function recordRunFailure(id: string, message: string, ts = Date.now()): void {
       .slice(0, MAX_RUN_FAILURE_CHARS);
     getDb()
       .prepare(
-        "UPDATE session_index SET last_error_at_ms = ?, last_error_text = ? WHERE id = ? AND deleted_at_ms IS NULL",
+        "UPDATE session_index SET last_error_at_ms = ?, last_error_text = ?, last_error_continue_json = NULL, last_error_run_id = ? WHERE id = ? AND deleted_at_ms IS NULL",
       )
-      .run(ts, text || "The agent run failed.", id);
+      .run(ts, text || "The agent run failed.", runId ?? null, id);
     touchSessionRows([id]);
   } catch {
     // best-effort mirror
@@ -1059,11 +1309,36 @@ function clearInterruptedRun(id: string): void {
   }
 }
 
+/**
+ * Put the "Continue on" offer beside the failure it belongs to: only while
+ * the row's failure is the one run `runId` ended with, never a newer run's, a
+ * failure no run owns, or a row a run start cleared meanwhile. Answers whether
+ * it was written.
+ */
+function recordContinueOffer(
+  id: string,
+  runId: string,
+  choices: SessionContinueChoice[],
+): boolean {
+  try {
+    const written = getDb()
+      .prepare(
+        "UPDATE session_index SET last_error_continue_json = ? WHERE id = ? AND deleted_at_ms IS NULL AND last_error_at_ms IS NOT NULL AND last_error_run_id = ?",
+      )
+      .run(choices.length ? JSON.stringify(choices) : null, id, runId);
+    if (written.changes === 0) return false;
+    touchSessionRows([id]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function clearRunFailure(id: string): void {
   try {
     getDb()
       .prepare(
-        "UPDATE session_index SET last_error_at_ms = NULL, last_error_text = NULL WHERE id = ? AND deleted_at_ms IS NULL",
+        "UPDATE session_index SET last_error_at_ms = NULL, last_error_text = NULL, last_error_continue_json = NULL, last_error_run_id = NULL WHERE id = ? AND deleted_at_ms IS NULL",
       )
       .run(id);
     touchSessionRows([id]);
@@ -1123,6 +1398,8 @@ function dismissRunFailure(
         `UPDATE session_index
             SET last_error_at_ms = NULL,
                 last_error_text = NULL,
+                last_error_continue_json = NULL,
+                last_error_run_id = NULL,
                 settled_at_ms = CASE WHEN ${PENDING_FAILED_OUTCOME}
                   THEN NULL ELSE settled_at_ms END,
                 attention_settled_revision = CASE WHEN ${PENDING_FAILED_OUTCOME}
@@ -1941,6 +2218,41 @@ function recordUsageTurn(
   }
 }
 
+const NO_USAGE: UsageCounters = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+  reasoningTokens: 0,
+  totalTokens: 0,
+  usageTurns: 0,
+  assistantTurns: 0,
+};
+
+/**
+ * Write the running native total an engine instance of binding `bindingSeq`
+ * reports as the session's usage, over the usage base the active binding
+ * counts on top of: a session's totals are the sum over all its bindings
+ * (`docs/session-runtime-switching.md` "Usage"). An instance of any other
+ * binding writes nothing (a switch's target before its commit, one a switch
+ * left after it); `bindingSeq` undefined is the active binding's.
+ */
+function replaceEngineUsage(
+  sessionId: string,
+  bindingSeq: number | undefined,
+  native: SessionUsageTotals,
+): void {
+  inDbTransaction(() => {
+    const active = activeBinding(sessionId);
+    if (bindingSeq !== undefined && active && active.seq !== bindingSeq) return;
+    const base = active?.usageBase;
+    replaceUsage(
+      sessionId,
+      base ? { ...native, ...combineUsage(base, native, 1) } : native,
+    );
+  });
+}
+
 function replaceUsage(sessionId: string, totals: SessionUsageTotals): void {
   getDb()
     .prepare(
@@ -2158,8 +2470,14 @@ export const sessionStore = {
   upsert,
   setPeerTurnCap,
   switchCredentialProfile,
+  switchEngineBinding,
+  stampBindingRun,
+  activeBinding,
+  bindings,
   requireEnterprise,
   setCompactionWindow,
+  setPendingRuntime,
+  sessionIdsWithPendingRuntime,
   markDeleted,
   remove,
   markRead,
@@ -2176,6 +2494,7 @@ export const sessionStore = {
   worktreeMissingAck,
   worktreeMissingAckBySession,
   recordRunFailure,
+  recordContinueOffer,
   clearRunFailure,
   dismissRunFailure,
   recordInterruptedRun,
@@ -2198,5 +2517,6 @@ export const sessionStore = {
   spawnGrantAncestors,
   recordUsageTurn,
   replaceUsage,
+  replaceEngineUsage,
   createInternalUsageSession,
 };

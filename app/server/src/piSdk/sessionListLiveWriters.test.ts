@@ -38,6 +38,10 @@ const { createSession } = await import("../harnesses/create.ts");
 const { HARNESS_IDLE_EVICT_MS } = await import("../harness.ts");
 const { installSessionActivityTracking } =
   await import("../sessionActivity.ts");
+const { prepareEngineSwitch } = await import("../harnesses/engineSwitch.ts");
+const { isSwitchingEngines } =
+  await import("../harnesses/engineSwitchFence.ts");
+const { setDeliveryWake } = await import("../deliveryWake.ts");
 const stopTracking = installSessionActivityTracking();
 updateSettings({
   sessionNaming: { ...getSettings().sessionNaming, enabled: false },
@@ -910,3 +914,100 @@ test.each([
       assert.equal(sessionRuntime.get(live.id), undefined);
   },
 );
+
+test("Pi engine-switch release and reopen on a binding report the live overlay", async () => {
+  interceptPi();
+  const profile = account("openai-codex");
+  const live = await freshPi(profile);
+  ensureRuntimeSessionWithRuntime(sessionRuntime, live);
+  await sessionRuntime.prompt(live.id, "before the switch");
+  await oracle(
+    "PiStore.releaseForSwitch",
+    () => piStore.releaseForSwitch(live.id, () => {}),
+    { changed: [live.id] },
+  );
+  assert.equal(piStore.get(live.id), undefined);
+  assert.equal(sessionRuntime.get(live.id)?.isDetached, true);
+  // A return: the transcript the first binding wrote opens under the app id.
+  const reopened = await oracle(
+    "PiStore.openForBinding",
+    async () =>
+      (
+        await piStore.openForBinding(live.id, {
+          bindingSeq: sessionStore.activeBinding(live.id)!.seq + 1,
+          kind: "assistant",
+          model: live.modelSelection().model!,
+          thinkingLevel: "off",
+          credentialProfileId: profile,
+          mode: "build",
+        })
+      ).session,
+    { changed: [live.id] },
+  );
+  assert.equal(piStore.getLiveById(live.id), reopened);
+  assert.notEqual(reopened, live);
+  assert.ok(reopened.listInfo().messageCount >= 2, "its history is back");
+});
+
+/** A Codex pi session that answered its first prompt and is naming itself. */
+async function namingPi() {
+  interceptPi();
+  updateSettings({
+    sessionNaming: { ...getSettings().sessionNaming, enabled: true },
+  });
+  const live = await freshPi(account("openai-codex"));
+  ensureRuntimeSessionWithRuntime(sessionRuntime, live);
+  await sessionRuntime.prompt(live.id, "name this conversation");
+  assert.equal(naming.pending.length, 1, "the naming run is in flight");
+  const endpoint = profiles.createCredentialProfile({
+    provider: "openai-compatible",
+    name: "Kind change endpoint",
+  });
+  const target = {
+    harness: "pi" as const,
+    model: { provider: endpoint.id, id: "llama3" },
+    thinkingLevel: "off" as const,
+    credentialProfileId: endpoint.id,
+  };
+  const pending = {
+    model: target.model,
+    thinkingLevel: "off" as const,
+    account: { kind: "account" as const, id: endpoint.id },
+    setBy: "user" as const,
+  };
+  return { live, target, pending };
+}
+
+/** Until the naming run has had every chance to finish. */
+async function settle(): Promise<void> {
+  for (let i = 0; i < 10; i += 1) await turn();
+}
+
+test("a pi kind change holds while the session names itself, and naming's end offers it again (F025)", async () => {
+  const { live, target, pending } = await namingPi();
+  const wakes: string[] = [];
+  setDeliveryWake((id) => wakes.push(id));
+  try {
+    const before = sessionStore.get(live.id);
+    await assert.rejects(
+      prepareEngineSwitch(live.id, target, pending, () => {}),
+      (error: Error) => error.name === "SessionSettlingError",
+    );
+    assert.equal(piStore.getLiveById(live.id), live, "pi keeps it meanwhile");
+    assert.equal(isSwitchingEngines(live.id), false);
+    assert.deepEqual(sessionStore.get(live.id), before);
+    assert.deepEqual(wakes, [], "nothing to offer yet");
+
+    naming.pending.shift()!("Named before the switch");
+    await settle();
+    assert.deepEqual(wakes, [live.id], "the held turn is offered again");
+    const row = sessionStore.get(live.id);
+    assert.equal(row?.title, "Named before the switch");
+    assert.equal(row?.provider, "openai-codex");
+    // Once named, the session lets go for the switch.
+    await piStore.releaseForSwitch(live.id, () => {});
+    assert.equal(piStore.getLiveById(live.id), undefined);
+  } finally {
+    setDeliveryWake(undefined);
+  }
+});

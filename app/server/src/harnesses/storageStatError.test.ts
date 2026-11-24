@@ -22,8 +22,14 @@ const { storedSessionState } = await import("./storage.ts");
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
 test("a record path that cannot be stat'ed is reported missing", () => {
-  assert.deepEqual(storedSessionState("claude-sdk", "claude-unstattable"), {
-    stored: false,
-    reason: "no Claude SDK state on disk",
-  });
+  assert.deepEqual(
+    storedSessionState({
+      harness: "claude-sdk",
+      sessionId: "claude-unstattable",
+    }),
+    {
+      stored: false,
+      reason: "no Claude SDK state on disk",
+    },
+  );
 });

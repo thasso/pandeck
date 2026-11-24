@@ -111,6 +111,7 @@ import { setSessionCompactionWindow } from "./sessionCompactionWindow.ts";
 import { handoffEngine } from "./harnesses/handoffSession.ts";
 import { harnessRegistry } from "./harnesses/registry.ts";
 import { buildSessionState } from "./sessionState.ts";
+import { activeEngine, activeNativeRef } from "./harnesses/activeEngine.ts";
 import { sessionRefFile } from "./harnesses/storage.ts";
 import {
   pickerModels,
@@ -152,10 +153,13 @@ import {
 } from "./db/backgroundWorkStore.ts";
 import { isStateTopicInvariant } from "./stateTopicKernel.ts";
 import { publishSessionRowsNow, stateTopicFor } from "./stateTopics.ts";
+import { accountMoveChoices } from "./sessionAccountMove.ts";
 import {
-  accountMoveTargets,
-  moveSessionAccount,
-} from "./sessionAccountMove.ts";
+  clearSessionPendingRuntime,
+  PendingRuntimeHeldError,
+  pendingSwitchHandoffTokens,
+  setSessionPendingRuntime,
+} from "./sessionPendingRuntime.ts";
 import {
   backgroundWorkHumanStopDeps,
   stopAllBackgroundWorkForHuman,
@@ -214,6 +218,8 @@ import {
   pausePromptQueueForStop,
   queuePrompt,
   removeQueuedPrompt,
+  holdInput,
+  removeHeldInput,
   resumePromptQueue,
   resumePromptQueueForHumanPrompt,
   sendQueuedPromptNow,
@@ -327,6 +333,7 @@ import {
   recordRebaseHandoff,
   runPullRequestCardAction,
 } from "./pullRequestActions.ts";
+import { continueOnModel } from "./sessionContinueOffer.ts";
 import { errorText } from "./errors.ts";
 import { serverBuildInfo } from "./buildInfo.ts";
 import { resolvePaObjectLinks } from "./objectLinkResolver.ts";
@@ -865,12 +872,8 @@ export class Connection implements Viewer {
         // adopting its Project mid-conversation is not what the composer asked.
         const stagedContext = resolveSessionContext(sessionContextRequest(msg));
         const staged = await applySessionContext(stagedContext, {
-          harness: driver.harness,
           agentType: driver.agentType,
           sessionId: driver.sessionId,
-          ...(driver.sessionFile !== undefined
-            ? { sessionFile: driver.sessionFile }
-            : {}),
         });
         attachments.push(...staged.attachments);
         if (stagedContext.kind === "task" && staged.taskId) {
@@ -903,6 +906,24 @@ export class Connection implements Viewer {
           // have been read, so sending it again is the user's call.
           const withdrawn =
             err instanceof SteerWithdrawnError ? err : undefined;
+          // Held by a pending runtime selection that cannot apply yet: the
+          // message waits in the user's queue, offered again once the
+          // selection can apply or is changed or reset (`sessionPendingRuntime.ts`).
+          // A skill invocation cannot be queued (Task-1023): its exact text
+          // is kept as a HELD input beside the queue instead, stored with the
+          // session, on every device, until the user puts it back or
+          // discards it. Nothing typed is lost, and nothing runs unasked.
+          const pendingHeld =
+            err instanceof PendingRuntimeHeldError ? err : undefined;
+          const held =
+            pendingHeld && !skillInvocation ? pendingHeld : undefined;
+          if (held)
+            queuePrompt(driver.sessionId, {
+              text: msg.text,
+              ...(attachments.length ? { attachments } : {}),
+            });
+          if (pendingHeld && skillInvocation)
+            holdInput(driver.sessionId, msg.text);
           if (withdrawn)
             queuePrompt(
               driver.sessionId,
@@ -920,13 +941,17 @@ export class Connection implements Viewer {
           const setupFinished = err instanceof SetupFinishedError;
           this.send({
             type: "error",
-            message: withdrawn
-              ? withdrawn.uncertain
-                ? `The response stopped, and Claude may already have read your message. It is held in your queue: ${STEER_MAY_HAVE_BEEN_READ.toLowerCase()}`
-                : "The response ended before it read your message. It is waiting in your queue."
-              : setupFinished
-                ? errorText(err)
-                : `Failed to send prompt: ${errorText(err)}`,
+            message: held
+              ? `${held.message} Your message is waiting in your queue.`
+              : pendingHeld && skillInvocation
+                ? `${pendingHeld.message} /${skillInvocation.name} did not run; it is waiting above your message box to put back once the change applies or is reset.`
+                : withdrawn
+                  ? withdrawn.uncertain
+                    ? `The response stopped, and Claude may already have read your message. It is held in your queue: ${STEER_MAY_HAVE_BEEN_READ.toLowerCase()}`
+                    : "The response ended before it read your message. It is waiting in your queue."
+                  : setupFinished
+                    ? errorText(err)
+                    : `Failed to send prompt: ${errorText(err)}`,
             target: { type: "session", id: driver.id },
             ...(msg.clientRequestId !== undefined
               ? { failedPromptClientRequestId: msg.clientRequestId }
@@ -969,6 +994,8 @@ export class Connection implements Viewer {
       case "recoverBackgroundUpdates":
       case "dismissBackgroundUpdates":
         return this.onPromptQueueCommand(msg);
+      case "removeHeldInput":
+        return this.onRemoveHeldInput(msg);
       case "withdrawPeerRequest":
         return this.onWithdrawPeerRequest(msg.sessionId, msg.id);
       case "loadTimelineBlock":
@@ -988,6 +1015,7 @@ export class Connection implements Viewer {
       case "setModel":
         return this.onSetModel(msg.provider, msg.id);
       case "setThinkingLevel":
+        if (this.refuseStartedRuntimeConfig()) return;
         return this.withViewedSession((_driver, view) => {
           if (view) this.applySessionConfig(() => view.setReasoning(msg.level));
         });
@@ -1243,12 +1271,13 @@ export class Connection implements Viewer {
           msg.sessionId,
           msg.requestId,
         );
-      case "moveSessionAccount":
-        return this.onMoveSessionAccount(
-          msg.sessionId,
-          msg.credentialProfileId,
-          msg.requestId,
-        );
+      case "estimateSessionHandoff":
+        return this.onEstimateSessionHandoff(msg.sessionId, msg.requestId);
+      case "setPendingRuntime":
+      case "clearPendingRuntime":
+        return this.onPendingRuntime(msg);
+      case "continueOnModel":
+        return this.onContinueOnModel(msg);
 
       case "grantApprovalForSession":
         grantApprovalForSession(
@@ -3547,6 +3576,31 @@ export class Connection implements Viewer {
     }
   }
 
+  /**
+   * Put back or Discard of a held input. Answered to this request alone
+   * (`heldInputAnswer`): the row that asked settles from it, and a refusal is
+   * that row's, never the session's failure (`docs/messaging.md`).
+   */
+  private onRemoveHeldInput(
+    msg: Extract<ClientMessage, { type: "removeHeldInput" }>,
+  ): void {
+    const { sessionId, id, requestId } = msg;
+    const answer = {
+      type: "heldInputAnswer" as const,
+      requestId,
+      sessionId,
+      id,
+    };
+    try {
+      if (!this.resolveSessionRef(sessionId))
+        throw new Error("Unknown session.");
+      removeHeldInput(sessionId, id);
+      this.send(answer);
+    } catch (err) {
+      this.send({ ...answer, error: errorText(err) });
+    }
+  }
+
   private async onAcceptCommitDryRun(entryId: string): Promise<void> {
     // The dry-run card is accepted INTO the session, so it needs the harness;
     // only pi produces dry-run cards.
@@ -4071,7 +4125,26 @@ export class Connection implements Viewer {
     }
   }
 
+  /**
+   * `setModel` / `setThinkingLevel` serve a session that has not started (a
+   * draft on the server). A started session's change is a pending selection
+   * (`setPendingRuntime`); refused here with the reason, targeted at it.
+   */
+  private refuseStartedRuntimeConfig(): boolean {
+    const sessionId = this.viewing?.sessionId;
+    if (!sessionId || (sessionStore.get(sessionId)?.messageCount ?? 0) === 0)
+      return false;
+    this.send({
+      type: "error",
+      target: { type: "session", id: sessionId },
+      message:
+        "This session has started: change its model or effort in the Runtime section, from its next turn.",
+    });
+    return true;
+  }
+
   private async onSetModel(provider: string, id: string): Promise<void> {
+    if (this.refuseStartedRuntimeConfig()) return;
     // Route model changes through the runtime view (the pi adapter resolves the
     // model via the profile registry; the claude-sdk adapter takes the alias).
     // The harness owns the selection, so a storage-backed view opens it first.
@@ -4891,12 +4964,13 @@ export class Connection implements Viewer {
     requestId: string,
   ): Promise<void> {
     try {
-      const accounts = await accountMoveTargets(sessionId);
+      const { accounts, boundEligible } = await accountMoveChoices(sessionId);
       this.send({
         type: "sessionAccountMoveTargets",
         requestId,
         sessionId,
         accounts,
+        boundEligible,
       });
     } catch (err) {
       this.send({
@@ -4908,33 +4982,95 @@ export class Connection implements Viewer {
     }
   }
 
-  /**
-   * The user's move of an idle session to the account they picked, right
-   * away. The answer retires the inspector's pending control; a refusal is
-   * the session's failure (`web/src/lib/messageArrival.ts`).
-   */
-  private async onMoveSessionAccount(
+  /** The inspector's "Hands over ~Nk tokens" for a pending engine switch. */
+  private async onEstimateSessionHandoff(
     sessionId: string,
-    credentialProfileId: string,
     requestId: string,
   ): Promise<void> {
     try {
-      await moveSessionAccount({
+      const tokens = await pendingSwitchHandoffTokens(sessionId);
+      this.send({
+        type: "sessionHandoffEstimate",
+        requestId,
         sessionId,
-        targetProfileId: credentialProfileId,
-        by: "user",
-        // The user may move any of their own sessions while it exists.
-        authorize: () => {
-          const row = sessionStore.get(sessionId);
-          if (!row) throw new Error("Session does not exist or was deleted.");
-          if (row.scope !== "user")
-            throw new Error("Only a user session can move to another account.");
-        },
+        tokens,
       });
-      this.send({ type: "sessionAccountMoveAnswer", requestId, sessionId });
     } catch (err) {
       this.send({
-        type: "sessionAccountMoveAnswer",
+        type: "sessionHandoffEstimate",
+        requestId,
+        sessionId,
+        error: errorText(err),
+      });
+    }
+  }
+
+  /**
+   * The user's change to what a started session's next turn runs on, or its
+   * reset (`sessionPendingRuntime.ts`). Accepted during a turn too. The answer
+   * retires the pending control; a refusal is the session's failure
+   * (`web/src/lib/messageArrival.ts`).
+   */
+  private async onPendingRuntime(
+    msg: Extract<
+      ClientMessage,
+      { type: "setPendingRuntime" } | { type: "clearPendingRuntime" }
+    >,
+  ): Promise<void> {
+    const { sessionId, requestId } = msg;
+    try {
+      if (!isSafeId(sessionId)) throw new Error("Invalid session id.");
+      if (msg.type === "clearPendingRuntime")
+        await clearSessionPendingRuntime(sessionId);
+      else
+        await setSessionPendingRuntime(
+          sessionId,
+          {
+            ...(msg.model ? { model: msg.model } : {}),
+            ...(msg.thinkingLevel ? { thinkingLevel: msg.thinkingLevel } : {}),
+            ...(msg.account ? { account: msg.account } : {}),
+          },
+          "user",
+        );
+      this.send({ type: "pendingRuntimeAnswer", requestId, sessionId });
+    } catch (err) {
+      this.send({
+        type: "pendingRuntimeAnswer",
+        requestId,
+        sessionId,
+        error: errorText(err),
+      });
+    }
+  }
+
+  /**
+   * The user's "Continue on <model>" on a failure that offers it
+   * (`sessionContinueOffer.ts`). Their authority past a Stop is read NOW, as
+   * they click. The answer comes once the continuation reached the provider,
+   * or says why nothing ran (the session's failure, `messageArrival.ts`).
+   */
+  private async onContinueOnModel(
+    msg: Extract<ClientMessage, { type: "continueOnModel" }>,
+  ): Promise<void> {
+    const { sessionId, requestId } = msg;
+    const resumeHold = isSafeId(sessionId)
+      ? captureHumanResume(sessionId)
+      : undefined;
+    try {
+      if (!isSafeId(sessionId)) throw new Error("Invalid session id.");
+      // A gone worktree refuses at the prompt door, with its reason.
+      const view = await hub.acquireById(sessionId);
+      const driver = view ? this.asRuntimePromptDriver(view) : undefined;
+      if (!driver) throw new Error("That session is not available.");
+      await continueOnModel(driver, {
+        failureAt: msg.failureAt,
+        model: msg.model,
+        resumeHold,
+      });
+      this.send({ type: "continueOnModelAnswer", requestId, sessionId });
+    } catch (err) {
+      this.send({
+        type: "continueOnModelAnswer",
         requestId,
         sessionId,
         error: errorText(err),
@@ -5268,9 +5404,9 @@ export class Connection implements Viewer {
     if (record) {
       const kind: AgentType = record.agentType;
       return {
-        harness: record.harness,
+        harness: activeEngine(record).harness,
         kind,
-        file: sessionRefFile(record.harness, id),
+        file: sessionRefFile(activeNativeRef(record)),
       };
     }
     const live = hub.getLiveById(id);
@@ -5455,7 +5591,9 @@ export class Connection implements Viewer {
     const viewing = this.viewing;
     if (!viewing) return undefined;
     const ready = this.asRuntimePromptDriver(viewing);
-    if (ready) return ready;
+    // A released driver (its engine let the session go, as a switch does)
+    // reopens through the registry like a storage-backed view.
+    if (ready && !ready.released) return ready;
     return this.openHarnessFor(viewing.sessionId);
   }
 
@@ -5511,7 +5649,11 @@ export class Connection implements Viewer {
     const viewing = this.viewing;
     if (!viewing) return;
     const sessionId = viewing.sessionId;
-    if (!viewing.live && !(await this.openHarnessFor(sessionId))) return;
+    if (
+      (!viewing.live || viewing.released) &&
+      !(await this.openHarnessFor(sessionId))
+    )
+      return;
     const driver = this.viewing;
     if (!driver || driver.sessionId !== sessionId) return;
     await act(driver, this.runtimeView);
@@ -5519,7 +5661,8 @@ export class Connection implements Viewer {
 
   /**
    * Another owner opened the harness for the session this connection is showing
-   * from storage. Re-attach so live state reaches this reader too.
+   * from storage, or on a driver its engine has since released (an engine
+   * switch). Re-attach so live state reaches this reader too.
    */
   sessionHarnessOpened(driver: HarnessDriver): void {
     this.upgradeViewingDriver(driver);
@@ -5546,7 +5689,10 @@ export class Connection implements Viewer {
    */
   private upgradeViewingDriver(driver: HarnessDriver): void {
     const viewing = this.viewing;
-    if (!viewing || viewing.live) return;
+    // A live view moves only off a driver its store released: a session that
+    // switched engines is driven by another instance under the same id.
+    if (!viewing || viewing === driver) return;
+    if (viewing.live && !viewing.released) return;
     if (viewing.sessionId !== driver.sessionId || this.disposed) return;
     if (this.engineStateViewer)
       this.engineStateViewer.live.removeViewer(this.engineStateViewer.viewer);
@@ -5755,7 +5901,7 @@ export class Connection implements Viewer {
       ? sessionStore.get(this.viewing.sessionId)
       : undefined;
     const provider = meta
-      ? (HARNESSES[meta.harness].modelProvider ?? meta.provider)
+      ? (HARNESSES[activeEngine(meta).harness].modelProvider ?? meta.provider)
       : undefined;
     return {
       ...(provider &&

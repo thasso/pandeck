@@ -5,6 +5,7 @@
  * (text/thinking/tool_use with full input), tool_results, the captured
  * session_id, the stop reason, and a flat string for a tool's output.
  */
+import { knownClaudeSdkModelAlias } from "./modelSettings.ts";
 import type { ClaudeSdkMessage } from "./sdkSeam.ts";
 
 export type ClaudeAssistantMessage = Extract<
@@ -308,27 +309,34 @@ export function mapResultEpochUsage(message: ClaudeResultMessage): ClaudeUsage {
 }
 
 /**
- * Cumulative cost (USD) and the real model context window from a `result`
- * message's `modelUsage` map. `total_cost_usd` is what this `query()` epoch has
- * cost so far, which the session rebases onto rather than accumulating (see
- * `mapResultEpochUsage`). `contextWindow` is
- * taken from the `modelUsage` entry that did the most work this turn (so a
- * helper model — e.g. for title generation — doesn't override the main model's
- * window), which lets us report e.g. the 1M window for Sonnet[1m] instead of a
- * hardcoded 200k.
+ * Cumulative cost (USD) and the selected model's real context window from a
+ * `result` message's `modelUsage` map. `total_cost_usd` is what this `query()`
+ * epoch has cost so far, which the session rebases onto rather than
+ * accumulating (see `mapResultEpochUsage`). `modelUsage` is the epoch's running
+ * total, so after an in-epoch model switch it still lists the previous model,
+ * often with the most work: `contextWindow` comes only from an entry of the
+ * SELECTED model (`modelId`, any alias or concrete id), and is absent when that
+ * model has none. Among its entries the one with the most work wins. That
+ * reports e.g. the 1M window for Sonnet[1m] instead of a hardcoded 200k, and a
+ * helper model (e.g. for title generation) never sets the main model's window.
  */
-export function mapResultMeta(message: ClaudeResultMessage): {
+export function mapResultMeta(
+  message: ClaudeResultMessage,
+  modelId: string,
+): {
   cost: number;
   contextWindow?: number;
 } {
   const m = message as { total_cost_usd?: unknown; modelUsage?: unknown };
   const cost = numberValue(m.total_cost_usd) ?? 0;
+  const selected = knownClaudeSdkModelAlias(modelId);
   let contextWindow: number | undefined;
-  if (m.modelUsage && typeof m.modelUsage === "object") {
+  if (selected && m.modelUsage && typeof m.modelUsage === "object") {
     let bestWork = -1;
-    for (const entry of Object.values(
+    for (const [model, entry] of Object.entries(
       m.modelUsage as Record<string, unknown>,
     )) {
+      if (knownClaudeSdkModelAlias(model) !== selected) continue;
       if (!entry || typeof entry !== "object") continue;
       const e = entry as Record<string, unknown>;
       const cw = numberValue(e.contextWindow);

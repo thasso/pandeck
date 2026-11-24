@@ -19,6 +19,7 @@
  * card.
  */
 import { randomUUID } from "node:crypto";
+import { activeEngine } from "./harnesses/activeEngine.ts";
 import {
   accountPinForModel,
   accountServesModel,
@@ -162,7 +163,8 @@ function fallbackRuntimeOf(
   meta: SessionMeta | undefined,
 ): SpawnFallbackRuntime | undefined {
   if (!meta?.model) return undefined;
-  const provider = HARNESSES[meta.harness].modelProvider ?? meta.provider;
+  const provider =
+    HARNESSES[activeEngine(meta).harness].modelProvider ?? meta.provider;
   if (!provider) return undefined;
   return {
     provider,
@@ -1196,7 +1198,6 @@ async function spawnOne(
   await applySessionContext(
     context,
     {
-      harness,
       agentType: item.agentType,
       sessionId,
     },
