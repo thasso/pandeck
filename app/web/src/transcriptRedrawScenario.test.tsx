@@ -671,6 +671,95 @@ describe("what a broadcast re-renders", () => {
       setPerfStatsEnabled(false);
     }
   });
+
+  it("re-renders no composer when the Runtime control is rebuilt with the same content (F038)", async () => {
+    const socket = await openChat();
+    // A started pi session with a pending switch to Claude: the composer
+    // carries the runtime commands and the "Next turn" chip with the size of
+    // the handoff, which App asks the server for again once per turn.
+    const pending = {
+      model: { provider: "claude-sdk", id: "sonnet" },
+      thinkingLevel: "high",
+      account: { kind: "automatic" },
+      setBy: "user",
+    };
+    const snapshot = snapshotMessage() as unknown as {
+      state: Record<string, unknown>;
+    };
+    await act(async () =>
+      socket.receive({
+        ...snapshot,
+        state: {
+          ...snapshot.state,
+          model: { provider: "openai", id: "gpt-test" },
+          pendingRuntime: pending,
+        },
+      } as unknown as ServerMessage),
+    );
+    await settle();
+    /** Answer the latest estimate request with this many tokens. */
+    const answerEstimate = async (tokens: number) => {
+      const request = socket.sent
+        .filter((message) => message.type === "estimateSessionHandoff")
+        .at(-1) as { requestId: string } | undefined;
+      expect(request).toBeDefined();
+      await act(async () =>
+        socket.receive({
+          type: "sessionHandoffEstimate",
+          requestId: request!.requestId,
+          sessionId: sessionId(0),
+          tokens,
+        } as unknown as ServerMessage),
+      );
+      await settle();
+    };
+    /** A turn ended: the viewed row's message count moved. */
+    let messageCount = 0;
+    const turnEnded = async () => {
+      messageCount += 2;
+      const requests = socket.sent.filter(
+        (message) => message.type === "estimateSessionHandoff",
+      ).length;
+      await act(async () =>
+        socket.receive(
+          listedMessage(
+            sessionRows((i) => 1_700_000_000_000 + i).map((row, i) =>
+              i === 0 ? { ...row, messageCount } : row,
+            ),
+          ),
+        ),
+      );
+      await settle();
+      expect(
+        socket.sent.filter(
+          (message) => message.type === "estimateSessionHandoff",
+        ).length,
+      ).toBe(requests + 1);
+    };
+    await answerEstimate(12_000);
+    expect(container!.textContent).toContain("12k");
+    // A turn end redraws the composer on its own; what is measured is the
+    // answer that follows it.
+    await turnEnded();
+    setPerfStatsEnabled(true);
+    try {
+      // Answered with the same figure: App's Runtime control is rebuilt, the
+      // composer's runtime props are not.
+      await answerEstimate(12_000);
+      await act(async () => socket.receive(reorderedSessions()));
+      await settle();
+      expect(countOf(perfSnapshot(), "Composer")).toBe(0);
+      // A new figure is what the chip shows, so that does reach it.
+      await turnEnded();
+      setPerfStatsEnabled(false);
+      setPerfStatsEnabled(true);
+      await answerEstimate(48_000);
+      expect(countOf(perfSnapshot(), "Composer")).toBeGreaterThan(0);
+      expect(container!.textContent).toContain("48k");
+    } finally {
+      setPerfStatsEnabled(false);
+    }
+  });
 });
 
 /**

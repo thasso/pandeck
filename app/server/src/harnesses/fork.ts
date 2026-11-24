@@ -149,7 +149,7 @@ const engines: Record<Harness, (request: ForkRequest) => PreparedFork> = {
         claudeSdkStore.forkSession(id, {
           anchor,
           keepThroughEntryId,
-          ...(binding ? { binding: claudeBindingCut(binding) } : {}),
+          ...(binding ? { binding: claudeBindingCut(id, binding) } : {}),
           forkOrigin: {
             harness: "claude-sdk",
             parentSessionId: id,
@@ -214,18 +214,53 @@ const engines: Record<Harness, (request: ForkRequest) => PreparedFork> = {
   },
 };
 
-/** What a Claude fork of an earlier binding cuts and runs on, not the record's. */
-function claudeBindingCut(binding: SessionEngineBinding) {
+/**
+ * What a Claude fork of an earlier binding cuts and runs on, not the record's:
+ * its native session, read from the account that holds it now
+ * ({@link nativeHolder}), and its model and effort.
+ */
+function claudeBindingCut(sessionId: string, binding: SessionEngineBinding) {
+  const holder = nativeHolder(sessionId, binding);
   return {
     ...(binding.nativeSessionId
       ? { nativeSessionId: binding.nativeSessionId }
       : {}),
-    ...(binding.credentialProfileId
-      ? { credentialProfileId: binding.credentialProfileId }
+    ...(holder.credentialProfileId
+      ? { credentialProfileId: holder.credentialProfileId }
       : {}),
     ...(binding.model ? { modelId: binding.model } : {}),
     ...(binding.thinkingLevel ? { thinkingLevel: binding.thinkingLevel } : {}),
   };
+}
+
+/**
+ * The binding whose account holds `binding`'s native Claude transcript now. A
+ * return that resumed it on another account copied it there and removed the
+ * earlier account's copy (`engineSwitch.ts`), and a same-kind account move
+ * rebinds the active binding in place; so the transcript lives with the last
+ * binding of the resume chain that continues it. Followed through the
+ * recorded `resumedSeq`, never inferred from equal native ids.
+ */
+function nativeHolder(
+  sessionId: string,
+  binding: SessionEngineBinding,
+): SessionEngineBinding {
+  const all = sessionStore.bindings(sessionId);
+  let holder = binding;
+  const seen = new Set([binding.seq]);
+  for (;;) {
+    const next = all
+      .filter(
+        (other) =>
+          other.resumedSeq === holder.seq &&
+          other.harness === binding.harness &&
+          !seen.has(other.seq),
+      )
+      .sort((a, b) => b.seq - a.seq)[0];
+    if (!next) return holder;
+    seen.add(next.seq);
+    holder = next;
+  }
 }
 
 /**

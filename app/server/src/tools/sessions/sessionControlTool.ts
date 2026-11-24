@@ -13,6 +13,7 @@ import {
   THINKING_LEVELS,
   type ApprovalCard,
   type SessionRuntimeApprovalBody,
+  samePendingRuntime,
   type SessionRuntimeChange,
   type ThinkingLevel,
 } from "@assistant/shared";
@@ -236,12 +237,24 @@ function makeSessionControlTool() {
 const PENDING_NOTE =
   "Nothing changed yet. Do not claim it did until the approved result appears.";
 
+/** How often set_runtime decides again when the next turn changed under it. */
+const DECIDE_ATTEMPTS = 3;
+
+/** The next-turn selection a no-card decision read is no longer the child's. */
+class NextTurnChangedError extends Error {}
+
 /**
  * Set an owned child's pending model, effort or account. An account alone is
  * set now for any owned child. A child spawned from an agent definition gets
  * its listed models and any effort now; a child without one asks the user
  * first for any model or effort change, as does any model a definition does
  * not list.
+ *
+ * Whether a card is needed is decided against the next-turn selection read
+ * here, and a write without one is made only while that selection is still
+ * the child's: asked again with the write itself, so a user's set or Reset
+ * meanwhile makes it decide again instead of writing what was judged
+ * against the old target.
  */
 async function setChildRuntime(
   ctx: { session: { sessionId: string }; toolCallId?: string },
@@ -252,6 +265,25 @@ async function setChildRuntime(
   requireOwnedChild(coordinator, targetSessionId, "switched");
   if (RUNTIME_FIELDS.every((field) => params[field] === undefined))
     throw new Error('"set_runtime" needs a model, an effort or an account.');
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await decideChildRuntime(ctx, targetSessionId, params);
+    } catch (err) {
+      if (!(err instanceof NextTurnChangedError)) throw err;
+      if (attempt >= DECIDE_ATTEMPTS)
+        throw new Error(
+          `${targetSessionId}'s next-turn selection kept changing; try again.`,
+        );
+    }
+  }
+}
+
+async function decideChildRuntime(
+  ctx: { session: { sessionId: string }; toolCallId?: string },
+  targetSessionId: string,
+  params: SessionControlParams,
+) {
+  const coordinator = ctx.session.sessionId;
   const row = sessionStore.get(targetSessionId);
   if (!row) throw new Error(`No session found with id ${targetSessionId}.`);
   const current = await sessionSelection(row);
@@ -301,26 +333,39 @@ async function setChildRuntime(
       changesModel,
     });
   }
-  // Without a definition only the account is ever written without a card: a
-  // model or effort that changed nothing when read is left out, so a reset
-  // meanwhile cannot turn it into an unapproved change.
-  const write: SessionRuntimeChange = listed
-    ? change
-    : change.account
-      ? { account: change.account }
-      : {};
-  if (!write.model && !write.thinkingLevel && !write.account)
+  // Only what changes the next turn is written without a card: a model or
+  // effort that changed nothing when read is left out, so it can never
+  // become a change no card approved.
+  const write: SessionRuntimeChange = {
+    ...(changesModel && change.model ? { model: change.model } : {}),
+    ...(changesEffort && change.thinkingLevel
+      ? { thinkingLevel: change.thinkingLevel }
+      : {}),
+    ...(change.account ? { account: change.account } : {}),
+  };
+  // The decision above holds only for the next-turn selection it read: the
+  // user may set or reset it, or take the child over, while it resolves.
+  // Asked again with the write itself, and before answering that nothing
+  // changes.
+  const stillDecided = () => {
+    requireOwnedChild(coordinator, targetSessionId, "switched");
+    if (
+      !samePendingRuntime(
+        sessionStore.get(targetSessionId)?.pendingRuntime,
+        pending,
+      )
+    )
+      throw new NextTurnChangedError();
+  };
+  if (!write.model && !write.thinkingLevel && !write.account) {
+    stillDecided();
     return textResult(pendingText(targetSessionId, pending));
-  // The user may take the child over while the selection resolves: the
-  // ownership edge is asked again with the write itself.
+  }
   const written = await setSessionPendingRuntime(
     targetSessionId,
     write,
     "coordinator",
-    {
-      authorize: () =>
-        requireOwnedChild(coordinator, targetSessionId, "switched"),
-    },
+    { authorize: stillDecided },
   );
   return textResult(pendingText(targetSessionId, written));
 }

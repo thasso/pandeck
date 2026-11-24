@@ -397,6 +397,40 @@ describe("session_control set_runtime: model", () => {
     );
   });
 
+  it("decides again when the user resets the next turn while it reads: an unlisted model is never restored without a card (F034)", async () => {
+    const a = account("Reset race A");
+    const caller = seed("Coordinator");
+    const c = child(caller, a);
+    asAgent(c.id, ["gpt-5.5"]);
+    // The user picked an unlisted model; the coordinator asks for that same
+    // model, which is no change as long as it stays pending.
+    sessionStore.setPendingRuntime(c.id, {
+      model: { provider: "openai-codex", id: "gpt-5.4-mini" },
+      thinkingLevel: "off",
+      account: { kind: "automatic" },
+      setBy: "user",
+    });
+    const { clearSessionPendingRuntime } =
+      await import("../../sessionPendingRuntime.ts");
+    let reads = 0;
+    // The user's Reset lands during the tool's first read of the child.
+    setAccountMoveHostForTests({
+      resident: async () => {
+        if (++reads === 1) await clearSessionPendingRuntime(c.id);
+        return c.driver;
+      },
+    });
+    const result = await setModel(caller, c.id, "gpt-5.4-mini");
+    assert.equal(
+      sessionStore.get(c.id)?.pendingRuntime,
+      undefined,
+      "the Reset stands",
+    );
+    assert.equal(result.terminate, true, "it now asks the user");
+    assert.match(text(result), /Nothing changed yet/);
+    assert.equal(cards(caller).length, 1);
+  });
+
   it("asks for an effort change only of a child without a definition; an account alone never asks", async () => {
     const a = account("Effort A");
     const b = account("Effort B");

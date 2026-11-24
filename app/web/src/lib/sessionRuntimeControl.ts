@@ -169,14 +169,16 @@ export function runtimeAccountChoices(
 
 /**
  * When the handoff estimate must be asked for again: the session, its pending
- * target, the log's size and last change (each turn changes what is handed
- * over), and the accounts (Automatic's pick names one in the note).
+ * target, the accounts (Automatic's pick names one in the note), and the log
+ * once per turn: its message count while the session is idle. A running turn
+ * changes the row with every entry; the estimate waits for the turn to end
+ * instead of asking on each of them (each answer reads the whole log).
  */
 export function handoffEstimateRefreshKey(input: {
   sessionId: string | undefined;
   pending: SessionPendingRuntime | undefined;
   messageCount: number | undefined;
-  updatedAt: number | undefined;
+  streaming: boolean;
   profiles: readonly Pick<
     CredentialProfileSummary,
     "id" | "enabled" | "enterprise" | "health"
@@ -185,8 +187,7 @@ export function handoffEstimateRefreshKey(input: {
   return JSON.stringify([
     input.sessionId,
     input.pending,
-    input.messageCount,
-    input.updatedAt,
+    input.streaming ? "running" : (input.messageCount ?? null),
     input.profiles.map(({ id, enabled, enterprise, health }) => [
       id,
       enabled,

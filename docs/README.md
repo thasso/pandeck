@@ -151,11 +151,13 @@ only binding rules; everything else lives here.
   and usage ports), the shared `HARNESSES` descriptor, the boundary ratchet that
   pins remaining engine imports and harness-id comparisons, and the step-by-step
   migration status.
-- `session-runtime-switching.md` — changing a started session's model and
-  effort: between turns on both harnesses, Claude's refusal during a turn, the
-  bound account's model gate, effort clamping, retained processes, agent pins
-  and the compaction window; grows into pending selections and harness switches
-  (Task-1485).
+- `session-runtime-switching.md` — changing a started session's model, effort,
+  account and engine (Task-1485): the pending next-turn selection and how a turn
+  applies or holds it, coordinator `set_runtime` and its approval card, Continue
+  on another model, the web Runtime section, chip and `/model` `/effort`
+  `/account`, engine bindings and usage, moving to another harness (handoff and
+  its estimate, store move, switching fence), and deleting, forking and Task
+  links across a switch.
 - `compaction-window.md` — a session's compaction window: the one stored value
   and its single writer, ranges per harness and model, the agent floor and actor
   rules, how Claude (start settings only; a running process keeps its window)

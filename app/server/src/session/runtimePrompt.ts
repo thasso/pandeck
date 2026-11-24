@@ -449,13 +449,18 @@ async function deliverWithRuntime(
       // The settled account must be entitled to the session's model (and its
       // pinned version) on the engine the turn runs on: refused here, before
       // any run, the refusal is a local policy decision that never reaches
-      // the provider or account health.
+      // the provider or account health. A target an applied selection chose
+      // is held instead, like every other refusal of it.
       if (!options.steerOnly)
-        await assertSessionModelEntitled({
-          sessionId: driver.sessionId,
-          credentialProfileId: turnDriver.credentialProfileId,
-          model: turnDriver.modelSelection?.()?.model,
-        });
+        try {
+          await assertSessionModelEntitled({
+            sessionId: driver.sessionId,
+            credentialProfileId: turnDriver.credentialProfileId,
+            model: turnDriver.modelSelection?.()?.model,
+          });
+        } catch (error) {
+          throw pendingSwitch ? pendingSwitch.refused(error) : error;
+        }
       assertTurnAllowed(driver.sessionId, options.resumeHold);
       assertRecoveryAdmission();
       // Nothing below awaits before the append. The enterprise check runs before
@@ -463,7 +468,11 @@ async function deliverWithRuntime(
       // delivery, and a refusal after that reservation could strand the prompt.
       pendingSwitch?.usable();
       accountMove?.usable();
-      assertSessionEnterpriseAccount(turnDriver);
+      try {
+        assertSessionEnterpriseAccount(turnDriver);
+      } catch (error) {
+        throw pendingSwitch ? pendingSwitch.refused(error) : error;
+      }
       // Setup may have finished while this send awaited above.
       assertNotFinishedSetup(driver.sessionId);
       admit?.();

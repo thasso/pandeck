@@ -64,6 +64,7 @@ import {
 import {
   isRuntimeCommand,
   resolveRuntimeCommand,
+  RUNTIME_COMMAND_NAMES,
   runtimeArgumentOptions,
   type RuntimeCommandName,
 } from "../lib/runtimeSlashCommand.ts";
@@ -200,6 +201,26 @@ export interface SessionChatInput {
         open: () => void;
       }
     | undefined;
+}
+
+/**
+ * What the composer's "Next turn" chip says, or undefined without a pending
+ * selection: the content its memo is keyed on.
+ */
+function runtimeChipText(
+  commands: SessionChatInput["runtimeCommands"],
+): { label: string; handoff?: string } | undefined {
+  const pending = commands?.control.pending;
+  if (!commands || !pending) return undefined;
+  // A pending engine switch carries the size of its handoff, once known.
+  const estimate = commands.control.engineSwitch?.handoff;
+  const tokens = estimate ? dataOf(estimate) : undefined;
+  return {
+    label: runtimeTargetLabel(pending, commands.control.models, (id) =>
+      commands.control.accounts?.nameOf(id),
+    ),
+    ...(tokens !== undefined ? { handoff: handoffEstimateText(tokens) } : {}),
+  };
 }
 
 /** Submitting follows the answer, wherever in the conversation it was sent from. */
@@ -1077,19 +1098,26 @@ export function useSessionChat({
     },
     [actions, pinTranscriptToBottom, worktreeMissing],
   );
+  // `runtimeCommands` is rebuilt whenever App rebuilds the Runtime control:
+  // another session's change, an account projection or an estimate refresh.
+  // The composer is handed only its CONTENT (CLAUDE.md): handlers read the
+  // latest through a ref, and what it draws is memoized on content keys.
+  const runtimeCommandsRef = useRef(runtimeCommands);
+  runtimeCommandsRef.current = runtimeCommands;
   const runClientSlashCommand = useCallback(
     (name: string, rawArgs: string): string | null => {
       if (name === "review" && onReviewCommand) return onReviewCommand(rawArgs);
       if (isRuntimeCommand(name)) {
-        if (!runtimeCommands || !sessionId)
+        const commands = runtimeCommandsRef.current;
+        if (!commands || !sessionId)
           return `/${name} is available once the session has started.`;
         const resolved = resolveRuntimeCommand(
           name,
           rawArgs,
-          runtimeCommandContext(runtimeCommands),
+          runtimeCommandContext(commands),
         );
         if (resolved.kind === "error") return resolved.message;
-        if (resolved.kind === "open") runtimeCommands.open();
+        if (resolved.kind === "open") commands.open();
         else actions.setPendingRuntime(sessionId, resolved.change);
         return null;
       }
@@ -1103,8 +1131,11 @@ export function useSessionChat({
       }
       return `/${name} is not available here.`;
     },
-    [actions, sessionId, onReviewCommand, runtimeCommands],
+    [actions, sessionId, onReviewCommand],
   );
+  const hasRuntimeCommands = runtimeCommands !== undefined;
+  const offersAccount =
+    runtimeCommands !== undefined && runtimeCommands.accountChoices.length > 1;
   // The registry this composer offers: the runtime commands only for a
   // started session, and `/account` only when it has an account to choose.
   const slashCommands = useMemo(
@@ -1112,34 +1143,48 @@ export function useSessionChat({
       state.slashCommands.filter((command) =>
         !isRuntimeCommand(command.name)
           ? true
-          : runtimeCommands !== undefined &&
-            (command.name !== "account" ||
-              runtimeCommands.accountChoices.length > 1),
+          : hasRuntimeCommands && (command.name !== "account" || offersAccount),
       ),
-    [state.slashCommands, runtimeCommands],
+    [state.slashCommands, hasRuntimeCommands, offersAccount],
   );
+  // The arguments each runtime command offers, keyed on the lists themselves:
+  // a new function reaches the composer only when what it returns changed.
+  const runtimeArgumentsKey = runtimeCommands
+    ? JSON.stringify(
+        RUNTIME_COMMAND_NAMES.map((name) =>
+          runtimeArgumentOptions(name, runtimeCommandContext(runtimeCommands)),
+        ),
+      )
+    : undefined;
   const runtimeArguments = useMemo(
     () =>
-      runtimeCommands
-        ? (name: RuntimeCommandName) =>
-            runtimeArgumentOptions(name, runtimeCommandContext(runtimeCommands))
-        : undefined,
-    [runtimeCommands],
+      runtimeArgumentsKey === undefined
+        ? undefined
+        : (name: RuntimeCommandName) => {
+            const commands = runtimeCommandsRef.current;
+            return commands
+              ? runtimeArgumentOptions(name, runtimeCommandContext(commands))
+              : [];
+          },
+    [runtimeArgumentsKey],
   );
-  const runtimeChip = useMemo(() => {
-    const pending = runtimeCommands?.control.pending;
-    if (!runtimeCommands || !pending) return undefined;
-    // A pending engine switch carries the size of its handoff, once known.
-    const estimate = runtimeCommands.control.engineSwitch?.handoff;
-    const tokens = estimate ? dataOf(estimate) : undefined;
-    return {
-      label: runtimeTargetLabel(pending, runtimeCommands.control.models, (id) =>
-        runtimeCommands.control.accounts?.nameOf(id),
-      ),
-      ...(tokens !== undefined ? { handoff: handoffEstimateText(tokens) } : {}),
-      onOpen: runtimeCommands.open,
-    };
-  }, [runtimeCommands]);
+  const runtimeChipContent = runtimeChipText(runtimeCommands);
+  const runtimeChipLabel = runtimeChipContent?.label;
+  const runtimeChipHandoff = runtimeChipContent?.handoff;
+  const openRuntime = useCallback(() => runtimeCommandsRef.current?.open(), []);
+  const runtimeChip = useMemo(
+    () =>
+      runtimeChipLabel === undefined
+        ? undefined
+        : {
+            label: runtimeChipLabel,
+            ...(runtimeChipHandoff !== undefined
+              ? { handoff: runtimeChipHandoff }
+              : {}),
+            onOpen: openRuntime,
+          },
+    [runtimeChipLabel, runtimeChipHandoff, openRuntime],
+  );
   // Live peer-prompt card lifecycle patches (Task 90/89 in-place reconciliation)
   // overlaid onto the rendered messages regardless of their source above.
   const transcriptMessages = useMemo(

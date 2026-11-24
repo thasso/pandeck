@@ -9,6 +9,7 @@
  * no assistant entry after the binding's `started_seq`, so a turn that failed
  * before any reply carries it again.
  */
+import { statSync } from "node:fs";
 import { ACCOUNT_KINDS, type Harness } from "@assistant/shared";
 import { credentialProfileById } from "./credentialProfiles.ts";
 import type { SessionEngineBinding } from "./db/sessionEngineBinding.ts";
@@ -201,13 +202,73 @@ export function estimateSwitchHandoffTokens(
   resumed: SessionEngineBinding | undefined,
 ): number {
   const active = sessionStore.activeBinding(sessionId);
+  const bindings = sessionStore.bindings(sessionId);
+  const key = estimateKey(sessionId, bindings, target, resumed);
+  const cached = estimates.get(sessionId);
+  if (key !== undefined && cached?.key === key) return cached.tokens;
   const context = switchContext({
     sessionId,
-    bindings: sessionStore.bindings(sessionId),
+    bindings,
     left: active,
     from: active ?? {},
     to: target,
     resumed,
   });
-  return context ? estimateTokens(context) : 0;
+  const tokens = context ? estimateTokens(context) : 0;
+  if (key === undefined) estimates.delete(sessionId);
+  else estimates.set(sessionId, { key, tokens });
+  return tokens;
+}
+
+/**
+ * The last estimate per session and what it measured. Asking again while
+ * nothing it reads changed answers it without reading the log again: every
+ * viewer asks, and a long log takes a noticeable synchronous scan.
+ */
+const estimates = new Map<string, { key: string; tokens: number }>();
+
+/**
+ * Everything {@link switchContext} reads for an estimate: the bindings, the
+ * target and the binding it resumes, the cap setting, the models' and
+ * accounts' names and windows, and the log's extent (an append grows it, a
+ * rewrite moves its time). Undefined when the log cannot be measured, so
+ * nothing is cached.
+ */
+function estimateKey(
+  sessionId: string,
+  bindings: readonly SessionEngineBinding[],
+  target: SwitchEnd,
+  resumed: SessionEngineBinding | undefined,
+): string | undefined {
+  let log: { size: number; mtimeMs: number };
+  try {
+    log = statSync(logPathFor(sessionId));
+  } catch {
+    return undefined;
+  }
+  const active = sessionStore.activeBinding(sessionId);
+  const profile = (id: string | undefined) => {
+    const found = id ? credentialProfileById(id) : undefined;
+    return found ? [found.id, found.name, found.provider] : null;
+  };
+  const targetModel = modelFor(target);
+  return JSON.stringify([
+    log.size,
+    log.mtimeMs,
+    bindings.map((binding) => [
+      binding.seq,
+      binding.startedSeq,
+      binding.resumedSeq ?? null,
+      binding.credentialProfileId ?? null,
+    ]),
+    active?.seq ?? null,
+    target,
+    resumed?.seq ?? null,
+    getSettings().sessionSwitching.handoffTokenCap,
+    targetModel?.contextWindow ?? null,
+    targetModel?.name ?? null,
+    active ? (modelFor(active)?.name ?? null) : null,
+    profile(active?.credentialProfileId),
+    profile(target.credentialProfileId),
+  ]);
 }

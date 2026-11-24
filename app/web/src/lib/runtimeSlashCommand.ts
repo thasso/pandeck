@@ -15,8 +15,14 @@ import {
 
 export type RuntimeCommandName = "model" | "effort" | "account";
 
+export const RUNTIME_COMMAND_NAMES: readonly RuntimeCommandName[] = [
+  "model",
+  "effort",
+  "account",
+];
+
 export function isRuntimeCommand(name: string): name is RuntimeCommandName {
-  return name === "model" || name === "effort" || name === "account";
+  return (RUNTIME_COMMAND_NAMES as readonly string[]).includes(name);
 }
 
 /** One argument the composer may complete, and the text it inserts. */

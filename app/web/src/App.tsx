@@ -5629,6 +5629,20 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   // A boolean, not the row: the row changes on every list broadcast, and the
   // control reaches the composer, whose props stay stable by content.
   const runtimeListed = displaySessionListItem !== undefined;
+  // This session's slices only: the maps are replaced for any session's change.
+  const runtimeTargets =
+    state.accountMoveTargets &&
+    state.accountMoveTargets.sessionId === displayCurrentId
+      ? state.accountMoveTargets
+      : undefined;
+  const runtimeHandoff =
+    state.handoffEstimate &&
+    state.handoffEstimate.sessionId === displayCurrentId
+      ? state.handoffEstimate.estimate
+      : undefined;
+  const runtimeBusy =
+    displayCurrentId !== undefined &&
+    displayCurrentId in state.runtimeChangePending;
   const sessionRuntime = useMemo(
     () =>
       sessionRuntimeControl({
@@ -5641,19 +5655,9 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         account: displayCredentialProfile,
         accounts: credentialProfiles,
         models: pickerModels,
-        targets:
-          state.accountMoveTargets &&
-          state.accountMoveTargets.sessionId === displayCurrentId
-            ? state.accountMoveTargets.targets
-            : undefined,
-        handoff:
-          state.handoffEstimate &&
-          state.handoffEstimate.sessionId === displayCurrentId
-            ? state.handoffEstimate.estimate
-            : undefined,
-        busy:
-          displayCurrentId !== undefined &&
-          displayCurrentId in state.runtimeChangePending,
+        targets: runtimeTargets?.targets,
+        handoff: runtimeHandoff,
+        busy: runtimeBusy,
         actions,
       }),
     [
@@ -5667,9 +5671,9 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       displayCredentialProfile,
       credentialProfiles,
       pickerModels,
-      state.accountMoveTargets,
-      state.handoffEstimate,
-      state.runtimeChangePending,
+      runtimeTargets?.targets,
+      runtimeHandoff,
+      runtimeBusy,
       actions,
     ],
   );
@@ -5683,11 +5687,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
             accountChoices: runtimeAccountChoices(
               displayCredentialProfile,
               displayPendingRuntime?.model ?? displaySession?.model,
-              sessionRuntime.accounts &&
-                state.accountMoveTargets &&
-                state.accountMoveTargets.sessionId === displayCurrentId
-                ? state.accountMoveTargets
-                : undefined,
+              sessionRuntime.accounts ? runtimeTargets : undefined,
             ),
             open: openRuntimeSection,
           }
@@ -5697,8 +5697,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       displayCredentialProfile,
       displayPendingRuntime?.model,
       displaySession?.model,
-      displayCurrentId,
-      state.accountMoveTargets,
+      runtimeTargets,
       openRuntimeSection,
     ],
   );
@@ -5723,14 +5722,15 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     if (accountTargetsKey !== undefined) requestAccountTargetsRef.current?.();
   }, [accountTargetsKey]);
   // The handoff estimate, while a change that switches engines is pending:
-  // asked again whenever what it measures changes (`handoffEstimateRefreshKey`).
+  // asked again when what it measures changes, the log once per turn
+  // (`handoffEstimateRefreshKey`).
   const requestHandoffEstimate = sessionRuntime?.engineSwitch?.onEstimate;
   const handoffEstimateKey = requestHandoffEstimate
     ? handoffEstimateRefreshKey({
         sessionId: displayCurrentId,
         pending: displayPendingRuntime,
         messageCount: displaySessionListItem?.messageCount,
-        updatedAt: displaySessionListItem?.updatedAt,
+        streaming: displaySessionListItem?.isStreaming === true,
         profiles: credentialProfiles,
       })
     : undefined;

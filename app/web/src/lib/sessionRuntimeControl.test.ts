@@ -384,7 +384,7 @@ describe("handoffEstimateRefreshKey", () => {
     sessionId: "s1",
     pending: undefined,
     messageCount: 4,
-    updatedAt: 10,
+    streaming: false,
     profiles: [
       {
         id: "cp-a",
@@ -396,7 +396,7 @@ describe("handoffEstimateRefreshKey", () => {
   };
   const key = handoffEstimateRefreshKey(base);
 
-  it("changes with the session, its target, its log and the accounts, and only then", () => {
+  it("changes with the session, its target, its log between turns and the accounts, and only then", () => {
     expect(handoffEstimateRefreshKey({ ...base })).toBe(key);
     for (const change of [
       { sessionId: "s2" },
@@ -409,9 +409,25 @@ describe("handoffEstimateRefreshKey", () => {
         },
       },
       { messageCount: 5 },
-      { updatedAt: 11 },
+      { streaming: true },
       { profiles: [{ ...base.profiles[0]!, enabled: false }] },
     ])
       expect(handoffEstimateRefreshKey({ ...base, ...change })).not.toBe(key);
+  });
+
+  it("stays the same while a running turn adds entries, so the estimate is not asked again on each (F037)", () => {
+    const running = handoffEstimateRefreshKey({ ...base, streaming: true });
+    for (const messageCount of [5, 6, 40])
+      expect(
+        handoffEstimateRefreshKey({ ...base, streaming: true, messageCount }),
+      ).toBe(running);
+    // The turn ended: asked once more, for the log it left.
+    expect(
+      handoffEstimateRefreshKey({
+        ...base,
+        streaming: false,
+        messageCount: 40,
+      }),
+    ).not.toBe(running);
   });
 });

@@ -590,6 +590,31 @@ test("Claude → pi → Claude through the set path: marker, estimate, handoff, 
   }
 });
 
+test("asking for the estimate again reads the log only once it changed (F037)", async () => {
+  const { id } = await claudeWithPendingPi("estimate-cache");
+  const handoff = await import("./sessionHandoff.ts");
+  const reads = vi.spyOn(handoff, "readHandoffRecords");
+  try {
+    const first = await pendingSwitchHandoffTokens(id);
+    const scanned = reads.mock.calls.length;
+    assert.ok(scanned > 0, "the first estimate reads the log");
+    for (let i = 0; i < 3; i++)
+      assert.equal(await pendingSwitchHandoffTokens(id), first);
+    assert.equal(
+      reads.mock.calls.length,
+      scanned,
+      "an unchanged log is not read again",
+    );
+    // The log grows (a turn's entry): the next estimate reads it again.
+    const lines = readFileSync(logPathFor(id), "utf8").trimEnd().split("\n");
+    writeFileSync(logPathFor(id), [...lines, lines.at(-1)!].join("\n") + "\n");
+    await pendingSwitchHandoffTokens(id);
+    assert.ok(reads.mock.calls.length > scanned, "a grown log is read again");
+  } finally {
+    reads.mockRestore();
+  }
+});
+
 test("a session's usage is the sum over its engines, Claude → pi → Claude, and a return counts Claude's earlier usage once (F027)", async () => {
   const { id, claude } = await claudeWithPendingPi("usage");
   await seedClaudeTranscript(id);

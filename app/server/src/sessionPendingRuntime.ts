@@ -439,6 +439,12 @@ export interface AppliedPendingRuntime {
    * enterprise, login and bench. Throws a hold that keeps the selection.
    */
   usable: () => void;
+  /**
+   * A refusal of the target by a check the caller runs after this applied
+   * (the final entitlement check), as the hold every apply refusal is: the
+   * selection stays pending and every lane keeps its work.
+   */
+  refused: (error: unknown) => Error;
   /** The turn was admitted on the target: the selection is spent. */
   commit: () => void;
   /**
@@ -682,6 +688,10 @@ export async function applyPendingRuntime(
   const boundTo = target?.id;
   return {
     ...(notice ? { notice } : {}),
+    refused: (error) =>
+      error instanceof AutomaticTurnsHeldError
+        ? error
+        : couldNot(errorText(error), target),
     usable: () => {
       unchanged();
       const now = driver.modelSelection?.();
@@ -870,6 +880,10 @@ async function applyEngineSwitch(
     notice: engineSwitchNotice(row, source, running, pending, target),
     driver: prepared.driver,
     abandon: prepared.abandon,
+    refused: (error) =>
+      error instanceof AutomaticTurnsHeldError
+        ? error
+        : couldNot(errorText(error), target),
     usable: () => {
       recheck();
       try {

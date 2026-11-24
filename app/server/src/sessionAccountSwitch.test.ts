@@ -17,6 +17,8 @@ import type { AccountSwitchOptions } from "./sessionAccount.ts";
 const offers = vi.hoisted(
   () => new Map<string, { provider: string; id: string }>(),
 );
+/** Accounts whose listing now lacks every model (an entitlement lost). */
+const lacksAll = vi.hoisted(() => new Set<string>());
 /** Per account, the pinned ids its listing lacks. */
 const lacksPin = vi.hoisted(() => new Map<string, string[]>());
 /**
@@ -53,8 +55,9 @@ vi.mock("./harnesses/models.ts", () => ({
     _model: string,
     pin?: { pinnedModelId?: string },
   ) =>
-    pin?.pinnedModelId !== undefined &&
-    (lacksPin.get(id)?.includes(pin.pinnedModelId) ?? false),
+    lacksAll.has(id) ||
+    (pin?.pinnedModelId !== undefined &&
+      (lacksPin.get(id)?.includes(pin.pinnedModelId) ?? false)),
   modelsForAccount: async ({ id }: { id: string }) =>
     pinOnly.has(id) ? [] : offered(id),
   accountOffersModel: async (id: string, provider: string, model: string) =>
@@ -1837,6 +1840,47 @@ test("the pin no longer applies once the user switched the session to another al
   profiles.setCredentialProfileEnabled(x, false);
   await s.send();
   assert.deepEqual(s.moves, [y]);
+});
+
+test("a final entitlement refusal of a pending target holds the turn like every other refusal of it (F035)", async () => {
+  const a = account("pi", "Late entitlement A");
+  const b = account("pi", "Late entitlement B");
+  const s = setup("pi", a, [undefined, undefined]);
+  host(s);
+  await s.send();
+  const pending = await choose(s, b);
+  const accountChecks = await import("./sessionAccount.ts");
+  const entitled = accountChecks.assertSessionModelEntitled;
+  // B stops listing the model after the selection's own last check, before
+  // the facade's final entitlement check.
+  const spy = vi
+    .spyOn(accountChecks, "assertSessionModelEntitled")
+    .mockImplementationOnce(async (input) => {
+      lacksAll.add(b);
+      try {
+        await entitled(input);
+      } finally {
+        lacksAll.delete(b);
+      }
+    });
+  try {
+    const held = await s.send().catch((error: unknown) => error);
+    assert.equal(spy.mock.calls.length, 1, "the final check ran");
+    assert.ok(
+      held instanceof PendingRuntimeHeldError,
+      `a hold, not ${String(held)}`,
+    );
+    assert.match(
+      held.message,
+      /^Couldn't switch to .*The change is still pending; change or reset it to continue\.$/,
+    );
+    assert.deepEqual(sessionStore.get(s.id)?.pendingRuntime, pending);
+    assert.equal(sessionStore.get(s.id)?.lastError?.message, held.message);
+    assert.equal(s.calls.length, 1, "nothing reached the provider");
+    released(s);
+  } finally {
+    spy.mockRestore();
+  }
 });
 
 test("a pending selection on Automatic judges a 5-2-pinned session by its pin: it leaves an account without 5-2 only for one that runs it", async () => {

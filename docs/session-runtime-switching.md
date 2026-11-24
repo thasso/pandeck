@@ -97,6 +97,10 @@ The turn is **held**, never failed and never run on the old engine
 - A cross-engine switch's refusals (the naming wait, an unreadable pi
   transcript, a failed open or a late account refusal) are this same hold, so
   everything below applies to them too.
+- So are the turn's final checks of the applied target, the bound account's
+  model entitlement and its enterprise rule (`AppliedPendingRuntime.refused`).
+  Only a refusal of a target the selection chose is held; a session without one
+  fails as before.
 - A user prompt is refused before anything is appended. It goes to the user's
   queue, and the error adds "Your message is waiting in your queue."
 - A skill invocation cannot be queued (Task-1023), so the server keeps it as a
@@ -148,6 +152,11 @@ selection is the same pending selection the user sets, with `setBy`
   it runs now with another pending is a change, and asks.
 - An account alone keeps the same-kind move rule and is set at once for any
   owned child.
+- The card decision and the write use the same next-turn target: the write is
+  authorized again at the write (`setSessionPendingRuntime`'s `authorize`)
+  against the selection the decision read. If it moved in between (a Reset, a
+  user change), `set_runtime` decides again from the new one, up to three times,
+  then refuses; it never writes a value decided against a stale target.
 - Asking is a `sessionRuntime` approval card (`docs/approvals.md`) naming the
   child, what it runs now and its next turn. Nothing changes until it is
   approved; the card is never granted, and a newer request for the same child
@@ -234,8 +243,12 @@ resume a native session that missed nothing. The server computes it
 `pendingSwitchHandoffTokens`) by the same selection and cap the switch delivers,
 predicting the resume without touching native data and resolving Automatic to
 the router's pick now. The client asks again when the session, its pending
-target, its message count or an account changes (`handoffEstimateRefreshKey`);
-only the latest request's answer lands. Loading, refreshing and failure follow
+target or an account changes, and once per turn (`handoffEstimateRefreshKey`): a
+running turn is one state, so its entries do not ask again, and its end does.
+Only the latest request's answer lands. The server keeps the last estimate per
+session, keyed on the log's size and modification time, the bindings, the target
+and the settings and models it reads, so an unchanged ask does not read the log
+again; delivery never reads it. Loading, refreshing and failure follow
 `app/web/docs/loading-states.md`, with Retry on a failure.
 
 While a change is pending, the composer shows a chip "Next turn: <model · effort
@@ -640,9 +653,12 @@ log from its `startedSeq` to the next binding's, and its native session also
 holds what the bindings it resumed (`resumedSeq`) wrote; anchors are read only
 from that chain, so an entry another engine wrote never names the cut. The fork
 runs on that binding's engine, from its native session at its account, model and
-effort; the child gets that binding only. An entry with no anchor in its owner's
-chain is refused like any anchorless fork. A session that never switched forks
-exactly as before.
+effort; the child gets that binding only. The native session is read where it
+lives now: a return on another Claude account copies the transcript and removes
+the old copy, so the account is the one of the last binding on its `resumedSeq`
+chain of the same engine, never one inferred from equal native ids. An entry
+with no anchor in its owner's chain is refused like any anchorless fork. A
+session that never switched forks exactly as before.
 
 ### Task links
 

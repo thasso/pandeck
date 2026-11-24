@@ -8,7 +8,13 @@
  * the fence refused someone meanwhile.
  */
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, test, vi } from "vitest";
 
@@ -1160,4 +1166,117 @@ test("the same engine and account kind is not an engine switch", async () => {
   );
   assert.equal(isSwitchingEngines(id), false);
   assert.equal(sessionStore.bindings(id).length, 1);
+});
+
+test("a fork of an earlier Claude binding reads its transcript where a return on another account moved it (F036)", async () => {
+  const id = freshId();
+  // The shared turn seam answers as "provider-store" for every session, an id
+  // only the first session to claim it keeps: this one answers as its own.
+  const native = `native-${id}`;
+  claudeSdkStore.setSeam(() =>
+    Promise.resolve({
+      ...claudeTurnSeam,
+      query(...args: Parameters<typeof claudeTurnSeam.query>) {
+        const turn = claudeTurnSeam.query(...args);
+        return {
+          async *[Symbol.asyncIterator]() {
+            for await (const message of turn)
+              yield { ...message, session_id: native } as typeof message;
+          },
+        };
+      },
+    }),
+  );
+  try {
+    await onClaude(id);
+  } finally {
+    claudeSdkStore.setSeam(() => Promise.resolve(claudeTurnSeam));
+  }
+  const first = sessionStore.activeBinding(id)!;
+  assert.equal(first.nativeSessionId, native);
+  const answer = readFileSync(logPathFor(id), "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+    .find((row) => row.type === "message" && row.role === "assistant");
+  assert.ok(answer);
+  const projects = (account: string) =>
+    join(claudeConfigDir(account), "projects", "p");
+  mkdirSync(projects(first.credentialProfileId!), { recursive: true });
+  const oldFile = join(projects(first.credentialProfileId!), `${native}.jsonl`);
+  writeFileSync(oldFile, "{}\n");
+  piOpensForReal();
+  (await prepareEngineSwitch(id, TO_PI, PENDING_PI, () => {})).commit();
+  const b = createCredentialProfile({
+    name: "Fork return B",
+    provider: "claude",
+  });
+  try {
+    // The return resumes the same native session on B: the transcript moves.
+    (
+      await prepareEngineSwitch(
+        id,
+        { ...TO_CLAUDE, credentialProfileId: b.id },
+        PENDING_CLAUDE,
+        () => {},
+      )
+    ).commit();
+    await vi.waitFor(() => assert.equal(existsSync(oldFile), false));
+    assert.equal(existsSync(join(projects(b.id), `${native}.jsonl`)), true);
+
+    let root: string | undefined;
+    claudeSdkStore.setSeam(() =>
+      Promise.resolve({
+        ...claudeTurnSeam,
+        forkSession: async (
+          nativeId: string,
+          opts: {
+            sessionStore?: {
+              root?: string;
+              load: (key: {
+                projectKey: string;
+                sessionId: string;
+              }) => Promise<unknown>;
+            };
+          },
+        ) => {
+          root = opts.sessionStore?.root;
+          const entries = await opts.sessionStore!.load({
+            projectKey: "p",
+            sessionId: nativeId,
+          });
+          if (!entries) throw new Error("the native transcript is missing");
+          return { sessionId: `fork-${freshId()}` };
+        },
+      } as never),
+    );
+    const anchors = {
+      entryFound: true,
+      seq: answer.seq as number,
+      own: "native-anchor",
+    };
+    vi.spyOn(sessionRuntime, "forkAnchors").mockReturnValue(anchors);
+    const { prepareFork } = await import("./fork.ts");
+    const prepared = prepareFork("claude-sdk", {
+      id,
+      kind: "developer",
+      file: id,
+      entryId: answer.id as string,
+      position: "at",
+      anchors,
+    });
+    assert.ok("fork" in prepared);
+    const child = await prepared.fork();
+    ids.push(child.sessionId);
+    assert.equal(root, claudeConfigDir(b.id), "read from B, where it lives");
+    assert.equal(
+      sessionStore.get(child.sessionId)?.credentialProfileId,
+      b.id,
+      "and the fork runs where its transcript was cut",
+    );
+  } finally {
+    vi.restoreAllMocks();
+    claudeSdkStore.setSeam(() => Promise.resolve(claudeTurnSeam));
+    setCredentialProfileEnabled(b.id, false);
+  }
 });
