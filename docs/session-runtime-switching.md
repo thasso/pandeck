@@ -264,7 +264,14 @@ gave every existing row, tombstones included, its first binding.
   the engine it starts on: harness, account, provider, model and effort as the
   adapter reports them. Run-completion listeners receive that stamp, so usage is
   marked against the account the run actually used; a marker without one (an
-  older log) falls back to the session's active binding.
+  older log) falls back to the session's active binding. After an account move
+  the one logical completion carries the stamp of the attempt that finished it,
+  not the first attempt's, and each attempt keeps its own marker.
+- **Offline readers** (`measure:session`, `measure:tasks`) never ask the
+  binding: it lives behind `getDb()`, which migrates, even when the directory is
+  this process's own `DATA_DIR`. They read the `session_index` projection over a
+  read-only connection and derive a pi file from the app id, which every pi
+  binding's native id equals.
 
 Until the cross-harness switch lands, no writer ends a binding or starts a
 second one.

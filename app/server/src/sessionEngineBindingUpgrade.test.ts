@@ -12,19 +12,15 @@
  *   pnpm --filter @assistant/server test src/sessionEngineBindingUpgrade.test.ts
  */
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { DatabaseSync } from "node:sqlite";
 import { afterAll, test, vi } from "vitest";
 import {
   createAssistantMessageEventStream,
@@ -32,6 +28,7 @@ import {
 } from "@earendil-works/pi-ai";
 import type { PiEngineHandle } from "./piSdk/piEngine.ts";
 import type { PiEngineOpenSpec } from "./piSdk/piEngineHost.ts";
+import { databaseBefore } from "./test/schemaBefore.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "engine-binding-upgrade-"));
 const dataDir = join(tmp, "data");
@@ -44,11 +41,6 @@ writeFileSync(
 );
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
-const MIGRATIONS_DIR = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "db",
-  "migrations",
-);
 const BINDING_MIGRATION = "0102_session_engine_binding.sql";
 const T0 = 1_760_000_000_000;
 
@@ -158,44 +150,7 @@ const ROWS: LegacyRow[] = [
 ];
 
 function seedDatabaseThrough0101(): void {
-  const files = readdirSync(MIGRATIONS_DIR)
-    .filter((name) => /^\d+_.+\.sql$/.test(name))
-    .sort();
-  const at = files.indexOf(BINDING_MIGRATION);
-  assert.ok(at > 0, "the binding migration ships");
-  mkdirSync(dataDir, { recursive: true });
-  const raw = new DatabaseSync(join(dataDir, "app.sqlite3"));
-  raw.exec("PRAGMA foreign_keys = ON");
-  raw.exec(`
-    CREATE TABLE schema_migrations (
-      version INTEGER PRIMARY KEY,
-      name TEXT NOT NULL,
-      checksum TEXT NOT NULL,
-      applied_at_ms INTEGER NOT NULL
-    )
-  `);
-  const record = raw.prepare(
-    "INSERT INTO schema_migrations (version, name, checksum, applied_at_ms) VALUES (?, ?, ?, 1)",
-  );
-  for (const name of files.slice(0, at)) {
-    const sql = readFileSync(join(MIGRATIONS_DIR, name), "utf8");
-    const foreignKeysOff = sql.includes(
-      "-- assistant:migration:foreign_keys_off",
-    );
-    if (foreignKeysOff) raw.exec("PRAGMA foreign_keys = OFF");
-    raw.exec("BEGIN IMMEDIATE");
-    raw.exec(sql);
-    record.run(
-      Number(name.split("_", 1)[0]),
-      name,
-      createHash("sha256").update(sql).digest("hex"),
-    );
-    raw.exec("COMMIT");
-    if (foreignKeysOff) {
-      raw.exec("PRAGMA legacy_alter_table = OFF");
-      raw.exec("PRAGMA foreign_keys = ON");
-    }
-  }
+  const raw = databaseBefore(dataDir, BINDING_MIGRATION);
   const insert = raw.prepare(
     `INSERT INTO session_index (
        id, scope, purpose, harness, agent_type, title, created_at_ms,

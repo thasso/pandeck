@@ -378,10 +378,13 @@ interface DeferredRunSettlement {
   failure?: RunFailureReport;
   finished: boolean;
   outcome?: RunOutcome;
-  completion?: {
-    origin: PromptOrigin | undefined;
-    engine: RunEngine | undefined;
-  };
+  completion?: { origin: PromptOrigin | undefined };
+  /**
+   * The engine of the attempt that finished the logical run. After an account
+   * move that is the replacement's, not the first attempt's: the completion
+   * reports the account the turn ended on.
+   */
+  terminalEngine?: RunEngine;
   publishCompletion?: boolean;
   completionPublished?: boolean;
   finish?: (
@@ -460,6 +463,8 @@ export class LiveRuntimeSession {
           origin: deferred.failure?.origin ?? terminalFailure.origin,
         });
       deferred.outcome = outcome;
+      const terminalEngine = this.recentEngines.get(terminal.runId);
+      if (terminalEngine) deferred.terminalEngine = terminalEngine;
       deferred.publishCompletion = publishCompletion;
       this.recentOutcomes.set(runId, outcome);
       this.deliverRunOutcome(outcome);
@@ -489,7 +494,7 @@ export class LiveRuntimeSession {
       this.sessionId,
       deferred.outcome.stopReason,
       deferred.completion.origin,
-      deferred.completion.engine,
+      deferred.terminalEngine,
     );
   }
 
@@ -586,6 +591,8 @@ export class LiveRuntimeSession {
    * run closed (a withdrawn steer). Bounded: only the newest matter.
    */
   private readonly recentOutcomes = new Map<string, RunOutcome>();
+  /** The engine stamp of each of those runs, bounded the same way. */
+  private readonly recentEngines = new Map<string, RunEngine | undefined>();
   /**
    * Why the open turn is running. A visible human steer takes precedence over
    * its earlier trigger: once the user joins a turn, its result is theirs.
@@ -755,6 +762,11 @@ export class LiveRuntimeSession {
       for (const old of this.recentOutcomes.keys()) {
         if (this.recentOutcomes.size <= RECENT_OUTCOMES_MAX) break;
         this.recentOutcomes.delete(old);
+      }
+      this.recentEngines.set(runId, this.turnEngine);
+      for (const old of this.recentEngines.keys()) {
+        if (this.recentEngines.size <= RECENT_OUTCOMES_MAX) break;
+        this.recentEngines.delete(old);
       }
       const deferred = this.deferredSettlements.get(runId);
       if (deferred) deferred.nativeOutcome = outcome;
@@ -1653,7 +1665,7 @@ export class LiveRuntimeSession {
           ? this.deferredSettlements.get(completedRunId)
           : undefined;
         if (deferred) {
-          deferred.completion = { origin, engine };
+          deferred.completion = { origin };
           this.publishDeferredCompletion(deferred);
         } else
           emitRunCompleted(this.sessionId, event.stopReason, origin, engine);
