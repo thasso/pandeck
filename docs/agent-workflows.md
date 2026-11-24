@@ -336,8 +336,9 @@ the outcome:
   accounts listed. The pending change shows as chosen by its coordinating
   session; a user who takes the child over sees it and may reset it. It never
   changes the enterprise requirement. `model` and `effort` set the child's next
-  model and effort the same way; a model its definition does not list asks the
-  user first (`docs/session-runtime-switching.md` "Coordinator switching").
+  model and effort the same way; a model its definition does not list, or a
+  model or effort change of a child without one, asks the user first
+  (`docs/session-runtime-switching.md` "Coordinator switching").
 
   #### Peer-message hop limit
 

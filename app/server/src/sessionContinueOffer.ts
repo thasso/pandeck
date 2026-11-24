@@ -89,13 +89,18 @@ async function offerFor(report: RunFailureReport): Promise<void> {
     return;
   latestFailedRun.set(sessionId, runId);
   // The failure's own record (`sessionActivity.ts`, on the run's error
-  // status) lands in the same stack as this report: let it, then attach.
-  await new Promise((resolve) => setImmediate(resolve));
+  // status) lands later in this same synchronous stack, or before it for a
+  // deferred settlement; a run start clears an older one. So once this stack
+  // unwound, and before anything else is awaited, the row's failure is this
+  // turn's: the offer attaches to that failure or to none.
+  await Promise.resolve();
+  const failureAt = sessionStore.get(sessionId)?.lastError?.at;
+  if (failureAt === undefined || latestFailedRun.get(sessionId) !== runId)
+    return;
   const choices = await continueChoices(sessionId);
   if (latestFailedRun.get(sessionId) !== runId) return;
   latestFailedRun.delete(sessionId);
-  const failureAt = sessionStore.get(sessionId)?.lastError?.at;
-  if (failureAt === undefined || choices.length === 0) return;
+  if (choices.length === 0) return;
   if (sessionStore.recordContinueOffer(sessionId, failureAt, choices))
     publishRows();
 }
@@ -187,9 +192,10 @@ export class ContinueOfferGoneError extends Error {}
 
 /**
  * The user's "Continue on <model>": the failure they saw (`failureAt`) must
- * still be the session's and still offer `model`. Sets the pending selection
- * to it (Automatic account) without offering held work its turn, then starts
- * the continuation of the failed turn at once: no user row, the user's
+ * still be the session's and still offer `model`, and the session idle, at
+ * the write itself. Sets the pending selection to it (Automatic account)
+ * without offering held work its turn, and with that write starts the
+ * continuation of the failed turn: no user row, the user's
  * authority past a Stop (`resumeHold`), admitted ahead of queued work, which
  * follows on the new engine. Resolves when the continuation reached the
  * provider; rejects with why nothing ran.
@@ -203,9 +209,8 @@ export async function continueOnModel(
   },
 ): Promise<void> {
   const sessionId = driver.sessionId;
-  const choice = currentChoice(sessionId, request);
-  if (driver.isRunning)
-    throw new ContinueOfferGoneError("The session is already running again.");
+  const choice = stillOffered(driver, request);
+  let continued: Promise<void> | undefined;
   await setSessionPendingRuntime(
     sessionId,
     {
@@ -214,23 +219,46 @@ export async function continueOnModel(
       account: { kind: "automatic" },
     },
     "user",
-    { wake: false },
+    {
+      wake: false,
+      // Asked again with the write itself: a run that started, a Dismiss or a
+      // newer failure while the target resolved retired the offer, and a
+      // retired offer writes nothing.
+      authorize: () => {
+        stillOffered(driver, request);
+      },
+      // In the same synchronous step as that write, the continuation claims
+      // the session's admission, so nothing else starts a turn between them.
+      written: () => {
+        continued = startContinuation(driver, request.resumeHold);
+      },
+    },
   );
-  // Asked again after every await: a run that started meanwhile, or a newer
-  // failure, is not the turn this click continues.
-  currentChoice(sessionId, request);
-  if (driver.isRunning)
-    throw new ContinueOfferGoneError("The session is already running again.");
+  if (!continued)
+    throw new ContinueOfferGoneError(
+      "This failure no longer offers that model.",
+    );
+  await continued;
+}
+
+/**
+ * The continuation of the failed turn: no user row, the user's authority past
+ * a Stop (`resumeHold`), the selection applied at its admission. Resolves when
+ * it reached the provider; rejects with why nothing ran.
+ */
+function startContinuation(
+  driver: RuntimePromptDriver,
+  resumeHold: HumanResumeToken | undefined,
+): Promise<void> {
+  const sessionId = driver.sessionId;
   const receipt = promptRuntimeSession(driver, "", {
     hidden: true,
     continuation: true,
     origin: { kind: "human" },
     contextBlock: CONTINUE_CONTEXT,
-    ...(request.resumeHold?.sessionId === sessionId
-      ? { resumeHold: request.resumeHold }
-      : {}),
+    ...(resumeHold?.sessionId === sessionId ? { resumeHold } : {}),
   });
-  await new Promise<void>((resolve, reject) => {
+  const reached = new Promise<void>((resolve, reject) => {
     let answered = false;
     receipt.observe((event) => {
       if (answered || event.type !== "provider-called") return;
@@ -254,6 +282,21 @@ export async function continueOnModel(
       },
     );
   });
+  // Awaited once the write's announcement is out; never an unhandled rejection
+  // meanwhile.
+  reached.catch(() => {});
+  return reached;
+}
+
+/** The offer the click names, while the session is idle and still offers it. */
+function stillOffered(
+  driver: RuntimePromptDriver,
+  request: { failureAt: number; model: { provider: string; id: string } },
+): SessionContinueChoice {
+  const choice = currentChoice(driver.sessionId, request);
+  if (driver.isRunning)
+    throw new ContinueOfferGoneError("The session is already running again.");
+  return choice;
 }
 
 function currentChoice(

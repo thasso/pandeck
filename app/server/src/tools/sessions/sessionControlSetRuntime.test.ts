@@ -369,16 +369,13 @@ describe("session_control set_runtime: model", () => {
       ),
       [listed.id, legacy.id, plain.id],
     );
-    // An effort or account alone, or the model it runs, never asks.
-    await tool().execute(
-      { operation: "set_runtime", targetSessionId: plain.id, effort: "high" },
-      context(caller),
-    );
+    // The model it runs already is no change, so it never asks, and writes
+    // nothing a reset could turn into an unapproved change.
     assert.equal(
-      sessionStore.get(plain.id)?.pendingRuntime?.thinkingLevel,
-      "high",
+      text(await setModel(caller, plain.id, "gpt-5.5")),
+      `${plain.id} keeps what it runs on now; nothing is pending.`,
     );
-    await setModel(caller, plain.id, "gpt-5.5");
+    assert.equal(sessionStore.get(plain.id)?.pendingRuntime, undefined);
     assert.equal(cards(caller).length, 3);
 
     await resolveApproval(pending[0]!.id, "approved");
@@ -387,6 +384,56 @@ describe("session_control set_runtime: model", () => {
       sessionStore.get(listed.id)?.pendingRuntime?.setBy,
       "coordinator",
     );
+  });
+
+  it("asks for an effort change only of a child without a definition; an account alone never asks", async () => {
+    const a = account("Effort A");
+    const b = account("Effort B");
+    const caller = seed("Coordinator");
+    const listed = child(caller, a);
+    asAgent(listed.id, ["gpt-5.5"]);
+    const plain = child(caller, a);
+    const setEffort = (target: string) =>
+      tool().execute(
+        { operation: "set_runtime", targetSessionId: target, effort: "high" },
+        context(caller),
+      );
+
+    // A definition vouches for any effort of its own.
+    assert.equal((await setEffort(listed.id)).terminate, undefined);
+    assert.equal(
+      sessionStore.get(listed.id)?.pendingRuntime?.thinkingLevel,
+      "high",
+    );
+
+    // A child without one has nothing to vouch for it.
+    const asked = await setEffort(plain.id);
+    assert.equal(asked.terminate, true);
+    assert.match(text(asked), /Nothing changed yet/);
+    assert.equal(sessionStore.get(plain.id)?.pendingRuntime, undefined);
+    const [card] = cards(caller);
+    assert.equal(card?.title, "Change a child's effort");
+
+    // The account rule predates model switching: no card for any owned child.
+    const moved = await tool().execute(
+      {
+        operation: "set_runtime",
+        targetSessionId: plain.id,
+        account: "Effort B",
+      },
+      context(caller),
+    );
+    assert.equal(moved.terminate, undefined);
+    assert.deepEqual(sessionStore.get(plain.id)?.pendingRuntime?.account, {
+      kind: "account",
+      id: b,
+    });
+
+    await resolveApproval(card!.id, "approved");
+    const pending = sessionStore.get(plain.id)?.pendingRuntime;
+    assert.equal(pending?.thinkingLevel, "high");
+    assert.equal(pending?.model.id, "gpt-5.5", "the model stays");
+    assert.equal(pending?.setBy, "coordinator");
   });
 
   it("fails an approved card when the user took the child over meanwhile", async () => {

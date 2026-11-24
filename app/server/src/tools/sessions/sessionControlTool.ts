@@ -3,8 +3,9 @@
  * child, or, while it is not running, dismiss its unhandled background updates
  * or make it enterprise-only. `set_runtime` sets the child's pending model,
  * effort or account, applied when its next turn starts, at any time; a model
- * its agent definition does not list asks the user on a `sessionRuntime` card
- * first (`docs/agent-definitions.md` "Switching a child"). A sender may
+ * its agent definition does not list, or a model or effort change of a child
+ * without one, asks the user on a `sessionRuntime` card first
+ * (`docs/agent-definitions.md` "Switching a child"). A sender may
  * retract only its own messages. The other operations require a direct spawn
  * edge still owned by `coordinator`; user takeover revokes them.
  */
@@ -89,7 +90,7 @@ function makeSessionControlTool() {
     name: "session_control",
     label: "Control Session",
     description:
-      "Abort a child you spawned and still own, or retract your own waiting peer deliveries. The cancellation operation removes every delivery YOU sent to the target that has not started dispatching. The stop operation aborts the child's current turn. Its `clearQueue` option cancels every not-yet-dispatched delivery queued for that child before aborting, so the idle transition does not start the next turn. A child the user took over cannot be stopped. Stopping does not archive or delete it. dismiss_background_updates is the user's Dismiss for every unhandled update of your still-owned direct child, refused while it runs; dismissal is not handling and leaves jobs and output unchanged. require_enterprise makes that idle child enterprise-only for good; its next prompt moves it to an enterprise account. set_runtime sets that child's model, effort or account for its next turn; a model its agent definition does not list, or any model change of a child not spawned from one, puts a card in front of the user and you end your turn.",
+      "Abort a child you spawned and still own, or retract your own waiting peer deliveries. The cancellation operation removes every delivery YOU sent to the target that has not started dispatching. The stop operation aborts the child's current turn. Its `clearQueue` option cancels every not-yet-dispatched delivery queued for that child before aborting, so the idle transition does not start the next turn. A child the user took over cannot be stopped. Stopping does not archive or delete it. dismiss_background_updates is the user's Dismiss for every unhandled update of your still-owned direct child, refused while it runs; dismissal is not handling and leaves jobs and output unchanged. require_enterprise makes that idle child enterprise-only for good; its next prompt moves it to an enterprise account. set_runtime sets that child's model, effort or account for its next turn; a model its agent definition does not list, or any model or effort change of a child not spawned from one, needs the user's card: end your turn.",
     searchHint:
       "stop abort spawned child cancel retract remove queued peer delivery clear queue dismiss unhandled background updates require enterprise account cybersecurity refusal move switch account model effort runtime",
     parameters: {
@@ -236,9 +237,11 @@ const PENDING_NOTE =
   "Nothing changed yet. Do not claim it did until the approved result appears.";
 
 /**
- * Set an owned child's pending model, effort or account. Within the models
- * its frozen agent definition lists (and for an account or effort alone) it
- * is set now; any other model asks the user first.
+ * Set an owned child's pending model, effort or account. An account alone is
+ * set now for any owned child. A child spawned from an agent definition gets
+ * its listed models and any effort now; a child without one asks the user
+ * first for any model or effort change, as does any model a definition does
+ * not list.
  */
 async function setChildRuntime(
   ctx: { session: { sessionId: string }; toolCallId?: string },
@@ -259,6 +262,10 @@ async function setChildRuntime(
     model !== undefined &&
     !sameModel(model, current?.model) &&
     !sameModel(model, row.pendingRuntime?.model);
+  const changesEffort =
+    effort !== undefined &&
+    effort !== (current?.thinkingLevel ?? "off") &&
+    effort !== row.pendingRuntime?.thinkingLevel;
   let account: { id: string; name: string; current: boolean } | undefined;
   if (params.account !== undefined) {
     if (changesModel) {
@@ -279,13 +286,34 @@ async function setChildRuntime(
     ...(effort ? { thinkingLevel: effort } : {}),
     ...(account ? { account: { kind: "account", id: account.id } } : {}),
   };
-  if (changesModel && !definitionLists(targetSessionId, model))
-    return proposeChildRuntime(ctx, row, current, change, model, account);
+  // A definition vouches for its listed models and any effort; a child
+  // without one has nothing to vouch for a model or effort change.
+  const listed = frozenListedModels(targetSessionId);
+  const needsCard = listed
+    ? changesModel && !listed.some((entry) => sameModel(entry, model))
+    : changesModel || changesEffort;
+  if (needsCard) {
+    const next = model ?? row.pendingRuntime?.model ?? current?.model;
+    if (!next) throw new Error("This session has no model to change from yet.");
+    return proposeChildRuntime(ctx, row, current, change, next, account, {
+      changesModel,
+    });
+  }
+  // Without a definition only the account is ever written without a card: a
+  // model or effort that changed nothing when read is left out, so a reset
+  // meanwhile cannot turn it into an unapproved change.
+  const write: SessionRuntimeChange = listed
+    ? change
+    : change.account
+      ? { account: change.account }
+      : {};
+  if (!write.model && !write.thinkingLevel && !write.account)
+    return textResult(pendingText(targetSessionId, row.pendingRuntime));
   // The user may take the child over while the selection resolves: the
   // ownership edge is asked again with the write itself.
   const pending = await setSessionPendingRuntime(
     targetSessionId,
-    change,
+    write,
     "coordinator",
     {
       authorize: () =>
@@ -331,25 +359,21 @@ function sameModel(
 }
 
 /**
- * Whether the child's frozen agent definition lists `model`. A child not
- * spawned from one, or whose stored definition is unreadable, lists none; a
- * row frozen before definitions recorded their list lists only its own.
+ * The models the child's frozen agent definition lists, or undefined for a
+ * child not spawned from one (or whose stored definition is unreadable). A row
+ * frozen before definitions recorded their list lists only its own model.
  */
-function definitionLists(
+function frozenListedModels(
   sessionId: string,
-  model: { provider: string; id: string },
-): boolean {
+): Array<{ provider: string; id: string }> | undefined {
   let agent: ReturnType<typeof sessionAgent>;
   try {
     agent = sessionAgent(sessionId);
   } catch {
-    return false;
+    return undefined;
   }
-  if (!agent) return false;
-  const listed = agent.listedModels ?? [
-    { provider: agent.provider, id: agent.model },
-  ];
-  return listed.some((entry) => sameModel(entry, model));
+  if (!agent) return undefined;
+  return agent.listedModels ?? [{ provider: agent.provider, id: agent.model }];
 }
 
 function resolveAccountName(value: unknown): { id: string; name: string } {
@@ -396,6 +420,7 @@ function proposeChildRuntime(
   change: SessionRuntimeChange,
   model: { provider: string; id: string; name?: string },
   account: { id: string; name: string } | undefined,
+  { changesModel }: { changesModel: boolean },
 ) {
   let agentName: string | undefined;
   try {
@@ -426,7 +451,7 @@ function proposeChildRuntime(
   const card = createApproval({
     sessionId: ctx.session.sessionId,
     kind: "sessionRuntime",
-    title: "Switch a child's model",
+    title: changesModel ? "Switch a child's model" : "Change a child's effort",
     summary,
     ...(ctx.toolCallId ? { sourceToolCallId: ctx.toolCallId } : {}),
     body,
@@ -438,7 +463,7 @@ function proposeChildRuntime(
     content: [
       {
         type: "text" as const,
-        text: `Asked the user to ${summary}${agentName ? `, a model agent "${agentName}" does not list` : ""}. ${PENDING_NOTE} ${approvalCardReference(card)}`,
+        text: `Asked the user to ${summary}${agentName && changesModel ? `, a model agent "${agentName}" does not list` : ""}. ${PENDING_NOTE} ${approvalCardReference(card)}`,
       },
     ],
     terminate: true,

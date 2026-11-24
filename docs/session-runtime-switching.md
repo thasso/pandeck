@@ -124,14 +124,20 @@ or account with `session_control` `set_runtime` (`sessionControlTool.ts`). The
 selection is the same pending selection the user sets, with `setBy`
 `coordinator`, so its marker reads `— chosen by its coordinating session.`
 
-- A model the child's frozen agent definition lists (`listedModels`, frozen at
-  spawn from the definition's model choices; `docs/agent-definitions.md`) is set
-  at once, as is an effort or account change that keeps the model.
-- Any other model, and every model change of a child not spawned from a
-  definition (or spawned before `listedModels` was frozen), asks the user: a
-  `sessionRuntime` approval card (`docs/approvals.md`) naming the child, what it
-  runs now and its next turn. Nothing changes until it is approved; the card is
-  never granted, and a newer request for the same child supersedes it.
+- A child spawned from an agent definition: a model its frozen definition lists
+  (`listedModels`, frozen at spawn from the definition's model choices; a row
+  frozen before reads as listing its own model only;
+  `docs/agent-definitions.md`) and any effort are set at once. Any other model
+  asks the user.
+- A child without a definition: any model or effort change asks the user. A
+  model or effort equal to what it runs or has pending is left out of the write,
+  so only an account is ever set for it without a card.
+- An account alone keeps the same-kind move rule and is set at once for any
+  owned child.
+- Asking is a `sessionRuntime` approval card (`docs/approvals.md`) naming the
+  child, what it runs now and its next turn. Nothing changes until it is
+  approved; the card is never granted, and a newer request for the same child
+  supersedes it.
 - Ownership is asked again at the write, also when the card is approved: a child
   the user took over, or a coordinator no longer its owner, changes nothing and
   the card fails.
@@ -151,15 +157,22 @@ the user's click continues anything.
   one's position among its own kind's. At most four. They are stored with the
   failure (`session_index.last_error_continue_json`, migration 0105) and carried
   as `continueOn` on its `SessionRunFailure`; a new failure, a run start, or
-  Dismiss clears them. User sessions only, never the permanent assistant.
+  Dismiss clears them. The failure an offer belongs to is read before the
+  choices are computed and the offer is written only while the row still holds
+  it, so a newer failure that started no run (a pending selection's hold) never
+  receives it. User sessions only, never the permanent assistant.
 - **Click** (`continueOnModel`). The offer must still belong to the failure the
   user saw (`failureAt`) and list the model, and the session must be idle;
   otherwise nothing changes and the answer carries the error. It sets the
   pending selection (model, clamped effort, Automatic account, `setBy` user)
-  without waking held work, then starts the continuation of the failed turn
-  through `runtimePrompt.ts`: no user row, the continue context as model-only
-  text, the switch's handoff as for any turn. Admission applies the selection as
-  above, so a refusal holds it pending like any other.
+  without waking held work. All three conditions are asked again with the write
+  itself (the setter's `authorize`), so an offer a run start, Dismiss or newer
+  failure retired while the target resolved writes nothing. In the same
+  synchronous step as the write it starts the continuation of the failed turn
+  through `runtimePrompt.ts`, which claims the session's admission at once: no
+  user row, the continue context as model-only text, the switch's handoff as for
+  any turn. Admission applies the selection as above, so a refusal holds it
+  pending like any other.
 - **Authority and order.** The click is the user's resume authority, captured
   when it arrived: it passes a Stop's hold and spends it once the provider is
   called. It is admitted ahead of queued work, which follows on the new engine;

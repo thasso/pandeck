@@ -229,6 +229,12 @@ interface PendingRuntimeWriteOptions {
    * applies the selection itself, ahead of that work ("Continue on").
    */
   wake?: boolean;
+  /**
+   * Run synchronously with the authorized write, whether or not it changed
+   * the selection, so the caller's own turn claims the session before anything
+   * else can start one there ("Continue on").
+   */
+  written?: () => void;
 }
 
 /**
@@ -270,6 +276,7 @@ export async function setSessionPendingRuntime(
       options.authorize?.();
       if (!samePendingRuntime(next, latest.pendingRuntime))
         sessionStore.setPendingRuntime(sessionId, next ?? null);
+      options.written?.();
       return next;
     }
   });

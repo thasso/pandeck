@@ -396,11 +396,13 @@ The session runs the model it was spawned on, never one a harness picks:
 
 An owning coordinator may switch its still-owned direct child with
 `session_control` `set_runtime` (`session-runtime-switching.md` "Coordinator
-switching"). A model in the child's frozen `listedModels` is set at once; any
-other model, or a model change of a child spawned without a definition or before
-`listedModels` was frozen, needs a `sessionRuntime` approval card. A frozen row
-without the list is read as listing only its own model, so it never switches
-more freely than the definition allowed.
+switching"). For a child spawned from a definition, a model in its frozen
+`listedModels` and any effort are set at once; any other model needs a
+`sessionRuntime` approval card. A frozen row without the list is read as listing
+only its own model, so it never switches more freely than the definition
+allowed. A child without a definition has nothing to vouch for a switch: any
+model or effort change needs the card. An account alone keeps the older
+same-kind move rule and is set at once for any owned child.
 
 ### How the definition reaches the model
 

@@ -10,6 +10,12 @@ import { afterAll, afterEach, beforeAll, test, vi } from "vitest";
 import type { ModelOption } from "@assistant/shared";
 import { randomUUID } from "node:crypto";
 
+/** A test may hold eligibility or routing open to act while they resolve. */
+const gates = vi.hoisted(() => ({
+  offers: undefined as undefined | (() => Promise<void>),
+  pick: undefined as undefined | (() => Promise<void>),
+}));
+
 vi.mock("./harnesses/models.ts", async (importOriginal) => {
   const original =
     await importOriginal<typeof import("./harnesses/models.ts")>();
@@ -46,7 +52,10 @@ vi.mock("./sessionAccountMove.ts", async (importOriginal) => {
   return {
     ...original,
     modelRefusal: async () => undefined,
-    accountOffersSelection: async () => true,
+    accountOffersSelection: async () => {
+      await gates.offers?.();
+      return true;
+    },
     assertStillEligible: () => {},
   };
 });
@@ -55,21 +64,26 @@ vi.mock("./accountRouter.ts", async (importOriginal) => {
   // Routing is not under test: each kind's default account is the pick.
   return {
     ...original,
-    pickAccount: async (request: { model: { provider: string } }) => ({
-      profileId:
-        request.model.provider === "openai-codex"
-          ? "default"
-          : "claude-default",
-      degraded: false,
-    }),
+    pickAccount: async (request: { model: { provider: string } }) => {
+      await gates.pick?.();
+      return {
+        profileId:
+          request.model.provider === "openai-codex"
+            ? "default"
+            : "claude-default",
+        degraded: false,
+      };
+    },
   };
 });
 
 /** The terminal-failure listener `installContinueOffers` subscribed. */
 const terminal: {
-  listener?: (
-    report: import("./session/runtime/liveSession.ts").RunFailureReport,
-  ) => void;
+  listener?:
+    | ((
+        report: import("./session/runtime/liveSession.ts").RunFailureReport,
+      ) => void)
+    | undefined;
 } = {};
 vi.mock("./session/runtime/liveSession.ts", async (importOriginal) => {
   const original =
@@ -220,6 +234,8 @@ beforeAll(() => {
   };
 });
 afterEach(async () => {
+  gates.offers = undefined;
+  gates.pick = undefined;
   pi.live.clear();
   opened.length = 0;
   for (const id of ids.splice(0)) {
@@ -375,4 +391,83 @@ test("a click on a failure that no longer offers the model changes nothing", asy
   assert.equal(sessionStore.get(id)?.pendingRuntime, undefined);
   assert.equal(sessionStore.get(id)?.harness, "claude-sdk");
   assert.deepEqual(opened, []);
+});
+
+/** A gate: `entered` once something waits on it, open after `release()`. */
+function gate() {
+  let release!: () => void;
+  let enter!: () => void;
+  const open = new Promise<void>((resolve) => (release = resolve));
+  const entered = new Promise<void>((resolve) => (enter = resolve));
+  return {
+    release,
+    entered,
+    wait: async () => {
+      enter();
+      await open;
+    },
+  };
+}
+
+test.each([
+  ["a run start", (id: string) => sessionStore.clearRunFailure(id)],
+  [
+    "a newer failure",
+    (id: string) => sessionStore.recordRunFailure(id, "again", Date.now() + 1),
+  ],
+] as const)(
+  "%s while Continue resolves its target retires the offer, and nothing is left pending",
+  async (_name, retire) => {
+    const { id, claude, failureAt } = await failedOnClaude("retired");
+    sessionStore.recordContinueOffer(id, failureAt, [SOL]);
+    const held = gate();
+    gates.offers = held.wait;
+    const click = continueOnModel(claude, {
+      failureAt,
+      model: { provider: SOL.provider, id: SOL.id },
+      resumeHold: undefined,
+    });
+    await held.entered;
+    retire(id);
+    held.release();
+    await assert.rejects(click, ContinueOfferGoneError);
+    assert.equal(
+      sessionStore.get(id)?.pendingRuntime,
+      undefined,
+      "a retired offer writes nothing",
+    );
+    assert.equal(sessionStore.get(id)?.harness, "claude-sdk");
+    assert.deepEqual(opened, []);
+  },
+);
+
+test("an offer computed for one failure never attaches to a newer one that started no run", async () => {
+  const uninstall = installContinueOffers();
+  try {
+    const { id } = await failedOnClaude("replaced");
+    const held = gate();
+    gates.pick = held.wait;
+    terminal.listener!({
+      sessionId: id,
+      runId: "run-quota",
+      origin: undefined,
+      errorMessage: undefined,
+      failure: { kind: "quota" },
+      at: Date.now(),
+    });
+    await held.entered;
+    // A pending selection's hold records its reason without starting a run.
+    sessionStore.recordRunFailure(
+      id,
+      "Waiting for background work on Claude; stop it to switch now.",
+      Date.now() + 1,
+    );
+    held.release();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const failure = sessionStore.get(id)?.lastError;
+    assert.match(failure?.message ?? "", /Waiting for background work/);
+    assert.equal(failure?.continueOn, undefined);
+  } finally {
+    uninstall();
+  }
 });
