@@ -4,9 +4,11 @@
  * effort and account its NEXT turn starts on (`docs/session-runtime-switching.md`).
  * A change is pending until that turn is admitted; nothing about the engine
  * changes before then, so the section shows "Next turn: …" and one Reset.
- * Models of another harness or account kind are listed but disabled, each with
- * its reason. A refusal reaches the user as the session's failure
- * (`lib/messageArrival.ts`); these controls show only that a change is busy.
+ * A model of another harness or account kind moves the session to that engine
+ * at the next turn; while one is pending the section shows how much earlier
+ * conversation that switch hands over. A refusal reaches the user as the
+ * session's failure (`lib/messageArrival.ts`); these controls show only that a
+ * change is busy.
  */
 import { RotateCcw } from "lucide-react";
 import {
@@ -33,7 +35,12 @@ import {
   PropertyList,
   PropertyText,
 } from "./common/PropertyList.tsx";
-import { EmptyBox, ErrorNote, Spinner } from "./common/load.tsx";
+import {
+  EmptyBox,
+  ErrorNote,
+  RefreshIndicator,
+  Spinner,
+} from "./common/load.tsx";
 import { dataOf, errorOf, type LoadState } from "../lib/loadState.ts";
 
 /** What the Runtime section needs from the app. */
@@ -45,13 +52,12 @@ export interface SessionRuntimeControl {
     accountName: string | undefined;
   };
   pending: SessionPendingRuntime | undefined;
-  /** Every model the pickers know, this session's harness first. */
+  /** Every model the pickers know, this session's engine first. */
   models: ModelOption[];
-  /** Why a model cannot be this session's next one, or undefined when it can. */
-  modelRefusal: (model: ModelOption) => string | undefined;
   /**
-   * The accounts it could move to, as the server judged them; undefined
-   * until asked. Absent entirely when its account cannot change (an endpoint).
+   * The accounts the next turn's model may run on, as the server judged
+   * them; undefined until asked. Absent entirely when that model's account
+   * cannot change (an endpoint).
    */
   accounts:
     | {
@@ -62,6 +68,20 @@ export interface SessionRuntimeControl {
         nameOf: (id: string) => string | undefined;
       }
     | undefined;
+  /**
+   * Present while the pending change moves the session to another engine
+   * (another harness or account kind).
+   */
+  engineSwitch?: {
+    /** The target's account kind, for Automatic's hint ("OpenAI"). */
+    kindLabel: string;
+    /** The one account an endpoint model runs on. */
+    fixedAccountName?: string | undefined;
+    /** The server's estimate of what it hands over; undefined until asked. */
+    handoff: LoadState<number | null> | undefined;
+    /** Ask the server for it (again). */
+    onEstimate: () => void;
+  };
   /** A change this browser sent is not answered yet. */
   busy: boolean;
   onChange: (change: SessionRuntimeChange) => void;
@@ -95,7 +115,7 @@ export function SessionRuntimeSection({
 }: {
   control: SessionRuntimeControl;
 }) {
-  const { current, pending, models, accounts } = control;
+  const { current, pending, models, accounts, engineSwitch } = control;
   const targetModel = pending?.model ?? current.model;
   const targetOption = targetModel
     ? models.find((option) => modelKey(option) === modelKey(targetModel))
@@ -156,25 +176,12 @@ export function SessionRuntimeSection({
           </SelectValue>
         </SelectTrigger>
         <SelectContent align="start" className="w-72">
-          {models.map((model) => {
-            const refusal = control.modelRefusal(model);
-            return (
-              <SelectItem
-                key={modelKey(model)}
-                value={modelKey(model)}
-                disabled={refusal !== undefined}
-                title={refusal}
-              >
-                <ProviderIcon provider={model.provider} size={14} />
-                <span className="min-w-0 truncate">{model.name}</span>
-                {refusal ? (
-                  <span className="ml-auto truncate text-xs text-muted-foreground">
-                    {refusal}
-                  </span>
-                ) : null}
-              </SelectItem>
-            );
-          })}
+          {models.map((model) => (
+            <SelectItem key={modelKey(model)} value={modelKey(model)}>
+              <ProviderIcon provider={model.provider} size={14} />
+              <span className="min-w-0 truncate">{model.name}</span>
+            </SelectItem>
+          ))}
         </SelectContent>
       </Select>
 
@@ -235,14 +242,18 @@ export function SessionRuntimeSection({
                 <SelectValue>
                   {pending?.account.kind === "account"
                     ? (accounts.nameOf(pending.account.id) ?? "Another account")
-                    : `Automatic · ${current.accountName}`}
+                    : engineSwitch
+                      ? "Automatic"
+                      : `Automatic · ${current.accountName}`}
                 </SelectValue>
               </SelectTrigger>
               <SelectContent align="start" className="w-64">
                 <SelectItem value={AUTOMATIC}>
                   Automatic
                   <span className="ml-auto text-xs text-muted-foreground">
-                    keeps {current.accountName} when it can
+                    {engineSwitch
+                      ? `chooses among ${engineSwitch.kindLabel} accounts`
+                      : `keeps ${current.accountName} when it can`}
                   </span>
                 </SelectItem>
                 {accountsError !== undefined ? (
@@ -287,7 +298,9 @@ export function SessionRuntimeSection({
             </Select>
           ) : (
             <PropertyText className="truncate">
-              {current.accountName}
+              {engineSwitch
+                ? (engineSwitch.fixedAccountName ?? engineSwitch.kindLabel)
+                : current.accountName}
             </PropertyText>
           )}
         </>
@@ -321,6 +334,15 @@ export function SessionRuntimeSection({
                 : ""}
             </span>
           </PropertyText>
+          {engineSwitch ? (
+            <>
+              <PropertyLabel>Handoff</PropertyLabel>
+              <HandoffEstimate
+                estimate={engineSwitch.handoff}
+                onRetry={engineSwitch.onEstimate}
+              />
+            </>
+          ) : null}
           <span aria-hidden />
           <Button
             variant="ghost"
@@ -336,4 +358,56 @@ export function SessionRuntimeSection({
       ) : null}
     </PropertyList>
   );
+}
+
+/**
+ * "Hands over ~12k tokens": how much earlier conversation the pending switch
+ * gives the new engine, from the server's own selection and budget. Loading
+ * until the first answer; a refresh keeps the last figure beside a marker.
+ */
+function HandoffEstimate({
+  estimate,
+  onRetry,
+}: {
+  estimate: LoadState<number | null> | undefined;
+  onRetry: () => void;
+}) {
+  const error = estimate ? errorOf(estimate) : undefined;
+  const tokens = estimate ? dataOf(estimate) : undefined;
+  if (error !== undefined && tokens === undefined)
+    return <ErrorNote message={error} onRetry={onRetry} />;
+  if (tokens === undefined)
+    return (
+      <PropertyText>
+        <span role="status" className="flex items-center gap-2">
+          <Spinner size="sm" />
+          Estimating the handoff…
+        </span>
+      </PropertyText>
+    );
+  return (
+    <PropertyText className="flex min-w-0 items-center gap-2">
+      <span className="truncate">{handoffEstimateText(tokens)}</span>
+      {estimate?.status === "refreshing" ? (
+        <RefreshIndicator label="Updating the estimate" />
+      ) : null}
+      {error !== undefined ? (
+        <ErrorNote message={error} onRetry={onRetry} />
+      ) : null}
+    </PropertyText>
+  );
+}
+
+/** "~12k": a handoff estimate's size. */
+function handoffTokensText(tokens: number): string {
+  return tokens < 1_000
+    ? `~${Math.max(1, Math.round(tokens))}`
+    : `~${Math.round(tokens / 1_000)}k`;
+}
+
+/** The estimate as a sentence; null when the new engine keeps its own history. */
+export function handoffEstimateText(tokens: number | null): string {
+  return tokens === null
+    ? "Hands over nothing: it keeps its own history"
+    : `Hands over ${handoffTokensText(tokens)} tokens`;
 }

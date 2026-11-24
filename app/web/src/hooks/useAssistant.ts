@@ -648,6 +648,15 @@ export interface UIState {
     boundEligible?: boolean;
   } | null;
   /**
+   * The server's estimate of what the inspected session's pending engine
+   * switch hands over (Q29); only the answer to the latest request lands.
+   */
+  handoffEstimate: {
+    sessionId: string;
+    requestId: string;
+    estimate: LoadState<number | null>;
+  } | null;
+  /**
    * PENDING CONTROL STATE ONLY: session id → the request id of the runtime
    * change (`setPendingRuntime` / `clearPendingRuntime`) this browser sent and
    * has not had answered. Its answer retires it; a refusal arrives as the
@@ -1051,6 +1060,7 @@ const emptyInitial: UIState = {
   backgroundStopPending: [],
   backgroundStopAllPending: [],
   accountMoveTargets: null,
+  handoffEstimate: null,
   runtimeChangePending: {},
   heldInputRemovals: {},
   backgroundHostCloseWaiting: [],
@@ -2098,6 +2108,11 @@ type Action =
   | { kind: "backgroundStopSent"; itemId?: string; ownerSessionId?: string }
   | {
       kind: "accountMoveTargetsRequested";
+      sessionId: string;
+      requestId: string;
+    }
+  | {
+      kind: "handoffEstimateRequested";
       sessionId: string;
       requestId: string;
     }
@@ -5496,6 +5511,23 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
         },
       },
     };
+  if (action.kind === "handoffEstimateRequested") {
+    // Asked again for the same session (its log or target changed): the last
+    // figure stays on screen while the new one comes.
+    const previous =
+      state.handoffEstimate?.sessionId === action.sessionId
+        ? state.handoffEstimate.estimate
+        : undefined;
+    const shown = previous ? dataOf(previous) : undefined;
+    return {
+      ...state,
+      handoffEstimate: {
+        sessionId: action.sessionId,
+        requestId: action.requestId,
+        estimate: shown !== undefined ? refreshing(shown) : loading(),
+      },
+    };
+  }
   if (action.kind === "runtimeChangeSent")
     // The change is the session's own send, so like a prompt it retires that
     // session's earlier failure (a held turn the change may now release); its
@@ -5893,6 +5925,16 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
                     ),
                   }
                 : state.accountMoveTargets,
+            handoffEstimate:
+              state.handoffEstimate && isPending(state.handoffEstimate.estimate)
+                ? {
+                    ...state.handoffEstimate,
+                    estimate: failed(
+                      "The connection was lost before the estimate arrived.",
+                      dataOf(state.handoffEstimate.estimate),
+                    ),
+                  }
+                : state.handoffEstimate,
           }),
     };
   }
@@ -5978,6 +6020,20 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
             ...(msg.error !== undefined ? { error: msg.error } : {}),
           },
         },
+      },
+    };
+  }
+  if (msg.type === "sessionHandoffEstimate") {
+    // Only the latest request's answer, like the account list above.
+    if (state.handoffEstimate?.requestId !== msg.requestId) return state;
+    return {
+      ...state,
+      handoffEstimate: {
+        ...state.handoffEstimate,
+        estimate:
+          msg.error !== undefined
+            ? failed(msg.error, dataOf(state.handoffEstimate.estimate))
+            : ready(msg.tokens),
       },
     };
   }
@@ -7103,6 +7159,8 @@ export interface AssistantActions {
   requireSessionEnterprise: (sessionId: string) => void;
   /** Ask the server which accounts the idle session could move to now. */
   listSessionAccountMoveTargets: (sessionId: string) => void;
+  /** Ask how much the session's pending engine switch would hand over. */
+  estimateSessionHandoff: (sessionId: string) => void;
   /** Move the idle session to that account right away. */
   /** Change what a started session's next turn starts on. */
   setPendingRuntime: (sessionId: string, change: SessionRuntimeChange) => void;
@@ -9056,6 +9114,11 @@ export function useAssistant({
         const requestId = createClientId();
         dispatch({ kind: "accountMoveTargetsRequested", sessionId, requestId });
         send({ type: "listSessionAccountMoveTargets", sessionId, requestId });
+      },
+      estimateSessionHandoff: (sessionId) => {
+        const requestId = createClientId();
+        dispatch({ kind: "handoffEstimateRequested", sessionId, requestId });
+        send({ type: "estimateSessionHandoff", sessionId, requestId });
       },
       setPendingRuntime: (sessionId, change) => {
         const requestId = createClientId();

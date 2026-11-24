@@ -80,6 +80,7 @@ function onClaude(id: string, native: string): void {
 
 function toPi(id: string, expectSeq: number, startedSeq: number): void {
   sessionStore.switchEngineBinding(id, {
+    nativeUsage: null,
     expectSeq,
     fields: {
       harness: "pi",
@@ -130,6 +131,7 @@ test("a return owes only what the resumed engine missed", () => {
     message(4, "assistant", "pi answered"),
   ]);
   sessionStore.switchEngineBinding(id, {
+    nativeUsage: null,
     expectSeq: 2,
     fields: {
       harness: "claude-sdk",
@@ -166,6 +168,7 @@ function backOnClaude(
   toPi(id, 1, 3);
   append(id, piRows);
   sessionStore.switchEngineBinding(id, {
+    nativeUsage: null,
     expectSeq: 2,
     fields: {
       harness: "claude-sdk",
@@ -243,6 +246,7 @@ test("a return's budget leaves room for what the resumed native session already 
     message(4, "assistant", "pi answered"),
   ]);
   sessionStore.switchEngineBinding(full, {
+    nativeUsage: null,
     expectSeq: 2,
     fields: {
       harness: "claude-sdk",
@@ -271,6 +275,7 @@ test("a return's budget leaves room for what the resumed native session already 
     message(4, "assistant", "pi answered"),
   ]);
   sessionStore.switchEngineBinding(light, {
+    nativeUsage: null,
     expectSeq: 2,
     fields: {
       harness: "claude-sdk",
@@ -298,6 +303,7 @@ test("a return's budget leaves room for what the resumed native session already 
     message(4, "assistant", "pi answered"),
   ]);
   sessionStore.switchEngineBinding(unknown, {
+    nativeUsage: null,
     expectSeq: 2,
     fields: {
       harness: "claude-sdk",
@@ -313,4 +319,46 @@ test("a return's budget leaves room for what the resumed native session already 
     pending: { ...PENDING, model: { provider: "claude", id: "opus" } },
   });
   assert.doesNotMatch(owedSwitchContext(unknown) ?? "", /pi answered/);
+});
+
+test("a kind change within pi owes nothing: its transcript resumed holds the whole session", () => {
+  const id = `switch-handoff-${Date.now()}-pi-kind`;
+  ids.push(id);
+  assert.ok(
+    sessionStore.upsert({
+      id,
+      harness: "pi",
+      agentType: "developer",
+      provider: "openai-codex",
+      model: "gpt-5.6-sol",
+      credentialProfileId: "default",
+    }),
+  );
+  append(id, [
+    message(1, "user", "asked on codex"),
+    message(2, "assistant", "ok"),
+  ]);
+  // Codex → an OpenAI-compatible endpoint: the same pi transcript, resumed
+  // from the binding the switch leaves (D1).
+  sessionStore.switchEngineBinding(id, {
+    nativeUsage: null,
+    expectSeq: 1,
+    fields: {
+      harness: "pi",
+      credentialProfileId: "cp_endpoint",
+      provider: "cp_endpoint",
+      model: "local-model",
+      thinkingLevel: "off",
+      providerSessionId: null,
+    },
+    nativeSessionId: id,
+    startedSeq: 3,
+    resumedSeq: 1,
+    pending: {
+      ...PENDING,
+      model: { provider: "cp_endpoint", id: "local-model" },
+    },
+  });
+  assert.equal(sessionStore.bindings(id).length, 2);
+  assert.equal(owedSwitchContext(id), undefined);
 });

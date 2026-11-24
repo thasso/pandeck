@@ -7810,6 +7810,16 @@ export type ClientMessage =
       requestId: string;
     }
   /**
+   * How many tokens of earlier conversation the session's pending switch to
+   * another engine would hand over if it applied now (Q29); answered by
+   * `sessionHandoffEstimate` with the same `requestId`.
+   */
+  | {
+      type: "estimateSessionHandoff";
+      sessionId: string;
+      requestId: string;
+    }
+  /**
    * Change the model, effort and/or account a started session's next turn
    * starts on (`docs/session-runtime-switching.md`). Accepted at any time,
    * during a turn too; nothing changes until that turn is admitted. Answered
@@ -8887,6 +8897,23 @@ export type ServerMessage =
     }
   /** Control feedback for a human Stop; the rows themselves travel as events. */
   | ({ type: "backgroundWorkStopAnswer" } & BackgroundWorkStopAnswer)
+  /** The answer to `estimateSessionHandoff`. */
+  | ({
+      type: "sessionHandoffEstimate";
+      requestId: string;
+      sessionId: string;
+    } & (
+      | {
+          /**
+           * The estimate, by the same selection and budget the switch
+           * delivers; null when the pending selection stays on the session's
+           * engine or hands nothing over.
+           */
+          tokens: number | null;
+          error?: undefined;
+        }
+      | { error: string; tokens?: undefined }
+    ))
   /** The answer to `listSessionAccountMoveTargets`. */
   | ({
       type: "sessionAccountMoveTargets";

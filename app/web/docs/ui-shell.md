@@ -1108,7 +1108,8 @@ current main-pane object:
    retained rows during refresh, and shows loading or retryable failure in the
    group rather than claiming an unread collection is empty.
 3. **Runtime** — a started session's model, effort and account for its NEXT
-   turn, with "Next turn: …" and Reset while a change is pending
+   turn, with "Next turn: …" and Reset while a change is pending, and a Handoff
+   estimate when that change moves the session to another engine
    (`docs/session-runtime-switching.md`). The composer's "Next turn" chip and
    `/model`, `/effort`, `/account` without an argument open the inspector here
    and scroll the section into view (a group's `revealNonce`), in the right

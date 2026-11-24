@@ -65,7 +65,8 @@ export class SessionHeldElsewhereError extends Error {
 /**
  * A harness switch could not release a session because work of its own was
  * still finishing (the naming agent). It ends by itself; the store offers the
- * session's held delivery again when it has (`claudeSdkStore.releaseForSwitch`).
+ * session's held delivery again when it has (`releaseForSwitch` on
+ * `claudeSdkStore` and `piStore`).
  */
 export class SessionSettlingError extends Error {
   constructor(readonly sessionId: string) {

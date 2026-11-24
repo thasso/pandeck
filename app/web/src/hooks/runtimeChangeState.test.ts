@@ -186,3 +186,63 @@ describe("the account picker's state", () => {
     expect(state.sessionFailures.s2).toBe("Unrelated failure");
   });
 });
+
+describe("the handoff estimate's state", () => {
+  const estimated = (
+    requestId: string,
+    tokens: number | null,
+    sessionId = "s1",
+  ): ServerMessage => ({
+    type: "sessionHandoffEstimate",
+    requestId,
+    sessionId,
+    tokens,
+  });
+  const asked = (state: State, requestId: string, sessionId = "s1") =>
+    reduceAssistantState(state, {
+      kind: "handoffEstimateRequested",
+      sessionId,
+      requestId,
+    });
+
+  it("takes only the latest request's answer, and keeps the last figure while the same session asks again", () => {
+    let state = asked(createInitialState(), "e1");
+    expect(state.handoffEstimate!.estimate.status).toBe("loading");
+    state = asked(state, "e2");
+    state = server(state, estimated("e1", 999));
+    expect(state.handoffEstimate!.estimate.status).toBe("loading");
+    state = server(state, estimated("e2", 12_000));
+    expect(dataOf(state.handoffEstimate!.estimate)).toBe(12_000);
+    state = asked(state, "e3");
+    expect(state.handoffEstimate!.estimate.status).toBe("refreshing");
+    expect(dataOf(state.handoffEstimate!.estimate)).toBe(12_000);
+    state = server(state, estimated("e3", null));
+    expect(state.handoffEstimate!.estimate).toEqual({
+      status: "ready",
+      data: null,
+    });
+    // Another session starts over.
+    state = asked(state, "e4", "s2");
+    expect(state.handoffEstimate!.estimate.status).toBe("loading");
+  });
+
+  it("keeps the last figure beside an error, and fails a pending one when the connection drops", () => {
+    let state = server(asked(createInitialState(), "e1"), estimated("e1", 5));
+    state = asked(state, "e2");
+    state = server(state, {
+      type: "sessionHandoffEstimate",
+      requestId: "e2",
+      sessionId: "s1",
+      error: "Session does not exist or was deleted.",
+    });
+    expect(errorOf(state.handoffEstimate!.estimate)).toBe(
+      "Session does not exist or was deleted.",
+    );
+    expect(dataOf(state.handoffEstimate!.estimate)).toBe(5);
+    state = asked(state, "e3");
+    state = reduceAssistantState(state, { kind: "status", connected: false });
+    expect(errorOf(state.handoffEstimate!.estimate)).toBe(
+      "The connection was lost before the estimate arrived.",
+    );
+  });
+});

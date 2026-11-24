@@ -116,6 +116,7 @@ test("each engine renders its own prompt and tools from the one frozen record", 
   // Claude, bound later to the same session: the `claude_code` preset with
   // the same persona appended.
   const claude = claudeSdkStore.openForBinding(ID, {
+    bindingSeq: 2,
     model: "claude-opus-5-5",
     thinkingLevel: "high",
     credentialProfileId: "claude-default",
@@ -198,6 +199,7 @@ test("the permanent assistant's profile suffix comes from settings on both engin
   assert.deepEqual(pi.persona.systemPrompt, { replace: expected });
 
   const claude = claudeSdkStore.openForBinding(PA_ID, {
+    bindingSeq: 2,
     model: "claude-opus-5-5",
     thinkingLevel: "high",
     credentialProfileId: "claude-default",

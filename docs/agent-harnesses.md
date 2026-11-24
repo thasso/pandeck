@@ -12,8 +12,9 @@ describes the architecture they produced, and "Status" records the steps.
 
 - **Harness** (`Harness` in `app/shared/harnesses.ts`): which engine runs a
   session: its active engine binding (`docs/session-runtime-switching.md`
-  "Engine bindings"), projected onto the session row. Every session has one
-  binding today; the cross-harness switch (Task-1485) adds the next.
+  "Engine bindings"), projected onto the session row. A session starts on one
+  harness; a runtime switch the user or a coordinator chooses (Task-1485) moves
+  it to the other under a new binding.
 - **Persona** (`AgentType` in `app/shared/protocol.ts`, field `agentType`): the
   system prompt and toolset a session presents (`assistant`, `developer`, …).
   Independent of the harness: every persona runs on either engine.

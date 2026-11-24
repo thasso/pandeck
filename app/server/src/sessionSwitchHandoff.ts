@@ -9,11 +9,11 @@
  * no assistant entry after the binding's `started_seq`, so a turn that failed
  * before any reply carries it again.
  */
-import { ACCOUNT_KINDS } from "@assistant/shared";
+import { ACCOUNT_KINDS, type Harness } from "@assistant/shared";
 import { credentialProfileById } from "./credentialProfiles.ts";
 import type { SessionEngineBinding } from "./db/sessionEngineBinding.ts";
 import { sessionStore } from "./db/sessionStore.ts";
-import { pickerModels } from "./harnesses/models.ts";
+import { pickerModels, storedBindingModelOption } from "./harnesses/models.ts";
 import { logPathFor } from "./session/log/persistence.ts";
 import { estimateTokens } from "./session/runtime/liveBlocks.ts";
 import {
@@ -42,10 +42,15 @@ function readRecords(sessionId: string, fromSeq: number): HandoffRecord[] {
   }
 }
 
-function modelFor(binding: SessionEngineBinding) {
-  return pickerModels().find(
-    (option) =>
-      option.provider === binding.provider && option.id === binding.model,
+/**
+ * The model option an end of a switch names: the pickers' entry, else (a
+ * Claude model no enabled account lists right now) its curated option.
+ */
+function modelFor(end: SwitchEnd) {
+  return (
+    pickerModels().find(
+      (option) => option.provider === end.provider && option.id === end.model,
+    ) ?? storedBindingModelOption(end)
   );
 }
 
@@ -87,6 +92,66 @@ function resumedContextTokens(
     .reduce((sum, record) => sum + estimateTokens(record.text), 0);
 }
 
+/** The engine a switch leaves or joins, as the handoff names and sizes it. */
+interface SwitchEnd {
+  harness?: Harness | undefined;
+  provider?: string | undefined;
+  model?: string | undefined;
+  credentialProfileId?: string | undefined;
+}
+
+/**
+ * The switch context for a move from `from` to `to`: the note and the budgeted
+ * log selection. `resumed` is the earlier binding whose native session `to`
+ * continues (a return), `bindings` the session's bindings up to and including
+ * the one the switch leaves (and the one it starts, once committed). Answers undefined when the resumed native session
+ * is the one the switch leaves (pi's account-kind change): it missed nothing.
+ */
+function switchContext(input: {
+  sessionId: string;
+  bindings: readonly SessionEngineBinding[];
+  left: SessionEngineBinding | undefined;
+  from: SwitchEnd;
+  to: SwitchEnd;
+  resumed: SessionEngineBinding | undefined;
+}): string | undefined {
+  const { sessionId, bindings, left, from, to, resumed } = input;
+  if (resumed && left && resumed.seq === left.seq) return undefined;
+  // A return carries only what the resumed native session missed: everything
+  // from the start of the binding that followed its last use.
+  const fromSeq = resumed
+    ? (bindings.find((binding) => binding.seq === resumed.seq + 1)
+        ?.startedSeq ?? 0)
+    : 0;
+  const target = modelFor(to);
+  const cap = handoffTokenCap({
+    setting: getSettings().sessionSwitching.handoffTokenCap,
+    contextWindow: target?.contextWindow,
+    usedTokens: resumed
+      ? resumedContextTokens(sessionId, bindings, resumed, fromSeq)
+      : 0,
+  });
+  const fromProfile = from.credentialProfileId
+    ? credentialProfileById(from.credentialProfileId)
+    : undefined;
+  const toProfile = to.credentialProfileId
+    ? credentialProfileById(to.credentialProfileId)
+    : undefined;
+  return renderSwitchContext({
+    sessionId,
+    from: {
+      model: modelFor(from)?.name ?? from.model ?? "",
+      where: fromProfile ? ACCOUNT_KINDS[fromProfile.provider].label : "",
+    },
+    to: {
+      model: target?.name ?? to.model ?? "",
+      where: toProfile?.name ?? "",
+    },
+    resumed: resumed !== undefined,
+    selection: selectHandoff(readRecords(sessionId, fromSeq), cap),
+  });
+}
+
 /**
  * The context the next turn owes the session's new engine, or undefined when
  * it owes none. Synchronous: the caller runs it after admission, with nothing
@@ -110,36 +175,39 @@ export function owedSwitchContext(sessionId: string): string | undefined {
     active.resumedSeq !== undefined
       ? all.find((binding) => binding.seq === active.resumedSeq)
       : undefined;
-  // A return carries only what the resumed native session missed: everything
-  // from the start of the binding that followed its last use.
-  const fromSeq = resumed
-    ? (all.find((binding) => binding.seq === resumed.seq + 1)?.startedSeq ?? 0)
-    : 0;
-  const target = modelFor(active);
-  const cap = handoffTokenCap({
-    setting: getSettings().sessionSwitching.handoffTokenCap,
-    contextWindow: target?.contextWindow,
-    usedTokens: resumed
-      ? resumedContextTokens(sessionId, all, resumed, fromSeq)
-      : 0,
-  });
-  const fromProfile = previous?.credentialProfileId
-    ? credentialProfileById(previous.credentialProfileId)
-    : undefined;
-  const toProfile = active.credentialProfileId
-    ? credentialProfileById(active.credentialProfileId)
-    : undefined;
-  return renderSwitchContext({
+  const context = switchContext({
     sessionId,
-    from: {
-      model: (previous && modelFor(previous)?.name) ?? previous?.model ?? "",
-      where: fromProfile ? ACCOUNT_KINDS[fromProfile.provider].label : "",
-    },
-    to: {
-      model: target?.name ?? active.model ?? "",
-      where: toProfile?.name ?? "",
-    },
-    resumed: resumed !== undefined,
-    selection: selectHandoff(readRecords(sessionId, fromSeq), cap),
+    bindings: all,
+    left: previous,
+    from: previous ?? {},
+    to: active,
+    resumed,
   });
+  if (!context) answered.set(sessionId, active.seq);
+  return context;
+}
+
+/**
+ * The tokens the switch to `target` would hand over if it applied now, by the
+ * same note, selection and budget the first turn after it carries
+ * ({@link owedSwitchContext}): the inspector's "Hands over ~Nk tokens" (Q29).
+ * `resumed` is the earlier binding whose native session the switch would
+ * reopen. 0 when nothing is handed over (pi's account-kind change continues
+ * the native session it leaves).
+ */
+export function estimateSwitchHandoffTokens(
+  sessionId: string,
+  target: SwitchEnd,
+  resumed: SessionEngineBinding | undefined,
+): number {
+  const active = sessionStore.activeBinding(sessionId);
+  const context = switchContext({
+    sessionId,
+    bindings: sessionStore.bindings(sessionId),
+    left: active,
+    from: active ?? {},
+    to: target,
+    resumed,
+  });
+  return context ? estimateTokens(context) : 0;
 }

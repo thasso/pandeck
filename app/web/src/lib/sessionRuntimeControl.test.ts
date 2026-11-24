@@ -1,18 +1,17 @@
 /**
  * Which models and accounts the Runtime pickers offer a started session, and
- * why one is disabled (`docs/session-runtime-switching.md`).
+ * when a pending change switches engines (`docs/session-runtime-switching.md`).
  *   pnpm --filter @assistant/web test src/lib/sessionRuntimeControl.test.ts
  */
 import { describe, expect, it, vi } from "vitest";
 import type { ModelOption } from "@assistant/shared";
 import { failed, loading, ready, refreshing } from "./loadState.ts";
 import {
-  OTHER_ACCOUNT_KIND_REASON,
-  OTHER_HARNESS_REASON,
   accountTargetsRefreshKey,
+  crossesEngines,
+  handoffEstimateRefreshKey,
   runtimeAccountChoices,
   runtimeCommandContext,
-  runtimeModelRefusal,
   sessionRuntimeControl,
 } from "./sessionRuntimeControl.ts";
 
@@ -42,6 +41,7 @@ const team = {
 
 const actions = () => ({
   listSessionAccountMoveTargets: vi.fn(),
+  estimateSessionHandoff: vi.fn(),
   setPendingRuntime: vi.fn(),
   clearPendingRuntime: vi.fn(),
 });
@@ -59,22 +59,20 @@ const input = (
   accounts: [personal, work],
   models: [codex, claude],
   targets: undefined,
+  handoff: undefined,
   busy: false,
   actions: actions(),
   ...over,
 });
 
-describe("runtimeModelRefusal", () => {
-  it("refuses another harness first, then another account kind", () => {
-    expect(runtimeModelRefusal(claude, "claude-sdk", personal)).toBeUndefined();
-    expect(runtimeModelRefusal(codex, "claude-sdk", personal)).toBe(
-      OTHER_HARNESS_REASON,
-    );
-    expect(runtimeModelRefusal(endpoint, "pi", chatgpt)).toBe(
-      OTHER_ACCOUNT_KIND_REASON,
-    );
-    expect(runtimeModelRefusal(endpoint, "pi", team)).toBeUndefined();
-    expect(runtimeModelRefusal(codex, "pi", undefined)).toBeUndefined();
+describe("crossesEngines", () => {
+  it("is another harness, or another kind of account than the bound one", () => {
+    expect(crossesEngines(claude, "claude-sdk", personal)).toBe(false);
+    expect(crossesEngines(codex, "claude-sdk", personal)).toBe(true);
+    expect(crossesEngines(endpoint, "pi", chatgpt)).toBe(true);
+    expect(crossesEngines(codex, "pi", team)).toBe(true);
+    expect(crossesEngines(endpoint, "pi", team)).toBe(false);
+    expect(crossesEngines(codex, "pi", undefined)).toBe(false);
   });
 });
 
@@ -93,7 +91,7 @@ describe("sessionRuntimeControl", () => {
       "opus",
       "gpt-5.5",
     ]);
-    expect(control.modelRefusal(codex)).toBe(OTHER_HARNESS_REASON);
+    expect(control.engineSwitch).toBeUndefined();
     control.onChange({ thinkingLevel: "low" });
     control.onReset();
     control.accounts!.onOpen();
@@ -129,7 +127,10 @@ describe("runtimeAccountChoices", () => {
       { id: "cp-a", name: "Personal", enterprise: false },
     ]);
     expect(
-      runtimeAccountChoices(personal, { targets, boundEligible: true }),
+      runtimeAccountChoices(personal, undefined, {
+        targets,
+        boundEligible: true,
+      }),
     ).toEqual([
       { id: "cp-a", name: "Personal" },
       { id: "cp-b", name: "Work" },
@@ -137,7 +138,7 @@ describe("runtimeAccountChoices", () => {
     // The server found nothing to move to: only the bound account, so
     // `/account` (offered for more than one) stays hidden.
     expect(
-      runtimeAccountChoices(personal, {
+      runtimeAccountChoices(personal, undefined, {
         targets: ready([]),
         boundEligible: true,
       }),
@@ -150,18 +151,21 @@ describe("runtimeAccountChoices", () => {
     // `/account` is not offered for a choice that is no choice.
     const targets = ready([{ id: "cp-b", name: "Work", enterprise: true }]);
     expect(
-      runtimeAccountChoices(personal, { targets, boundEligible: false }),
+      runtimeAccountChoices(personal, undefined, {
+        targets,
+        boundEligible: false,
+      }),
     ).toEqual([{ id: "cp-b", name: "Work" }]);
     // An answer without the verdict counts it out too.
-    expect(runtimeAccountChoices(personal, { targets })).toEqual([
+    expect(runtimeAccountChoices(personal, undefined, { targets })).toEqual([
       { id: "cp-b", name: "Work" },
     ]);
   });
 
   it("offers nothing until the server answered, keeps its last answer while refreshing, and nothing for an account that cannot move", () => {
     const list = [{ id: "cp-b", name: "Work", enterprise: false }];
-    const answer = (targets: Parameters<typeof runtimeAccountChoices>[1]) =>
-      runtimeAccountChoices(personal, targets);
+    const answer = (targets: Parameters<typeof runtimeAccountChoices>[2]) =>
+      runtimeAccountChoices(personal, undefined, targets);
     expect(answer(undefined)).toEqual([]);
     expect(answer({ targets: loading() })).toEqual([]);
     expect(answer({ targets: failed("lost") })).toEqual([]);
@@ -169,13 +173,13 @@ describe("runtimeAccountChoices", () => {
       answer({ targets: refreshing(list), boundEligible: true }),
     ).toHaveLength(2);
     expect(
-      runtimeAccountChoices(team, {
+      runtimeAccountChoices(team, undefined, {
         targets: ready(list),
         boundEligible: true,
       }),
     ).toEqual([]);
     expect(
-      runtimeAccountChoices(undefined, {
+      runtimeAccountChoices(undefined, undefined, {
         targets: ready(list),
         boundEligible: true,
       }),
@@ -289,5 +293,125 @@ describe("runtimeCommandContext", () => {
       runtimeCommandContext({ control: pending, accountChoices: [] })
         .targetModel,
     ).toBe(other);
+  });
+});
+
+describe("a pending change that switches engines", () => {
+  const toCodex = {
+    model: { provider: "openai-codex", id: "gpt-5.5" },
+    thinkingLevel: "high" as const,
+    account: { kind: "automatic" as const },
+    setBy: "user" as const,
+  };
+
+  it("offers every model, and the target kind's accounts with the estimate", () => {
+    const acts = actions();
+    const estimate = ready(12_000);
+    const control = sessionRuntimeControl(
+      input({
+        pending: toCodex,
+        accounts: [personal, work, chatgpt],
+        handoff: estimate,
+        actions: acts,
+      }),
+    )!;
+    expect(control.models.map((option) => option.id)).toEqual([
+      "opus",
+      "gpt-5.5",
+    ]);
+    expect(control.engineSwitch).toMatchObject({
+      kindLabel: "OpenAI",
+      handoff: estimate,
+    });
+    expect(control.engineSwitch?.fixedAccountName).toBeUndefined();
+    control.engineSwitch!.onEstimate();
+    expect(acts.estimateSessionHandoff).toHaveBeenCalledWith("s1");
+    expect(control.accounts?.nameOf("cp-c")).toBe("ChatGPT");
+  });
+
+  it("names the one account an endpoint model runs on, with no picker", () => {
+    const control = sessionRuntimeControl(
+      input({
+        harness: "pi",
+        account: chatgpt,
+        accounts: [chatgpt, team],
+        model: { provider: "openai-codex", id: "gpt-5.5" },
+        models: [codex, endpoint],
+        pending: { ...toCodex, model: { provider: team.id, id: "local" } },
+      }),
+    )!;
+    expect(control.accounts).toBeUndefined();
+    expect(control.engineSwitch).toMatchObject({
+      kindLabel: "OpenAI-compatible",
+      fixedAccountName: "Team LLM",
+    });
+  });
+
+  it("gives an endpoint-bound session an account picker for a subscription target", () => {
+    const control = sessionRuntimeControl(
+      input({
+        harness: "pi",
+        account: team,
+        accounts: [team, personal],
+        model: { provider: team.id, id: "local" },
+        pending: { ...toCodex, model: { provider: "claude-sdk", id: "opus" } },
+      }),
+    )!;
+    expect(control.accounts).toBeDefined();
+    expect(control.engineSwitch?.kindLabel).toBe("Claude");
+  });
+
+  it("lets /account name only the target kind's accounts the server listed, never the bound one", () => {
+    const targets = ready([{ id: "cp-c", name: "ChatGPT", enterprise: false }]);
+    expect(
+      runtimeAccountChoices(personal, codex, { targets, boundEligible: false }),
+    ).toEqual([{ id: "cp-c", name: "ChatGPT" }]);
+    // A stale verdict on the bound account never names it for another kind.
+    expect(
+      runtimeAccountChoices(personal, codex, { targets, boundEligible: true }),
+    ).toEqual([{ id: "cp-c", name: "ChatGPT" }]);
+    expect(
+      runtimeAccountChoices(chatgpt, endpoint, {
+        targets,
+        boundEligible: false,
+      }),
+    ).toEqual([]);
+  });
+});
+
+describe("handoffEstimateRefreshKey", () => {
+  const base = {
+    sessionId: "s1",
+    pending: undefined,
+    messageCount: 4,
+    updatedAt: 10,
+    profiles: [
+      {
+        id: "cp-a",
+        enabled: true,
+        enterprise: false,
+        health: { state: "ok" as const, since: 1 },
+      },
+    ],
+  };
+  const key = handoffEstimateRefreshKey(base);
+
+  it("changes with the session, its target, its log and the accounts, and only then", () => {
+    expect(handoffEstimateRefreshKey({ ...base })).toBe(key);
+    for (const change of [
+      { sessionId: "s2" },
+      {
+        pending: {
+          model: { provider: "openai-codex", id: "gpt-5.5" },
+          thinkingLevel: "high" as const,
+          account: { kind: "automatic" as const },
+          setBy: "user" as const,
+        },
+      },
+      { messageCount: 5 },
+      { updatedAt: 11 },
+      { profiles: [{ ...base.profiles[0]!, enabled: false }] },
+    ])
+      expect(handoffEstimateRefreshKey({ ...base, ...change })).not.toBe(key);
   });
 });

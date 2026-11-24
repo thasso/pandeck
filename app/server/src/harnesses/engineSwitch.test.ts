@@ -10,10 +10,22 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeAll, test } from "vitest";
+import { afterEach, beforeAll, test, vi } from "vitest";
+
+/** Naming runs, each answered by the test. */
+const titles = vi.hoisted(() => [] as Array<(title: string) => void>);
+vi.mock("../sessionNaming.ts", async (original) => ({
+  ...(await original<object>()),
+  generateSessionTitle: () =>
+    new Promise<string>((resolve) => titles.push(resolve)),
+}));
 import type { SessionPendingRuntime } from "@assistant/shared";
 import { claudeSdkStore } from "../claudeSdk/claudeSdkStore.ts";
-import { claudeConfigDir } from "../credentialProfiles.ts";
+import {
+  claudeConfigDir,
+  createCredentialProfile,
+  setCredentialProfileEnabled,
+} from "../credentialProfiles.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import { setDeliveryWake } from "../deliveryWake.ts";
 import { openPiEngine } from "../piSdk/piEngineHost.ts";
@@ -38,6 +50,7 @@ import {
   isSwitchingEngines,
   SessionSwitchingEnginesError,
 } from "./engineSwitchFence.ts";
+import { routingSpendLines } from "../workflow/runSpend.ts";
 import { harnessRegistry } from "./registry.ts";
 
 installClaudeStateBuilder(claudeSdkStore);
@@ -125,6 +138,7 @@ function piOpensForReal(): PiEngineOpenSpec[] {
       dispose() {
         this.released = true;
       },
+      commitWorkflowContext: () => ({ sessionManager: undefined }),
     };
     pi.live.set(engine.sessionId, live);
     return live;
@@ -293,6 +307,7 @@ test("a return to Claude resumes the earlier native session its account still ho
       }),
     );
     sessionStore.switchEngineBinding(id, {
+      nativeUsage: null,
       expectSeq: 1,
       fields: {
         harness: "pi",
@@ -355,6 +370,7 @@ function claudeThenPi(id: string, native: string, profile: string): void {
     }),
   );
   sessionStore.switchEngineBinding(id, {
+    nativeUsage: null,
     expectSeq: 1,
     fields: {
       harness: "pi",
@@ -390,6 +406,65 @@ function crashClaude(id: string): void {
   internals.sessions.delete(id);
   internals.logs.delete(id);
 }
+
+test("a move from pi onto Claude keeps the usage pi counted, and Claude's turns add to it (F027)", async () => {
+  // The resolution review's reproducer, through the switch's own commit.
+  const id = freshId();
+  sessionStore.upsert({
+    id,
+    harness: "pi",
+    agentType: "developer",
+    credentialProfileId: "default",
+    provider: "openai-codex",
+    model: "gpt-5.6-sol",
+    messageCount: 2,
+    title: "Usage fixture",
+  });
+  sessionStore.replaceUsage(id, {
+    inputTokens: 7_777,
+    outputTokens: 1,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    totalTokens: 7_778,
+    costMicros: 1_000_000,
+    currency: "USD",
+    usageTurns: 1,
+    assistantTurns: 1,
+    usageSource: "provider_reported",
+    updatedAt: 1_000,
+  });
+  const before = sessionStore.getUsageTotals(id);
+  const toClaude = await prepareEngineSwitch(
+    id,
+    TO_CLAUDE,
+    PENDING_CLAUDE,
+    () => {},
+  );
+  assert.deepEqual(sessionStore.getUsageTotals(id), before);
+  toClaude.commit();
+  assert.deepEqual(
+    sessionStore.getUsageTotals(id),
+    before,
+    "the commit adds nothing",
+  );
+
+  ensureRuntimeSessionWithRuntime(sessionRuntime, toClaude.driver as never);
+  await sessionRuntime.prompt(id, "first Claude turn");
+  // Claude's query reports 1 input, 1 output and $0.01, on top of pi's.
+  const totals = sessionStore.getUsageTotals(id);
+  assert.equal(totals?.inputTokens, 7_778);
+  assert.equal(totals?.outputTokens, 2);
+  assert.equal(totals?.totalTokens, 7_780);
+  assert.equal(totals?.costMicros, 1_010_000);
+  assert.equal(totals?.usageTurns, 2);
+  assert.equal(totals?.assistantTurns, 2);
+  // A run's spend evidence reads the same totals.
+  const [spent] = routingSpendLines([
+    { kind: "agent", executor: { kind: "session", id }, payload: {} } as never,
+  ]);
+  assert.equal(spent, "This run has spent $1.01 so far across 1 session.");
+});
 
 test("a concurrent return to Claude is refused before it touches the winner's staged transcript (F014)", async () => {
   const id = freshId();
@@ -646,6 +721,7 @@ test("a return to pi whose transcript is gone starts over and is not recorded as
     const id = freshId();
     claudeThenPi(id, `native-${id}`, "claude-default");
     sessionStore.switchEngineBinding(id, {
+      nativeUsage: null,
       expectSeq: 2,
       fields: {
         harness: "claude-sdk",
@@ -698,6 +774,7 @@ test("a fresh pi return owes the whole log, the pi-era history included (F018)",
     row(0, "user", "PI_ONLY_HISTORY ask") + row(1, "assistant", "pi said so"),
   );
   sessionStore.switchEngineBinding(id, {
+    nativeUsage: null,
     expectSeq: 2,
     fields: {
       harness: "claude-sdk",
@@ -751,4 +828,333 @@ test("a switch held only by the naming agent is offered again when naming ends (
   assert.deepEqual(wakes, [id], "the held turn is offered again");
   session.onChange();
   assert.deepEqual(wakes, [id], "once");
+});
+
+test("a kind change within pi reopens its own transcript on the new account and owes no handoff", async () => {
+  const endpoint = createCredentialProfile({
+    name: "Team LLM",
+    provider: "openai-compatible",
+  });
+  try {
+    const id = freshId();
+    await onClaude(id);
+    sessionStore.setPendingRuntime(id, PENDING_PI);
+    const specs = piOpensForReal();
+    const toCodex = await prepareEngineSwitch(
+      id,
+      { ...TO_PI, credentialProfileId: "default" },
+      PENDING_PI,
+      () => {},
+    );
+    toCodex.usable();
+    toCodex.commit();
+    // pi's transcript of the session, as pi keeps it once it has run.
+    const file = canonicalPiSessionPath(id);
+    mkdirSync(join(file, ".."), { recursive: true });
+    writeFileSync(
+      file,
+      `${JSON.stringify({ type: "session", version: 3, id, timestamp: new Date().toISOString(), cwd: process.cwd() })}\n`,
+    );
+    const onCodex = pi.live.get(id) as { released: boolean } | undefined;
+    assert.ok(onCodex);
+
+    const toEndpoint: EngineSwitchTarget = {
+      harness: "pi",
+      model: { provider: endpoint.id, id: "llama3" },
+      thinkingLevel: "off",
+      credentialProfileId: endpoint.id,
+    };
+    const pending: SessionPendingRuntime = {
+      ...PENDING_PI,
+      model: toEndpoint.model,
+      thinkingLevel: "off",
+      account: { kind: "account", id: endpoint.id },
+    };
+    sessionStore.setPendingRuntime(id, pending);
+    const prepared = await prepareEngineSwitch(
+      id,
+      toEndpoint,
+      pending,
+      () => {},
+    );
+    assert.equal(onCodex.released, true, "the Codex-bound engine let it go");
+    assert.equal(specs[1]?.transcript.type, "open");
+    assert.equal(prepared.resumed?.seq, 2, "it resumed the binding it left");
+    prepared.usable();
+    prepared.commit();
+    const row = sessionStore.get(id);
+    assert.equal(row?.harness, "pi");
+    assert.equal(row?.provider, endpoint.id);
+    assert.equal(row?.credentialProfileId, endpoint.id);
+    assert.deepEqual(
+      sessionStore.bindings(id).map((binding) => binding.harness),
+      ["claude-sdk", "pi", "pi"],
+    );
+    assert.equal(sessionStore.activeBinding(id)?.resumedSeq, 2);
+    assert.equal(owedSwitchContext(id), undefined);
+    pi.live.clear();
+    rmSync(file, { force: true });
+  } finally {
+    // Still bound to the test's session, so it cannot be deleted.
+    setCredentialProfileEnabled(endpoint.id, false);
+  }
+});
+
+/**
+ * pi opens for real and is tracked for real: the production `track` builds a
+ * `PiLiveSession`, whose constructor syncs the session's row. Only the agent
+ * session under the engine is a stand-in, one that has run and runs `model`.
+ */
+function piTracksForReal(model: {
+  provider: string;
+  id: string;
+  thinkingLevel: string;
+}): void {
+  pi.openEngine = (spec) => {
+    const { model: _model, thinkingLevel: _thinking, ...transcript } = spec;
+    return openPiEngine(
+      transcript,
+      {} as never,
+      async (_spec, _ctx, { sm }) => {
+        const session = {
+          sessionId: sm.getSessionId(),
+          sessionFile: sm.getSessionFile(),
+          sessionManager: sm,
+          sessionName: undefined as string | undefined,
+          setSessionName: (name: string) => {
+            session.sessionName = name;
+          },
+          model: { provider: model.provider, id: model.id },
+          thinkingLevel: model.thinkingLevel,
+          isStreaming: false,
+          messages: [],
+          getSessionStats: () => ({ totalMessages: 2 }),
+          subscribe: () => () => {},
+          dispose: async () => {},
+        };
+        return { session: session as never, notices: [] };
+      },
+    );
+  };
+}
+
+test("a kind change within pi writes nothing to the binding it leaves before it commits, and abandon leaves it as it was (F023)", async () => {
+  const endpoint = createCredentialProfile({
+    name: "Kind change LLM",
+    provider: "openai-compatible",
+  });
+  const id = freshId();
+  try {
+    assert.ok(
+      sessionStore.upsert({
+        id,
+        harness: "pi",
+        agentType: "developer",
+        provider: "openai-codex",
+        providerSessionId: id,
+        model: "gpt-5.6-sol",
+        thinkingLevel: "high",
+        credentialProfileId: "default",
+        title: "kind fixture",
+        messageCount: 2,
+      }),
+    );
+    const file = canonicalPiSessionPath(id);
+    mkdirSync(join(file, ".."), { recursive: true });
+    writeFileSync(
+      file,
+      `${JSON.stringify({ type: "session", version: 3, id, timestamp: new Date().toISOString(), cwd: process.cwd() })}\n`,
+    );
+    const toEndpoint: EngineSwitchTarget = {
+      harness: "pi",
+      model: { provider: endpoint.id, id: "llama3" },
+      thinkingLevel: "off",
+      credentialProfileId: endpoint.id,
+    };
+    const pending: SessionPendingRuntime = {
+      ...PENDING_PI,
+      model: toEndpoint.model,
+      thinkingLevel: "off",
+      account: { kind: "account", id: endpoint.id },
+    };
+    sessionStore.setPendingRuntime(id, pending);
+    const before = sessionStore.get(id);
+    const bindingBefore = sessionStore.activeBinding(id);
+    piTracksForReal({ ...toEndpoint.model, thinkingLevel: "off" });
+
+    const prepared = await prepareEngineSwitch(
+      id,
+      toEndpoint,
+      pending,
+      () => {},
+    );
+    assert.equal(
+      piStore.getLiveById(id),
+      prepared.driver,
+      "the production track registered the target",
+    );
+    assert.deepEqual(
+      sessionStore.get(id),
+      before,
+      "the uncommitted target rewrote nothing on the row",
+    );
+    assert.deepEqual(sessionStore.activeBinding(id), bindingBefore);
+
+    await prepared.abandon();
+    assert.equal(piStore.getLiveById(id), undefined);
+    assert.deepEqual(
+      sessionStore.get(id),
+      before,
+      "after abandon the row is as it was",
+    );
+    assert.deepEqual(sessionStore.activeBinding(id), bindingBefore);
+    assert.deepEqual(sessionStore.get(id)?.pendingRuntime, pending);
+
+    // The same move committed: the target's own figures land with the binding.
+    piTracksForReal({ ...toEndpoint.model, thinkingLevel: "off" });
+    const again = await prepareEngineSwitch(id, toEndpoint, pending, () => {});
+    again.commit();
+    const row = sessionStore.get(id);
+    assert.equal(row?.provider, endpoint.id);
+    assert.equal(row?.model, "llama3");
+    assert.equal(row?.thinkingLevel, "off");
+    assert.equal(row?.credentialProfileId, endpoint.id);
+    const [left, active] = sessionStore.bindings(id);
+    assert.equal(
+      left?.provider,
+      "openai-codex",
+      "the left binding kept its own",
+    );
+    assert.equal(left?.model, "gpt-5.6-sol");
+    assert.equal(left?.credentialProfileId, "default");
+    assert.equal(active?.provider, endpoint.id);
+    // Once committed, the target is the active engine and writes as one.
+    await (
+      again.driver as unknown as { rename(t: string): Promise<void> }
+    ).rename("renamed on the endpoint");
+    assert.equal(sessionStore.get(id)?.title, "renamed on the endpoint");
+    await piStore.releaseForSwitch(id, () => {});
+    rmSync(file, { force: true });
+  } finally {
+    // Still bound to the test's session, so it cannot be deleted.
+    setCredentialProfileEnabled(endpoint.id, false);
+  }
+});
+
+test("a pi kind change waits for a naming run, and one that outlives its released instance writes nothing after the commit (F025)", async () => {
+  const endpoint = createCredentialProfile({
+    name: "Naming kind change LLM",
+    provider: "openai-compatible",
+  });
+  const id = freshId();
+  try {
+    assert.ok(
+      sessionStore.upsert({
+        id,
+        harness: "pi",
+        agentType: "developer",
+        provider: "openai-codex",
+        providerSessionId: id,
+        model: "gpt-5.6-sol",
+        thinkingLevel: "high",
+        credentialProfileId: "default",
+        messageCount: 2,
+      }),
+    );
+    const file = canonicalPiSessionPath(id);
+    mkdirSync(join(file, ".."), { recursive: true });
+    writeFileSync(
+      file,
+      `${JSON.stringify({ type: "session", version: 3, id, timestamp: new Date().toISOString(), cwd: process.cwd() })}\n`,
+    );
+    // The source: Codex, opened and tracked as the store opens any session.
+    piTracksForReal({
+      provider: "openai-codex",
+      id: "gpt-5.6-sol",
+      thinkingLevel: "high",
+    });
+    const source = await piStore.acquireByRecordId(id, "developer");
+    assert.ok(source);
+    assert.equal(source.bindingSeq, 1);
+    // Its first answer started the naming agent (the production routine).
+    const naming = (
+      source as unknown as {
+        autoNameFromFirstPrompt(
+          prompt: string,
+          attachments: never[],
+          settings: { enabled: boolean },
+        ): Promise<void>;
+      }
+    ).autoNameFromFirstPrompt("name this", [], { enabled: true });
+    assert.equal(titles.length, 1);
+
+    const toEndpoint: EngineSwitchTarget = {
+      harness: "pi",
+      model: { provider: endpoint.id, id: "llama3" },
+      thinkingLevel: "off",
+      credentialProfileId: endpoint.id,
+    };
+    const pending: SessionPendingRuntime = {
+      ...PENDING_PI,
+      model: toEndpoint.model,
+      thinkingLevel: "off",
+      account: { kind: "account", id: endpoint.id },
+    };
+    sessionStore.setPendingRuntime(id, pending);
+    piTracksForReal({ ...toEndpoint.model, thinkingLevel: "off" });
+    await assert.rejects(
+      prepareEngineSwitch(id, toEndpoint, pending, () => {}),
+      (error: Error) => error.name === "SessionSettlingError",
+    );
+    assert.equal(piStore.getLiveById(id), source, "pi keeps it meanwhile");
+    assert.equal(isSwitchingEngines(id), false);
+    assert.equal(sessionStore.get(id)?.provider, "openai-codex");
+
+    // Released anyway (nothing does so now): the switch commits meanwhile.
+    piStore.evict(id);
+    const prepared = await prepareEngineSwitch(
+      id,
+      toEndpoint,
+      pending,
+      () => {},
+    );
+    prepared.commit();
+    const committed = sessionStore.get(id);
+    assert.equal(committed?.provider, endpoint.id);
+    assert.equal(committed?.model, "llama3");
+
+    titles.shift()!("Too late");
+    await naming;
+    assert.deepEqual(sessionStore.get(id), committed);
+    assert.equal(
+      source.engine.sessionName,
+      undefined,
+      "nothing is appended to the transcript the endpoint binding reopened",
+    );
+    await piStore.releaseForSwitch(id, () => {});
+    rmSync(file, { force: true });
+  } finally {
+    titles.length = 0;
+    setCredentialProfileEnabled(endpoint.id, false);
+  }
+});
+
+test("the same engine and account kind is not an engine switch", async () => {
+  const id = freshId();
+  await onClaude(id);
+  await assert.rejects(
+    prepareEngineSwitch(
+      id,
+      {
+        harness: "claude-sdk",
+        model: { provider: "claude-sdk", id: "opus" },
+        thinkingLevel: "high",
+        credentialProfileId: "claude-default",
+      },
+      PENDING_PI,
+      () => {},
+    ),
+  );
+  assert.equal(isSwitchingEngines(id), false);
+  assert.equal(sessionStore.bindings(id).length, 1);
 });

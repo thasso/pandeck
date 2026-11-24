@@ -72,6 +72,8 @@ function binding(
   overrides: Partial<ClaudeSwitchBinding> = {},
 ): ClaudeSwitchBinding {
   return {
+    // The binding the switch's commit would start after the row's first.
+    bindingSeq: 2,
     model: "claude-opus-5-5",
     thinkingLevel: "high",
     credentialProfileId: "cp_switch_target",
@@ -157,6 +159,34 @@ describe("opening a Claude session on a switch's binding", () => {
     assert.equal(row?.credentialProfileId, "cp_pi");
     assert.equal(row?.title, "Row title");
     assert.equal(row?.messageCount, 12);
+  });
+
+  test("a return's earlier record replaces no usage totals before the switch commits (F025 sibling)", async () => {
+    const id = freshId();
+    await ranOnce(id);
+    await claudeSdkStore.releaseForSwitch(id, () => {});
+    assert.ok(
+      readClaudeSdkRecord(CLAUDE_SDK_STORE_DIR, id)?.record.usage,
+      "the earlier Claude binding recorded usage",
+    );
+    projectPi(id);
+    // The totals as the active pi binding left them.
+    sessionStore.replaceUsage(id, {
+      inputTokens: 7_777,
+      outputTokens: 1,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      reasoningTokens: 0,
+      totalTokens: 7_778,
+      currency: "USD",
+      usageTurns: 3,
+      assistantTurns: 3,
+      usageSource: "provider_reported",
+      updatedAt: 1_000,
+    });
+    const before = sessionStore.getUsageTotals(id);
+    claudeSdkStore.openForBinding(id, binding());
+    assert.deepEqual(sessionStore.getUsageTotals(id), before);
   });
 
   test("a return resumes the native session the binding names", async () => {

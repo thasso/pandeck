@@ -13,7 +13,12 @@ import {
   InspectorSection,
 } from "../../../src/components/shell/Inspector.tsx";
 import type { SessionRuntimeControl } from "../../../src/components/SessionRuntimeSection.tsx";
-import { failed, loading, ready } from "../../../src/lib/loadState.ts";
+import {
+  failed,
+  loading,
+  ready,
+  type LoadState,
+} from "../../../src/lib/loadState.ts";
 import { chatModels } from "../../fixtures/chat.ts";
 import { attentionFixture } from "../../fixtures/shell.ts";
 
@@ -40,7 +45,11 @@ type RuntimeState =
   | "coordinator"
   | "accountsLoading"
   | "accountsFailed"
-  | "fixedAccount";
+  | "fixedAccount"
+  | "engineSwitch"
+  | "engineSwitchEstimating"
+  | "engineSwitchEstimateFailed"
+  | "engineSwitchNothing";
 
 /** The Runtime section's control in each state it shows. */
 function runtimeControl(
@@ -60,6 +69,41 @@ function runtimeControl(
     onOpen: noop,
     nameOf: (id: string) => ({ "cp-work": "Work", "cp-team": "Team" })[id],
   };
+  const handoff: Partial<Record<RuntimeState, LoadState<number | null>>> = {
+    engineSwitch: ready(12_400),
+    engineSwitchEstimating: loading(),
+    engineSwitchEstimateFailed: failed("The estimate could not be computed."),
+    engineSwitchNothing: ready(null),
+  };
+  if (state in handoff)
+    return {
+      current: {
+        model: chatModels[0],
+        thinkingLevel: "medium",
+        accountName: "Personal",
+      },
+      // A model of another engine, on Automatic within its kind.
+      pending: {
+        model: { provider: "openai-codex", id: "gpt-5.4" },
+        thinkingLevel: "medium",
+        account: { kind: "automatic" },
+        setBy: "user",
+      },
+      models: chatModels,
+      accounts: {
+        targets: ready([{ id: "cp-codex", name: "Codex", enterprise: false }]),
+        onOpen: noop,
+        nameOf: (id: string) => (id === "cp-codex" ? "Codex" : undefined),
+      },
+      engineSwitch: {
+        kindLabel: "OpenAI",
+        handoff: handoff[state],
+        onEstimate: noop,
+      },
+      busy: false,
+      onChange: noop,
+      onReset: noop,
+    };
   return {
     current: {
       model: chatModels[0],
@@ -76,10 +120,6 @@ function runtimeControl(
           }
         : undefined,
     models: chatModels,
-    modelRefusal: (model) =>
-      model.provider === "claude-sdk"
-        ? undefined
-        : "Another harness: not available yet",
     accounts: state === "fixedAccount" ? undefined : accounts,
     busy: false,
     onChange: noop,
@@ -194,6 +234,10 @@ const meta = {
         "accountsLoading",
         "accountsFailed",
         "fixedAccount",
+        "engineSwitch",
+        "engineSwitchEstimating",
+        "engineSwitchEstimateFailed",
+        "engineSwitchNothing",
       ],
     },
   },
@@ -233,6 +277,29 @@ export const SessionRuntimeAccountsFailed: Story = {
 /** An account that cannot move (an endpoint) shows as text. */
 export const SessionRuntimeFixedAccount: Story = {
   args: { runtime: "fixedAccount" },
+};
+
+/** A model on another engine: Automatic within its kind, and the handoff estimate. */
+export const SessionRuntimeEngineSwitch: Story = {
+  args: { runtime: "engineSwitch" },
+};
+
+export const SessionRuntimeEngineSwitchDark: Story = {
+  args: { runtime: "engineSwitch" },
+  globals: { theme: "dark" },
+};
+
+export const SessionRuntimeEngineSwitchEstimating: Story = {
+  args: { runtime: "engineSwitchEstimating" },
+};
+
+export const SessionRuntimeEngineSwitchEstimateFailed: Story = {
+  args: { runtime: "engineSwitchEstimateFailed" },
+};
+
+/** Returning to an engine whose own history is complete hands over nothing. */
+export const SessionRuntimeEngineSwitchNothing: Story = {
+  args: { runtime: "engineSwitchNothing" },
 };
 
 export const Task: Story = { args: { object: "task" } };

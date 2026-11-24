@@ -22,7 +22,8 @@ import { CLAUDE_SDK_STORE_DIR } from "../sessionStorage.ts";
 import { ClaudeSdkSession } from "./ClaudeSdkSession.ts";
 import { buildRealClaudeSdkSeam, type ClaudeSdkSeam } from "./sdkSeam.ts";
 import { sessionRuntime } from "../session/runtimeInstance.ts";
-import { sessionStore } from "../db/sessionStore.ts";
+import { sessionStore, type SessionUsageTotals } from "../db/sessionStore.ts";
+import type { UsageCounters } from "../db/sessionEngineBinding.ts";
 import { sourceRequiresEnterprise } from "../sessionEnterprise.ts";
 import {
   type CheckedCheckout,
@@ -84,6 +85,8 @@ interface ClaudeAcquireOptions {
  * decides it.
  */
 export interface ClaudeSwitchBinding {
+  /** The binding the switch's commit starts, which the session writes as. */
+  bindingSeq: number;
   model: string;
   thinkingLevel: string;
   credentialProfileId: string;
@@ -122,6 +125,40 @@ function boundClaudeFields(id: string):
   };
 }
 
+/**
+ * The record's running native usage total as session usage totals; undefined
+ * when the record reports none. Turn counts are the record's own entries'.
+ */
+function nativeUsageTotals(
+  record: ClaudeSdkRecordMeta,
+  figures: ClaudeSdkEntryFigures,
+): SessionUsageTotals | undefined {
+  const usage = record.usage;
+  if (!usage) return undefined;
+  return {
+    inputTokens: usage.input,
+    outputTokens: usage.output,
+    cacheReadTokens: usage.cacheRead,
+    cacheWriteTokens: usage.cacheWrite,
+    reasoningTokens: 0,
+    totalTokens:
+      usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
+    costMicros: Math.round(usage.cost * 1_000_000),
+    currency: "USD",
+    // Runs that actually reported usage — what the accumulated totals cover.
+    usageTurns: figures.usageTurns,
+    assistantTurns: figures.assistantTurns,
+    ...(usage.contextTokens !== undefined
+      ? { contextTokens: usage.contextTokens }
+      : {}),
+    ...(usage.contextWindow !== undefined
+      ? { contextWindow: usage.contextWindow }
+      : {}),
+    usageSource: "provider_reported",
+    updatedAt: record.updatedAt,
+  };
+}
+
 class ClaudeSdkSessionStore {
   private sessions = new Map<string, ClaudeSdkSession>();
   private deleted = new Set<string>();
@@ -139,6 +176,12 @@ class ClaudeSdkSessionStore {
    * still finishing (the naming agent); delivery is woken once they settle.
    */
   private wakeWhenSettled = new Set<string>();
+  /**
+   * The engine binding each instance runs (`seq`), named on its row writes:
+   * one for a binding that is not the active one is foreign
+   * (`docs/session-runtime-switching.md` "Engine bindings").
+   */
+  private readonly bindingSeqs = new WeakMap<ClaudeSdkSession, number>();
   /** Where each live session's next persist continues its timeline log. */
   private logs = new Map<string, ClaudeSdkLogCursor>();
   /** Lazily-built real seam, shared by every live session. */
@@ -392,6 +435,12 @@ class ClaudeSdkSessionStore {
       ...(opts.scope ? { scope: opts.scope } : {}),
       ...(opts.requiresEnterprise ? { requiresEnterprise: true } : {}),
     });
+    // The active binding, a session's first, or the one a switch's commit
+    // starts.
+    this.bindingSeqs.set(
+      session,
+      binding?.bindingSeq ?? sessionStore.activeBinding(id)?.seq ?? 1,
+    );
     // Registry sync: record the session's metadata on create (providerSessionId
     // is not known until the first turn ends; persist() fills it in then).
     this.syncRegistry(session);
@@ -571,6 +620,8 @@ class ClaudeSdkSessionStore {
         scope: sourceMeta?.scope ?? DEFAULT_SESSION_SCOPE,
         ...(requiresEnterprise ? { requiresEnterprise: true } : {}),
       });
+      // A fork is a new session: it runs its first binding.
+      this.bindingSeqs.set(session, 1);
       this.sessions.set(id, session);
       this.persist(session);
       session.armIdleIfUnviewed();
@@ -723,6 +774,7 @@ class ClaudeSdkSessionStore {
     const committed = session.committedTimeline();
     this.syncRegistryRecord(
       session.toRecordMeta(),
+      this.bindingSeqs.get(session),
       cursor?.kind === "append" && cursor.log.count === committed.length
         ? cursor.log
         : claudeSdkEntryFigures(committed),
@@ -731,15 +783,13 @@ class ClaudeSdkSessionStore {
 
   private syncRegistryRecord(
     record: ClaudeSdkRecordMeta,
+    bindingSeq: number | undefined,
     figures: ClaudeSdkEntryFigures,
   ): void {
     try {
       const harness = "claude-sdk";
       const agentType = record.agentType ?? "workshop";
       const messageCount = figures.messages;
-      const assistantTurns = figures.assistantTurns;
-      // Runs that actually reported usage — what the accumulated totals cover.
-      const usageTurns = figures.usageTurns;
       const existing = sessionStore.get(record.id);
       const metadataUnchanged =
         existing?.harness === harness &&
@@ -778,37 +828,48 @@ class ClaudeSdkSessionStore {
             ? { credentialProfileId: record.credentialProfileId }
             : {}),
           ...(record.forkOrigin ? { forkOrigin: record.forkOrigin } : {}),
+          ...(bindingSeq !== undefined ? { bindingSeq } : {}),
         });
       }
-      if (record.usage) {
-        sessionStore.replaceUsage(record.id, {
-          inputTokens: record.usage.input,
-          outputTokens: record.usage.output,
-          cacheReadTokens: record.usage.cacheRead,
-          cacheWriteTokens: record.usage.cacheWrite,
-          reasoningTokens: 0,
-          totalTokens:
-            record.usage.input +
-            record.usage.output +
-            record.usage.cacheRead +
-            record.usage.cacheWrite,
-          costMicros: Math.round(record.usage.cost * 1_000_000),
-          currency: "USD",
-          usageTurns,
-          assistantTurns,
-          ...(record.usage.contextTokens !== undefined
-            ? { contextTokens: record.usage.contextTokens }
-            : {}),
-          ...(record.usage.contextWindow !== undefined
-            ? { contextWindow: record.usage.contextWindow }
-            : {}),
-          usageSource: "provider_reported",
-          updatedAt: record.updatedAt,
-        });
-      }
+      // The record's running native total, written over the usage the
+      // session had before this binding (a switched-to binding's base). Only
+      // the active binding's instance writes it: a switch's target before its
+      // commit (a return brings back an earlier record) replaces nothing.
+      const native = nativeUsageTotals(record, figures);
+      if (native)
+        sessionStore.replaceEngineUsage(record.id, bindingSeq, native);
     } catch {
       // Best-effort metadata sync.
     }
+  }
+
+  /**
+   * What the resident session's native counter holds now: the totals its
+   * record reports, a return's earlier Claude usage included. A switch to
+   * Claude commits its binding over the session's usage less this. Zero
+   * counters when the record has none yet.
+   */
+  nativeUsage(id: string): UsageCounters {
+    const session = this.sessions.get(id);
+    const totals = session
+      ? nativeUsageTotals(
+          session.toRecordMeta(),
+          claudeSdkEntryFigures(session.committedTimeline()),
+        )
+      : undefined;
+    return {
+      inputTokens: totals?.inputTokens ?? 0,
+      outputTokens: totals?.outputTokens ?? 0,
+      cacheReadTokens: totals?.cacheReadTokens ?? 0,
+      cacheWriteTokens: totals?.cacheWriteTokens ?? 0,
+      reasoningTokens: totals?.reasoningTokens ?? 0,
+      totalTokens: totals?.totalTokens ?? 0,
+      ...(totals?.costMicros !== undefined
+        ? { costMicros: totals.costMicros }
+        : {}),
+      usageTurns: totals?.usageTurns ?? 0,
+      assistantTurns: totals?.assistantTurns ?? 0,
+    };
   }
 
   /** Remove a session for good (tombstone + delete its record). */

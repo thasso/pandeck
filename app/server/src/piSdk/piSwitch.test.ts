@@ -121,6 +121,8 @@ const binding = {
   thinkingLevel: "high" as const,
   credentialProfileId: "cp_pi",
   mode: "build" as const,
+  // The binding the switch's commit would start after the row's first.
+  bindingSeq: 2,
 };
 
 test("a first pi binding starts its transcript under the app id", async () => {
@@ -282,6 +284,7 @@ test("a reopen of a switched-to pi binding runs its committed model, a first bin
     if (switched) {
       row(id);
       sessionStore.switchEngineBinding(id, {
+        nativeUsage: null,
         expectSeq: 1,
         fields: {
           harness: "pi",

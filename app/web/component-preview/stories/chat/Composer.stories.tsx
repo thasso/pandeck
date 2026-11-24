@@ -30,6 +30,7 @@ type State =
   | "inert"
   | "dictation"
   | "runtimePending"
+  | "runtimeEngineSwitch"
   | "runtimeArgument";
 /** `/model`, as the server registers it (`slashCommands.ts`). */
 const modelCommand = {
@@ -42,20 +43,17 @@ const modelCommand = {
   argument: "model" as const,
 };
 const runtimeCommands = [...chatCommands, modelCommand];
-/** What `/model` completes to: this engine's models, another harness's disabled. */
+/** What `/model` completes to: every model, this engine's first. */
 const runtimeArguments = () =>
-  chatModels.map((model) =>
-    model.provider === "claude-sdk"
-      ? { value: model.id, label: model.name }
-      : {
-          value: model.id,
-          label: model.name,
-          detail: "Another harness: not available yet",
-          disabled: true,
-        },
-  );
+  chatModels.map((model) => ({ value: model.id, label: model.name }));
 const runtimeChip = {
   label: "Claude Opus 4.6 · High · Work",
+  onOpen: noop,
+};
+/** A pending model on another engine: the chip adds what it hands over. */
+const engineSwitchChip = {
+  label: "GPT-5.4 · Medium · Automatic",
+  handoff: "Hands over ~12k tokens",
   onOpen: noop,
 };
 function ComposerPreview({
@@ -131,7 +129,10 @@ function ComposerPreview({
         : state === "runtimeArgument"
           ? "/model o"
           : "";
-  const runtime = state === "runtimePending" || state === "runtimeArgument";
+  const runtime =
+    state === "runtimePending" ||
+    state === "runtimeEngineSwitch" ||
+    state === "runtimeArgument";
   return (
     <div
       ref={host}
@@ -151,6 +152,9 @@ function ComposerPreview({
         slashCommands={runtime ? runtimeCommands : chatCommands}
         {...(runtime ? { runtimeArguments } : {})}
         {...(state === "runtimePending" ? { runtimeChip } : {})}
+        {...(state === "runtimeEngineSwitch"
+          ? { runtimeChip: engineSwitchChip }
+          : {})}
         actions={chatActions}
         draft={{ sessionId: chatSession.sessionId, token: 1, text }}
         draftAutoFocus={false}
@@ -187,7 +191,15 @@ export const RuntimePendingPhone = {
   args: { frameWidth: 390, state: "runtimePending" },
   globals: { viewport: { value: "paPhone", isRotated: false } },
 } satisfies Story;
-/** `/model` completing its argument from this engine's models. */
+/** A pending switch to another engine, with its handoff estimate. */
+export const RuntimeEngineSwitch = {
+  args: { state: "runtimeEngineSwitch" },
+} satisfies Story;
+export const RuntimeEngineSwitchPhone = {
+  args: { frameWidth: 390, state: "runtimeEngineSwitch" },
+  globals: { viewport: { value: "paPhone", isRotated: false } },
+} satisfies Story;
+/** `/model` completing its argument from every model, this engine's first. */
 export const RuntimeArgument = {
   args: { state: "runtimeArgument" },
 } satisfies Story;

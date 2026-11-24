@@ -23,7 +23,13 @@ import {
 } from "./objectInspectors.tsx";
 import { DialogProvider } from "./common/dialogs.tsx";
 import type { SessionRuntimeControl } from "./SessionRuntimeSection.tsx";
-import { failed, loading, ready, refreshing } from "../lib/loadState.ts";
+import {
+  failed,
+  loading,
+  ready,
+  refreshing,
+  type LoadState,
+} from "../lib/loadState.ts";
 
 const openers = {
   onOpenTask: () => {},
@@ -273,10 +279,6 @@ describe("SessionInspector layout", () => {
       },
       pending: undefined,
       models: [opus, sonnet, gpt],
-      modelRefusal: (model) =>
-        model.provider === "openai-codex"
-          ? "Another harness: not available yet"
-          : undefined,
       accounts: {
         targets: undefined,
         onOpen: () => {},
@@ -323,7 +325,7 @@ describe("SessionInspector layout", () => {
       ).toBe(false);
     });
 
-    it("lists another harness's model disabled with its reason, and sends the one picked", async () => {
+    it("offers another harness's model like any other, and sends the one picked", async () => {
       const { host, root } = mount();
       const changes: SessionRuntimeChange[] = [];
       await show(root, control({ onChange: (change) => changes.push(change) }));
@@ -331,18 +333,54 @@ describe("SessionInspector layout", () => {
       const gptOption = options().find((item) =>
         item.textContent?.includes("GPT-5.5"),
       )!;
-      expect(gptOption.textContent).toContain(
-        "Another harness: not available yet",
+      expect(gptOption.getAttribute("aria-disabled")).not.toBe("true");
+      await act(async () => gptOption.click());
+      expect(changes).toEqual([
+        { model: { provider: "openai-codex", id: "gpt-5.5" } },
+      ]);
+    });
+
+    it("shows a pending engine switch's handoff estimate: loading, ready, refreshing, error", async () => {
+      const { root } = mount();
+      let asked = 0;
+      const toGpt = (handoff: LoadState<number | null> | undefined) =>
+        control({
+          pending: {
+            model: { provider: "openai-codex", id: "gpt-5.5" },
+            thinkingLevel: "high",
+            account: { kind: "automatic" },
+            setBy: "user",
+          },
+          engineSwitch: {
+            kindLabel: "OpenAI",
+            handoff,
+            onEstimate: () => {
+              asked += 1;
+            },
+          },
+        });
+      await show(root, toGpt(loading()));
+      expect(document.body.textContent).toContain("Estimating the handoff…");
+      await show(root, toGpt(ready(12_400)));
+      expect(document.body.textContent).toContain("Hands over ~12k tokens");
+      expect(document.body.textContent).toContain("Next turn: GPT-5.5");
+      await show(root, toGpt(refreshing(12_400)));
+      expect(document.body.textContent).toContain("Hands over ~12k tokens");
+      expect(document.body.textContent).toContain("Updating the estimate");
+      await show(root, toGpt(ready(null)));
+      expect(document.body.textContent).toContain(
+        "Hands over nothing: it keeps its own history",
       );
-      expect(gptOption.getAttribute("aria-disabled")).toBe("true");
+      await show(root, toGpt(failed("Session does not exist or was deleted.")));
+      expect(document.body.textContent).toContain(
+        "Session does not exist or was deleted.",
+      );
       await act(async () =>
-        options()
-          .find((item) => item.textContent === "Claude Sonnet")!
+        [...document.querySelectorAll("button")]
+          .find((button) => button.textContent?.trim() === "Retry")!
           .click(),
       );
-      expect(changes).toEqual([
-        { model: { provider: "anthropic", id: "claude-sonnet" } },
-      ]);
+      expect(asked).toBe(1);
     });
 
     it("asks for the accounts when opened and states loading, empty and failure", async () => {

@@ -14,6 +14,14 @@ import type {
   ServerMessage,
   SessionPendingRuntime,
 } from "@assistant/shared";
+import { randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import type {
+  ClaudeQueryParams,
+  ClaudeSdkSeam,
+  ClaudeSdkUserMessage,
+} from "./claudeSdk/sdkSeam.ts";
 
 vi.mock("./harnesses/models.ts", async (importOriginal) => {
   const original =
@@ -26,6 +34,12 @@ vi.mock("./harnesses/models.ts", async (importOriginal) => {
         id: "gpt-5.6-sol",
         name: "GPT-5.6 Sol",
         contextWindow: 272_000,
+      } as ModelOption,
+      {
+        provider: "claude-sdk",
+        id: "sonnet",
+        name: "Claude Sonnet",
+        contextWindow: 200_000,
       } as ModelOption,
     ],
   };
@@ -42,6 +56,7 @@ vi.mock("./sessionAccountMove.ts", async (importOriginal) => {
   return {
     ...original,
     modelRefusal: async () => undefined,
+    accountOffersSelection: async () => true,
     assertStillEligible: () => {},
   };
 });
@@ -60,8 +75,14 @@ const { logPathFor } = await import("./session/log/persistence.ts");
 const { ensureRuntimeSessionWithRuntime, promptRuntimeSessionWithRuntime } =
   await import("./session/runtimePrompt.ts");
 const { readHandoffRecords } = await import("./sessionHandoff.ts");
-const { setPendingRuntimeHostForTests } =
-  await import("./sessionPendingRuntime.ts");
+const { estimateTokens } = await import("./session/runtime/liveBlocks.ts");
+const { claudeConfigDir, setCredentialProfileEnabled } =
+  await import("./credentialProfiles.ts");
+const {
+  pendingSwitchHandoffTokens,
+  setPendingRuntimeHostForTests,
+  setSessionPendingRuntime,
+} = await import("./sessionPendingRuntime.ts");
 const { installClaudeStateBuilder } =
   await import("./test/claudeSdkSession.ts");
 const { claudeTurnSeam } = await import("./test/claudeTurnSeam.ts");
@@ -104,6 +125,10 @@ class PiStandIn extends FakeRuntimeDriver {
   }
   addViewer(): void {}
   removeViewer(): void {}
+  /** Where the session works: the default directory. */
+  commitWorkflowContext() {
+    return { sessionManager: undefined };
+  }
   dispose(): void {
     this.released = true;
   }
@@ -112,8 +137,48 @@ class PiStandIn extends FakeRuntimeDriver {
 const opened: PiStandIn[] = [];
 const ids: string[] = [];
 
+/** What each Claude query was asked: the model text and the native resume. */
+const claudeQueries: Array<{ text: string; resume: string | undefined }> = [];
+
+async function firstPromptText(
+  prompt: ClaudeQueryParams["prompt"],
+): Promise<string> {
+  if (typeof prompt === "string") return prompt;
+  const messages = prompt as AsyncIterable<ClaudeSdkUserMessage>;
+  const first = await messages[Symbol.asyncIterator]().next();
+  const content = (first.value as ClaudeSdkUserMessage | undefined)?.message
+    .content;
+  if (typeof content === "string") return content;
+  return (content ?? [])
+    .map((block) => ("text" in block ? block.text : ""))
+    .join("");
+}
+
+const recordingClaudeSeam: ClaudeSdkSeam = {
+  query(params) {
+    const turn = claudeTurnSeam.query(params) as AsyncIterable<
+      Record<string, unknown>
+    >;
+    // Native ids are unique across sessions: each session gets its own.
+    const native = params.options?.resume ?? `native-${randomUUID()}`;
+    return {
+      async *[Symbol.asyncIterator]() {
+        claudeQueries.push({
+          text: await firstPromptText(params.prompt),
+          resume: params.options?.resume,
+        });
+        for await (const message of turn)
+          yield "session_id" in message
+            ? { ...message, session_id: native }
+            : message;
+      },
+    } as never;
+  },
+  deleteSession: async () => {},
+};
+
 beforeAll(() => {
-  claudeSdkStore.setSeam(() => Promise.resolve(claudeTurnSeam));
+  claudeSdkStore.setSeam(() => Promise.resolve(recordingClaudeSeam));
   piStore.setHost({
     sessionRowsChanged: () => {},
     noteRunStarted: () => {},
@@ -154,6 +219,7 @@ beforeAll(() => {
 afterEach(async () => {
   pi.live.clear();
   opened.length = 0;
+  claudeQueries.length = 0;
   for (const id of ids.splice(0)) {
     claudeSdkStore.remove(id);
     await sessionRuntime.disposeSession(id);
@@ -232,7 +298,10 @@ test("the turn runs on the new engine with the handoff, and an attached viewer f
       model ?? "",
       /^<session-switch>\nSession switch: this session/,
     );
-    assert.match(model ?? "", /moved from sonnet · Claude to GPT-5\.6 Sol · /);
+    assert.match(
+      model ?? "",
+      /moved from Claude Sonnet · Claude to GPT-5\.6 Sol · /,
+    );
     assert.match(
       model ?? "",
       /<session-history>[\s\S]*first ask[\s\S]*a reply/,
@@ -340,5 +409,219 @@ test("a skill whose switch is held is kept as a held input, and the session stay
     hub.unregister(conn as never);
     conn.dispose();
     promptQueueStore.deleteSession(id);
+  }
+});
+
+type TestConnection = {
+  handle(msg: ClientMessage): Promise<void>;
+  dispose(): void;
+};
+
+/** A connection whose answers are read back by request id. */
+function connect() {
+  const sent: ServerMessage[] = [];
+  const conn = new Connection({
+    OPEN: 1,
+    readyState: 1,
+    send: (frame: string | Buffer) => sent.push(parseServerFrame(frame)),
+  } as never) as unknown as TestConnection;
+  hub.register(conn as never);
+  const ask = async (msg: ClientMessage & { requestId: string }) => {
+    await conn.handle(msg);
+    const answer = sent.find(
+      (frame) => "requestId" in frame && frame.requestId === msg.requestId,
+    );
+    assert.ok(answer, `${msg.type} was answered`);
+    return answer as ServerMessage & Record<string, unknown>;
+  };
+  const close = () => {
+    hub.unregister(conn as never);
+    conn.dispose();
+  };
+  return { ask, close };
+}
+
+/** The host's display-only markers in the session's log, oldest first. */
+function notices(id: string): string[] {
+  return readFileSync(logPathFor(id), "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as { type?: string; message?: string })
+    .filter((entry) => entry.type === "provider.notice")
+    .map((entry) => entry.message ?? "");
+}
+
+/** The model-only context a turn carried ahead of the user's `text`. */
+function contextOf(model: string | undefined, text: string): string {
+  const tail = `\n\n${text}`;
+  assert.ok(model?.endsWith(tail), "the turn ends with its text");
+  return (model ?? "").slice(0, -tail.length);
+}
+
+/** Claude's account holds the native transcript its binding names, so a return resumes it. */
+async function seedClaudeTranscript(id: string): Promise<void> {
+  // The binding learns its native id from the turn's result.
+  const binding = await vi.waitFor(() => {
+    const [first] = sessionStore.bindings(id);
+    assert.ok(first?.nativeSessionId && first.credentialProfileId);
+    return first as typeof first & {
+      nativeSessionId: string;
+      credentialProfileId: string;
+    };
+  });
+  const dir = join(
+    claudeConfigDir(binding.credentialProfileId),
+    "projects",
+    "engine-switch-turn",
+  );
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${binding.nativeSessionId}.jsonl`), "");
+}
+
+test("Claude → pi → Claude through the set path: marker, estimate, handoff, and the return's delta", async () => {
+  const id = `engine-switch-turn-${Date.now()}-set-path`;
+  ids.push(id);
+  const claude = claudeSdkStore.acquire(id, { modelId: "sonnet" });
+  claude.setTitle("switch turn");
+  ensureRuntimeSessionWithRuntime(sessionRuntime, claude);
+  await promptRuntimeSessionWithRuntime(sessionRuntime, claude, "first ask");
+  await seedClaudeTranscript(id);
+  const { ask, close } = connect();
+  try {
+    // The inspector's set: a model of another engine with its account.
+    const set = await ask({
+      type: "setPendingRuntime",
+      sessionId: id,
+      requestId: "set-pi",
+      model: { provider: "openai-codex", id: "gpt-5.6-sol" },
+      account: { kind: "account", id: "default" },
+    });
+    assert.equal(set.type, "pendingRuntimeAnswer");
+    assert.equal(set.error, undefined);
+    assert.equal(sessionStore.get(id)?.pendingRuntime?.setBy, "user");
+
+    // The estimate the inspector shows is the handoff the turn delivers.
+    const estimate = await ask({
+      type: "estimateSessionHandoff",
+      sessionId: id,
+      requestId: "estimate-pi",
+    });
+    assert.equal(estimate.type, "sessionHandoffEstimate");
+    assert.equal(typeof estimate.tokens, "number");
+
+    await promptRuntimeSessionWithRuntime(sessionRuntime, claude, "second ask");
+    const [onPi] = opened;
+    assert.ok(onPi, "the session opened on pi");
+    const toPi = contextOf(onPi.promptTexts[0], "second ask");
+    assert.equal(estimate.tokens, estimateTokens(toPi));
+    assert.match(toPi, /moved from Claude Sonnet · Claude to GPT-5\.6 Sol · /);
+    assert.match(toPi, /<session-history>[\s\S]*first ask[\s\S]*a reply/);
+    assert.match(
+      notices(id).at(-1) ?? "",
+      /^Switched from Claude Sonnet · Claude to GPT-5\.6 Sol · Default OpenAI — chosen by you\.$/,
+    );
+
+    // Back to Claude on the account that holds its transcript, which the
+    // return resumes. (This test host has no logged-in account for Automatic
+    // to route to.)
+    await setSessionPendingRuntime(
+      id,
+      {
+        model: { provider: "claude-sdk", id: "sonnet" },
+        account: { kind: "account", id: "claude-default" },
+      },
+      "user",
+    );
+    const back = await pendingSwitchHandoffTokens(id);
+    await promptRuntimeSessionWithRuntime(sessionRuntime, onPi, "third ask");
+    assert.equal(onPi.released, true, "pi let the session go");
+    assert.equal(sessionStore.get(id)?.harness, "claude-sdk");
+    const resumedNative = sessionStore.bindings(id)[0]?.nativeSessionId;
+    const last = claudeQueries.at(-1);
+    assert.equal(last?.resume, resumedNative, "Claude resumed its transcript");
+    const toClaude = contextOf(last?.text, "third ask");
+    assert.equal(back, estimateTokens(toClaude));
+    // Only what Claude missed: the turn on pi, not the turn it already holds.
+    assert.match(toClaude, /<session-history>[\s\S]*second ask/);
+    assert.doesNotMatch(toClaude, /first ask/);
+    assert.match(
+      notices(id).at(-1) ?? "",
+      /^Switched from GPT-5\.6 Sol · .+ to Claude Sonnet · .+ — chosen by you\.$/,
+    );
+    assert.deepEqual(
+      sessionStore.bindings(id).map((binding) => binding.harness),
+      ["claude-sdk", "pi", "claude-sdk"],
+    );
+    assert.deepEqual(userTexts(id), ["first ask", "second ask", "third ask"]);
+  } finally {
+    close();
+  }
+});
+
+test("a session's usage is the sum over its engines, Claude → pi → Claude, and a return counts Claude's earlier usage once (F027)", async () => {
+  const { id, claude } = await claudeWithPendingPi("usage");
+  await seedClaudeTranscript(id);
+  const usage = () => {
+    const totals = sessionStore.getUsageTotals(id);
+    return {
+      input: totals?.inputTokens,
+      output: totals?.outputTokens,
+      cost: totals?.costMicros,
+    };
+  };
+  // Each Claude query reports 1 input, 1 output and $0.01 for its epoch.
+  assert.deepEqual(usage(), { input: 1, output: 1, cost: 10_000 });
+
+  await promptRuntimeSessionWithRuntime(sessionRuntime, claude, "second ask");
+  const [onPi] = opened;
+  assert.ok(onPi, "the session opened on pi");
+  // pi counts run by run: its turn's assistant entry adds its own usage (the
+  // stand-in writes no reply, so the entry's figure is added as the log does).
+  sessionStore.recordUsageTurn(id, {
+    inputTokens: 7_776,
+    outputTokens: 0,
+    costUSD: 1,
+  });
+  assert.deepEqual(usage(), { input: 7_777, output: 1, cost: 1_010_000 });
+
+  await setSessionPendingRuntime(
+    id,
+    {
+      model: { provider: "claude-sdk", id: "sonnet" },
+      account: { kind: "account", id: "claude-default" },
+    },
+    "user",
+  );
+  await promptRuntimeSessionWithRuntime(sessionRuntime, onPi, "third ask");
+  assert.equal(sessionStore.get(id)?.harness, "claude-sdk");
+  const back = claudeSdkStore.get(id);
+  assert.ok(back && back !== claude, "the return opened Claude afresh");
+  // The record Claude resumed already counts its first turn: the session adds
+  // only the return's own turn to pi's, never that first turn again.
+  assert.deepEqual(usage(), { input: 7_778, output: 2, cost: 1_020_000 });
+
+  // The base is durable: a reopen writes the record's totals over it again.
+  await claudeSdkStore.releaseForSwitch(id, () => {});
+  claudeSdkStore.acquire(id, {});
+  assert.deepEqual(usage(), { input: 7_778, output: 2, cost: 1_020_000 });
+});
+
+test("a target that cannot run is held as the session's failure, the selection still pending", async () => {
+  const { id, claude } = await claudeWithPendingPi("held");
+  setCredentialProfileEnabled("default", false);
+  try {
+    await assert.rejects(
+      promptRuntimeSessionWithRuntime(sessionRuntime, claude, "second ask"),
+      /Couldn't switch to GPT-5\.6 Sol/,
+    );
+    assert.match(
+      sessionStore.get(id)?.lastError?.message ?? "",
+      /^Couldn't switch to GPT-5\.6 Sol.*The change is still pending/,
+    );
+    assert.deepEqual(sessionStore.get(id)?.pendingRuntime, PENDING);
+    assert.equal(sessionStore.get(id)?.harness, "claude-sdk");
+    assert.deepEqual(opened, [], "pi never opened");
+  } finally {
+    setCredentialProfileEnabled("default", true);
   }
 });

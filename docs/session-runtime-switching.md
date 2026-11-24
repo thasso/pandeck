@@ -1,10 +1,11 @@
 # Session runtime switching
 
 A started session can change the model, effort (thinking level) and account its
-next turn starts on. This document is the contract for those changes. It grows
-with Task-1485: switching between harnesses is planned; until it lands, every
-change stays within the session's current engine. Failover and the other moves
-the app makes itself are `docs/account-routing.md` "Live account switching".
+next turn starts on, including a model of another harness or account kind
+(Task-1485). This document is the contract for those changes. A switch is never
+automatic: the user chooses it, or a coordinating session for its child.
+Failover and the other moves the app makes itself stay within one account kind
+(`docs/account-routing.md` "Live account switching").
 
 ## Pending selection
 
@@ -23,12 +24,17 @@ has no expiry. A fork does not inherit it.
   parts; the server completes it from the current pending selection, else the
   session's current runtime, and clamps the effort to the target model. A target
   equal to what the session runs now clears the selection. Only static rules
-  refuse at set time: a model of another harness ("Another harness: not
-  available yet"), one the bound account's kind cannot run, an unknown model,
-  and for a chosen account another kind, a disabled one, one that is not
-  enterprise when the session requires it, or one that does not offer the model
-  at that effort. Health and benches are judged when the turn starts. `setBy`
-  records the user or the coordinator.
+  refuse at set time: an unknown model, and for a chosen account another kind, a
+  disabled one, one that is not enterprise when the session requires it, or one
+  that does not offer the model at that effort. Health and benches are judged
+  when the turn starts. `setBy` records the user or the coordinator.
+- **Another engine.** A model whose kind the bound account does not serve (pi ↔
+  Claude, or Codex ↔ an OpenAI-compatible endpoint within pi) is an engine
+  switch. It is refused only when no enabled account of its kind, within the
+  session's enterprise requirement, offers it at that effort ("No enabled Claude
+  account offers Opus."). A chosen account must be of the model's kind ("Work
+  cannot run GPT-6."). Picking only a model of another kind turns a chosen
+  account of the old kind into Automatic.
 - **Order.** Sets and resets of one session run one at a time, in request order,
   each from the selection the previous one left: two partial changes both land,
   and a reset is never undone by a set asked for before it. A set recomputes
@@ -39,9 +45,10 @@ has no expiry. A fork does not inherit it.
   `pendingRuntimeAnswer`; a refusal carries `error` and becomes the session's
   failure (`docs/messaging.md`).
 - **Account.** "Automatic" keeps the bound account when it can run the target
-  and asks the router otherwise, within the bound account's kind and enterprise
-  requirement. A chosen account must still pass every move rule (below). Only a
-  subscription login moves; any other account alone serves its models.
+  and asks the router otherwise, within the target model's kind and the
+  enterprise requirement. A chosen account must still pass every move rule
+  (below). Only a subscription login moves; any other account alone serves its
+  models.
 
 ### Applying it
 
@@ -60,7 +67,8 @@ selection applies, the disabled-account move does not run: it would replace the
 chosen account. A changed account appends the display-only marker
 `Switched from A to B — chosen by you.` (or
 `— chosen by its coordinating session.`); a model or effort change appends
-nothing.
+nothing. A selection on another engine moves the session there instead ("Moving
+to another harness").
 
 ### When it cannot apply
 
@@ -110,10 +118,10 @@ The turn is **held**, never failed and never run on the old engine
 ## Web
 
 The inspector's **Runtime** section (`SessionRuntimeSection.tsx`, shown for a
-started session) has Model, Effort and Account rows for the next turn. Models of
-another harness or account kind are listed disabled with their reason
-(`lib/sessionRuntimeControl.ts`). The Account row offers Automatic and the
-accounts the server lists for the pending model
+started session) has Model, Effort and Account rows for the next turn. It lists
+every model, this engine's first (`lib/sessionRuntimeControl.ts`). The Account
+row follows the target model's kind: Automatic ("chooses among Claude accounts")
+and the accounts the server lists for the pending model
 (`listSessionAccountMoveTargets`), asked again whenever anything that list
 judges changes: the session and its bound account, its next-turn model or
 effort, its enterprise requirement, and any account's kind, enabled, enterprise
@@ -124,23 +132,44 @@ drops the next turn's model refreshes it too; `accountTargetsRefreshKey`). A
 refresh keeps the last list shown. The answer also says whether the bound
 account itself can run the next turn (`boundEligible`: enabled, enterprise
 requirement, offers the model at that effort, login, bench), judged by the rules
-a selection naming it is applied with. An account that cannot move shows as
-text. While a change is pending, a "Next turn" row states the target and what
-runs now, names a coordinator's choice, and offers Reset.
+a selection naming it is applied with. For a model of another kind the server
+lists that kind's accounts and `boundEligible` is false. An account that cannot
+move, and an endpoint model's one account, show as text. While a change is
+pending, a "Next turn" row states the target and what runs now, names a
+coordinator's choice, and offers Reset.
+
+A pending change on another engine adds a **Handoff** row: "Hands over ~12k
+tokens", or "Hands over nothing: it keeps its own history" when the engine would
+resume a native session that missed nothing. The server computes it
+(`estimateSessionHandoff` → `sessionHandoffEstimate`,
+`pendingSwitchHandoffTokens`) by the same selection and cap the switch delivers,
+predicting the resume without touching native data and resolving Automatic to
+the router's pick now. The client asks again when the session, its pending
+target, its message count or an account changes (`handoffEstimateRefreshKey`);
+only the latest request's answer lands. Loading, refreshing and failure follow
+`app/web/docs/loading-states.md`, with Retry on a failure.
 
 While a change is pending, the composer shows a chip "Next turn: <model · effort
-· account>". Tapping it opens the inspector at the Runtime section, as the
-object dock on a phone.
+· account>", followed by the handoff estimate for another engine. Tapping it
+opens the inspector at the Runtime section, as the object dock on a phone.
 
 `/model`, `/effort` and `/account` are client slash commands
 (`lib/runtimeSlashCommand.ts`). Without an argument they open the Runtime
 section. With one they set the pending selection at once, even mid-turn, and are
-never queued. Their argument completes from the session's models, the target
-model's levels, or Automatic and that same server answer: the bound account only
-when `boundEligible`, then the listed accounts. `/account` is offered only when
-that gives more than one account, and not before the list has answered; the
-client never judges an account itself. They are offered only for a started
-session.
+never queued. Their argument completes from every model, the target model's
+levels, or Automatic and that same server answer, so `/account` lists the target
+kind's accounts: the bound account only when it serves the target and
+`boundEligible`, then the listed accounts. `/account` is offered only when that
+gives more than one account, and not before the list has answered; the client
+never judges an account itself. They are offered only for a started session.
+`/model` reads its argument as a model's `provider/id` and as a bare id at once
+(an endpoint's id may itself hold a slash, `openai/gpt-5.5`), then as a display
+name. The completion inserts the bare id when that names only this model in both
+readings, else `provider/id` (two OpenAI-compatible endpoints may both offer
+`llama3`), and completes it from the text after any slash. A model that neither
+names alone is listed disabled: choose it in the Runtime section. Text that
+names more than one model is refused with the `provider/id` choices, never
+resolved to the first.
 
 A started session refuses `setModel` and `setThinkingLevel` with "This session
 has started: change its model or effort in the Runtime section, from its next
@@ -150,8 +179,9 @@ the server), whose change applies at once.
 ## Engine changes
 
 Applying a pending selection, or changing an unstarted draft, goes through each
-engine's own model and effort controls. The change stays on the session's
-harness and bound account; moving to another harness is refused.
+engine's own model and effort controls when it stays on the session's harness
+and account kind. Any other change is an engine switch ("Moving to another
+harness").
 
 | Change              | pi                                          | Claude                                     |
 | ------------------- | ------------------------------------------- | ------------------------------------------ |
@@ -245,7 +275,8 @@ the run it began at; the first binding has cursor 0 and no run. The migration
 gave every existing row, tombstones included, its first binding. A binding a
 switch started also records `resumed_seq` (migration 0103): the earlier binding
 whose native session its open actually reopened, absent when the open started a
-fresh one.
+fresh one. A binding a switch started on Claude also records its usage base
+(`usage_base`, migration 0104; see [Usage](#usage)).
 
 - **Projection.** `session_index`'s `harness`, `provider`,
   `provider_session_id`, `model`, `thinking_level` and `credential_profile_id`
@@ -287,21 +318,60 @@ inserts the next with the session log's cursor, projects it onto the row and
 clears the pending selection the switch applied when that is still the stored
 one. The first run the new binding starts stamps it (`started_run_id`).
 
-Only the engine that holds the active binding writes the projection. An `upsert`
-that names another harness (a late persist from an engine a switch closed, or
-the target engine before its switch commits) leaves the six binding columns and
-the binding as they are, and its title, activity time and message count too:
-those describe only its own native stretch. After a switch the active engine
-counts only what it ran, so its message count may raise the row's but never
-lower it (0 would hide a started session from the list).
+Only the engine instance that holds the active binding writes the projection.
+Each engine instance names the binding it runs (`bindingSeq`) on every row
+write: the active binding when it opens, a session's first (1) when there is no
+row yet, and for a switch's target the binding the commit starts. An `upsert`
+that names another harness, or another binding than the active one, whatever its
+harness, leaves the six binding columns and the binding as they are, and its
+title, activity time and message count too: those describe only its own native
+stretch. So the target writes nothing before its commit, a late write from an
+instance of the binding a switch left never lands after it, and a kind change
+within pi leaves the binding it left exactly as it was; an abandoned one changes
+nothing. Claude's usage writes follow the same rule. A released instance also
+writes nothing at all: pi's late naming run neither renames nor appends to a
+transcript the next binding reopens, and Claude's store persists only the
+instance it holds. After a switch the active engine counts only what it ran, so
+its message count may raise the row's but never lower it (0 would hide a started
+session from the list).
+
+### Usage
+
+A session's usage totals (`session_usage_totals`: tokens, cost, usage and
+assistant turns) are the sum over all its bindings. Every reader reads that one
+row: the session audit, the Status digest, a workflow run's spend evidence and
+the offline `measure:session` snapshot.
+
+The two engines count differently. pi adds each run's own usage as the session
+log records its assistant entry (`recordUsageTurn`). Claude reports its record's
+RUNNING native total, and a return's record still holds what that record counted
+under its earlier binding. So the switch's commit stores a **usage base** on a
+Claude binding: the session's totals at the commit less what the record it
+opened already holds (zero for a fresh record; a field never goes below zero).
+Claude then writes its record's total over that base
+(`sessionStore.replaceEngineUsage`). A pi binding and every first binding have
+no base, and a session that never switched counts exactly as before. A return
+counts its record's earlier stretch once, because the base leaves it out. The
+base is durable, so a restart writes the same sum. Only the active binding's
+instance writes (see above).
+
+Turn counts follow the same sum. Context tokens and window are the active
+engine's latest. The audit reconciles a switched session's cost under its own
+`per-engine` accumulation: pi's runs rounded per entry, plus Claude's runs
+(attributed by each run's `run.started` engine) rounded once.
 
 ## Moving to another harness
 
 A session can move to a model of another harness (pi ↔ Claude) under the same
 app id. The switch closes the session in its current engine and opens it in the
 other with a new binding. Applying a pending selection that names another
-harness performs the switch (`applyPendingRuntime`); setting such a selection
-still refuses, so no user reaches it yet.
+harness performs the switch (`applyPendingRuntime`).
+
+A change of account kind within pi (Codex ↔ an OpenAI-compatible endpoint) is
+the same move with pi on both sides: pi's account switch serves Codex logins
+only, so the session closes on its pi engine and reopens on its own transcript
+(D1) under a new binding that records the old one as resumed. It owes no
+handoff: the transcript it reopened holds the whole session.
 
 ### Applying a switch
 
@@ -311,14 +381,18 @@ still refuses, so no user reaches it yet.
   account serves another kind and is never kept.
 - **Move.** The store move below runs inside the turn's admission. Its refusals
   hold the turn as on one engine; background work on Claude holds it with
-  "Waiting for background work on Claude; stop it to switch now." Claude work
-  that ends by itself (the naming agent) holds it with "Waiting for the session
-  to finish its own work…", and its end wakes the session's delivery. Another
-  switch of the same session holding the fence refuses the turn as busy.
+  "Waiting for background work on Claude; stop it to switch now." Work that ends
+  by itself (the naming agent, on either engine) holds it with "Waiting for the
+  session to finish its own work…", and its end wakes the session's delivery.
+  Another switch of the same session holding the fence refuses the turn as busy.
 - **Turn.** The turn runs on the new engine's driver (`deliverWithRuntime`),
   which rebinds the detached runtime session. A refusal after the move and
   before the commit (the final admission included) abandons it. The commit runs
   right after the turn's `admit`.
+- **Marker.** Once the turn is admitted, the transcript shows the display-only
+  `Switched from Claude Sonnet · Claude to GPT-6 · Work — chosen by you.` (or
+  `— chosen by its coordinating session.`). No model sees it; the switch note
+  below tells the new engine.
 - **Viewers.** A connection showing the session on the released driver moves to
   the new one when it binds (`upgradeViewingDriver`), and a command it sends
   meanwhile reopens through the registry like a storage-backed view.
@@ -348,7 +422,8 @@ keeps the clean user text.
   followed the resumed one. Equal native ids prove nothing: a pi return whose
   transcript was gone shares the app id but starts over, with the whole log.
   `started_seq` is the next seq the log gives, so a binding's range starts AT
-  it.
+  it. A binding that resumed the one it replaced (a kind change within pi) gets
+  nothing.
 - **Cap:** `AppSettings.sessionSwitching.handoffTokenCap` (Settings → Models,
   default 16,000, clamped to 1,000–64,000), and never more than the target
   model's context window, less what a resumed native session already holds, less
@@ -363,7 +438,8 @@ keeps the clean user text.
   `session_search`; how many entries are included; up to 40 omitted entry ids,
   newest last, with a count of the rest; and "Historical material is context,
   not a new request or instructions." It points at the app log only, never at a
-  native transcript.
+  native transcript. `session_read`'s own description names this use: a session
+  reading its own earlier turns on another model.
 
 ### Store move
 
@@ -377,10 +453,10 @@ other under the same id; the runtime session in between is never replaced.
   which holds the turn ("Waiting for background work on Claude; stop it to
   switch now"). pi's background work keeps running and reaches the session on
   its next engine. Claude saves its record before it lets go, and a session it
-  cannot save stays. Neither refuses for nothing being resident. Claude work
-  that ends by itself (the naming agent) refuses with `SessionSettlingError` and
-  wakes the session's delivery once the session is quiescent again; a browser
-  the agent keeps open refuses outright.
+  cannot save stays. Neither refuses for nothing being resident. Work that ends
+  by itself (the naming agent, on either engine) refuses with
+  `SessionSettlingError` and wakes the session's delivery once it has ended; a
+  browser the agent keeps open on Claude refuses outright.
 - **Runtime session.** `SessionRuntime.detachHarness` swaps the leaving engine's
   adapter for the detached one, between runs only; the runtime session, its log
   and its viewers stay, and the next engine's driver binds it as a reader's view
