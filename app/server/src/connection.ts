@@ -111,6 +111,7 @@ import { setSessionCompactionWindow } from "./sessionCompactionWindow.ts";
 import { handoffEngine } from "./harnesses/handoffSession.ts";
 import { harnessRegistry } from "./harnesses/registry.ts";
 import { buildSessionState } from "./sessionState.ts";
+import { activeEngine, activeNativeRef } from "./harnesses/activeEngine.ts";
 import { sessionRefFile } from "./harnesses/storage.ts";
 import {
   pickerModels,
@@ -5343,9 +5344,9 @@ export class Connection implements Viewer {
     if (record) {
       const kind: AgentType = record.agentType;
       return {
-        harness: record.harness,
+        harness: activeEngine(record).harness,
         kind,
-        file: sessionRefFile(record.harness, id),
+        file: sessionRefFile(activeNativeRef(record)),
       };
     }
     const live = hub.getLiveById(id);
@@ -5830,7 +5831,7 @@ export class Connection implements Viewer {
       ? sessionStore.get(this.viewing.sessionId)
       : undefined;
     const provider = meta
-      ? (HARNESSES[meta.harness].modelProvider ?? meta.provider)
+      ? (HARNESSES[activeEngine(meta).harness].modelProvider ?? meta.provider)
       : undefined;
     return {
       ...(provider &&

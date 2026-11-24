@@ -32,10 +32,8 @@ import { subscribeIntegrationToolChanges } from "../integrationToolChanges.ts";
 import { registerSessionToolExposure } from "../tools/sessionToolExposure.ts";
 import type { LiveListInfo } from "../sessions.ts";
 import { sessionRuntime } from "../session/runtimeInstance.ts";
-import {
-  canonicalPiSessionPath,
-  migrateFileToCanonical,
-} from "../sessionStorage.ts";
+import { migrateFileToCanonical } from "../sessionStorage.ts";
+import { piSessionFile } from "../piSessionFile.ts";
 import {
   findLegacySessionFile,
   openExistingSession,
@@ -121,13 +119,14 @@ function sameIntegrationGates(
  */
 function piToolSessionFromHandle(
   kind: AgentType,
+  appId: string,
   engine: PiEngineHandle,
   cwd: string,
 ): ToolSession {
   const sessionFile = engine.sessionFile;
   const title = engine.sessionName;
   return {
-    sessionId: engine.sessionId,
+    sessionId: appId,
     harness: "pi",
     agentType: kind,
     cwd,
@@ -194,7 +193,7 @@ class PiSessionStore {
    * legacy per-persona one a continuation could still reopen.
    */
   hasTranscript(id: string): boolean {
-    if (existsSync(canonicalPiSessionPath(id))) return true;
+    if (existsSync(piSessionFile(id))) return true;
     return LEGACY_KINDS.some(
       (kind) => findLegacySessionFile(kind, id) !== undefined,
     );
@@ -315,7 +314,7 @@ class PiSessionStore {
     // continuations survive after the legacy file has been folded away.
     const candidateId =
       expectedId ?? readSessionHeaderId(file) ?? sessionIdFromFile(file);
-    const canonical = candidateId ? canonicalPiSessionPath(candidateId) : file;
+    const canonical = candidateId ? piSessionFile(candidateId) : file;
 
     for (const ls of this.live.values()) {
       if (
@@ -436,7 +435,7 @@ class PiSessionStore {
             : agentType === "workflow-coordinator"
               ? "workflow-coordinator"
               : "assistant";
-    const canonical = canonicalPiSessionPath(id);
+    const canonical = piSessionFile(id);
     if (existsSync(canonical)) return this.acquireExisting(kind, canonical, id);
     const legacy = findLegacySessionFile(kind, id);
     return legacy ? this.acquireExisting(kind, legacy, id) : undefined;
@@ -455,10 +454,10 @@ class PiSessionStore {
 
   /** A resident live session for our id, without loading anything from disk. */
   getLiveById(id: string): PiLiveSession | undefined {
-    // pi live sessions are keyed by id, not by our id directly,
-    // so scan for a resident one whose pi sessionId matches.
+    // pi live sessions are keyed by file, not by our id directly,
+    // so scan for a resident one whose app id matches.
     for (const ls of this.live.values()) {
-      if (ls.engine.sessionId === id) return ls;
+      if (ls.appId === id) return ls;
     }
     return undefined;
   }
@@ -835,7 +834,7 @@ class PiSessionStore {
       piAppToolBinding(
         withoutDeniedTools(AGENT_TYPES[kind].tools(), sessionAgent(id)),
         {
-          session: () => piToolSessionFromHandle(kind, engine, cwd),
+          session: () => piToolSessionFromHandle(kind, id, engine, cwd),
           unavailableReason: (tool) =>
             (this.sessionModes.get(id) ?? "build") === "plan" &&
             !isPlanModeToolAllowed(tool)
@@ -909,7 +908,7 @@ class PiSessionStore {
       entries = live.engine.transcript.getEntries() as typeof entries;
     } else {
       try {
-        const file = canonicalPiSessionPath(sessionId);
+        const file = piSessionFile(sessionId);
         if (!existsSync(file)) return undefined;
         const sm = await openExistingSession(kind, file, {
           expectedId: sessionId,

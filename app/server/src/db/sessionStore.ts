@@ -36,7 +36,14 @@ import {
 } from "@assistant/shared";
 import type { AgentUsage } from "@assistant/shared/session";
 import { randomUUID } from "node:crypto";
-import { getDb } from "./index.ts";
+import { getDb, inDbTransaction } from "./index.ts";
+import {
+  activeBinding,
+  bindings,
+  syncActiveBinding,
+  syncActiveBindingAccount,
+  type ActiveBindingFields,
+} from "./sessionEngineBinding.ts";
 import { touchSessionRows } from "./sessionListChanges.ts";
 
 /**
@@ -458,48 +465,67 @@ function upsert(input: SessionUpsert): boolean {
       input.forkOrigin !== undefined
         ? JSON.stringify(input.forkOrigin)
         : (prev?.fork_origin_json ?? null);
-    getDb()
-      .prepare(upsertSql)
-      .run(
-        input.id,
-        // Scope is INSERT-ONLY, like createdAt: the
-        // first stored value owns the row for its life. A later write can never
-        // reclassify a session — not by stating a different scope, and not by
-        // omitting one — because the access policy built on it (Task-477) would
-        // otherwise be one stray metadata refresh away from being wrong.
-        prev
-          ? sessionScopeOrFailClosed(prev.scope)
-          : (input.scope ?? DEFAULT_SESSION_SCOPE),
-        pick(input.purpose, prev?.purpose, "chat"),
-        input.harness,
-        input.agentType,
-        pick(input.title, prev?.title, "New chat"),
-        // createdAt is insert-only: the first stored value always wins so an update
-        // can never move a session's creation time.
-        prev?.created_at_ms ?? input.createdAt ?? now,
-        pick(input.updatedAt, prev?.updated_at_ms, now),
-        pick(input.messageCount, prev?.message_count, 0),
+    // The active engine binding's projection, merged once and written to both
+    // the row and the binding in one transaction (`sessionEngineBinding.ts`).
+    const binding: ActiveBindingFields = {
+      harness: input.harness,
+      provider:
         input.provider !== undefined
           ? input.provider
           : (prev?.provider ?? null),
+      providerSessionId:
         input.providerSessionId !== undefined
           ? input.providerSessionId
           : (prev?.provider_session_id ?? null),
-        input.model !== undefined ? input.model : (prev?.model ?? null),
+      model: input.model !== undefined ? input.model : (prev?.model ?? null),
+      thinkingLevel:
         input.thinkingLevel !== undefined
           ? input.thinkingLevel
           : (prev?.thinking_level ?? null),
-        // Ordinary metadata refreshes cannot change the current binding.
-        // Live failover uses switchCredentialProfile's compare-and-set.
+      // Ordinary metadata refreshes cannot change the current account.
+      // Live failover uses switchCredentialProfile's compare-and-set.
+      credentialProfileId:
         prev?.credential_profile_id ?? input.credentialProfileId ?? null,
-        prev?.requires_enterprise ?? (input.requiresEnterprise ? 1 : 0),
-        sessionModeOrDefault(input.mode ?? prev?.mode),
-        forkOriginJson,
-        (input.forkAutoRenamePending ?? Boolean(prev?.fork_auto_rename_pending))
-          ? 1
-          : 0,
-        input.peerTurnCap ?? prev?.peer_turn_cap ?? null,
-      );
+    };
+    const createdAt = prev?.created_at_ms ?? input.createdAt ?? now;
+    inDbTransaction(() => {
+      getDb()
+        .prepare(upsertSql)
+        .run(
+          input.id,
+          // Scope is INSERT-ONLY, like createdAt: the
+          // first stored value owns the row for its life. A later write can never
+          // reclassify a session — not by stating a different scope, and not by
+          // omitting one — because the access policy built on it (Task-477) would
+          // otherwise be one stray metadata refresh away from being wrong.
+          prev
+            ? sessionScopeOrFailClosed(prev.scope)
+            : (input.scope ?? DEFAULT_SESSION_SCOPE),
+          pick(input.purpose, prev?.purpose, "chat"),
+          input.harness,
+          input.agentType,
+          pick(input.title, prev?.title, "New chat"),
+          // createdAt is insert-only: the first stored value always wins so an update
+          // can never move a session's creation time.
+          createdAt,
+          pick(input.updatedAt, prev?.updated_at_ms, now),
+          pick(input.messageCount, prev?.message_count, 0),
+          binding.provider,
+          binding.providerSessionId,
+          binding.model,
+          binding.thinkingLevel,
+          binding.credentialProfileId,
+          prev?.requires_enterprise ?? (input.requiresEnterprise ? 1 : 0),
+          sessionModeOrDefault(input.mode ?? prev?.mode),
+          forkOriginJson,
+          (input.forkAutoRenamePending ??
+            Boolean(prev?.fork_auto_rename_pending))
+            ? 1
+            : 0,
+          input.peerTurnCap ?? prev?.peer_turn_cap ?? null,
+        );
+      syncActiveBinding(input.id, binding, createdAt);
+    });
     if (!prev) noteLiveness([input.id]);
     else touchSessionRows([input.id]);
     return true;
@@ -552,17 +578,20 @@ function switchCredentialProfile(
   next: string,
   options: { requireEnterprise?: true } = {},
 ): void {
-  const result = getDb()
-    .prepare(
-      options.requireEnterprise
-        ? "UPDATE session_index SET credential_profile_id = ?, requires_enterprise = 1 WHERE id = ? AND credential_profile_id = ? AND deleted_at_ms IS NULL"
-        : "UPDATE session_index SET credential_profile_id = ? WHERE id = ? AND credential_profile_id = ? AND deleted_at_ms IS NULL",
-    )
-    .run(next, id, previous);
-  if (result.changes !== 1)
-    throw new Error(
-      "The session's account changed or the session was deleted during the switch.",
-    );
+  inDbTransaction(() => {
+    const result = getDb()
+      .prepare(
+        options.requireEnterprise
+          ? "UPDATE session_index SET credential_profile_id = ?, requires_enterprise = 1 WHERE id = ? AND credential_profile_id = ? AND deleted_at_ms IS NULL"
+          : "UPDATE session_index SET credential_profile_id = ? WHERE id = ? AND credential_profile_id = ? AND deleted_at_ms IS NULL",
+      )
+      .run(next, id, previous);
+    if (result.changes !== 1)
+      throw new Error(
+        "The session's account changed or the session was deleted during the switch.",
+      );
+    syncActiveBindingAccount(id, next);
+  });
   touchSessionRows([id]);
 }
 
@@ -2209,6 +2238,8 @@ export const sessionStore = {
   upsert,
   setPeerTurnCap,
   switchCredentialProfile,
+  activeBinding,
+  bindings,
   requireEnterprise,
   setCompactionWindow,
   setPendingRuntime,
