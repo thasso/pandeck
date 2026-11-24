@@ -42,6 +42,7 @@ import type {
   ConversationRawEntry,
   HostCommandResultEntry,
   ProviderNoticeEntry,
+  RunEngine,
 } from "../log/rawEntry.ts";
 import type {
   SessionLog,
@@ -307,19 +308,16 @@ function emitTurnClosed(
  * one to boot silently take the signal away from the others. Each subscriber
  * is isolated: one that throws cannot stop the next from being told.
  */
-const runCompletedListeners = new Set<
-  (
-    sessionId: string,
-    stopReason: AgentStopReason,
-    origin: PromptOrigin | undefined,
-  ) => void
->();
+type RunCompletedListener = (
+  sessionId: string,
+  stopReason: AgentStopReason,
+  origin: PromptOrigin | undefined,
+  /** The engine the run ran on, as its `run.started` marker recorded it. */
+  engine?: RunEngine,
+) => void;
+const runCompletedListeners = new Set<RunCompletedListener>();
 export function subscribeSessionRunCompleted(
-  listener: (
-    sessionId: string,
-    stopReason: AgentStopReason,
-    origin: PromptOrigin | undefined,
-  ) => void,
+  listener: RunCompletedListener,
 ): () => void {
   runCompletedListeners.add(listener);
   return () => runCompletedListeners.delete(listener);
@@ -329,10 +327,11 @@ function emitRunCompleted(
   sessionId: string,
   stopReason: AgentStopReason,
   origin: PromptOrigin | undefined,
+  engine: RunEngine | undefined,
 ): void {
   for (const listener of runCompletedListeners) {
     try {
-      listener(sessionId, stopReason, origin);
+      listener(sessionId, stopReason, origin, engine);
     } catch {
       /* best-effort */
     }
@@ -379,7 +378,10 @@ interface DeferredRunSettlement {
   failure?: RunFailureReport;
   finished: boolean;
   outcome?: RunOutcome;
-  completion?: { origin: PromptOrigin | undefined };
+  completion?: {
+    origin: PromptOrigin | undefined;
+    engine: RunEngine | undefined;
+  };
   publishCompletion?: boolean;
   completionPublished?: boolean;
   finish?: (
@@ -487,6 +489,7 @@ export class LiveRuntimeSession {
       this.sessionId,
       deferred.outcome.stopReason,
       deferred.completion.origin,
+      deferred.completion.engine,
     );
   }
 
@@ -556,6 +559,8 @@ export class LiveRuntimeSession {
   private turnContinuation = false;
   /** Identity of the open turn's durable run bracket, while one is open. */
   private turnRunId: string | undefined;
+  /** The engine the open run runs on, stamped on its `run.started` marker. */
+  private turnEngine: RunEngine | undefined;
   /** The run whose failure was last recorded, so one turn records once. */
   private recordedFailureRunId: string | undefined;
   private notifiedFailureRunId: string | undefined;
@@ -676,6 +681,7 @@ export class LiveRuntimeSession {
     this.turnOrigin = origin;
     this.turnOpen = true;
     this.turnRunId = randomUUID();
+    this.turnEngine = this.adapter.runEngine?.();
     emitRunStarted(
       this.sessionId,
       this.turnRunId,
@@ -687,7 +693,11 @@ export class LiveRuntimeSession {
       runId: this.turnRunId,
       modelProvider: this.adapter.modelProvider?.(),
     });
-    this.log.append({ type: "run.started", runId: this.turnRunId });
+    this.log.append({
+      type: "run.started",
+      runId: this.turnRunId,
+      ...(this.turnEngine ? { engine: this.turnEngine } : {}),
+    });
   }
 
   private noteTurnOrigin(origin: PromptOrigin, hidden: boolean): void {
@@ -1630,6 +1640,7 @@ export class LiveRuntimeSession {
         // turns; prompt()'s finally also calls this, so the normal path remains
         // idempotent. This is the only end that knows HOW the run stopped.
         const origin = this.turnOrigin;
+        const engine = this.turnEngine;
         const completedRunId = this.turnRunId;
         this.endTurn(
           event.stopReason,
@@ -1642,9 +1653,10 @@ export class LiveRuntimeSession {
           ? this.deferredSettlements.get(completedRunId)
           : undefined;
         if (deferred) {
-          deferred.completion = { origin };
+          deferred.completion = { origin, engine };
           this.publishDeferredCompletion(deferred);
-        } else emitRunCompleted(this.sessionId, event.stopReason, origin);
+        } else
+          emitRunCompleted(this.sessionId, event.stopReason, origin, engine);
         return;
       }
       case "passthrough": {

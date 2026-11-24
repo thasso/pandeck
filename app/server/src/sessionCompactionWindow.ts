@@ -24,6 +24,7 @@ import {
   type CompactionWindowEstimate,
   type CompactionWindowPendingReason,
 } from "@assistant/shared";
+import { activeEngine } from "./harnesses/activeEngine.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 import { isLiveSession, type LiveSession } from "./harness.ts";
 import {
@@ -98,7 +99,7 @@ async function setNow(
     );
   const meta = sessionStore.get(sessionId);
   if (!meta) return refused("The session was not found.");
-  const capability = HARNESSES[meta.harness].compactionWindow;
+  const capability = HARNESSES[activeEngine(meta).harness].compactionWindow;
   if (!capability)
     return refused("This session's harness has no compaction window.");
   const live = residentLive(sessionId);

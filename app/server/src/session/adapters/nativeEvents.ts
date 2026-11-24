@@ -1,6 +1,6 @@
-import type { ServerMessage } from "@assistant/shared";
+import type { Harness, ServerMessage } from "@assistant/shared";
 import type { AgentContentBlock, AgentUsage } from "@assistant/shared/session";
-import type { HostCommandCard } from "../log/rawEntry.ts";
+import type { HostCommandCard, RunEngine } from "../log/rawEntry.ts";
 import type {
   AdapterEvent,
   ProviderActivityKind,
@@ -436,4 +436,24 @@ function appendDelta(
 
 function cloneContentBlock(block: AgentContentBlock): AgentContentBlock {
   return { ...block };
+}
+
+/**
+ * A run's engine stamp from what an adapter knows when the run opens. Empty
+ * strings drop out, so a stamp never claims a model or account it lacks.
+ */
+export function runEngineStamp(
+  harness: Harness,
+  facts: { credentialProfileId?: string; thinkingLevel?: string } | undefined,
+  model: { provider: string | undefined; model: string | undefined },
+): RunEngine {
+  return {
+    harness,
+    ...(facts?.credentialProfileId
+      ? { credentialProfileId: facts.credentialProfileId }
+      : {}),
+    ...(model.provider ? { provider: model.provider } : {}),
+    ...(model.model ? { model: model.model } : {}),
+    ...(facts?.thinkingLevel ? { thinkingLevel: facts.thinkingLevel } : {}),
+  };
 }

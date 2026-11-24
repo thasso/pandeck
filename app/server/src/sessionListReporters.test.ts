@@ -180,6 +180,8 @@ const CLASSIFIED: Record<
       subscribeLiveness: "read",
       get: "read",
       getIncludingDeleted: "read",
+      activeBinding: "read",
+      bindings: "read",
       list: "read",
       liveDefaultScopeGate: "read",
       claimScope: "projected-write",

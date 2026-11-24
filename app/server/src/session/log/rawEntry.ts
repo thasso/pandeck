@@ -17,7 +17,7 @@ import type {
   SessionEntryOrigin,
 } from "@assistant/shared/session";
 import type { HostCommandCard } from "@assistant/shared/runtime";
-import type { PeerPromptCard } from "@assistant/shared";
+import type { Harness, PeerPromptCard } from "@assistant/shared";
 
 /**
  * A durable host-command result card (e.g. `/commit`, `/compact`) — the rich,
@@ -150,10 +150,28 @@ export type ProviderNoticeEntry = RawEntryBase & {
   requestBytes?: number;
 };
 
+/**
+ * The engine a run ran on, stamped on its `run.started` marker (design 25 in
+ * `docs/session-runtime-switching.md`): which harness, account, model and
+ * effort. History readers (usage, audit, overhead) attribute the run by it;
+ * a marker written before the stamp existed falls back to the session's
+ * binding at that point of the log (`runEngine.ts`).
+ */
+export interface RunEngine {
+  harness: Harness;
+  credentialProfileId?: string;
+  /** The model's provider as the pickers name it (`claude-sdk` for Claude). */
+  provider?: string;
+  model?: string;
+  thinkingLevel?: string;
+}
+
 /** Durable run lifecycle marker (crash recovery brackets an active run). */
 type RunMarkerEntry = RawEntryBase & {
   type: "run.started" | "run.ended" | "run.aborted";
   runId: string;
+  /** On `run.started` only, from the build that added it on. */
+  engine?: RunEngine;
 };
 
 /** Durable host-command lifecycle marker (e.g. /commit span). */

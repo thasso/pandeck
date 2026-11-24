@@ -9,6 +9,7 @@
  * inspection sources. The hub is consulted only to overlay live/running state.
  */
 import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
+import { activeEngine, activeNativeRef } from "../../harnesses/activeEngine.ts";
 import { storedSessionState } from "../../harnesses/storage.ts";
 import { sessionStore, type SessionMeta } from "../../db/sessionStore.ts";
 import { canonicalSessionLogPath } from "../../sessionStorage.ts";
@@ -396,7 +397,7 @@ export function resumableState(
   runtime: RuntimeState,
 ): { resumable: boolean; reason?: string } {
   if (runtime !== "not_loaded") return { resumable: true };
-  const stored = storedSessionState(meta.harness, meta.id);
+  const stored = storedSessionState(activeNativeRef(meta));
   return stored.stored
     ? { resumable: true }
     : { resumable: false, reason: stored.reason };
@@ -420,7 +421,7 @@ export async function sessionMetaProjection(resolved: ResolvedSession) {
   return {
     sessionId: meta.id,
     title: meta.title,
-    harness: meta.harness,
+    harness: activeEngine(meta).harness,
     persona: meta.agentType,
     createdAt: meta.createdAt,
     updatedAt: meta.updatedAt,

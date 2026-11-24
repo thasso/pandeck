@@ -18,6 +18,7 @@
  * untyped JSON lines, the same way `session_read` reads it.
  */
 import { existsSync } from "node:fs";
+import { activeEngine } from "../harnesses/activeEngine.ts";
 import { approvalStore } from "../db/approvalStore.ts";
 import { outgoing } from "../db/links.ts";
 import { peerPromptStore } from "../db/peerPromptStore.ts";
@@ -747,7 +748,7 @@ function headerLines(
     "",
     `- Digest generated: ${stamp(now)}`,
     `- Session id: \`${meta.id}\``,
-    `- Persona: ${meta.agentType} · runtime: ${meta.harness} ${meta.provider ?? ""}/${meta.model ?? ""}`,
+    `- Persona: ${meta.agentType} · runtime: ${activeEngine(meta).harness} ${meta.provider ?? ""}/${meta.model ?? ""}`,
     ...activityLines(meta, rows, runs),
     `- Created: ${stamp(meta.createdAt)} · last activity: ${stamp(meta.updatedAt)}`,
     ...(meta.archivedAt ? [`- Archived: ${stamp(meta.archivedAt)}`] : []),

@@ -24,7 +24,7 @@ import type {
   ServerMessage,
 } from "@assistant/shared";
 import type { ProviderBinding } from "../log/identity.ts";
-import type { HostCommandCard } from "../log/rawEntry.ts";
+import type { HostCommandCard, RunEngine } from "../log/rawEntry.ts";
 import type { MessageDelta } from "@assistant/shared/runtime";
 
 export type { MessageDelta };
@@ -387,6 +387,11 @@ export interface PromptableAdapter extends SessionAdapter {
   modelProvider?(): string | undefined;
   /** The live model id, for model-scoped account evidence. */
   modelId?(): string | undefined;
+  /**
+   * The engine a run opening now runs on (harness, account, model, effort),
+   * stamped on its `run.started` marker for history readers.
+   */
+  runEngine?(): RunEngine;
   /** Run one prompt to completion. Resolves with the run result (errors resolve, not reject). */
   prompt(text: string, options?: PromptOptions): Promise<AgentRunResult>;
   abort(): void | Promise<void>;

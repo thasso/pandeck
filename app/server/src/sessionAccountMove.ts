@@ -16,6 +16,7 @@ import {
   type SessionAccountMoveTarget,
   type ThinkingLevel,
 } from "@assistant/shared";
+import { activeEngine } from "./harnesses/activeEngine.ts";
 import { isSubscriptionAccountModel } from "@assistant/shared/accountHealth";
 import { gatherAccountCandidate } from "./accountRouter.ts";
 import { readAccountBench, readAccountHealth } from "./accountHealth.ts";
@@ -225,7 +226,11 @@ export async function sessionSelection(
 ): Promise<MoveSelection | undefined> {
   const driver = await host().resident(row.id);
   if (driver?.modelSelection) return driver.modelSelection();
-  const model = storedSessionModelOption(row.harness, row.provider, row.model);
+  const model = storedSessionModelOption(
+    activeEngine(row).harness,
+    row.provider,
+    row.model,
+  );
   return model
     ? {
         model: { provider: model.provider, id: model.id },

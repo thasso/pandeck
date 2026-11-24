@@ -25,6 +25,7 @@ import {
   type SessionRuntimeChange,
   type SessionRuntimeChooser,
 } from "@assistant/shared";
+import { activeEngine } from "./harnesses/activeEngine.ts";
 import { pickAccount } from "./accountRouter.ts";
 import { AutomaticTurnsHeldError } from "./automaticTurnHold.ts";
 import {
@@ -136,7 +137,7 @@ function modelEngineRefusal(
   model: { provider: string; id: string },
 ): string | undefined {
   const name = modelName(model);
-  if (harnessForModelProvider(model.provider) !== row.harness)
+  if (harnessForModelProvider(model.provider) !== activeEngine(row).harness)
     return `${name} runs on another harness; moving a session between harnesses is not available yet.`;
   if (source && !accountServesModel(source, model.provider))
     return `${name} needs another kind of account than ${source.name}; moving a session there is not available yet.`;

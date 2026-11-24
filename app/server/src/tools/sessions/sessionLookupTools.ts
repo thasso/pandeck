@@ -6,6 +6,7 @@
  * overlays live/running state from the hub. Output is bounded and compact.
  */
 import { defineAgentTool, type AgentTool } from "../../mcp/tool.ts";
+import { activeEngine } from "../../harnesses/activeEngine.ts";
 import { sessionStore, type SessionMeta } from "../../db/sessionStore.ts";
 import { objectRefsForSession } from "../../db/sessionObjectStore.ts";
 import { taskStore } from "../../db/taskStore.ts";
@@ -260,7 +261,7 @@ async function toCandidate(meta: SessionMeta, refs?: CompactRef[]) {
   return {
     sessionId: meta.id,
     title: meta.title,
-    harness: meta.harness,
+    harness: activeEngine(meta).harness,
     persona: meta.agentType,
     createdAt: meta.createdAt,
     updatedAt: meta.updatedAt,

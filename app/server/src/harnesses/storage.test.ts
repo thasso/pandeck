@@ -24,34 +24,78 @@ function onDisk(file: string): void {
 }
 
 test("a pi session carries its transcript; a Claude session its id", () => {
-  assert.equal(sessionRefFile("pi", "pi-1"), canonicalPiSessionPath("pi-1"));
-  assert.equal(sessionRefFile("claude-sdk", "claude-1"), "claude-1");
+  assert.equal(
+    sessionRefFile({ harness: "pi", sessionId: "pi-1" }),
+    canonicalPiSessionPath("pi-1"),
+  );
+  assert.equal(
+    sessionRefFile({ harness: "claude-sdk", sessionId: "claude-1" }),
+    "claude-1",
+  );
+});
+
+test("a pi binding names its transcript by native id; another native id is refused for now", () => {
+  assert.equal(
+    sessionRefFile({
+      harness: "pi",
+      sessionId: "pi-2",
+      nativeSessionId: "pi-2",
+    }),
+    canonicalPiSessionPath("pi-2"),
+  );
+  assert.throws(
+    () =>
+      sessionRefFile({
+        harness: "pi",
+        sessionId: "pi-3",
+        nativeSessionId: "pi-native",
+      }),
+    /its own native id/,
+  );
 });
 
 test("only a pi transcript on disk is named as the engine's own", () => {
-  assert.equal(engineTranscript("pi", "pi-absent"), undefined);
+  assert.equal(
+    engineTranscript({ harness: "pi", sessionId: "pi-absent" }),
+    undefined,
+  );
   onDisk(canonicalPiSessionPath("pi-present"));
   assert.equal(
-    engineTranscript("pi", "pi-present"),
+    engineTranscript({ harness: "pi", sessionId: "pi-present" }),
     canonicalPiSessionPath("pi-present"),
   );
   onDisk(join(process.env.DATA_DIR!, "claude-sdk", "claude-present.json"));
-  assert.equal(engineTranscript("claude-sdk", "claude-present"), undefined);
+  assert.equal(
+    engineTranscript({ harness: "claude-sdk", sessionId: "claude-present" }),
+    undefined,
+  );
 });
 
 test("a session is reopenable from what its engine stored, else says what is missing", () => {
   onDisk(canonicalPiSessionPath("pi-stored"));
   onDisk(join(process.env.DATA_DIR!, "claude-sdk", "claude-stored.json"));
-  assert.deepEqual(storedSessionState("pi", "pi-stored"), { stored: true });
-  assert.deepEqual(storedSessionState("claude-sdk", "claude-stored"), {
-    stored: true,
-  });
-  assert.deepEqual(storedSessionState("pi", "pi-missing"), {
-    stored: false,
-    reason: "no pi transcript on disk",
-  });
-  assert.deepEqual(storedSessionState("claude-sdk", "claude-missing"), {
-    stored: false,
-    reason: "no Claude SDK state on disk",
-  });
+  assert.deepEqual(
+    storedSessionState({ harness: "pi", sessionId: "pi-stored" }),
+    { stored: true },
+  );
+  assert.deepEqual(
+    storedSessionState({ harness: "claude-sdk", sessionId: "claude-stored" }),
+    {
+      stored: true,
+    },
+  );
+  assert.deepEqual(
+    storedSessionState({ harness: "pi", sessionId: "pi-missing" }),
+    {
+      stored: false,
+      reason: "no pi transcript on disk",
+    },
+  );
+  assert.deepEqual(
+    storedSessionState({ harness: "claude-sdk", sessionId: "claude-missing" }),
+    {
+      stored: false,
+      reason: "no Claude SDK state on disk",
+    },
+  );
 });

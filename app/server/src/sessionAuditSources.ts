@@ -27,10 +27,8 @@ import { objectRefsForSession } from "./db/sessionObjectStore.ts";
 import { readSessionSnapshot } from "./db/sessionSnapshotRead.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 import type { PromptConditions } from "./promptConditions.ts";
-import {
-  canonicalPiSessionPath,
-  canonicalSessionLogPath,
-} from "./sessionStorage.ts";
+import { piSessionFile } from "./piSessionFile.ts";
+import { canonicalSessionLogPath } from "./sessionStorage.ts";
 import type {
   AuditCallSource,
   PersistedUsageTotals,
@@ -120,7 +118,7 @@ function callTranscriptFor(
   if (harness === "pi") {
     const path =
       dataDir === DATA_DIR
-        ? canonicalPiSessionPath(sessionId)
+        ? piSessionFile(sessionId)
         : join(dataDir, "sessions", sessionId, "native.jsonl");
     if (existsSync(path)) return { transcript: { source: "pi-native", path } };
     return {
@@ -152,16 +150,20 @@ export function resolveAuditSource(
   const resolved = resolveInspectableSession(sessionId);
   const meta = resolved.meta;
   const warnings = resolved.warning ? [resolved.warning] : [];
+  // The native transcript is the active engine binding's: its harness, its
+  // native id, and (Claude) the account whose profile holds it.
+  const binding = sessionStore.activeBinding(meta.id);
+  const harness = binding?.harness ?? meta.harness;
   const projectsDir = claudeProjectsDirFor(
     "credentialProfilesRoot" in options
       ? options.credentialProfilesRoot
       : CREDENTIAL_PROFILES_ROOT,
-    meta.credentialProfileId,
+    binding ? binding.credentialProfileId : meta.credentialProfileId,
   );
   const calls = callTranscriptFor(
     meta.id,
-    meta.harness,
-    meta.providerSessionId,
+    harness,
+    binding ? binding.nativeSessionId : meta.providerSessionId,
     DATA_DIR,
     projectsDir,
   );
@@ -173,7 +175,7 @@ export function resolveAuditSource(
     sessionId: meta.id,
     meta: {
       title: meta.title,
-      harness: meta.harness,
+      harness,
       agentType: meta.agentType,
       createdAtMs: meta.createdAt,
       updatedAtMs: meta.updatedAt,

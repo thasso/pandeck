@@ -2162,7 +2162,7 @@ server.listen(PORT, HOST, () => {
   });
   // Declarative Web Push is driven by a real normalized run completion, not a
   // generic idle transition or synthetic host command.
-  subscribeSessionRunCompleted((sessionId, stopReason, origin) => {
+  subscribeSessionRunCompleted((sessionId, stopReason, origin, engine) => {
     void notifySessionTurnCompleted(sessionId, stopReason, {
       ...(origin ? { origin } : {}),
     }).catch((err) => {
@@ -2173,8 +2173,12 @@ server.listen(PORT, HOST, () => {
     });
     // A finished run moved this account's usage. The run completion is the only
     // trigger we take (a session's last turn IS one, and the idle hook is a
-    // superset that would double-fetch); it only marks the account dirty.
-    const profileId = usageProfileForSession(sessionStore.get(sessionId));
+    // superset that would double-fetch); it only marks the account the run
+    // ran on dirty.
+    const profileId = usageProfileForSession(
+      sessionStore.get(sessionId),
+      engine,
+    );
     if (profileId) markUsageProfileDirty(profileId);
   });
   // Each boot recovery is its own step: one that throws (a corrupt row) must

@@ -10,14 +10,14 @@ import {
   type InterruptedTurnEvidence,
   type TurnLineKind,
 } from "../interruptedTurnEvidence.ts";
-import { canonicalPiSessionPath } from "../sessionStorage.ts";
+import { piSessionFile } from "../piSessionFile.ts";
 import { piStore } from "./piStore.ts";
 
 export function piInterruptedTurn(
   id: string,
   since: number,
 ): InterruptedTurnEvidence | undefined {
-  const path = canonicalPiSessionPath(id);
+  const path = piSessionFile(id);
   // No transcript at all: the prompt never reached pi, which writes one with
   // its first user message. A legacy transcript elsewhere is not read here.
   if (!existsSync(path))

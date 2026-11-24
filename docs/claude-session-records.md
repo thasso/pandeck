@@ -30,10 +30,13 @@ them from the log would change what those see, so the record keeps its own.
 
 ## Account failover
 
-The credential profile is the current binding. Only live failover changes it,
-through a compare-and-set on the session row. `acquire` prefers that row over
-record metadata, so a failed metadata write cannot restore an older account.
-Every ordinary upsert preserves the row's established binding.
+The credential profile is the active engine binding's account
+(`docs/session-runtime-switching.md` "Engine bindings"), and its
+`providerSessionId` is that binding's native id. Only live failover changes the
+account, through a compare-and-set on the session row that writes the binding in
+the same transaction. `acquire` prefers that row over record metadata, so a
+failed metadata write cannot restore an older account. Every ordinary upsert
+preserves the row's established binding.
 
 The old process epoch must end before native history is copied. The copy keeps
 both `<providerSessionId>.jsonl` and `<providerSessionId>/`, including
