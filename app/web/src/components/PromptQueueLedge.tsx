@@ -14,6 +14,7 @@ import type {
   QueuedPeerPrompt,
   QueuedPrompt,
 } from "@assistant/shared";
+import type { HeldInputRemoval } from "../hooks/useAssistant.ts";
 import { sessionPath } from "../lib/sessionRoutes.ts";
 import { IconButton } from "./common/IconButton.tsx";
 import { Spinner } from "./common/load.tsx";
@@ -70,11 +71,11 @@ export interface PromptQueueLedgeProps {
    */
   connected?: boolean;
   /**
-   * The viewed session's latest failure. A new one while an answer is in
-   * flight is that answer's failure, shown on its row, and the answer can be
-   * given again.
+   * Held input id → the last removal this browser sent for it
+   * (`UIState.heldInputRemovals`). A row settles only from its own request's
+   * answer, and a refusal shows on that row alone.
    */
-  requestFailure?: { message: string } | null | undefined;
+  heldRemovals?: Readonly<Record<string, HeldInputRemoval>> | undefined;
 }
 
 /**
@@ -137,7 +138,7 @@ export function PromptQueueLedge({
   onPutBackHeld,
   onDiscardHeld,
   connected = true,
-  requestFailure,
+  heldRemovals = NO_REMOVALS,
 }: PromptQueueLedgeProps) {
   const [open, setOpen] = useState(true);
   const heldInputs = queue.held ?? EMPTY_HELD;
@@ -161,8 +162,8 @@ export function PromptQueueLedge({
     if (fresh) setOpen(true);
   }, [queue.items, peers, heldInputs]);
   // Held inputs the user already answered, by the answer, busy on its button
-  // until the server's queue drops them. A request that failed keeps its row
-  // with the failure in place, and both buttons free again.
+  // until the request sent for it is answered or the server's queue drops it.
+  // A refusal then shows on its row, and both buttons are free again.
   const [settling, setSettling] = useState<ReadonlyMap<string, HeldSettling>>(
     () => new Map(),
   );
@@ -176,25 +177,21 @@ export function PromptQueueLedge({
   // Unknown outcome: an answer in flight on a connection that dropped, or
   // that a reconnect replaced, is released. Its snapshot decides.
   useEffect(() => {
+    setSettling((current) => (current.size === 0 ? current : new Map()));
+  }, [connected]);
+  // Settled by its OWN answer: the request sent since the click (not the one
+  // the row held before it) was answered. Nothing else ends it.
+  useEffect(() => {
     setSettling((current) => {
-      const next = new Map([...current].filter(([, s]) => s.failed));
+      const next = new Map(
+        [...current].filter(([id, s]) => {
+          const removal = heldRemovals[id];
+          return !(removal?.answered && removal.requestId !== s.before);
+        }),
+      );
       return next.size === current.size ? current : next;
     });
-  }, [connected]);
-  // A failure of this session's requests while answers are in flight belongs
-  // to them: each shows it on its row and is free to be given again.
-  useEffect(() => {
-    if (!requestFailure) return;
-    setSettling((current) => {
-      if (![...current.values()].some((s) => !s.failed)) return current;
-      return new Map(
-        [...current].map(([id, s]) => [
-          id,
-          s.failed ? s : { ...s, failed: requestFailure.message },
-        ]),
-      );
-    });
-  }, [requestFailure]);
+  }, [heldRemovals]);
   // Sends this browser asked for, shown as under way before the server's
   // `sending` arrives; a row leaves the set when it leaves the queue.
   const [asked, setAsked] = useState<ReadonlySet<string>>(() => new Set());
@@ -225,7 +222,12 @@ export function PromptQueueLedge({
     answer: "putBack" | "discard",
     act: () => void,
   ) => {
-    setSettling((current) => new Map(current).set(id, { answer }));
+    setSettling((current) =>
+      new Map(current).set(id, {
+        answer,
+        before: heldRemovals[id]?.requestId,
+      }),
+    );
     act();
   };
   const steering = running && canSteer;
@@ -271,12 +273,12 @@ export function PromptQueueLedge({
               <HeldInputRow
                 key={`held:${input.id}`}
                 input={input}
-                settling={
-                  settling.get(input.id)?.failed
+                settling={settling.get(input.id)?.answer}
+                failure={
+                  settling.has(input.id)
                     ? undefined
-                    : settling.get(input.id)?.answer
+                    : heldRemovals[input.id]?.error
                 }
-                failure={settling.get(input.id)?.failed}
                 {...(onPutBackHeld
                   ? {
                       onPutBack: (chosen: HeldInput) =>
@@ -361,11 +363,16 @@ export function PromptQueueLedge({
 
 const EMPTY_HELD: readonly HeldInput[] = [];
 
-/** A held-input answer this browser sent, and what became of it. */
+const NO_REMOVALS: Readonly<Record<string, HeldInputRemoval>> = {};
+
+/** A held-input answer the user gave, until its own request is answered. */
 interface HeldSettling {
   answer: "putBack" | "discard";
-  /** The failure that ended the request; the answer is free to be given again. */
-  failed?: string;
+  /**
+   * The request the row held when the user answered: its answer is an
+   * earlier one's, so it does not settle this.
+   */
+  before: string | undefined;
 }
 
 /**

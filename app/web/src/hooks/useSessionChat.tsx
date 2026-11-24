@@ -671,6 +671,7 @@ export function useSessionChat({
   // screen; the permanent Assistant queues its intake on its own.
   const queueSessionId = surface === "session" ? session?.sessionId : undefined;
   const sendPromptQueue = actions.promptQueue;
+  const removeHeldInput = actions.removeHeldInput;
   const shownPromptQueue = queueSessionId ? session?.promptQueue : undefined;
   // Put back (a held input, `PromptQueueLedge`): the text goes into this
   // session's composer first, and the server lets go of it only once the
@@ -707,13 +708,9 @@ export function useSessionChat({
       setPutBacks((current) =>
         current.filter((request) => request.token !== token),
       );
-      sendPromptQueue({
-        type: "removeHeldInput",
-        sessionId: done.sessionId,
-        id: done.id,
-      });
+      removeHeldInput(done.sessionId, done.id);
     },
-    [sendPromptQueue],
+    [removeHeldInput],
   );
   // Alt+Enter queues a message AND steers it in at once, so it is seen in the
   // queue on its way. The server names the row, so the steer waits for the
@@ -848,15 +845,13 @@ export function useSessionChat({
     surface === "assistant" && (assistantHeld || shownUnhandledBackground > 0)
       ? session?.sessionId
       : undefined;
-  // The failure of this session's last request, new on every arrival: a held
-  // answer in flight takes it as its own (`PromptQueueLedge`).
-  const queueRequestFailure = useMemo(() => {
-    const message = failureOnViewedSession(
-      state.sessionFailures,
-      queueSessionId,
-    );
-    return message ? { message } : null;
-  }, [state.sessionFailures, queueSessionId]);
+  // This session's held-input removals, each settling only its own row
+  // (read defensively: hand-built partial states predate the field).
+  const heldRemovals = queueSessionId
+    ? (state.heldInputRemovals as UIState["heldInputRemovals"] | undefined)?.[
+        queueSessionId
+      ]
+    : undefined;
   const promptQueueLedge = useMemo(
     () =>
       heldAssistantSessionId ? (
@@ -952,21 +947,16 @@ export function useSessionChat({
           }
           onOpenSession={onOpenSession}
           onPutBackHeld={putBackHeldInput}
-          onDiscardHeld={(id) =>
-            sendPromptQueue({
-              type: "removeHeldInput",
-              sessionId: queueSessionId,
-              id,
-            })
-          }
+          onDiscardHeld={(id) => removeHeldInput(queueSessionId, id)}
           connected={state.connected}
-          requestFailure={queueRequestFailure}
+          heldRemovals={heldRemovals}
         />
       ) : undefined,
     [
       putBackHeldInput,
       state.connected,
-      queueRequestFailure,
+      heldRemovals,
+      removeHeldInput,
       heldAssistantSessionId,
       assistantHeld,
       shownPromptQueue,

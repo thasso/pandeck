@@ -2,7 +2,11 @@
 import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AssistantActions, UIState } from "../../hooks/useAssistant.ts";
+import type {
+  AssistantActions,
+  HeldInputRemoval,
+  UIState,
+} from "../../hooks/useAssistant.ts";
 import type { SessionChatHost } from "../../hooks/useSessionChat.tsx";
 import type { Composer } from "../Composer.tsx";
 import type { MessageList } from "../MessageList.tsx";
@@ -347,6 +351,7 @@ describe("held inputs on the composer's queue strip", () => {
   const queueActions = {
     ...actions,
     promptQueue: vi.fn(),
+    removeHeldInput: vi.fn(),
     retireSessionDraft: vi.fn(),
   } as unknown as AssistantActions;
   const withHeld = (
@@ -395,9 +400,8 @@ describe("held inputs on the composer's queue strip", () => {
   };
   const removals = () =>
     vi
-      .mocked(queueActions.promptQueue)
-      .mock.calls.map(([command]) => command)
-      .filter((command) => command.type === "removeHeldInput");
+      .mocked(queueActions.removeHeldInput)
+      .mock.calls.map(([sessionId, id]) => ({ sessionId, id }));
 
   beforeEach(() => {
     seen.realComposer = true;
@@ -421,16 +425,13 @@ describe("held inputs on the composer's queue strip", () => {
 
   it("Put back fills an empty field as is, and only then asks the server to drop it", async () => {
     let storedWhenRemoved: string | null = "unset";
-    vi.mocked(queueActions.promptQueue).mockImplementation((command) => {
-      if (command.type === "removeHeldInput")
-        storedWhenRemoved = window.localStorage.getItem(KEY);
+    vi.mocked(queueActions.removeHeldInput).mockImplementation(() => {
+      storedWhenRemoved = window.localStorage.getItem(KEY);
     });
     await show(withHeld());
     await click("h1", "Put back");
     expect(field().value).toBe(HELD);
-    expect(removals()).toEqual([
-      { type: "removeHeldInput", sessionId: "s1", id: "h1" },
-    ]);
+    expect(removals()).toEqual([{ sessionId: "s1", id: "h1" }]);
     expect(storedWhenRemoved).toBe(HELD);
   });
 
@@ -445,9 +446,7 @@ describe("held inputs on the composer's queue strip", () => {
     window.localStorage.setItem(KEY, "typed since");
     await show(withHeld());
     await click("h1", "Discard");
-    expect(removals()).toEqual([
-      { type: "removeHeldInput", sessionId: "s1", id: "h1" },
-    ]);
+    expect(removals()).toEqual([{ sessionId: "s1", id: "h1" }]);
     expect(field().value).toBe("typed since");
   });
 
@@ -512,21 +511,88 @@ describe("held inputs on the composer's queue strip", () => {
     expect(removals()).toHaveLength(2);
   });
 
-  it("a failed Discard shows its failure on the row and can be given again", async () => {
+  // F029: a row settles only from ITS request's answer (`heldInputAnswer`,
+  // reduced into `UIState.heldInputRemovals`), never from session failures.
+  const removal = (entry: HeldInputRemoval) => ({
+    heldInputRemovals: { s1: { h1: entry } },
+  });
+  const busy = (label: string) =>
+    heldButton(label).getAttribute("aria-busy") === "true";
+  const alertsWith = (message: string) =>
+    [...container.querySelectorAll('[role="alert"]')].filter((node) =>
+      node.textContent?.includes(message),
+    );
+
+  it("a refused Discard shows its refusal once, on the row, and can be given again", async () => {
+    const refusal = "Unknown session.";
+    await show(withHeld());
+    await click("h1", "Discard");
+    await show(withHeld(undefined, removal({ requestId: "r1" })));
+    expect(busy("Discard")).toBe(true);
+    await show(
+      withHeld(
+        undefined,
+        removal({ requestId: "r1", answered: true, error: refusal }),
+      ),
+    );
+    expect(rows()).toEqual([expect.stringContaining(refusal)]);
+    const homes = alertsWith(refusal);
+    expect(homes).toHaveLength(1);
+    expect(homes[0]!.closest('[data-held-input="h1"]')).not.toBeNull();
+    expect(busy("Discard")).toBe(false);
+    expect(heldButton("Discard").disabled).toBe(false);
+    expect(heldButton("Put back").disabled).toBe(false);
+    // Given again: busy, and the old refusal is not what settles it.
+    await click("h1", "Discard");
+    expect(busy("Discard")).toBe(true);
+    expect(rows()[0]).not.toContain(refusal);
+    expect(removals()).toHaveLength(2);
+    await show(
+      withHeld(
+        undefined,
+        removal({ requestId: "r1", answered: true, error: refusal }),
+      ),
+    );
+    expect(busy("Discard")).toBe(true);
+  });
+
+  it("an unrelated failure of the same session during a Discard neither settles nor marks the row", async () => {
+    const unrelated = "The selected runtime model is unavailable";
     await show(withHeld());
     await click("h1", "Discard");
     await show(
       withHeld(undefined, {
-        sessionFailures: { s1: "Failed to update the queue: refused" },
+        ...removal({ requestId: "r1" }),
+        sessionFailures: { s1: unrelated },
       }),
     );
-    expect(rows()).toEqual([
-      expect.stringContaining("Failed to update the queue: refused"),
-    ]);
-    expect(heldButton("Discard").getAttribute("aria-busy")).toBeNull();
-    expect(heldButton("Discard").disabled).toBe(false);
-    expect(heldButton("Put back").disabled).toBe(false);
+    expect(busy("Discard")).toBe(true);
+    expect(rows()[0]).not.toContain(unrelated);
+  });
+
+  it("a failure from before the click is never attributed to it, not even when another session's failure arrives", async () => {
+    const older = "An older failure before Discard was clicked";
+    await show(withHeld(undefined, { sessionFailures: { s1: older } }));
     await click("h1", "Discard");
-    expect(removals()).toHaveLength(2);
+    await show(
+      withHeld(undefined, {
+        ...removal({ requestId: "r1" }),
+        sessionFailures: { s1: older, s2: "A different session failed" },
+      }),
+    );
+    expect(busy("Discard")).toBe(true);
+    expect(rows()[0]).not.toContain(older);
+  });
+
+  it("its own success settles the row, and the queue update takes it away", async () => {
+    await show(withHeld());
+    await click("h1", "Discard");
+    await show(
+      withHeld(undefined, removal({ requestId: "r1", answered: true })),
+    );
+    expect(busy("Discard")).toBe(false);
+    expect(rows()[0]).toContain("did not run");
+    await show(withHeld([], removal({ requestId: "r1", answered: true })));
+    expect(rows()).toEqual([]);
   });
 });

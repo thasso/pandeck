@@ -986,7 +986,6 @@ export class Connection implements Viewer {
       case "queuePrompt":
       case "updateQueuedPrompt":
       case "removeQueuedPrompt":
-      case "removeHeldInput":
       case "moveQueuedPrompt":
       case "clearPromptQueue":
       case "sendQueuedPromptNow":
@@ -996,6 +995,8 @@ export class Connection implements Viewer {
       case "recoverBackgroundUpdates":
       case "dismissBackgroundUpdates":
         return this.onPromptQueueCommand(msg);
+      case "removeHeldInput":
+        return this.onRemoveHeldInput(msg);
       case "withdrawPeerRequest":
         return this.onWithdrawPeerRequest(msg.sessionId, msg.id);
       case "loadTimelineBlock":
@@ -3550,8 +3551,6 @@ export class Connection implements Viewer {
           return updateQueuedPrompt(sessionId, msg.id, msg.text);
         case "removeQueuedPrompt":
           return removeQueuedPrompt(sessionId, msg.id);
-        case "removeHeldInput":
-          return removeHeldInput(sessionId, msg.id);
         case "moveQueuedPrompt":
           return moveQueuedPrompt(sessionId, msg.id, msg.toIndex);
         case "clearPromptQueue":
@@ -3571,6 +3570,31 @@ export class Connection implements Viewer {
         message: `Failed to update the queue: ${errorText(err)}`,
         target,
       });
+    }
+  }
+
+  /**
+   * Put back or Discard of a held input. Answered to this request alone
+   * (`heldInputAnswer`): the row that asked settles from it, and a refusal is
+   * that row's, never the session's failure (`docs/messaging.md`).
+   */
+  private onRemoveHeldInput(
+    msg: Extract<ClientMessage, { type: "removeHeldInput" }>,
+  ): void {
+    const { sessionId, id, requestId } = msg;
+    const answer = {
+      type: "heldInputAnswer" as const,
+      requestId,
+      sessionId,
+      id,
+    };
+    try {
+      if (!this.resolveSessionRef(sessionId))
+        throw new Error("Unknown session.");
+      removeHeldInput(sessionId, id);
+      this.send(answer);
+    } catch (err) {
+      this.send({ ...answer, error: errorText(err) });
     }
   }
 

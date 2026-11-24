@@ -7653,7 +7653,6 @@ export type PromptQueueCommand = Extract<
       | "resumePromptQueue"
       | "sendQueuedPeerPromptNow"
       | "withdrawQueuedPeerPrompt"
-      | "removeHeldInput"
       | "recoverBackgroundUpdates"
       | "dismissBackgroundUpdates";
   }
@@ -7694,8 +7693,15 @@ export type ClientMessage =
   /**
    * Remove one held input ({@link HeldInput}): the user discarded it, or put
    * it back into the composer, which sends this once the text is there.
+   * Answered by `heldInputAnswer` with the same `requestId`, which is how the
+   * row that asked settles; an id already gone is an ordinary success.
    */
-  | { type: "removeHeldInput"; sessionId: string; id: string }
+  | {
+      type: "removeHeldInput";
+      sessionId: string;
+      id: string;
+      requestId: string;
+    }
   /** Move one queued message to `toIndex` in send order. */
   | {
       type: "moveQueuedPrompt";
@@ -8889,6 +8895,19 @@ export type ServerMessage =
         }
       | { error: string; accounts?: undefined; boundEligible?: undefined }
     ))
+  /**
+   * The answer to `removeHeldInput`, to the connection that sent it: no
+   * `error` means the held input is gone (the queue update carries that);
+   * `error` is why it was refused, shown on the held row that asked and
+   * nowhere else.
+   */
+  | {
+      type: "heldInputAnswer";
+      requestId: string;
+      sessionId: string;
+      id: string;
+      error?: string;
+    }
   /**
    * The answer to `setPendingRuntime` / `clearPendingRuntime`: no `error`
    * means it was stored (the session's row and state carry it); `error` is

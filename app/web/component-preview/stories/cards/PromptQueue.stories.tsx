@@ -9,7 +9,7 @@ import { PromptQueueLedge } from "../../../src/components/PromptQueueLedge.tsx";
 import type { AssistantActions } from "../../../src/hooks/useAssistant.ts";
 
 export type PromptQueueScenario =
-  "running" | "paused" | "stopped" | "unhandled" | "held";
+  "running" | "paused" | "stopped" | "unhandled" | "held" | "heldRefused";
 
 export interface PromptQueueStoryProps {
   frameWidth: number;
@@ -32,7 +32,7 @@ function queueFor(scenario: PromptQueueScenario): PromptQueueState {
   if (scenario === "unhandled") return { paused: false, items: [] };
   // Idle, with two skill commands a pending runtime selection refused: they
   // never send on their own, so each offers only Put back and Discard.
-  if (scenario === "held")
+  if (scenario === "held" || scenario === "heldRefused")
     return {
       paused: false,
       items: [],
@@ -85,7 +85,12 @@ function queueFor(scenario: PromptQueueScenario): PromptQueueState {
 
 /** What other sessions sent, waiting behind the drafts; one is mid-steer. */
 function peersFor(scenario: PromptQueueScenario): QueuedPeerPrompt[] {
-  if (scenario === "stopped" || scenario === "unhandled" || scenario === "held")
+  if (
+    scenario === "stopped" ||
+    scenario === "unhandled" ||
+    scenario === "held" ||
+    scenario === "heldRefused"
+  )
     return [];
   return [
     {
@@ -158,6 +163,19 @@ export function PromptQueueStory({
               onWithdrawPeer={() => {}}
               onPutBackHeld={() => {}}
               onDiscardHeld={() => {}}
+              // The answer to this browser's Discard of h1 refused it: shown
+              // on that row alone, both answers free again.
+              {...(scenario === "heldRefused"
+                ? {
+                    heldRemovals: {
+                      h1: {
+                        requestId: "r1",
+                        answered: true as const,
+                        error: "Unknown session.",
+                      },
+                    },
+                  }
+                : {})}
             />
           }
         />
@@ -176,7 +194,14 @@ const meta = {
     frameWidth: { control: { type: "range", min: 360, max: 960, step: 1 } },
     scenario: {
       control: "radio",
-      options: ["running", "paused", "stopped", "unhandled", "held"],
+      options: [
+        "running",
+        "paused",
+        "stopped",
+        "unhandled",
+        "held",
+        "heldRefused",
+      ],
     },
   },
 } satisfies Meta<typeof PromptQueueStory>;
@@ -202,6 +227,10 @@ export const Unhandled: Story = {
 
 export const Held: Story = {
   args: { frameWidth: 720, scenario: "held" },
+};
+
+export const HeldRefused: Story = {
+  args: { frameWidth: 720, scenario: "heldRefused" },
 };
 
 export const Phone: Story = {

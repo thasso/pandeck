@@ -1027,7 +1027,11 @@ const REGISTRY = defineRegistry({
   ),
   updateQueuedPrompt: fields({ sessionId: STRING, id: STRING, text: STRING }),
   removeQueuedPrompt: fields({ sessionId: STRING, id: STRING }),
-  removeHeldInput: fields({ sessionId: STRING, id: STRING }),
+  removeHeldInput: fields({
+    sessionId: STRING,
+    id: STRING,
+    requestId: STRING,
+  }),
   moveQueuedPrompt: fields({ sessionId: STRING, id: STRING, toIndex: NUMBER }),
   clearPromptQueue: fields({ sessionId: STRING }),
   sendQueuedPromptNow: fields({ sessionId: STRING, id: STRING }),

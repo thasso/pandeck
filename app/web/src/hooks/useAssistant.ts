@@ -386,6 +386,33 @@ const defaultSettings: AppSettings = {
   },
 };
 
+/** The last `removeHeldInput` this browser sent for one held input. */
+export interface HeldInputRemoval {
+  requestId: string;
+  /** Its own `heldInputAnswer` arrived. */
+  answered?: true;
+  /** Why that answer refused it. */
+  error?: string;
+}
+
+/**
+ * What a lost connection leaves of the held-input requests: their refusals.
+ * A request in flight is never answered on a new socket, and a success needs
+ * no more saying; the reconnect snapshot shows which held inputs are left.
+ */
+function keepHeldInputRefusals(
+  removals: UIState["heldInputRemovals"],
+): UIState["heldInputRemovals"] {
+  const kept: UIState["heldInputRemovals"] = {};
+  for (const [sessionId, byId] of Object.entries(removals)) {
+    const refused = Object.fromEntries(
+      Object.entries(byId).filter(([, removal]) => removal.error !== undefined),
+    );
+    if (Object.keys(refused).length > 0) kept[sessionId] = refused;
+  }
+  return kept;
+}
+
 export interface ForkDraft {
   sessionId: string;
   text: string;
@@ -627,6 +654,13 @@ export interface UIState {
    * on the session row.
    */
   runtimeChangePending: Record<string, string>;
+  /**
+   * PER-CONTROL STATE of the held-input rows (`PromptQueueLedge`): session id
+   * → held input id → the last `removeHeldInput` this browser sent for it.
+   * Only that request's own `heldInputAnswer` settles it; a refusal stays
+   * here, on its row, until the row is answered again (`docs/messaging.md`).
+   */
+  heldInputRemovals: Record<string, Record<string, HeldInputRemoval>>;
   /**
    * Owners whose last Stop-all left a retained host open because an ordinary
    * prompted turn is still inside its safe boundary. The wait is shown; it is
@@ -1017,6 +1051,7 @@ const emptyInitial: UIState = {
   backgroundStopAllPending: [],
   accountMoveTargets: null,
   runtimeChangePending: {},
+  heldInputRemovals: {},
   backgroundHostCloseWaiting: [],
   sessionListFresh: false,
   taskListFresh: false,
@@ -2066,6 +2101,12 @@ type Action =
       requestId: string;
     }
   | { kind: "runtimeChangeSent"; sessionId: string; requestId: string }
+  | {
+      kind: "heldInputRemovalSent";
+      sessionId: string;
+      id: string;
+      requestId: string;
+    }
   | { kind: "optimisticWorktreeRemove"; worktreeId: string }
   | {
       kind: "optimisticPullRequestCardAction";
@@ -5441,6 +5482,19 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       },
     };
   }
+  if (action.kind === "heldInputRemovalSent")
+    // A new answer for the row replaces whatever its last one left, a
+    // refusal included: the row is in flight again.
+    return {
+      ...state,
+      heldInputRemovals: {
+        ...state.heldInputRemovals,
+        [action.sessionId]: {
+          ...state.heldInputRemovals[action.sessionId],
+          [action.id]: { requestId: action.requestId },
+        },
+      },
+    };
   if (action.kind === "runtimeChangeSent")
     // The change is the session's own send, so like a prompt it retires that
     // session's earlier failure (a held turn the change may now release); its
@@ -5827,6 +5881,7 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
         ? {}
         : {
             runtimeChangePending: {},
+            heldInputRemovals: keepHeldInputRefusals(state.heldInputRemovals),
             accountMoveTargets:
               state.accountMoveTargets &&
               isPending(state.accountMoveTargets.targets)
@@ -5902,6 +5957,27 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
               targets: ready(msg.accounts),
               boundEligible: msg.boundEligible,
             },
+    };
+  }
+  if (msg.type === "heldInputAnswer") {
+    // Only the request the row is waiting on settles it; an answer it no
+    // longer waits for (answered again since) changes nothing.
+    const removals = state.heldInputRemovals[msg.sessionId];
+    const removal = removals?.[msg.id];
+    if (!removals || removal?.requestId !== msg.requestId) return state;
+    return {
+      ...state,
+      heldInputRemovals: {
+        ...state.heldInputRemovals,
+        [msg.sessionId]: {
+          ...removals,
+          [msg.id]: {
+            requestId: msg.requestId,
+            answered: true,
+            ...(msg.error !== undefined ? { error: msg.error } : {}),
+          },
+        },
+      },
     };
   }
   if (msg.type === "pendingRuntimeAnswer") {
@@ -6907,6 +6983,11 @@ export interface AssistantActions {
   promptSkill: (text: string, skill: string) => void;
   /** Edit a session's prompt queue; the server answers with its new state. */
   promptQueue: (command: PromptQueueCommand) => void;
+  /**
+   * Put back (once the composer holds the text) or Discard one held input;
+   * its own answer settles the row (`UIState.heldInputRemovals`).
+   */
+  removeHeldInput: (sessionId: string, id: string) => void;
   /** Close a request `sessionId` sent (its sent card's key); it stays unanswered. */
   withdrawPeerRequest: (sessionId: string, messageKey: string) => void;
   acceptCommitDryRun: (entryId: string) => void;
@@ -8606,6 +8687,11 @@ export function useAssistant({
         send({ type: "prompt", text, skill, clientRequestId });
       },
       promptQueue: (command) => send(command),
+      removeHeldInput: (sessionId, id) => {
+        const requestId = createClientId();
+        dispatch({ kind: "heldInputRemovalSent", sessionId, id, requestId });
+        send({ type: "removeHeldInput", sessionId, id, requestId });
+      },
       withdrawPeerRequest: (sessionId, id) =>
         send({ type: "withdrawPeerRequest", sessionId, id }),
       acceptCommitDryRun: (entryId) =>

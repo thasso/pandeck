@@ -220,6 +220,7 @@ test("only Put back or Discard removes a held input; queue commands never touch 
       type: "removeHeldInput",
       sessionId: id,
       id: first!.id,
+      requestId: "r1",
     });
     assert.deepEqual(errorsOf(sent), []);
   } finally {
@@ -232,6 +233,65 @@ test("only Put back or Discard removes a held input; queue commands never touch 
   queue.deleteSessionPromptQueue(id);
   assert.deepEqual(promptQueueStore.listHeld(id), []);
   assert.deepEqual(queue.promptQueueField(id), {});
+});
+
+test("a removeHeldInput is answered to its own request: success, an id already gone, and a refusal that is no session error", async () => {
+  sessionStore.upsert({ id, harness: "pi", agentType: "assistant" });
+  queue.holdInput(id, "/first");
+  const [first] = promptQueueStore.listHeld(id);
+  const { conn, sent } = connection(new FakeRuntimeDriver(id));
+  const answers = () =>
+    sent.filter((message) => message.type === "heldInputAnswer");
+  try {
+    await conn.handle({
+      type: "removeHeldInput",
+      sessionId: id,
+      id: first!.id,
+      requestId: "ok",
+    });
+    // Another client got there first: still a success, nothing to remove.
+    await conn.handle({
+      type: "removeHeldInput",
+      sessionId: id,
+      id: first!.id,
+      requestId: "gone",
+    });
+    await conn.handle({
+      type: "removeHeldInput",
+      sessionId: "no-such-session",
+      id: "h1",
+      requestId: "refused",
+    });
+    assert.deepEqual(answers(), [
+      {
+        type: "heldInputAnswer",
+        requestId: "ok",
+        sessionId: id,
+        id: first!.id,
+      },
+      {
+        type: "heldInputAnswer",
+        requestId: "gone",
+        sessionId: id,
+        id: first!.id,
+      },
+      {
+        type: "heldInputAnswer",
+        requestId: "refused",
+        sessionId: "no-such-session",
+        id: "h1",
+        error: "Unknown session.",
+      },
+    ]);
+    assert.deepEqual(
+      errorsOf(sent),
+      [],
+      "a refusal is the row's answer, never also a session failure",
+    );
+  } finally {
+    conn.dispose();
+  }
+  assert.deepEqual(promptQueueStore.listHeld(id), []);
 });
 
 // Last: reopening the database leaves later tests a fresh handle.

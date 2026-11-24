@@ -281,7 +281,10 @@ describe("PromptQueueLedge held inputs", () => {
   });
 });
 
-describe("PromptQueueLedge held inputs after a failed or unknown answer", () => {
+describe("PromptQueueLedge held inputs settle from their own request", () => {
+  // Each row settles only from the answer to the request sent for it
+  // (`heldRemovals`, keyed by held id and request id), and a disconnect
+  // releases an answer whose outcome is unknown.
   const held = [{ id: "h1", text: "/review-pr 412", createdAt: 1 }];
   const heldButton = (label: string) =>
     [
@@ -289,49 +292,60 @@ describe("PromptQueueLedge held inputs after a failed or unknown answer", () => 
         '[data-held-input="h1"] button',
       ),
     ].find((candidate) => candidate.textContent === label)!;
+  const busy = (label: string) =>
+    heldButton(label).getAttribute("aria-busy") === "true";
+  const row = () => container.querySelector('[data-held-input="h1"]')!;
 
-  it("Discard is retryable after its request fails", () => {
+  it("a refusal of its own request shows on the row, frees both answers, and a retry is busy again", () => {
     const onDiscardHeld = vi.fn();
     const base = {
       queue: { items: [], paused: false, held },
       onPutBackHeld: vi.fn(),
       onDiscardHeld,
     };
-    render({ ...base, requestFailure: null });
+    render(base);
     act(() => heldButton("Discard").click());
-    expect(heldButton("Discard").getAttribute("aria-busy")).toBe("true");
+    render({ ...base, heldRemovals: { h1: { requestId: "r1" } } });
+    expect(busy("Discard")).toBe(true);
     render({
       ...base,
-      requestFailure: { message: "Failed to update the queue" },
+      heldRemovals: {
+        h1: { requestId: "r1", answered: true, error: "refused" },
+      },
     });
-    expect(
-      container.querySelector('[data-held-input="h1"]')!.textContent,
-    ).toContain("Failed to update the queue");
+    expect(row().querySelector('[role="alert"]')?.textContent).toBe("refused");
+    expect(busy("Discard")).toBe(false);
     expect(heldButton("Discard").disabled).toBe(false);
-    expect(heldButton("Discard").getAttribute("aria-busy")).toBeNull();
     expect(heldButton("Put back").disabled).toBe(false);
     act(() => heldButton("Discard").click());
     expect(onDiscardHeld).toHaveBeenCalledTimes(2);
+    // The earlier refusal is still what the row holds until the new request
+    // is sent; it neither shows nor settles the retry.
+    expect(busy("Discard")).toBe(true);
+    expect(row().textContent).not.toContain("refused");
   });
 
-  it("Put back is retryable after its request fails", () => {
-    const onPutBackHeld = vi.fn();
+  it("Put back stays busy until the request sent after the click is answered", () => {
     const base = {
       queue: { items: [], paused: false, held },
-      onPutBackHeld,
+      onPutBackHeld: vi.fn(),
       onDiscardHeld: vi.fn(),
+      heldRemovals: {
+        h1: { requestId: "r0", answered: true as const, error: "old" },
+      },
     };
-    render({ ...base, requestFailure: null });
+    render(base);
     act(() => heldButton("Put back").click());
+    render(base);
+    expect(busy("Put back")).toBe(true);
+    render({ ...base, heldRemovals: { h1: { requestId: "r1" } } });
+    expect(busy("Put back")).toBe(true);
     render({
       ...base,
-      requestFailure: { message: "Failed to update the queue" },
+      heldRemovals: { h1: { requestId: "r1", answered: true } },
     });
-    expect(heldButton("Put back").getAttribute("aria-busy")).toBeNull();
-    expect(heldButton("Put back").disabled).toBe(false);
-    expect(heldButton("Discard").disabled).toBe(false);
-    act(() => heldButton("Put back").click());
-    expect(onPutBackHeld).toHaveBeenCalledTimes(2);
+    expect(busy("Put back")).toBe(false);
+    expect(row().querySelector('[role="alert"]')).toBeNull();
   });
 
   it("Discard and Put back are released by a disconnect and by a reconnect that keeps the id", () => {
@@ -344,35 +358,39 @@ describe("PromptQueueLedge held inputs after a failed or unknown answer", () => 
     };
     render({ ...base, connected: true });
     act(() => heldButton("Discard").click());
-    expect(heldButton("Discard").getAttribute("aria-busy")).toBe("true");
+    expect(busy("Discard")).toBe(true);
     // The socket drops with the answer unanswered, then comes back with the
     // same held id: the outcome is unknown, so the row is free again.
     render({ ...base, connected: false });
     render({ ...base, connected: true });
-    expect(heldButton("Discard").getAttribute("aria-busy")).toBeNull();
+    expect(busy("Discard")).toBe(false);
     expect(heldButton("Discard").disabled).toBe(false);
     expect(heldButton("Put back").disabled).toBe(false);
     act(() => heldButton("Put back").click());
     render({ ...base, connected: false });
     render({ ...base, connected: true });
-    expect(heldButton("Put back").getAttribute("aria-busy")).toBeNull();
-    expect(heldButton("Put back").disabled).toBe(false);
+    expect(busy("Put back")).toBe(false);
     act(() => heldButton("Put back").click());
     expect(onPutBackHeld).toHaveBeenCalledTimes(2);
   });
 
-  it("a failure that arrives before the answer does not mark it", () => {
+  it("another row's answer does not settle this one", () => {
+    const two = [...held, { id: "h2", text: "/other", createdAt: 2 }];
     const base = {
-      queue: { items: [], paused: false, held },
+      queue: { items: [], paused: false, held: two },
       onPutBackHeld: vi.fn(),
       onDiscardHeld: vi.fn(),
     };
-    // The same failure object is what the viewed session still holds: nothing
-    // new arrived, so the answer stays in flight.
-    const old = { message: "old failure" };
-    render({ ...base, requestFailure: old });
+    render(base);
     act(() => heldButton("Discard").click());
-    render({ ...base, requestFailure: old });
-    expect(heldButton("Discard").getAttribute("aria-busy")).toBe("true");
+    render({
+      ...base,
+      heldRemovals: {
+        h1: { requestId: "r1" },
+        h2: { requestId: "r2", answered: true, error: "refused" },
+      },
+    });
+    expect(busy("Discard")).toBe(true);
+    expect(row().textContent).not.toContain("refused");
   });
 });

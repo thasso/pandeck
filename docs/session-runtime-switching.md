@@ -86,6 +86,12 @@ The turn is **held**, never failed and never run on the old engine
     replacing it. The client sends `removeHeldInput` only once the field holds
     the text and this browser's draft has stored it. Discard sends
     `removeHeldInput` at once.
+  - Each `removeHeldInput` carries a `requestId`, and the server answers that
+    request alone with `heldInputAnswer` (`error` when refused). The row's
+    answer stays busy until its OWN answer arrives (or the id leaves the queue);
+    a disconnect releases it as unknown. A refusal shows on the row and nowhere
+    else, never as the session's failure above the composer; no other failure of
+    the session settles or marks the row (`docs/messaging.md`).
   - A held input is never sent on its own: not when the selection applies or is
     reset, not by the boot drain. Queue commands (Remove, Clear, Send next)
     never touch it. It stays until Put back or Discard; a fork does not copy it,

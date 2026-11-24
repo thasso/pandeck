@@ -2493,6 +2493,84 @@ describe("a failed prompt and its optimistic echo", () => {
     expect(state.session?.promptQueue).toBeUndefined();
   });
 
+  it("settles a held input's removal only from its own request's answer, never from a session failure", () => {
+    let state = reduceAssistantState(createInitialState(), {
+      kind: "heldInputRemovalSent",
+      sessionId: "s1",
+      id: "h1",
+      requestId: "r1",
+    });
+    expect(state.heldInputRemovals).toEqual({
+      s1: { h1: { requestId: "r1" } },
+    });
+    // Any other failure of the session is the session's, not this row's.
+    state = apply(
+      {
+        type: "error",
+        message: "The selected runtime model is unavailable",
+        target: { type: "session", id: "s1" },
+      },
+      state,
+    );
+    expect(state.heldInputRemovals.s1?.h1).toEqual({ requestId: "r1" });
+    // Sent again before the first answer: only the newer request settles it.
+    state = reduceAssistantState(state, {
+      kind: "heldInputRemovalSent",
+      sessionId: "s1",
+      id: "h1",
+      requestId: "r2",
+    });
+    state = apply(
+      {
+        type: "heldInputAnswer",
+        requestId: "r1",
+        sessionId: "s1",
+        id: "h1",
+        error: "late refusal",
+      },
+      state,
+    );
+    expect(state.heldInputRemovals.s1?.h1).toEqual({ requestId: "r2" });
+    const failuresBefore = state.sessionFailures;
+    state = apply(
+      {
+        type: "heldInputAnswer",
+        requestId: "r2",
+        sessionId: "s1",
+        id: "h1",
+        error: "Unknown session.",
+      },
+      state,
+    );
+    expect(state.heldInputRemovals.s1?.h1).toEqual({
+      requestId: "r2",
+      answered: true,
+      error: "Unknown session.",
+    });
+    // One home: the refusal is the row's, never also above the composer.
+    expect(state.sessionFailures).toBe(failuresBefore);
+  });
+
+  it("a lost connection drops held removals in flight or done, and keeps refusals", () => {
+    let state: UIState = {
+      ...createInitialState(),
+      hydrationSource: "live",
+      connected: true,
+      heldInputRemovals: {
+        s1: {
+          pending: { requestId: "a" },
+          ok: { requestId: "b", answered: true },
+          refused: { requestId: "c", answered: true, error: "refused" },
+        },
+        s2: { pending: { requestId: "d" } },
+      },
+    };
+    state = reduceAssistantState(state, { kind: "status", connected: false });
+    expect(state.heldInputRemovals).toEqual({
+      s1: { refused: { requestId: "c", answered: true, error: "refused" } },
+    });
+  });
+
   it("keeps every echo for a failure that is not a prompt send", () => {
     const state = apply(
       {
