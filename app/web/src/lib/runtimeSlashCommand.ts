@@ -29,9 +29,11 @@ export interface RuntimeArgumentOption {
 }
 
 export interface RuntimeCommandContext {
-  /** Every model the pickers know, each with why it cannot be next, if so. */
+  /**
+   * Every model the pickers know. One of another harness or account kind is
+   * an engine switch at the next turn, never refused here.
+   */
   models: readonly ModelOption[];
-  modelRefusal: (model: ModelOption) => string | undefined;
   /** The model the next turn starts on: pending, else current. */
   targetModel: ModelOption | undefined;
   /** Accounts that could run the target model, by name; empty when fixed. */
@@ -46,14 +48,10 @@ export function runtimeArgumentOptions(
   context: RuntimeCommandContext,
 ): RuntimeArgumentOption[] {
   if (name === "model")
-    return context.models.map((model) => {
-      const refusal = context.modelRefusal(model);
-      return {
-        value: model.id,
-        label: model.name,
-        ...(refusal ? { detail: refusal, disabled: true } : {}),
-      };
-    });
+    return context.models.map((model) => ({
+      value: model.id,
+      label: model.name,
+    }));
   if (name === "effort")
     return effortLevels(context.targetModel).map((level) => ({
       value: level,
@@ -95,9 +93,6 @@ export function resolveRuntimeCommand(
         kind: "error",
         message: `No model is named "${rawArgs.trim()}".`,
       };
-    const refusal = context.modelRefusal(model);
-    if (refusal)
-      return { kind: "error", message: `${model.name}: ${refusal}.` };
     return {
       kind: "change",
       change: { model: { provider: model.provider, id: model.id } },

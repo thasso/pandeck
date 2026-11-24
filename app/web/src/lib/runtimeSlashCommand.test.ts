@@ -32,10 +32,6 @@ const context = (
   over: Partial<RuntimeCommandContext> = {},
 ): RuntimeCommandContext => ({
   models: [opus, gpt],
-  modelRefusal: (model) =>
-    model.provider === "openai-codex"
-      ? "Another harness: not available yet"
-      : undefined,
   targetModel: opus,
   accounts: [
     { id: "cp-a", name: "Personal" },
@@ -58,7 +54,7 @@ describe("runtime slash commands", () => {
       });
   });
 
-  it("resolves a model by id or name, and refuses one it cannot switch to", () => {
+  it("resolves a model by id or name, another harness's too (a switch)", () => {
     const change = {
       kind: "change",
       change: { model: { provider: "claude-sdk", id: "claude-opus" } },
@@ -70,8 +66,8 @@ describe("runtime slash commands", () => {
       change,
     );
     expect(resolveRuntimeCommand("model", "gpt-5.5", context())).toEqual({
-      kind: "error",
-      message: "GPT-5.5: Another harness: not available yet.",
+      kind: "change",
+      change: { model: { provider: "openai-codex", id: "gpt-5.5" } },
     });
     expect(resolveRuntimeCommand("model", "nope", context())).toEqual({
       kind: "error",
@@ -124,15 +120,10 @@ describe("runtime slash commands", () => {
     });
   });
 
-  it("offers each argument, a refused model disabled with its reason", () => {
+  it("offers each argument, every harness's models enabled", () => {
     expect(runtimeArgumentOptions("model", context())).toEqual([
       { value: "claude-opus", label: "Claude Opus" },
-      {
-        value: "gpt-5.5",
-        label: "GPT-5.5",
-        detail: "Another harness: not available yet",
-        disabled: true,
-      },
+      { value: "gpt-5.5", label: "GPT-5.5" },
     ]);
     expect(
       runtimeArgumentOptions("effort", context()).map((option) => option.value),

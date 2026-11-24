@@ -1529,7 +1529,7 @@ for (const harness of engines) {
     assert.ok(sessionStore.get(s.id)?.pendingRuntime);
   });
 
-  test(`${harness} a target outside the session's engine or one that could never run is refused when set`, async () => {
+  test(`${harness} a target that could never run is refused when set, and another engine's only without an account`, async () => {
     const a = account(harness, "A");
     const disabled = account(harness, "Off");
     profiles.setCredentialProfileEnabled(disabled, false);
@@ -1548,14 +1548,53 @@ for (const harness of engines) {
       await assert.rejects(choose(s, target), { message: reason }, target);
       assert.equal(sessionStore.get(s.id)?.pendingRuntime, undefined);
     }
+    // Another harness's model is an engine switch: refused while no enabled
+    // account of its kind offers it, accepted (on Automatic) once one does.
+    const crossModel = bigModel(otherKind(harness));
+    profiles.setCredentialProfileEnabled(other, false);
+    await assert.rejects(
+      setSessionPendingRuntime(s.id, { model: crossModel }, "user"),
+      {
+        message: `No enabled ${harness === "pi" ? "Claude" : "OpenAI"} account offers Big model.`,
+      },
+    );
+    assert.equal(sessionStore.get(s.id)?.pendingRuntime, undefined);
+    profiles.setCredentialProfileEnabled(other, true);
+    const cross = await setSessionPendingRuntime(
+      s.id,
+      { model: crossModel },
+      "user",
+    );
+    assert.deepEqual(cross?.model, crossModel);
+    assert.deepEqual(cross?.account, { kind: "automatic" });
+    // The account list follows the target's kind: the other kind's accounts,
+    // never the bound one.
+    const listed = (await accountMoveTargets(s.id)).map(({ id }) => id);
+    assert.ok(listed.includes(other), "the target kind's account is listed");
+    assert.ok(!listed.includes(a), "the bound account cannot run it");
+    assert.ok(!listed.includes(disabled));
     await assert.rejects(
       setSessionPendingRuntime(
         s.id,
-        { model: bigModel(otherKind(harness)) },
+        { account: { kind: "account", id: a } },
         "user",
       ),
-      /runs on another harness; moving a session between harnesses is not available yet\.$/,
+      { message: "A cannot run Big model." },
     );
+    const chosen = await setSessionPendingRuntime(
+      s.id,
+      { account: { kind: "account", id: other } },
+      "user",
+    );
+    assert.deepEqual(chosen?.account, { kind: "account", id: other });
+    // Picking a model of the bound kind again drops the other kind's account.
+    const back = await setSessionPendingRuntime(
+      s.id,
+      { model: { provider: offers.get(a)!.provider, id: offers.get(a)!.id } },
+      "user",
+    );
+    assert.notDeepEqual(back?.account, { kind: "account", id: other });
+    await clearSessionPendingRuntime(s.id);
     await assert.rejects(
       setSessionPendingRuntime(
         s.id,

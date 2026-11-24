@@ -179,7 +179,12 @@ interface Props {
    * pending: what it starts on, and the way to the inspector's Runtime
    * section (`docs/session-runtime-switching.md`).
    */
-  runtimeChip?: { label: string; onOpen: () => void };
+  runtimeChip?: {
+    label: string;
+    /** "Hands over ~12k tokens", while a pending engine switch has an estimate. */
+    handoff?: string;
+    onOpen: () => void;
+  };
   /**
    * The current skills library scan, read only for the frozen
    * `session.activeSkills`: each one's description, argument hint and whether
@@ -2420,13 +2425,22 @@ export const Composer = memo(function Composer({
                         <Button
                           variant="outline"
                           size="xs"
-                          className="min-w-0 max-w-48"
-                          title={`Next turn: ${runtimeChip.label}`}
-                          aria-label={`Next turn: ${runtimeChip.label}. Open the Runtime section.`}
+                          className={
+                            runtimeChip.handoff
+                              ? "min-w-0 max-w-72"
+                              : "min-w-0 max-w-48"
+                          }
+                          title={`Next turn: ${runtimeChip.label}${runtimeChip.handoff ? `. ${runtimeChip.handoff}` : ""}`}
+                          aria-label={`Next turn: ${runtimeChip.label}.${runtimeChip.handoff ? ` ${runtimeChip.handoff}.` : ""} Open the Runtime section.`}
                           onClick={runtimeChip.onOpen}
                         >
                           <span className="truncate">
                             Next turn: {runtimeChip.label}
+                            {runtimeChip.handoff ? (
+                              <span className="text-muted-foreground">
+                                {` · ${runtimeChip.handoff}`}
+                              </span>
+                            ) : null}
                           </span>
                         </Button>
                       ) : null}

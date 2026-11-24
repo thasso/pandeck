@@ -643,7 +643,7 @@ describe("Composer runtime commands", () => {
     {
       value: "gpt-5.5",
       label: "GPT-5.5",
-      detail: "Another harness: not available yet",
+      detail: "Not offered here",
       disabled: true,
     },
   ];

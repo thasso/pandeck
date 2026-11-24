@@ -57,6 +57,7 @@ import {
 } from "../lib/sessionInbox.ts";
 import type { AssistantActions, UIState } from "./useAssistant.ts";
 import {
+  handoffEstimateText,
   runtimeTargetLabel,
   type SessionRuntimeControl,
 } from "../components/SessionRuntimeSection.tsx";
@@ -1128,10 +1129,14 @@ export function useSessionChat({
   const runtimeChip = useMemo(() => {
     const pending = runtimeCommands?.control.pending;
     if (!runtimeCommands || !pending) return undefined;
+    // A pending engine switch carries the size of its handoff, once known.
+    const estimate = runtimeCommands.control.engineSwitch?.handoff;
+    const tokens = estimate ? dataOf(estimate) : undefined;
     return {
       label: runtimeTargetLabel(pending, runtimeCommands.control.models, (id) =>
         runtimeCommands.control.accounts?.nameOf(id),
       ),
+      ...(tokens !== undefined ? { handoff: handoffEstimateText(tokens) } : {}),
       onOpen: runtimeCommands.open,
     };
   }, [runtimeCommands]);

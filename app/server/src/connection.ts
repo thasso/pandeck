@@ -157,6 +157,7 @@ import { accountMoveChoices } from "./sessionAccountMove.ts";
 import {
   clearSessionPendingRuntime,
   PendingRuntimeHeldError,
+  pendingSwitchHandoffTokens,
   setSessionPendingRuntime,
 } from "./sessionPendingRuntime.ts";
 import {
@@ -1269,6 +1270,8 @@ export class Connection implements Viewer {
           msg.sessionId,
           msg.requestId,
         );
+      case "estimateSessionHandoff":
+        return this.onEstimateSessionHandoff(msg.sessionId, msg.requestId);
       case "setPendingRuntime":
       case "clearPendingRuntime":
         return this.onPendingRuntime(msg);
@@ -4969,6 +4972,29 @@ export class Connection implements Viewer {
     } catch (err) {
       this.send({
         type: "sessionAccountMoveTargets",
+        requestId,
+        sessionId,
+        error: errorText(err),
+      });
+    }
+  }
+
+  /** The inspector's "Hands over ~Nk tokens" for a pending engine switch. */
+  private async onEstimateSessionHandoff(
+    sessionId: string,
+    requestId: string,
+  ): Promise<void> {
+    try {
+      const tokens = await pendingSwitchHandoffTokens(sessionId);
+      this.send({
+        type: "sessionHandoffEstimate",
+        requestId,
+        sessionId,
+        tokens,
+      });
+    } catch (err) {
+      this.send({
+        type: "sessionHandoffEstimate",
         requestId,
         sessionId,
         error: errorText(err),

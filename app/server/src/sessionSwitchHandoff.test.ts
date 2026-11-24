@@ -314,3 +314,44 @@ test("a return's budget leaves room for what the resumed native session already 
   });
   assert.doesNotMatch(owedSwitchContext(unknown) ?? "", /pi answered/);
 });
+
+test("a kind change within pi owes nothing: its transcript resumed holds the whole session", () => {
+  const id = `switch-handoff-${Date.now()}-pi-kind`;
+  ids.push(id);
+  assert.ok(
+    sessionStore.upsert({
+      id,
+      harness: "pi",
+      agentType: "developer",
+      provider: "openai-codex",
+      model: "gpt-5.6-sol",
+      credentialProfileId: "default",
+    }),
+  );
+  append(id, [
+    message(1, "user", "asked on codex"),
+    message(2, "assistant", "ok"),
+  ]);
+  // Codex → an OpenAI-compatible endpoint: the same pi transcript, resumed
+  // from the binding the switch leaves (D1).
+  sessionStore.switchEngineBinding(id, {
+    expectSeq: 1,
+    fields: {
+      harness: "pi",
+      credentialProfileId: "cp_endpoint",
+      provider: "cp_endpoint",
+      model: "local-model",
+      thinkingLevel: "off",
+      providerSessionId: null,
+    },
+    nativeSessionId: id,
+    startedSeq: 3,
+    resumedSeq: 1,
+    pending: {
+      ...PENDING,
+      model: { provider: "cp_endpoint", id: "local-model" },
+    },
+  });
+  assert.equal(sessionStore.bindings(id).length, 2);
+  assert.equal(owedSwitchContext(id), undefined);
+});

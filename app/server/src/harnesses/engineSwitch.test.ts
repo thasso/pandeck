@@ -13,7 +13,11 @@ import { join } from "node:path";
 import { afterEach, beforeAll, test } from "vitest";
 import type { SessionPendingRuntime } from "@assistant/shared";
 import { claudeSdkStore } from "../claudeSdk/claudeSdkStore.ts";
-import { claudeConfigDir } from "../credentialProfiles.ts";
+import {
+  claudeConfigDir,
+  createCredentialProfile,
+  setCredentialProfileEnabled,
+} from "../credentialProfiles.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import { setDeliveryWake } from "../deliveryWake.ts";
 import { openPiEngine } from "../piSdk/piEngineHost.ts";
@@ -125,6 +129,7 @@ function piOpensForReal(): PiEngineOpenSpec[] {
       dispose() {
         this.released = true;
       },
+      commitWorkflowContext: () => ({ sessionManager: undefined }),
     };
     pi.live.set(engine.sessionId, live);
     return live;
@@ -751,4 +756,94 @@ test("a switch held only by the naming agent is offered again when naming ends (
   assert.deepEqual(wakes, [id], "the held turn is offered again");
   session.onChange();
   assert.deepEqual(wakes, [id], "once");
+});
+
+test("a kind change within pi reopens its own transcript on the new account and owes no handoff", async () => {
+  const endpoint = createCredentialProfile({
+    name: "Team LLM",
+    provider: "openai-compatible",
+  });
+  try {
+    const id = freshId();
+    await onClaude(id);
+    sessionStore.setPendingRuntime(id, PENDING_PI);
+    const specs = piOpensForReal();
+    const toCodex = await prepareEngineSwitch(
+      id,
+      { ...TO_PI, credentialProfileId: "default" },
+      PENDING_PI,
+      () => {},
+    );
+    toCodex.usable();
+    toCodex.commit();
+    // pi's transcript of the session, as pi keeps it once it has run.
+    const file = canonicalPiSessionPath(id);
+    mkdirSync(join(file, ".."), { recursive: true });
+    writeFileSync(
+      file,
+      `${JSON.stringify({ type: "session", version: 3, id, timestamp: new Date().toISOString(), cwd: process.cwd() })}\n`,
+    );
+    const onCodex = pi.live.get(id) as { released: boolean } | undefined;
+    assert.ok(onCodex);
+
+    const toEndpoint: EngineSwitchTarget = {
+      harness: "pi",
+      model: { provider: endpoint.id, id: "llama3" },
+      thinkingLevel: "off",
+      credentialProfileId: endpoint.id,
+    };
+    const pending: SessionPendingRuntime = {
+      ...PENDING_PI,
+      model: toEndpoint.model,
+      thinkingLevel: "off",
+      account: { kind: "account", id: endpoint.id },
+    };
+    sessionStore.setPendingRuntime(id, pending);
+    const prepared = await prepareEngineSwitch(
+      id,
+      toEndpoint,
+      pending,
+      () => {},
+    );
+    assert.equal(onCodex.released, true, "the Codex-bound engine let it go");
+    assert.equal(specs[1]?.transcript.type, "open");
+    assert.equal(prepared.resumed?.seq, 2, "it resumed the binding it left");
+    prepared.usable();
+    prepared.commit();
+    const row = sessionStore.get(id);
+    assert.equal(row?.harness, "pi");
+    assert.equal(row?.provider, endpoint.id);
+    assert.equal(row?.credentialProfileId, endpoint.id);
+    assert.deepEqual(
+      sessionStore.bindings(id).map((binding) => binding.harness),
+      ["claude-sdk", "pi", "pi"],
+    );
+    assert.equal(sessionStore.activeBinding(id)?.resumedSeq, 2);
+    assert.equal(owedSwitchContext(id), undefined);
+    pi.live.clear();
+    rmSync(file, { force: true });
+  } finally {
+    // Still bound to the test's session, so it cannot be deleted.
+    setCredentialProfileEnabled(endpoint.id, false);
+  }
+});
+
+test("the same engine and account kind is not an engine switch", async () => {
+  const id = freshId();
+  await onClaude(id);
+  await assert.rejects(
+    prepareEngineSwitch(
+      id,
+      {
+        harness: "claude-sdk",
+        model: { provider: "claude-sdk", id: "opus" },
+        thinkingLevel: "high",
+        credentialProfileId: "claude-default",
+      },
+      PENDING_PI,
+      () => {},
+    ),
+  );
+  assert.equal(isSwitchingEngines(id), false);
+  assert.equal(sessionStore.bindings(id).length, 1);
 });
