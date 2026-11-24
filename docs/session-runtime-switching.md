@@ -275,7 +275,8 @@ the run it began at; the first binding has cursor 0 and no run. The migration
 gave every existing row, tombstones included, its first binding. A binding a
 switch started also records `resumed_seq` (migration 0103): the earlier binding
 whose native session its open actually reopened, absent when the open started a
-fresh one.
+fresh one. A binding a switch started on Claude also records its usage base
+(`usage_base`, migration 0104; see [Usage](#usage)).
 
 - **Projection.** `session_index`'s `harness`, `provider`,
   `provider_session_id`, `model`, `thinking_level` and `credential_profile_id`
@@ -327,12 +328,37 @@ title, activity time and message count too: those describe only its own native
 stretch. So the target writes nothing before its commit, a late write from an
 instance of the binding a switch left never lands after it, and a kind change
 within pi leaves the binding it left exactly as it was; an abandoned one changes
-nothing. Claude's usage totals follow the same rule. A released instance also
+nothing. Claude's usage writes follow the same rule. A released instance also
 writes nothing at all: pi's late naming run neither renames nor appends to a
 transcript the next binding reopens, and Claude's store persists only the
 instance it holds. After a switch the active engine counts only what it ran, so
 its message count may raise the row's but never lower it (0 would hide a started
 session from the list).
+
+### Usage
+
+A session's usage totals (`session_usage_totals`: tokens, cost, usage and
+assistant turns) are the sum over all its bindings. Every reader reads that one
+row: the session audit, the Status digest, a workflow run's spend evidence and
+the offline `measure:session` snapshot.
+
+The two engines count differently. pi adds each run's own usage as the session
+log records its assistant entry (`recordUsageTurn`). Claude reports its record's
+RUNNING native total, and a return's record still holds what that record counted
+under its earlier binding. So the switch's commit stores a **usage base** on a
+Claude binding: the session's totals at the commit less what the record it
+opened already holds (zero for a fresh record; a field never goes below zero).
+Claude then writes its record's total over that base
+(`sessionStore.replaceEngineUsage`). A pi binding and every first binding have
+no base, and a session that never switched counts exactly as before. A return
+counts its record's earlier stretch once, because the base leaves it out. The
+base is durable, so a restart writes the same sum. Only the active binding's
+instance writes (see above).
+
+Turn counts follow the same sum. Context tokens and window are the active
+engine's latest. The audit reconciles a switched session's cost under its own
+`per-engine` accumulation: pi's runs rounded per entry, plus Claude's runs
+(attributed by each run's `run.started` engine) rounded once.
 
 ## Moving to another harness
 

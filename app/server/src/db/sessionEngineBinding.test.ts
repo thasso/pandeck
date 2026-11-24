@@ -52,6 +52,7 @@ function rowAndBinding(id: string) {
 }
 
 type BindingFields = import("./sessionEngineBinding.ts").ActiveBindingFields;
+type UsageCounters = import("./sessionEngineBinding.ts").UsageCounters;
 type Pending = import("@assistant/shared").SessionPendingRuntime;
 
 const PENDING: Pending = {
@@ -69,9 +70,11 @@ function switchTo(
     pending?: Pending;
     nativeSessionId?: string | null;
     startedSeq?: number;
+    nativeUsage?: UsageCounters | null;
   } = {},
 ): void {
   sessionStore.switchEngineBinding(id, {
+    nativeUsage: options.nativeUsage ?? null,
     expectSeq: sessionStore.activeBinding(id)!.seq,
     fields,
     nativeSessionId:
@@ -493,6 +496,109 @@ test("on one harness, only the instance of the active binding writes it: never t
   assertRowIsActiveBinding(id);
 });
 
+/** A native counter holding `input` tokens and `cost` micros over `turns` runs. */
+function counted(input: number, cost: number, turns = 1): UsageCounters {
+  return {
+    inputTokens: input,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    totalTokens: input,
+    costMicros: cost,
+    usageTurns: turns,
+    assistantTurns: turns,
+  };
+}
+
+/** An engine's running native total as it reports it. */
+function reported(input: number, cost: number, turns = 1) {
+  return {
+    ...counted(input, cost, turns),
+    currency: "USD",
+    usageSource: "provider_reported" as const,
+    updatedAt: Date.now(),
+  };
+}
+
+test("a session's usage is the sum over its bindings: a native total counts on top of a base, a return's record once, a stale instance never (F027)", () => {
+  const id = freshId("usage-sum");
+  const pi: BindingFields = {
+    harness: "pi",
+    credentialProfileId: "acct-codex",
+    provider: "openai-codex",
+    model: "gpt-5.6-sol",
+    thinkingLevel: "high",
+    providerSessionId: null,
+  };
+  assert.ok(
+    sessionStore.upsert({
+      id,
+      harness: "pi",
+      agentType: "developer",
+      credentialProfileId: "acct-codex",
+      provider: "openai-codex",
+      model: "gpt-5.6-sol",
+      thinkingLevel: "high",
+      title: "Sum",
+    }),
+  );
+  const totals = () => {
+    const t = sessionStore.getUsageTotals(id);
+    return [t?.inputTokens, t?.costMicros, t?.usageTurns];
+  };
+  // pi counts run by run.
+  sessionStore.recordUsageTurn(id, { inputTokens: 100, costUSD: 0.5 });
+  assert.deepEqual(totals(), [100, 500_000, 1]);
+
+  // To a fresh Claude record: the binding counts on top of all of it.
+  switchTo(id, CLAUDE, { nativeUsage: counted(0, 0, 0) });
+  assert.deepEqual(
+    sessionStore.activeBinding(id)?.usageBase,
+    counted(100, 500_000),
+  );
+  sessionStore.replaceEngineUsage(id, 2, reported(10, 10_000));
+  assert.deepEqual(totals(), [110, 510_000, 2]);
+  // The binding it left, or one not yet committed, writes nothing.
+  sessionStore.replaceEngineUsage(id, 1, reported(1, 1));
+  sessionStore.replaceEngineUsage(id, 3, reported(1, 1));
+  assert.deepEqual(totals(), [110, 510_000, 2]);
+
+  // Back to pi: no base, its runs add; Claude's late report lands nowhere.
+  switchTo(id, pi);
+  assert.equal(sessionStore.activeBinding(id)?.usageBase, undefined);
+  sessionStore.recordUsageTurn(id, { inputTokens: 1_000, costUSD: 1 });
+  sessionStore.replaceEngineUsage(id, 2, reported(20, 20_000, 2));
+  assert.deepEqual(totals(), [1_110, 1_510_000, 3]);
+
+  // A return reopens the record that holds its first stretch: that stretch is
+  // already in the session's totals, so the base leaves it out.
+  switchTo(id, CLAUDE, { nativeUsage: counted(10, 10_000) });
+  assert.deepEqual(
+    sessionStore.activeBinding(id)?.usageBase,
+    counted(1_100, 1_500_000, 2),
+  );
+  sessionStore.replaceEngineUsage(id, 4, reported(25, 25_000, 2));
+  assert.deepEqual(totals(), [1_125, 1_525_000, 4]);
+});
+
+test("a native counter holding more than the session counted leaves a zero base, never a negative one (F027)", () => {
+  const id = freshId("usage-clamp");
+  assert.ok(
+    sessionStore.upsert({
+      id,
+      harness: "pi",
+      agentType: "developer",
+      provider: "openai-codex",
+      model: "gpt-5.6-sol",
+    }),
+  );
+  switchTo(id, CLAUDE, { nativeUsage: counted(50, 50_000) });
+  assert.deepEqual(sessionStore.activeBinding(id)?.usageBase, counted(0, 0, 0));
+  sessionStore.replaceEngineUsage(id, 2, reported(60, 60_000));
+  assert.equal(sessionStore.getUsageTotals(id)?.inputTokens, 60);
+});
+
 test("after a switch the active engine raises the message count but never lowers it", () => {
   const id = freshId("switched-count");
   assert.ok(
@@ -638,6 +744,7 @@ test("a switch from a binding that is no longer active, or of a deleted session,
   assert.throws(
     () =>
       sessionStore.switchEngineBinding(id, {
+        nativeUsage: null,
         expectSeq: 2,
         fields: CLAUDE,
         nativeSessionId: null,

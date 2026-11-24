@@ -234,6 +234,7 @@ const CLASSIFIED: Record<
       spawnGrantAncestors: "read",
       recordUsageTurn: "non-projected-write",
       replaceUsage: "non-projected-write",
+      replaceEngineUsage: "non-projected-write",
       // Internal scope: never a list row.
       createInternalUsageSession: "non-projected-write",
     },
@@ -937,6 +938,7 @@ describe("fan-out", () => {
       "engine binding switch",
       () =>
         sessionStore.switchEngineBinding(switched, {
+          nativeUsage: null,
           expectSeq: sessionStore.activeBinding(switched)!.seq,
           fields: {
             harness: "claude-sdk",

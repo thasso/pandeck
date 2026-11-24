@@ -270,8 +270,8 @@ const owners: Record<string, Owner> = {
       ),
       group(
         "read",
-        "requireStateBuilder seam get exists unreadableRecord list metaForRemoval",
-        "Read callbacks, current handles, records or a binding error; no classification/membership write.",
+        "requireStateBuilder seam get exists unreadableRecord list metaForRemoval nativeUsage",
+        "Read callbacks, current handles, records, native usage counters or a binding error; no classification/membership write.",
       ),
     ],
   },

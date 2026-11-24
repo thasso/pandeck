@@ -25,7 +25,10 @@ import {
 import { existsSync } from "node:fs";
 import { credentialProfileById } from "../credentialProfiles.ts";
 import { sessionStore, type SessionMeta } from "../db/sessionStore.ts";
-import type { SessionEngineBinding } from "../db/sessionEngineBinding.ts";
+import type {
+  SessionEngineBinding,
+  UsageCounters,
+} from "../db/sessionEngineBinding.ts";
 import type { LiveSession } from "../harness.ts";
 import { piStore } from "../piSdk/piStore.ts";
 import { sessionRuntime } from "../session/runtimeInstance.ts";
@@ -178,8 +181,10 @@ function release(
 
 /**
  * Open the session on the target engine, on the binding the switch starts.
- * Answers the driver and the earlier binding whose native session the open
- * actually resumed: pi's transcript may be gone, and pi then starts over.
+ * Answers the driver, the earlier binding whose native session the open
+ * actually resumed (pi's transcript may be gone, and pi then starts over),
+ * and what the engine's native usage counter already holds when it reports a
+ * running total (Claude), null when it counts run by run (pi).
  */
 async function open(
   row: SessionMeta,
@@ -187,7 +192,11 @@ async function open(
   plan: { earlier?: SessionEngineBinding; resumed?: SessionEngineBinding },
   cwd: string | undefined,
   bindingSeq: number,
-): Promise<{ driver: LiveSession; resumed?: SessionEngineBinding }> {
+): Promise<{
+  driver: LiveSession;
+  resumed?: SessionEngineBinding;
+  nativeUsage: UsageCounters | null;
+}> {
   const mode = sessionModeOrDefault(row.mode);
   if (target.harness === "pi") {
     const opened = await piStore.openForBinding(row.id, {
@@ -202,6 +211,7 @@ async function open(
     return {
       driver: opened.session,
       ...(opened.resumed && plan.earlier ? { resumed: plan.earlier } : {}),
+      nativeUsage: null,
     };
   }
   const { resumed } = plan;
@@ -223,7 +233,11 @@ async function open(
       checkout,
     ),
   );
-  return { driver, ...(resumed ? { resumed } : {}) };
+  return {
+    driver,
+    ...(resumed ? { resumed } : {}),
+    nativeUsage: claudeSdkStore.nativeUsage(row.id),
+  };
 }
 
 /** The session as the engine `harness` holds it resident, if it does. */
@@ -269,6 +283,7 @@ export async function prepareEngineSwitch(
   let active: SessionEngineBinding | undefined;
   let driver: LiveSession;
   let resumed: SessionEngineBinding | undefined;
+  let nativeUsage: UsageCounters | null;
   try {
     // Read under the fence, so no other switch moves the binding meanwhile.
     row = sessionStore.get(sessionId);
@@ -289,7 +304,13 @@ export async function prepareEngineSwitch(
     admit();
     // The target writes as the binding the commit starts: until then its
     // writes are foreign, and the binding it leaves stays as it is.
-    ({ driver, resumed } = await open(row, target, plan, cwd, active.seq + 1));
+    ({ driver, resumed, nativeUsage } = await open(
+      row,
+      target,
+      plan,
+      cwd,
+      active.seq + 1,
+    ));
   } catch (error) {
     await rollback();
     lifted(false);
@@ -365,6 +386,10 @@ export async function prepareEngineSwitch(
         startedSeq: sessionRuntime.logCursor(sessionId),
         ...(resumed ? { resumedSeq: resumed.seq } : {}),
         pending,
+        // The session's usage stays the sum over its bindings: Claude's
+        // record totals count on top of what the session used before, less
+        // what a return's record already holds.
+        nativeUsage,
       });
       ended = true;
       lifted(true);

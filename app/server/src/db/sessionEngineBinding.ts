@@ -43,9 +43,79 @@ export interface SessionEngineBinding {
    * starts over.
    */
   resumedSeq?: number;
+  /**
+   * The session usage this binding's engine counts on top of: what the
+   * session had used when the switch committed, less what the engine's own
+   * native counter already held (a return's record). Present only on a binding
+   * whose engine reports its running native total (Claude); its totals are
+   * written over this base (`sessionStore.replaceEngineUsage`).
+   */
+  usageBase?: UsageCounters;
   createdAt: number;
   /** Absent while the binding is active. */
   endedAt?: number;
+}
+
+/** The additive part of a session's usage totals. */
+export interface UsageCounters {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  reasoningTokens: number;
+  totalTokens: number;
+  costMicros?: number;
+  usageTurns: number;
+  assistantTurns: number;
+}
+
+const COUNTERS = [
+  "inputTokens",
+  "outputTokens",
+  "cacheReadTokens",
+  "cacheWriteTokens",
+  "reasoningTokens",
+  "totalTokens",
+  "usageTurns",
+  "assistantTurns",
+] as const;
+
+/**
+ * `a` plus or minus `b`, field by field. A difference never goes below 0: a
+ * native counter holding more than the session counted (usage the session
+ * never saw) leaves nothing, not a negative base.
+ */
+export function combineUsage(
+  a: UsageCounters,
+  b: UsageCounters,
+  sign: 1 | -1,
+): UsageCounters {
+  const out = {} as UsageCounters;
+  for (const key of COUNTERS) out[key] = Math.max(0, a[key] + sign * b[key]);
+  if (a.costMicros !== undefined || b.costMicros !== undefined)
+    out.costMicros = Math.max(
+      0,
+      (a.costMicros ?? 0) + sign * (b.costMicros ?? 0),
+    );
+  return out;
+}
+
+/** A stored base's counters; an unreadable one reads as none. */
+function parseUsageBase(json: string | null): UsageCounters | undefined {
+  if (json === null) return undefined;
+  try {
+    const value = JSON.parse(json) as Record<string, unknown>;
+    const out = {} as UsageCounters;
+    for (const key of COUNTERS) {
+      const n = value[key];
+      if (typeof n !== "number" || !Number.isFinite(n)) return undefined;
+      out[key] = n;
+    }
+    if (typeof value.costMicros === "number") out.costMicros = value.costMicros;
+    return out;
+  } catch {
+    return undefined;
+  }
 }
 
 /** The projection fields a binding writer hands over, already merged. */
@@ -71,8 +141,15 @@ interface DbBindingRow {
   started_seq: number;
   started_run_id: string | null;
   resumed_seq: number | null;
+  usage_base: string | null;
   created_at_ms: number;
   ended_at_ms: number | null;
+}
+
+function withUsageBase(usageBase: UsageCounters | undefined): {
+  usageBase?: UsageCounters;
+} {
+  return usageBase ? { usageBase } : {};
 }
 
 function fromRow(row: DbBindingRow): SessionEngineBinding {
@@ -92,6 +169,7 @@ function fromRow(row: DbBindingRow): SessionEngineBinding {
     startedSeq: row.started_seq,
     ...(row.started_run_id ? { startedRunId: row.started_run_id } : {}),
     ...(row.resumed_seq !== null ? { resumedSeq: row.resumed_seq } : {}),
+    ...withUsageBase(parseUsageBase(row.usage_base)),
     createdAt: row.created_at_ms,
     ...(row.ended_at_ms !== null ? { endedAt: row.ended_at_ms } : {}),
   };
@@ -207,8 +285,8 @@ export function bindings(sessionId: string): SessionEngineBinding[] {
 /**
  * End the active binding `expectSeq` and start the session's next one on
  * `fields`, its native id `nativeSessionId` (none for a fresh Claude binding)
- * and `resumedSeq`, the earlier binding whose native session it reopened.
- * Call ONLY from `sessionStore.switchEngineBinding`, inside its transaction.
+ * and `resumedSeq`, the earlier binding whose native session it reopened,
+ * with `usageBase` ({@link SessionEngineBinding.usageBase}). Call ONLY from `sessionStore.switchEngineBinding`, inside its transaction.
  * Throws when `expectSeq` is not the active binding.
  */
 export function startNextBinding(
@@ -218,6 +296,7 @@ export function startNextBinding(
   nativeSessionId: string | null,
   startedSeq: number,
   resumedSeq: number | null,
+  usageBase: UsageCounters | null,
   at: number,
 ): void {
   const db = getDb();
@@ -233,9 +312,9 @@ export function startNextBinding(
     `INSERT INTO session_engine_binding (
        session_id, seq, harness, credential_profile_id, provider, model,
        thinking_level, native_session_id, started_seq, started_run_id,
-       resumed_seq, created_at_ms, ended_at_ms
+       resumed_seq, usage_base, created_at_ms, ended_at_ms
      )
-     SELECT ?, MAX(seq) + 1, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL
+     SELECT ?, MAX(seq) + 1, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL
        FROM session_engine_binding WHERE session_id = ?`,
   ).run(
     sessionId,
@@ -247,6 +326,7 @@ export function startNextBinding(
     nativeSessionId,
     startedSeq,
     resumedSeq,
+    usageBase ? JSON.stringify(usageBase) : null,
     at,
     sessionId,
   );

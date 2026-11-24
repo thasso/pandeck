@@ -558,6 +558,54 @@ test("Claude → pi → Claude through the set path: marker, estimate, handoff, 
   }
 });
 
+test("a session's usage is the sum over its engines, Claude → pi → Claude, and a return counts Claude's earlier usage once (F027)", async () => {
+  const { id, claude } = await claudeWithPendingPi("usage");
+  await seedClaudeTranscript(id);
+  const usage = () => {
+    const totals = sessionStore.getUsageTotals(id);
+    return {
+      input: totals?.inputTokens,
+      output: totals?.outputTokens,
+      cost: totals?.costMicros,
+    };
+  };
+  // Each Claude query reports 1 input, 1 output and $0.01 for its epoch.
+  assert.deepEqual(usage(), { input: 1, output: 1, cost: 10_000 });
+
+  await promptRuntimeSessionWithRuntime(sessionRuntime, claude, "second ask");
+  const [onPi] = opened;
+  assert.ok(onPi, "the session opened on pi");
+  // pi counts run by run: its turn's assistant entry adds its own usage (the
+  // stand-in writes no reply, so the entry's figure is added as the log does).
+  sessionStore.recordUsageTurn(id, {
+    inputTokens: 7_776,
+    outputTokens: 0,
+    costUSD: 1,
+  });
+  assert.deepEqual(usage(), { input: 7_777, output: 1, cost: 1_010_000 });
+
+  await setSessionPendingRuntime(
+    id,
+    {
+      model: { provider: "claude-sdk", id: "sonnet" },
+      account: { kind: "account", id: "claude-default" },
+    },
+    "user",
+  );
+  await promptRuntimeSessionWithRuntime(sessionRuntime, onPi, "third ask");
+  assert.equal(sessionStore.get(id)?.harness, "claude-sdk");
+  const back = claudeSdkStore.get(id);
+  assert.ok(back && back !== claude, "the return opened Claude afresh");
+  // The record Claude resumed already counts its first turn: the session adds
+  // only the return's own turn to pi's, never that first turn again.
+  assert.deepEqual(usage(), { input: 7_778, output: 2, cost: 1_020_000 });
+
+  // The base is durable: a reopen writes the record's totals over it again.
+  await claudeSdkStore.releaseForSwitch(id, () => {});
+  claudeSdkStore.acquire(id, {});
+  assert.deepEqual(usage(), { input: 7_778, output: 2, cost: 1_020_000 });
+});
+
 test("a target that cannot run is held as the session's failure, the selection still pending", async () => {
   const { id, claude } = await claudeWithPendingPi("held");
   setCredentialProfileEnabled("default", false);

@@ -50,6 +50,7 @@ import {
   isSwitchingEngines,
   SessionSwitchingEnginesError,
 } from "./engineSwitchFence.ts";
+import { routingSpendLines } from "../workflow/runSpend.ts";
 import { harnessRegistry } from "./registry.ts";
 
 installClaudeStateBuilder(claudeSdkStore);
@@ -306,6 +307,7 @@ test("a return to Claude resumes the earlier native session its account still ho
       }),
     );
     sessionStore.switchEngineBinding(id, {
+      nativeUsage: null,
       expectSeq: 1,
       fields: {
         harness: "pi",
@@ -368,6 +370,7 @@ function claudeThenPi(id: string, native: string, profile: string): void {
     }),
   );
   sessionStore.switchEngineBinding(id, {
+    nativeUsage: null,
     expectSeq: 1,
     fields: {
       harness: "pi",
@@ -403,6 +406,65 @@ function crashClaude(id: string): void {
   internals.sessions.delete(id);
   internals.logs.delete(id);
 }
+
+test("a move from pi onto Claude keeps the usage pi counted, and Claude's turns add to it (F027)", async () => {
+  // The resolution review's reproducer, through the switch's own commit.
+  const id = freshId();
+  sessionStore.upsert({
+    id,
+    harness: "pi",
+    agentType: "developer",
+    credentialProfileId: "default",
+    provider: "openai-codex",
+    model: "gpt-5.6-sol",
+    messageCount: 2,
+    title: "Usage fixture",
+  });
+  sessionStore.replaceUsage(id, {
+    inputTokens: 7_777,
+    outputTokens: 1,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    totalTokens: 7_778,
+    costMicros: 1_000_000,
+    currency: "USD",
+    usageTurns: 1,
+    assistantTurns: 1,
+    usageSource: "provider_reported",
+    updatedAt: 1_000,
+  });
+  const before = sessionStore.getUsageTotals(id);
+  const toClaude = await prepareEngineSwitch(
+    id,
+    TO_CLAUDE,
+    PENDING_CLAUDE,
+    () => {},
+  );
+  assert.deepEqual(sessionStore.getUsageTotals(id), before);
+  toClaude.commit();
+  assert.deepEqual(
+    sessionStore.getUsageTotals(id),
+    before,
+    "the commit adds nothing",
+  );
+
+  ensureRuntimeSessionWithRuntime(sessionRuntime, toClaude.driver as never);
+  await sessionRuntime.prompt(id, "first Claude turn");
+  // Claude's query reports 1 input, 1 output and $0.01, on top of pi's.
+  const totals = sessionStore.getUsageTotals(id);
+  assert.equal(totals?.inputTokens, 7_778);
+  assert.equal(totals?.outputTokens, 2);
+  assert.equal(totals?.totalTokens, 7_780);
+  assert.equal(totals?.costMicros, 1_010_000);
+  assert.equal(totals?.usageTurns, 2);
+  assert.equal(totals?.assistantTurns, 2);
+  // A run's spend evidence reads the same totals.
+  const [spent] = routingSpendLines([
+    { kind: "agent", executor: { kind: "session", id }, payload: {} } as never,
+  ]);
+  assert.equal(spent, "This run has spent $1.01 so far across 1 session.");
+});
 
 test("a concurrent return to Claude is refused before it touches the winner's staged transcript (F014)", async () => {
   const id = freshId();
@@ -659,6 +721,7 @@ test("a return to pi whose transcript is gone starts over and is not recorded as
     const id = freshId();
     claudeThenPi(id, `native-${id}`, "claude-default");
     sessionStore.switchEngineBinding(id, {
+      nativeUsage: null,
       expectSeq: 2,
       fields: {
         harness: "claude-sdk",
@@ -711,6 +774,7 @@ test("a fresh pi return owes the whole log, the pi-era history included (F018)",
     row(0, "user", "PI_ONLY_HISTORY ask") + row(1, "assistant", "pi said so"),
   );
   sessionStore.switchEngineBinding(id, {
+    nativeUsage: null,
     expectSeq: 2,
     fields: {
       harness: "claude-sdk",

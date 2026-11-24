@@ -41,11 +41,13 @@ import { getDb, inDbTransaction } from "./index.ts";
 import {
   activeBinding,
   bindings,
+  combineUsage,
   stampBindingRun,
   startNextBinding,
   syncActiveBinding,
   syncActiveBindingAccount,
   type ActiveBindingFields,
+  type UsageCounters,
 } from "./sessionEngineBinding.ts";
 import { touchSessionRows } from "./sessionListChanges.ts";
 
@@ -231,7 +233,7 @@ interface SessionUpsert {
   bindingSeq?: number;
 }
 
-interface SessionUsageTotals {
+export interface SessionUsageTotals {
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
@@ -656,6 +658,13 @@ interface EngineBindingSwitch {
   resumedSeq?: number;
   /** The pending selection the switch applied, cleared when still stored. */
   pending: SessionPendingRuntime;
+  /**
+   * What the target engine's own counter already holds when that engine
+   * reports its running native total (Claude: the record it opened, a
+   * return's earlier usage included); null when it counts run by run (pi).
+   * The new binding then counts on top of the session's totals less this.
+   */
+  nativeUsage: UsageCounters | null;
 }
 
 /**
@@ -681,6 +690,9 @@ function switchEngineBinding(id: string, change: EngineBindingSwitch): void {
       change.nativeSessionId,
       change.startedSeq,
       change.resumedSeq ?? null,
+      change.nativeUsage
+        ? combineUsage(getUsageTotals(id) ?? NO_USAGE, change.nativeUsage, -1)
+        : null,
       Date.now(),
     );
     const stored = pendingRuntimeFields(row.pending_runtime).pendingRuntime;
@@ -2132,6 +2144,41 @@ function recordUsageTurn(
   }
 }
 
+const NO_USAGE: UsageCounters = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+  reasoningTokens: 0,
+  totalTokens: 0,
+  usageTurns: 0,
+  assistantTurns: 0,
+};
+
+/**
+ * Write the running native total an engine instance of binding `bindingSeq`
+ * reports as the session's usage, over the usage base the active binding
+ * counts on top of: a session's totals are the sum over all its bindings
+ * (`docs/session-runtime-switching.md` "Usage"). An instance of any other
+ * binding writes nothing (a switch's target before its commit, one a switch
+ * left after it); `bindingSeq` undefined is the active binding's.
+ */
+function replaceEngineUsage(
+  sessionId: string,
+  bindingSeq: number | undefined,
+  native: SessionUsageTotals,
+): void {
+  inDbTransaction(() => {
+    const active = activeBinding(sessionId);
+    if (bindingSeq !== undefined && active && active.seq !== bindingSeq) return;
+    const base = active?.usageBase;
+    replaceUsage(
+      sessionId,
+      base ? { ...native, ...combineUsage(base, native, 1) } : native,
+    );
+  });
+}
+
 function replaceUsage(sessionId: string, totals: SessionUsageTotals): void {
   getDb()
     .prepare(
@@ -2395,5 +2442,6 @@ export const sessionStore = {
   spawnGrantAncestors,
   recordUsageTurn,
   replaceUsage,
+  replaceEngineUsage,
   createInternalUsageSession,
 };
