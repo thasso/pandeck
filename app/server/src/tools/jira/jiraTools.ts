@@ -1,11 +1,7 @@
-import type {
-  ApprovalCard,
-  JiraIssueMutationItemDisplay,
-} from "@assistant/shared";
+import type { ApprovalCard } from "@assistant/shared";
 import { defineAgentTool } from "../../mcp/tool.ts";
 import { getJiraToolConfig } from "../../jiraSettings.ts";
 import {
-  approvalCardReference,
   createApproval,
   proposalSnapshot,
   registerApprovalExecutor,
@@ -55,7 +51,11 @@ import {
 } from "../../jiraSearch.ts";
 import { errorText } from "../../errors.ts";
 import { resolveUserNames } from "../../jiraUsers.ts";
-import { jiraSprintItemLabel } from "../../jiraSprint.ts";
+import {
+  jiraMutationTitle,
+  jiraProposalSummary,
+  jiraProposalText,
+} from "./jiraProposalCard.ts";
 type CustomFieldMode = "none" | "known" | "selected" | "discoverNonEmpty";
 
 type GetIssueParams = {
@@ -264,13 +264,7 @@ export const jiraMutateIssueTool = defineAgentTool<JiraMutationParams>({
       },
     );
     const title = jiraMutationTitle(items);
-    const labels = items.map(jiraMutationItemLabel);
-    const summary = [
-      labels.join(", "),
-      warnings.length ? `${warnings.length} warning(s)` : "",
-    ]
-      .filter(Boolean)
-      .join(" · ");
+    const summary = jiraProposalSummary(items, warnings);
     const card = createApproval({
       sessionId: ctx.session.sessionId,
       kind: "jiraIssue",
@@ -279,54 +273,10 @@ export const jiraMutateIssueTool = defineAgentTool<JiraMutationParams>({
       sourceToolCallId: ctx.toolCallId,
       body: { kind: "jiraIssue", jiraHost: config.jiraHost, items },
     });
-    const warnLine = warnings.length
-      ? ` Warnings: ${warnings.join("; ")}.`
-      : "";
-    const text = `Prepared a Jira edit proposal for ${items.length} issue(s) pending your approval.${warnLine} Do not claim Jira changed until the approved result appears. ${approvalCardReference(card)}`;
+    const text = jiraProposalText(items, warnings, card);
     return { content: [{ type: "text", text }], terminate: true };
   },
 });
-
-/** Short human label for one mutation item (edit/create/comment). */
-function jiraMutationItemLabel(item: JiraIssueMutationItemDisplay): string {
-  if (item.operation === "create")
-    return `create ${item.createProjectKey ?? "?"} ${item.createIssueType ?? ""}`.trim();
-  if (item.operation === "comment") return `comment ${item.issueKey}`;
-  if (item.operation === "rank")
-    return `rank ${(item.rankIssueKeys ?? []).join(", ")} ${item.rankPosition ?? ""}`.trim();
-  if (item.operation === "sprint") return jiraSprintItemLabel(item);
-  return item.issueKey;
-}
-
-/** Approval-card title reflecting the mix of operations. */
-function jiraMutationTitle(items: JiraIssueMutationItemDisplay[]): string {
-  if (items.length === 1) {
-    const item = items[0]!;
-    if (item.operation === "create")
-      return `Create ${item.createProjectKey ?? ""} issue`
-        .replace(/\s+/g, " ")
-        .trim();
-    if (item.operation === "comment") return `Comment on ${item.issueKey}`;
-    if (item.operation === "rank") {
-      const count = item.rankIssueKeys?.length ?? 0;
-      return count === 1
-        ? `Rank ${item.rankIssueKeys?.[0]} ${item.rankPosition ?? ""}`.trim()
-        : `Rank ${count} Jira issues`;
-    }
-    if (item.operation === "sprint")
-      return `Edit sprint ${item.sprint?.name ?? ""}`.trim();
-    return `Edit ${item.issueKey}`;
-  }
-  const kinds = new Set(items.map((item) => item.operation ?? "edit"));
-  if (kinds.size === 1) {
-    const only = [...kinds][0];
-    if (only === "create") return `Create ${items.length} Jira issues`;
-    if (only === "comment") return `Comment on ${items.length} Jira issues`;
-    if (only === "rank") return `Rank ${items.length} Jira backlogs`;
-    if (only === "sprint") return `Edit ${items.length} Jira sprints`;
-  }
-  return `${items.length} Jira changes`;
-}
 
 /** Execute an approved Jira issue mutation: apply each item, recording per-item results. */
 registerApprovalExecutor("jiraIssue", {
