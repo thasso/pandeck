@@ -30,6 +30,11 @@ vi.mock("./harnesses/models.ts", async (importOriginal) => {
     ],
   };
 });
+// The library is not under test: a skill the session froze is user-invocable.
+vi.mock("./sessionSkills.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./sessionSkills.ts")>()),
+  skillUserInvocable: async () => true,
+}));
 vi.mock("./sessionAccountMove.ts", async (importOriginal) => {
   const original =
     await importOriginal<typeof import("./sessionAccountMove.ts")>();
@@ -44,6 +49,7 @@ vi.mock("./sessionAccountMove.ts", async (importOriginal) => {
 const { claudeSdkStore } = await import("./claudeSdk/claudeSdkStore.ts");
 const { Connection } = await import("./connection.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
+const { getDb } = await import("./db/index.ts");
 const { setDeliveryWake } = await import("./deliveryWake.ts");
 const { isSwitchingEngines } = await import("./harnesses/engineSwitchFence.ts");
 const { hub } = await import("./hub.ts");
@@ -272,4 +278,67 @@ test("a refusal after the move puts the session back on its old binding", async 
   assert.equal(sessionStore.bindings(id).length, 1);
   assert.deepEqual(userTexts(id), ["first ask"], "nothing was appended");
   assert.deepEqual(onPi?.promptTexts, []);
+});
+
+test("a skill whose switch is held is kept as a held input, and the session stays where it was", async () => {
+  const { id, claude } = await claudeWithPendingPi("held-skill");
+  const { promptQueueStore } = await import("./db/promptQueueStore.ts");
+  // The session's frozen skills name it, so only the switch can refuse it
+  // (the hold comes before the skill is materialized on any engine).
+  getDb()
+    .prepare("UPDATE session_skills SET names_json = ? WHERE session_id = ?")
+    .run(JSON.stringify(["review-pr"]), id);
+  const failing = pi.openEngine;
+  pi.openEngine = async () => {
+    throw new Error("pi could not start");
+  };
+  const sent: ServerMessage[] = [];
+  const conn = new Connection({
+    OPEN: 1,
+    readyState: 1,
+    send: (frame: string | Buffer) => sent.push(parseServerFrame(frame)),
+  } as never) as unknown as {
+    view(live: unknown): void;
+    handle(msg: ClientMessage): Promise<void>;
+    dispose(): void;
+  };
+  hub.register(conn as never);
+  try {
+    conn.view(claude);
+    const typed = "/review-pr 7";
+    await conn.handle({
+      type: "prompt",
+      text: typed,
+      skill: "review-pr",
+      clientRequestId: "skill-1",
+    } as ClientMessage);
+    await vi.waitFor(() =>
+      assert.ok(sent.some((message) => message.type === "error")),
+    );
+    const error = sent.find((message) => message.type === "error") as Extract<
+      ServerMessage,
+      { type: "error" }
+    >;
+    // The switch's own hold, with sub-PR 2's held-input wording.
+    assert.match(error.message, /^Couldn't switch to GPT-5\.6 Sol/);
+    assert.match(
+      error.message,
+      /\/review-pr did not run; it is waiting above your message box/,
+    );
+    assert.deepEqual(
+      promptQueueStore.listHeld(id).map((input) => input.text),
+      [typed],
+      "kept exactly as typed",
+    );
+    assert.equal(promptQueueStore.list(id).length, 0, "skills never queue");
+    assert.equal(sessionStore.get(id)?.harness, "claude-sdk");
+    assert.deepEqual(sessionStore.get(id)?.pendingRuntime, PENDING);
+    assert.equal(isSwitchingEngines(id), false);
+    assert.deepEqual(userTexts(id), ["first ask"], "nothing was appended");
+  } finally {
+    pi.openEngine = failing;
+    hub.unregister(conn as never);
+    conn.dispose();
+    promptQueueStore.deleteSession(id);
+  }
 });

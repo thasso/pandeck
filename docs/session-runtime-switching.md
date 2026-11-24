@@ -72,6 +72,9 @@ The turn is **held**, never failed and never run on the old engine
   The change is still pending; change or reset it to continue."
 - When the only obstacle is background work keeping the source engine open, the
   reason is "Waiting for background work on Claude; stop it to switch now."
+- A cross-engine switch's refusals (the naming wait, an unreadable pi
+  transcript, a failed open or a late account refusal) are this same hold, so
+  everything below applies to them too.
 - A user prompt is refused before anything is appended. It goes to the user's
   queue, and the error adds "Your message is waiting in your queue."
 - A skill invocation cannot be queued (Task-1023), so the server keeps it as a
