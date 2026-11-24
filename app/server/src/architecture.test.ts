@@ -727,3 +727,36 @@ test("only tests and the probe set the gateway's Claude token endpoint", () => {
     'gatewayLink.ts: claudeTokenEndpoint?: GatewayOptions["claudeTokenEndpoint"];',
   ]);
 });
+
+/**
+ * The gateway write modules are leaves of the tool graph (Task-1463 P6b,
+ * P6B-F1): `catalog → remoteToolGroup → remoteWrites → card leaves` and the
+ * local tools share only the leaves, so no load order can meet a cycle.
+ */
+test("the gateway write tool and the card leaves reach no catalog, tool group or local tool module", () => {
+  const FORBIDDEN = [
+    "tools/catalog.ts",
+    "tools/gateway/remoteToolGroup.ts",
+    "tools/jira/jiraTools.ts",
+    "tools/confluence/confluenceTools.ts",
+  ];
+  for (const entry of [
+    "tools/gateway/remoteWrites.ts",
+    "tools/jira/jiraProposalCard.ts",
+    "tools/confluence/confluenceProposalCard.ts",
+  ]) {
+    const reach = staticReach(entry);
+    assert.ok(reach.modules.length > 1, `the walk from ${entry} imports`);
+    assert.deepEqual(
+      reach.modules.filter((module) => FORBIDDEN.includes(module)),
+      [],
+      entry,
+    );
+  }
+  assert.ok(
+    staticReach("tools/gateway/remoteWrites.ts").modules.includes(
+      "tools/jira/jiraProposalCard.ts",
+    ),
+    "the walk reaches the leaves",
+  );
+});

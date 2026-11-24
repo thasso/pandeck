@@ -777,3 +777,99 @@ test.each(CASES.map((oracle) => [oracle.name, oracle] as const))(
     expect(await observe(oracle)).toEqual(oracle.expected);
   },
 );
+
+// ---------------------------------------------------------------------------
+// The gateway path (Task-1463 P6b, P6B-F2): given the proposal the shared
+// prepare builds for the same input on the same fake site, the remote tool
+// raises the card and tool text pinned above, literal for literal. Applying a
+// gateway card is M2's.
+
+const { updateJiraSettings } = await import("../../jiraSettings.ts");
+const { buildJiraMutationItems } = await import("../../jiraMutate.ts");
+const { getJiraFieldMap } = await import("../../jiraFieldCache.ts");
+const { getJiraIssueLinkTypes } =
+  await import("../../jiraIssueLinkTypeCache.ts");
+const { resolveUserNames } = await import("../../jiraUsers.ts");
+const { errorText } = await import("../../errors.ts");
+const { jiraMessageMatchesHttpStatus } = await import("./jiraTools.ts");
+const { acceptRemoteTools, applyListing, installRemoteToolPort } =
+  await import("../../remoteTools.ts");
+const { remoteToolsFor } = await import("../gateway/remoteToolGroup.ts");
+const { approvalStore } = await import("../../db/approvalStore.ts");
+
+const SITE = {
+  jiraHost: "acme.atlassian.net",
+  atlassianEmail: "oracle@example.com",
+  atlassianToken: "oracle-token",
+};
+
+async function observeGateway(
+  oracle: OracleCase,
+): Promise<Pick<Observed, "title" | "summary" | "text" | "body">> {
+  const answer = oracle.answer?.();
+  stubJiraFetch(
+    (request) => answer?.(request) ?? fakeJiraAnswer(request, oracle.options),
+  );
+  const uninstall = installRemoteToolPort({
+    call: () => Promise.reject(new Error("unused")),
+    // What the edge's `tools.prepare` answers: the shared prepare's proposal.
+    prepare: async (_name, args) => ({
+      ok: true,
+      site: SITE.jiraHost,
+      ...(await buildJiraMutationItems(SITE, args.items as never, {
+        fieldMap: () => getJiraFieldMap(SITE),
+        issueLinkTypes: () => getJiraIssueLinkTypes(SITE),
+        userNames: (accountIds) => resolveUserNames(SITE, accountIds),
+        describeError: errorText,
+        matchesHttpStatus: jiraMessageMatchesHttpStatus,
+      })),
+    }),
+    apply: () => Promise.reject(new Error("unused")),
+  });
+  await updateJiraSettings({ enabled: true });
+  try {
+    applyListing(
+      acceptRemoteTools([
+        {
+          name: "jira_mutate_issue",
+          effect: "write",
+          actionKey: "jira:write",
+          twoPhase: true,
+        },
+      ]),
+    );
+    const tool = remoteToolsFor("jira")[0]!;
+    const sessionId = `jira-oracle-gateway-${(session += 1)}`;
+    const result = await tool.execute({ items: oracle.items }, {
+      session: { sessionId },
+      toolCallId: "call-1",
+    } as never);
+    const part = result.content[0];
+    const proposed = approvalsForSession(sessionId).at(-1)!;
+    expect(approvalStore.get(proposed.id)?.context).toEqual({
+      via: "gateway",
+    });
+    return {
+      title: proposed.title,
+      summary: proposed.summary,
+      text: withoutCardId(part?.type === "text" ? part.text : ""),
+      body: structuredClone(proposed.body),
+    };
+  } finally {
+    uninstall();
+    await updateJiraSettings({ enabled: false });
+  }
+}
+
+test.each(CASES.map((oracle) => [oracle.name, oracle] as const))(
+  "gateway jira_mutate_issue oracle: %s",
+  async (_name, oracle) => {
+    const { title, summary, text, body } = oracle.expected;
+    expect(await observeGateway(oracle)).toEqual({
+      title,
+      summary,
+      text,
+      body,
+    });
+  },
+);

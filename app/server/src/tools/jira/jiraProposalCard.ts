@@ -13,6 +13,9 @@ import type {
 import { approvalCardReference } from "../../pendingApprovals.ts";
 import { jiraSprintItemLabel } from "../../jiraSprint.ts";
 
+/** The tool's label, local and on the gateway. */
+export const JIRA_MUTATE_ISSUE_LABEL = "Jira: Prepare Issue Changes";
+
 /** Short human label for one mutation item (edit/create/comment). */
 function jiraMutationItemLabel(item: JiraIssueMutationItemDisplay): string {
   if (item.operation === "create")

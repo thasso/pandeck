@@ -21,6 +21,8 @@ import {
   registerApprovalExecutor,
 } from "../../pendingApprovals.ts";
 import {
+  CONFLUENCE_MUTATE_PAGE_LABEL,
+  CONFLUENCE_MUTATE_PAGE_SEARCH_HINT,
   confluenceMutationTitle,
   confluenceProposalSummary,
   confluenceProposalText,
@@ -233,10 +235,9 @@ async function resolveAttachmentInput(
 export const confluenceMutatePageTool = defineAgentTool<ConfluenceMutateParams>(
   {
     name: "confluence_mutate_page",
-    label: "Confluence: Prepare Page Changes",
+    label: CONFLUENCE_MUTATE_PAGE_LABEL,
     description: CONFLUENCE_MUTATE_PAGE_DESCRIPTION,
-    searchHint:
-      "confluence create page edit page write comment delete label wiki upload attachment file",
+    searchHint: CONFLUENCE_MUTATE_PAGE_SEARCH_HINT,
     parameters: confluenceMutateParamsSchema,
     async execute(params, ctx) {
       const config = getConfluenceToolConfig();

@@ -12,6 +12,11 @@ import type {
 } from "@assistant/shared";
 import { approvalCardReference } from "../../pendingApprovals.ts";
 
+/** The tool's label and search hint, local and on the gateway. */
+export const CONFLUENCE_MUTATE_PAGE_LABEL = "Confluence: Prepare Page Changes";
+export const CONFLUENCE_MUTATE_PAGE_SEARCH_HINT =
+  "confluence create page edit page write comment delete label wiki upload attachment file";
+
 function itemLabel(item: ConfluencePageMutationItemDisplay): string {
   const fileName = item.attachment?.fileName ?? "?";
   if (item.operation === "uploadAttachment")

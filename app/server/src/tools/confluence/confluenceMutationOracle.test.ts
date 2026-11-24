@@ -595,3 +595,91 @@ test.each(CASES.map((oracle) => [oracle.name, oracle] as const))(
     expect(await observe(oracle)).toEqual(oracle.expected);
   },
 );
+
+// ---------------------------------------------------------------------------
+// The gateway path (Task-1463 P6b, P6B-F2): given the proposal the shared
+// prepare builds for the same input on the same fake site, the remote tool
+// raises the card and tool text pinned above, literal for literal. Applying a
+// gateway card is M2's.
+
+const { updateConfluenceSettings } =
+  await import("../../confluenceSettings.ts");
+const { buildConfluenceMutationItems } =
+  await import("../../confluenceMutate.ts");
+const { acceptRemoteTools, applyListing, installRemoteToolPort } =
+  await import("../../remoteTools.ts");
+const { remoteToolsFor } = await import("../gateway/remoteToolGroup.ts");
+const { approvalStore } = await import("../../db/approvalStore.ts");
+
+const SITE = {
+  host: "acme.atlassian.net",
+  atlassianEmail: "oracle@example.com",
+  atlassianToken: "oracle-token",
+};
+
+async function observeGateway(
+  oracle: OracleCase,
+): Promise<Pick<Observed, "title" | "summary" | "text" | "body">> {
+  stubConfluenceWriteFetch(oracle.answer?.(), oracle.options);
+  const uninstall = installRemoteToolPort({
+    call: () => Promise.reject(new Error("unused")),
+    // What the edge's `tools.prepare` answers: the shared prepare's proposal.
+    prepare: async (_name, args, signal) => ({
+      ok: true,
+      site: SITE.host,
+      ...(await buildConfluenceMutationItems(SITE, args.items as never, {
+        signal,
+        freezeUpload: () => {
+          throw new Error("no uploads in the oracle");
+        },
+      })),
+    }),
+    apply: () => Promise.reject(new Error("unused")),
+  });
+  updateConfluenceSettings({ enabled: true });
+  try {
+    applyListing(
+      acceptRemoteTools([
+        {
+          name: "confluence_mutate_page",
+          effect: "write",
+          actionKey: "confluence:write",
+          twoPhase: true,
+        },
+      ]),
+    );
+    const tool = remoteToolsFor("confluence")[0]!;
+    const sessionId = `confluence-oracle-gateway-${(session += 1)}`;
+    const result = await tool.execute({ items: oracle.items }, {
+      session: { sessionId },
+      toolCallId: "call-1",
+    } as never);
+    const part = result.content[0];
+    const proposed = approvalsForSession(sessionId).at(-1)!;
+    expect(approvalStore.get(proposed.id)?.context).toEqual({
+      via: "gateway",
+    });
+    return {
+      title: proposed.title,
+      summary: proposed.summary,
+      text: withoutCardId(part?.type === "text" ? part.text : ""),
+      body: structuredClone(proposed.body),
+    };
+  } finally {
+    uninstall();
+    updateConfluenceSettings({ enabled: false });
+  }
+}
+
+test.each(CASES.map((oracle) => [oracle.name, oracle] as const))(
+  "gateway confluence_mutate_page oracle: %s",
+  async (_name, oracle) => {
+    const { title, summary, text, body } = oracle.expected;
+    expect(await observeGateway(oracle)).toEqual({
+      title,
+      summary,
+      text,
+      body,
+    });
+  },
+);

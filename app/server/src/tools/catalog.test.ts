@@ -686,6 +686,8 @@ describe("client mode: the gateway's Jira tools (Task-1398)", () => {
   const clientMode = (names: string[]) => {
     uninstall = installRemoteToolPort({
       call: () => Promise.reject(new Error("unused")),
+      prepare: () => Promise.reject(new Error("unused")),
+      apply: () => Promise.reject(new Error("unused")),
     });
     applyListing(acceptRemoteTools(names.map(listed)));
   };
@@ -788,6 +790,8 @@ describe("client mode: the gateway's Slack tools (Task-1455)", () => {
   const clientMode = (names: string[]) => {
     uninstall = installRemoteToolPort({
       call: () => Promise.reject(new Error("unused")),
+      prepare: () => Promise.reject(new Error("unused")),
+      apply: () => Promise.reject(new Error("unused")),
     });
     applyListing(acceptRemoteTools(names.map(listed)));
   };
@@ -903,6 +907,14 @@ describe("client mode: the gateway's Confluence reads (Task-1439)", () => {
         calls.push(name);
         return Promise.resolve({ ok: true, text: "from the gateway" });
       },
+      prepare: (name) => {
+        calls.push(`prepare ${name}`);
+        return Promise.reject(new Error("unused"));
+      },
+      apply: (name) => {
+        calls.push(`apply ${name}`);
+        return Promise.reject(new Error("unused"));
+      },
     });
     applyListing(acceptRemoteTools(listing));
   };
@@ -992,5 +1004,161 @@ describe("client mode: the gateway's Confluence reads (Task-1439)", () => {
 
     markDisconnected();
     assert.ok(!active("assistant").has("confluence_search"));
+  });
+});
+
+describe("client mode: reserved gateway writes in the catalog and Plan (Task-1463 P6b v04)", () => {
+  const SMALL = {
+    description: "A gateway write.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  };
+  const RESERVED = [
+    { name: "jira_mutate_issue", product: "jira", other: "confluence" },
+    { name: "confluence_mutate_page", product: "confluence", other: "jira" },
+  ] as const;
+  const entry = (
+    name: string,
+    product: string,
+    overrides: Record<string, unknown> = {},
+  ) => ({
+    name,
+    ...SMALL,
+    effect: "write",
+    actionKey: `${product}:write`,
+    twoPhase: true,
+    ...overrides,
+  });
+  const rejected = (name: string, product: string, other: string) =>
+    [
+      ["read effect, write key", entry(name, product, { effect: "read" })],
+      [
+        "read effect, read key",
+        entry(name, product, {
+          effect: "read",
+          actionKey: `${product}:read`,
+          twoPhase: undefined,
+        }),
+      ],
+      ["no twoPhase", entry(name, product, { twoPhase: undefined })],
+      ["twoPhase false", entry(name, product, { twoPhase: false })],
+      [
+        "the other product's key",
+        entry(name, product, { actionKey: `${other}:write` }),
+      ],
+    ] as const;
+
+  let uninstall: () => void = () => {};
+  afterEach(async () => {
+    uninstall();
+    await updateJiraSettings({ enabled: false });
+    updateConfluenceSettings({ enabled: false });
+  });
+
+  /** Each case gets its own port and listing, connected with both products on. */
+  const clientMode = async (listing: unknown[]) => {
+    uninstall = installRemoteToolPort({
+      call: () => Promise.reject(new Error("unused")),
+      prepare: () => Promise.reject(new Error("unused")),
+      apply: () => Promise.reject(new Error("unused")),
+    });
+    await updateJiraSettings({ enabled: true });
+    updateConfluenceSettings({ enabled: true });
+    applyListing(acceptRemoteTools(listing));
+  };
+  const planNames = (persona: AgentType) => {
+    const tools = agentToolsFor(persona);
+    return modeGatedActiveToolNames(
+      "plan",
+      tools,
+      new Set(tools.map((tool) => tool.name)),
+    );
+  };
+
+  for (const { name, product, other } of RESERVED) {
+    for (const [what, listed] of rejected(name, product, other))
+      test(`${name} with ${what}: no group holds it and Plan lists none`, async () => {
+        await clientMode([listed]);
+        for (const persona of PERSONAS) {
+          for (const group of toolGroupsFor(persona))
+            assert.ok(
+              !group.tools.some((tool) => tool.name === name),
+              `${persona} ${group.id}`,
+            );
+          assert.ok(!planNames(persona).has(name), persona);
+        }
+      });
+
+    test(`${name} with its full write contract: exactly one tool, in the gateway group, external, absent from Plan`, async () => {
+      await clientMode([entry(name, product)]);
+      for (const persona of PERSONAS) {
+        const matches = toolGroupsFor(persona).flatMap((group) =>
+          group.tools
+            .filter((tool) => tool.name === name)
+            .map((tool) => [group.id, tool.sideEffects]),
+        );
+        assert.deepEqual(
+          matches,
+          [[`gateway-${product}`, "external"]],
+          persona,
+        );
+        const tools = agentToolsFor(persona);
+        assert.equal(tools.filter((tool) => tool.name === name).length, 1);
+        assert.ok(
+          integrationGatedActiveToolNames(
+            persona,
+            tools,
+            new Set(tools.map((tool) => tool.name)),
+          ).has(name),
+          persona,
+        );
+        assert.ok(!planNames(persona).has(name), persona);
+      }
+    });
+  }
+
+  test("beside the writes, the products' reads keep their group, class and Plan presence", async () => {
+    await clientMode([
+      entry("jira_mutate_issue", "jira"),
+      {
+        name: "jira_get_issue",
+        ...SMALL,
+        effect: "read",
+        actionKey: "jira:read",
+      },
+      {
+        name: "confluence_search",
+        ...SMALL,
+        effect: "read",
+        actionKey: "confluence:read",
+      },
+      entry("confluence_mutate_page", "confluence"),
+    ]);
+    for (const persona of PERSONAS) {
+      const groups = toolGroupsFor(persona);
+      assert.deepEqual(
+        groups
+          .find((group) => group.id === "gateway-jira")
+          ?.tools.map((tool) => [tool.name, tool.sideEffects]),
+        [
+          ["jira_mutate_issue", "external"],
+          ["jira_get_issue", "none"],
+        ],
+      );
+      assert.deepEqual(
+        groups
+          .find((group) => group.id === "gateway-confluence")
+          ?.tools.map((tool) => [tool.name, tool.sideEffects]),
+        [
+          ["confluence_search", "none"],
+          ["confluence_mutate_page", "external"],
+        ],
+      );
+      const plan = planNames(persona);
+      assert.ok(plan.has("jira_get_issue") && plan.has("confluence_search"));
+    }
   });
 });

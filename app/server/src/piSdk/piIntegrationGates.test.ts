@@ -434,6 +434,14 @@ test("client mode: the gateway's Jira, Slack and Confluence tools are in a pi un
       calls.push(name);
       return Promise.resolve({ ok: true, text: '{"key":"OPS-1"}' });
     },
+    prepare: (name) => {
+      calls.push(`prepare ${name}`);
+      return Promise.reject(new Error("unused"));
+    },
+    apply: (name) => {
+      calls.push(`apply ${name}`);
+      return Promise.reject(new Error("unused"));
+    },
   });
   const slackSearch = {
     name: "slack_search",

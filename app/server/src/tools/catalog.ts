@@ -146,8 +146,11 @@ export interface ToolGroup {
 }
 
 type UnclassifiedToolGroup = Omit<ToolGroup, "tools"> & {
-  tools: AgentTool[];
-  /** The tools carry their own classification: the gateway's read tools. */
+  tools: Array<AgentTool & { remoteWrite?: true }>;
+  /**
+   * The gateway's tools: a read carries its own classification; a write
+   * (`remoteWrite`, Task-1463 P6b) takes its name's entry here.
+   */
   remote?: true;
 };
 
@@ -347,9 +350,10 @@ function classifyToolGroups(groups: UnclassifiedToolGroup[]): ToolGroup[] {
       ? group.tools.filter((tool) => !local.has(tool.name))
       : group.tools
     ).map((tool) => {
-      const sideEffects = remote
-        ? tool.sideEffects
-        : TOOL_SIDE_EFFECTS[tool.name];
+      const sideEffects =
+        remote && !tool.remoteWrite
+          ? tool.sideEffects
+          : TOOL_SIDE_EFFECTS[tool.name];
       if (!sideEffects)
         throw new Error(
           `Catalog tool ${tool.name} needs an explicit sideEffects classification.`,

@@ -2,7 +2,9 @@
  * The catalog's gateway tools in client mode (Task-1398): one `AgentTool`
  * per read tool of a mapped product (Jira, Slack, Confluence) the gateway
  * listed this boot (`remoteTools.ts`). A call goes from this server to the gateway as
- * `tools.call`; the gateway runs it with the user's own credential.
+ * `tools.call`; the gateway runs it with the user's own credential. An
+ * accepted gateway write is the local write tool behind the approval card
+ * (`remoteWrites.ts`, Task-1463 P6b).
  *
  * A name stays for the boot, so a pi engine that registered it keeps a
  * binding; before any call `execute` checks the connection, the product's
@@ -20,8 +22,10 @@ import {
   remoteToolsConnected,
   type RemoteToolAnswer,
   type RemoteProduct,
+  type RemoteReadDescriptor,
   type RemoteToolDescriptor,
 } from "../../remoteTools.ts";
+import { remoteWriteTool, type RemoteWriteAgentTool } from "./remoteWrites.ts";
 
 const UNREACHABLE = "The credential gateway is unreachable; try again shortly.";
 /** A product's toggle is off; every mapped product needs its text. */
@@ -33,7 +37,8 @@ const DISABLED: Record<RemoteProduct, string> = {
 };
 const MESSAGE_MAX = 500;
 
-type RemoteAgentTool = AgentTool & { sideEffects: "none" };
+type RemoteReadAgentTool = AgentTool & { sideEffects: "none" };
+type RemoteAgentTool = RemoteReadAgentTool | RemoteWriteAgentTool;
 
 const noLongerOffered = (name: string): string =>
   `The gateway no longer offers ${name}.`;
@@ -59,7 +64,7 @@ function failureText(
   }
 }
 
-function remoteTool(descriptor: RemoteToolDescriptor): RemoteAgentTool {
+function remoteTool(descriptor: RemoteReadDescriptor): RemoteReadAgentTool {
   // The name from the accepted listing, never from an answer.
   const { name, product } = descriptor;
   return {
@@ -100,14 +105,17 @@ const built = new Map<
 >();
 
 /**
- * The gateway's read tools of `product` known this boot, in first-listed
- * order; a tool is rebuilt only when its descriptor changes.
+ * The gateway's tools of `product` known this boot, reads and writes, in
+ * first-listed order; a tool is rebuilt only when its descriptor changes.
  */
 export function remoteToolsFor(product: RemoteProduct): RemoteAgentTool[] {
   return knownRemoteTools(product).map((descriptor) => {
     const cached = built.get(descriptor.name);
     if (cached?.descriptor === descriptor) return cached.tool;
-    const tool = remoteTool(descriptor);
+    const tool =
+      descriptor.effect === "write"
+        ? remoteWriteTool(descriptor)
+        : remoteTool(descriptor);
     built.set(descriptor.name, { descriptor, tool });
     return tool;
   });

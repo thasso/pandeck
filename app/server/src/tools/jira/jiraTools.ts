@@ -52,6 +52,7 @@ import {
 import { errorText } from "../../errors.ts";
 import { resolveUserNames } from "../../jiraUsers.ts";
 import {
+  JIRA_MUTATE_ISSUE_LABEL,
   jiraMutationTitle,
   jiraProposalSummary,
   jiraProposalText,
@@ -241,7 +242,7 @@ export const jiraLookupTool = defineAgentTool<LookupParams>({
  */
 export const jiraMutateIssueTool = defineAgentTool<JiraMutationParams>({
   name: "jira_mutate_issue",
-  label: "Jira: Prepare Issue Changes",
+  label: JIRA_MUTATE_ISSUE_LABEL,
   description: JIRA_MUTATE_ISSUE_DESCRIPTION,
   parameters: mutateIssueParamsSchema,
   async execute(params, ctx) {

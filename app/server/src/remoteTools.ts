@@ -1,19 +1,22 @@
 /**
  * Client mode's gateway tools (Task-1398): the edge's tools Pandeck's agents
- * call through the client link (`tools.list` and `tools.call` on gateway
- * client 1.0, `gatewayClientLink.ts`). The catalog's remote group
- * (`tools/gateway/remoteToolGroup.ts`) is built from the set kept here.
+ * call through the client link (`tools.list`, `tools.call`, and on gateway
+ * client 1.1 `tools.prepare` and `tools.apply`, `gatewayClientLink.ts`). The
+ * catalog's remote group (`tools/gateway/remoteToolGroup.ts`) is built from
+ * the set kept here.
  *
  * The link lists on every connect, before it publishes the connection, and
- * hands the listing to {@link applyListing}. Only read tools of a mapped
- * product are accepted, until approvals wrap writes (G5): the `actionKey`
- * prefix names the product, and {@link PRODUCTS} maps `jira`, `slack` and
- * `confluence` to the Settings toggle that turns their tools on; a product in
- * {@link PRODUCT_READS} accepts only the names listed there. A name accepted
- * once stays known for the boot, so a pi engine's universe, registered at
- * open, never outgrows the server's binding; a dispatch checks the CURRENT
- * listing, connection and product toggle before any call. A pi open waits for
- * the boot's first listing.
+ * hands the listing to {@link applyListing}. The `actionKey` prefix names the
+ * product, and {@link PRODUCTS} maps `jira`, `slack` and `confluence` to the
+ * Settings toggle that turns their tools on. A name in {@link WRITE_TOOLS} is
+ * decided there (Task-1463 P6b): it is accepted only as that row's two-phase
+ * write, whose agent tool is the local one behind the local approval card,
+ * and is never a read. Every other name is accepted only as a bounded read
+ * tool; a product in {@link PRODUCT_READS} accepts only the names listed
+ * there. A name accepted once stays known for the boot, so a pi engine's
+ * universe, registered at open, never outgrows the server's binding; a
+ * dispatch checks the CURRENT listing, connection and product toggle before
+ * any call. A pi open waits for the boot's first listing.
  *
  * Types are structural: nothing here imports `gateway/`.
  */
@@ -50,11 +53,32 @@ const PRODUCT_READS: Partial<Record<RemoteProduct, ReadonlySet<string>>> = {
   ]),
 };
 
+/**
+ * The gateway writes Pandeck offers (Task-1463 P6b), by tool name: each is
+ * the local tool of that name, proposing through the edge's `tools.prepare`
+ * and raising the local approval card of `kind`. A listed entry of one of
+ * these names is accepted only as this row's write.
+ */
+const WRITE_TOOLS = {
+  jira_mutate_issue: { product: "jira", kind: "jiraIssue" },
+  confluence_mutate_page: { product: "confluence", kind: "confluencePage" },
+} as const satisfies Record<
+  string,
+  { product: RemoteProduct; kind: "jiraIssue" | "confluencePage" }
+>;
+
+export type RemoteWriteName = keyof typeof WRITE_TOOLS;
+
 function isRemoteProduct(value: string | undefined): value is RemoteProduct {
   return value !== undefined && Object.hasOwn(PRODUCTS, value);
 }
 
-export interface RemoteToolDescriptor {
+function isWriteName(name: string): name is RemoteWriteName {
+  return Object.hasOwn(WRITE_TOOLS, name);
+}
+
+/** A gateway read tool, called once with `tools.call`. */
+export interface RemoteReadDescriptor {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
@@ -62,6 +86,21 @@ export interface RemoteToolDescriptor {
   actionKey: string;
   product: RemoteProduct;
 }
+
+/**
+ * A gateway write the edge runs in two phases. The listed description and
+ * schema are not kept: the agent tool is the local definition.
+ */
+export interface RemoteWriteDescriptor {
+  name: RemoteWriteName;
+  effect: "write";
+  actionKey: `${RemoteProduct}:write`;
+  product: RemoteProduct;
+  kind: (typeof WRITE_TOOLS)[RemoteWriteName]["kind"];
+  twoPhase: true;
+}
+
+export type RemoteToolDescriptor = RemoteReadDescriptor | RemoteWriteDescriptor;
 
 /** The edge's answer to one call, as the link decodes it. */
 export type RemoteToolAnswer =
@@ -79,9 +118,48 @@ export type RemoteToolAnswer =
       message: string;
     };
 
+type RemoteToolFailure = Extract<RemoteToolAnswer, { ok: false }>;
+
+/**
+ * The edge's answer to `tools.prepare`, as the link decodes it (shallow): the
+ * proposal for the credential's site, unchecked. Nothing was written.
+ */
+export type RemotePrepareAnswer =
+  | { ok: true; site: string; items: unknown[]; warnings: string[] }
+  | RemoteToolFailure;
+
+/** Whether any write request left the edge. */
+type RemoteEffects = "none" | "possible";
+
+/** The edge's answer to `tools.apply`, as the link decodes it (shallow). */
+type RemoteApplyAnswer =
+  | { ok: true; results: object[]; effects: RemoteEffects; trimmed?: true }
+  | (RemoteToolFailure & {
+      effects: RemoteEffects;
+      itemEffects?: RemoteEffects[];
+      results?: object[];
+      trimmed?: true;
+    });
+
+/**
+ * How a `tools.apply` went (Task-1463 P6b, P6-F4), never a message. Only
+ * `notSent` proves the edge never saw the request. A decoded `answer`, a
+ * failed one too, carries the edge's own `effects`, which alone says whether
+ * anything was written (D6(i)); every other outcome, an error frame (`lost`)
+ * included, may have written (D2).
+ */
+type RemoteApplyOutcome =
+  | { outcome: "notSent" }
+  | { outcome: "answer"; answer: RemoteApplyAnswer }
+  | { outcome: "lost" }
+  | { outcome: "timeout" }
+  | { outcome: "undecodable" };
+
 /** A call the link could not make; the tool group says why in fixed text. */
 export class RemoteToolRefusal extends Error {
-  constructor(readonly code: "gateway_unavailable" | "tools_unavailable") {
+  constructor(
+    readonly code: "gateway_unavailable" | "tools_unavailable" | "undecodable",
+  ) {
     super(code);
   }
 }
@@ -93,6 +171,21 @@ export interface RemoteToolPort {
     args: Record<string, unknown>,
     signal: AbortSignal,
   ): Promise<RemoteToolAnswer>;
+  /**
+   * A write's proposal; nothing is written. Throws {@link RemoteToolRefusal}
+   * when the link can't ask or can't read the answer.
+   */
+  prepare(
+    name: string,
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<RemotePrepareAnswer>;
+  /** Applies approved items once; never throws and takes no caller signal. */
+  apply(
+    name: string,
+    site: string,
+    items: unknown[],
+  ): Promise<RemoteApplyOutcome>;
 }
 
 const MAX_TOOLS = 64;
@@ -137,16 +230,59 @@ function record(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+/**
+ * One listed entry, in three steps (Task-1463 P6b v04): the shape and the
+ * mapped product first; then a {@link WRITE_TOOLS} name is decided as that
+ * row's write and never reaches the read path; then every other name as a
+ * bounded read. A reserved name's description and schema are neither checked
+ * nor kept (the edge's Jira write schema is over {@link MAX_SCHEMA}).
+ */
 function accepted(value: unknown): RemoteToolDescriptor | undefined {
   const entry = record(value);
   if (!entry) return undefined;
-  const { name, description, inputSchema, effect } = entry;
+  const { name } = entry;
   const actionKey = typeof entry.actionKey === "string" ? entry.actionKey : "";
-  const schema = record(inputSchema);
   const product = ACTION_KEY_RE.exec(actionKey)?.[1];
+  if (typeof name !== "string" || !NAME_RE.test(name)) return undefined;
+  if (!isRemoteProduct(product)) return undefined;
+  if (isWriteName(name)) return acceptedWrite(name, entry, product);
+  return acceptedRead(name, entry, product);
+}
+
+/** A reserved name: its row's two-phase write, else nothing. */
+function acceptedWrite(
+  name: RemoteWriteName,
+  entry: Record<string, unknown>,
+  product: RemoteProduct,
+): RemoteWriteDescriptor | undefined {
+  const row = WRITE_TOOLS[name];
+  const actionKey = `${row.product}:write` as const;
   if (
-    typeof name !== "string" ||
-    !NAME_RE.test(name) ||
+    entry.effect !== "write" ||
+    entry.actionKey !== actionKey ||
+    entry.twoPhase !== true ||
+    product !== row.product
+  )
+    return undefined;
+  return {
+    name,
+    effect: "write",
+    actionKey,
+    product: row.product,
+    kind: row.kind,
+    twoPhase: true,
+  };
+}
+
+/** Any other name: a read tool of the product within the bounds. */
+function acceptedRead(
+  name: string,
+  entry: Record<string, unknown>,
+  product: RemoteProduct,
+): RemoteReadDescriptor | undefined {
+  const { description, inputSchema, effect, actionKey } = entry;
+  const schema = record(inputSchema);
+  if (
     typeof description !== "string" ||
     description.length < 1 ||
     description.length > MAX_DESCRIPTION ||
@@ -154,7 +290,7 @@ function accepted(value: unknown): RemoteToolDescriptor | undefined {
     schema.type !== "object" ||
     JSON.stringify(schema).length > MAX_SCHEMA ||
     effect !== "read" ||
-    !isRemoteProduct(product) ||
+    typeof actionKey !== "string" ||
     PRODUCT_READS[product]?.has(name) === false
   )
     return undefined;
@@ -169,8 +305,9 @@ function accepted(value: unknown): RemoteToolDescriptor | undefined {
 }
 
 /**
- * The listing's entries Pandeck offers its agents: the first 64, read tools
- * of a mapped product within the bounds, a name listed twice not at all.
+ * The listing's entries Pandeck offers its agents: the first 64, the
+ * reserved writes and the read tools of a mapped product within the bounds,
+ * a name listed twice not at all.
  */
 export function acceptRemoteTools(listing: unknown): RemoteToolDescriptor[] {
   if (!Array.isArray(listing)) return [];
@@ -244,11 +381,18 @@ export function remoteToolGate(product: RemoteProduct): boolean {
   return connected && remoteProductEnabled(product);
 }
 
-/** Whether `name` may be called now: connected, listed now, product on. */
-export function remoteToolDispatchable(name: string): boolean {
+/**
+ * Whether `name` may be called now: connected, listed now, product on; with
+ * `"two-phase"`, also listed as a two-phase write.
+ */
+export function remoteToolDispatchable(
+  name: string,
+  requires?: "two-phase",
+): boolean {
   const tool = known.get(name);
   return (
     tool !== undefined &&
+    (requires !== "two-phase" || (tool.effect === "write" && tool.twoPhase)) &&
     connected &&
     current.has(name) &&
     remoteProductEnabled(tool.product)
