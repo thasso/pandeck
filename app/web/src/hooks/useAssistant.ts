@@ -384,6 +384,7 @@ const defaultSettings: AppSettings = {
     weeklyUsedThreshold: 95,
     openAiResetAutoRedeemHours: 6,
   },
+  sessionSwitching: { handoffTokenCap: 16_000 },
 };
 
 /** The last `removeHeldInput` this browser sent for one held input. */

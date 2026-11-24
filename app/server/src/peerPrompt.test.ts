@@ -956,7 +956,6 @@ describe("peer prompt engine", () => {
     });
     await applySessionContext(resolveSessionContext({ taskId: task.id }), {
       sessionId: recipient,
-      harness: "pi",
       agentType: "assistant",
     });
 

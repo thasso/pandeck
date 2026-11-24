@@ -465,28 +465,44 @@ function upsert(input: SessionUpsert): boolean {
       input.forkOrigin !== undefined
         ? JSON.stringify(input.forkOrigin)
         : (prev?.fork_origin_json ?? null);
+    // An engine that no longer holds the session's active binding (a late
+    // persist from the engine a harness switch closed, or the target before
+    // the switch commits) keeps its other fields but never rewrites the
+    // projection: only the switch itself moves a session between engines
+    // (`docs/session-runtime-switching.md` "Engine bindings").
+    const foreign = prev !== undefined && prev.harness !== input.harness;
     // The active engine binding's projection, merged once and written to both
     // the row and the binding in one transaction (`sessionEngineBinding.ts`).
-    const binding: ActiveBindingFields = {
-      harness: input.harness,
-      provider:
-        input.provider !== undefined
-          ? input.provider
-          : (prev?.provider ?? null),
-      providerSessionId:
-        input.providerSessionId !== undefined
-          ? input.providerSessionId
-          : (prev?.provider_session_id ?? null),
-      model: input.model !== undefined ? input.model : (prev?.model ?? null),
-      thinkingLevel:
-        input.thinkingLevel !== undefined
-          ? input.thinkingLevel
-          : (prev?.thinking_level ?? null),
-      // Ordinary metadata refreshes cannot change the current account.
-      // Live failover uses switchCredentialProfile's compare-and-set.
-      credentialProfileId:
-        prev?.credential_profile_id ?? input.credentialProfileId ?? null,
-    };
+    const binding: ActiveBindingFields = foreign
+      ? {
+          harness: prev.harness,
+          provider: prev.provider,
+          providerSessionId: prev.provider_session_id,
+          model: prev.model,
+          thinkingLevel: prev.thinking_level,
+          credentialProfileId: prev.credential_profile_id,
+        }
+      : {
+          harness: input.harness,
+          provider:
+            input.provider !== undefined
+              ? input.provider
+              : (prev?.provider ?? null),
+          providerSessionId:
+            input.providerSessionId !== undefined
+              ? input.providerSessionId
+              : (prev?.provider_session_id ?? null),
+          model:
+            input.model !== undefined ? input.model : (prev?.model ?? null),
+          thinkingLevel:
+            input.thinkingLevel !== undefined
+              ? input.thinkingLevel
+              : (prev?.thinking_level ?? null),
+          // Ordinary metadata refreshes cannot change the current account.
+          // Live failover uses switchCredentialProfile's compare-and-set.
+          credentialProfileId:
+            prev?.credential_profile_id ?? input.credentialProfileId ?? null,
+        };
     const createdAt = prev?.created_at_ms ?? input.createdAt ?? now;
     inDbTransaction(() => {
       getDb()
@@ -502,7 +518,7 @@ function upsert(input: SessionUpsert): boolean {
             ? sessionScopeOrFailClosed(prev.scope)
             : (input.scope ?? DEFAULT_SESSION_SCOPE),
           pick(input.purpose, prev?.purpose, "chat"),
-          input.harness,
+          binding.harness,
           input.agentType,
           pick(input.title, prev?.title, "New chat"),
           // createdAt is insert-only: the first stored value always wins so an update
@@ -524,7 +540,7 @@ function upsert(input: SessionUpsert): boolean {
             : 0,
           input.peerTurnCap ?? prev?.peer_turn_cap ?? null,
         );
-      syncActiveBinding(input.id, binding, createdAt);
+      if (!foreign) syncActiveBinding(input.id, binding, createdAt);
     });
     if (!prev) noteLiveness([input.id]);
     else touchSessionRows([input.id]);

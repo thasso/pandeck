@@ -870,12 +870,8 @@ export class Connection implements Viewer {
         // adopting its Project mid-conversation is not what the composer asked.
         const stagedContext = resolveSessionContext(sessionContextRequest(msg));
         const staged = await applySessionContext(stagedContext, {
-          harness: driver.harness,
           agentType: driver.agentType,
           sessionId: driver.sessionId,
-          ...(driver.sessionFile !== undefined
-            ? { sessionFile: driver.sessionFile }
-            : {}),
         });
         attachments.push(...staged.attachments);
         if (stagedContext.kind === "task" && staged.taskId) {

@@ -304,3 +304,43 @@ test("engineOf names the bound engine first, else the engine holding it on disk"
   assert.equal(harnessRegistry.engineOf(id), "claude-sdk");
   assert.equal(harnessRegistry.engineOf(freshId("nowhere")), undefined);
 });
+
+test("an engine that does not hold the active binding never rewrites the projection", () => {
+  const id = freshId("foreign-writer");
+  assert.ok(
+    sessionStore.upsert({
+      id,
+      harness: "pi",
+      agentType: "developer",
+      provider: "openai-codex",
+      model: "gpt-5.6-sol",
+      thinkingLevel: "medium",
+      credentialProfileId: "acct-a",
+      title: "Before",
+    }),
+  );
+  const before = sessionStore.bindings(id);
+  // A late persist from the other engine (the one a switch closed, or the
+  // target before its switch commits): its title lands, its binding does not.
+  assert.ok(
+    sessionStore.upsert({
+      id,
+      harness: "claude-sdk",
+      agentType: "developer",
+      provider: "claude",
+      providerSessionId: "native-claude",
+      model: "claude-opus-5-5",
+      thinkingLevel: "high",
+      title: "After",
+    }),
+  );
+  const row = sessionStore.get(id);
+  assert.equal(row?.title, "After");
+  assert.equal(row?.harness, "pi");
+  assert.equal(row?.model, "gpt-5.6-sol");
+  assert.equal(row?.provider, "openai-codex");
+  assert.equal(row?.thinkingLevel, "medium");
+  assert.equal(row?.providerSessionId, undefined);
+  assert.deepEqual(sessionStore.bindings(id), before);
+  assertRowIsActiveBinding(id);
+});

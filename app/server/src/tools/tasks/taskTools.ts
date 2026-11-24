@@ -573,12 +573,8 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
               ...(addLinks ? { addLinks } : {}),
               sessionRefs: [
                 {
-                  harness: session.harness,
                   agentType: session.agentType,
                   sessionId: session.sessionId,
-                  ...(session.sessionFile !== undefined
-                    ? { sessionFile: session.sessionFile }
-                    : {}),
                 },
               ],
               source: {
@@ -1164,12 +1160,8 @@ function addSessionRef(
   return [
     ...current,
     {
-      harness: session.harness,
       agentType: session.agentType,
       sessionId: session.sessionId,
-      ...(session.sessionFile !== undefined
-        ? { sessionFile: session.sessionFile }
-        : {}),
     },
   ];
 }

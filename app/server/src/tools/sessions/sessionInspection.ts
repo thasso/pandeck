@@ -612,6 +612,30 @@ function recordsForRow(row: JsonRow, lineIndex: number): SessionRecord[] {
   return out;
 }
 
+/**
+ * Every inspection record of a session log in log order, each with the `seq`
+ * of the log row it came from, skipping rows at or before `afterSeq`. The
+ * records and their entry ids are exactly what `session_read` reads, so an id
+ * taken from here is a valid `at` anchor. A harness switch builds its handoff
+ * from this (`sessionHandoff.ts`).
+ */
+export function forEachSessionRecord(
+  logPath: string,
+  afterSeq: number,
+  onRecord: (record: SessionRecord, seq: number) => void,
+): void {
+  let lineIndex = 0;
+  forEachJsonlLine(logPath, 0, (line) => {
+    lineIndex++;
+    const row = parseLine(line);
+    if (!row) return "continue";
+    const seq = typeof row.seq === "number" ? row.seq : undefined;
+    if (seq === undefined || seq <= afterSeq) return "continue";
+    for (const record of recordsForRow(row, lineIndex)) onRecord(record, seq);
+    return "continue";
+  });
+}
+
 /* ---------------------------- windowed reads ------------------------------ */
 
 export interface WindowResult {
