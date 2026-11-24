@@ -189,6 +189,21 @@ export function subscribeSessionRunFailed(
   return () => runFailureListeners.delete(listener);
 }
 
+/** Best-effort consumers of each TERMINAL failed turn, once it is recorded. */
+const terminalFailureListeners = new Set<(report: RunFailureReport) => void>();
+
+/**
+ * Notified once per terminal failed turn, after {@link runFailureHook} stored
+ * it: recovery's continuation has given up by then, so this is the failure
+ * the turn ends with. Never for an intermediate attempt recovery replaced.
+ */
+export function subscribeSessionRunTerminallyFailed(
+  listener: (report: RunFailureReport) => void,
+): () => void {
+  terminalFailureListeners.add(listener);
+  return () => terminalFailureListeners.delete(listener);
+}
+
 let runFailureHook: ((report: RunFailureReport) => void) | undefined;
 /**
  * Notified once per terminal failed turn. Recovery defers this hook while it
@@ -909,10 +924,19 @@ export class LiveRuntimeSession {
       );
       return false;
     }
+    const first = this.recordedFailureRunId !== report.runId;
     this.recordedFailureRunId = report.runId;
     this.unrecordedFailures = this.unrecordedFailures.filter(
       (r) => r.runId !== report.runId,
     );
+    if (first)
+      for (const listener of terminalFailureListeners) {
+        try {
+          listener(report);
+        } catch {
+          /* Independent best-effort listeners. */
+        }
+      }
     return true;
   }
 

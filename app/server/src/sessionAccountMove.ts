@@ -2,7 +2,7 @@
  * Which accounts a session may move to, and the rules a move must pass.
  *
  * A move the user (session inspector) or its owning coordinator
- * (`session_control` `move_account`) picks is a PENDING account
+ * (`session_control` `set_runtime`) picks is a PENDING account
  * (`sessionPendingRuntime.ts`); the move itself happens when the next turn is
  * admitted, through the engines' existing `switchAccount` (history copy on
  * Claude, staged reopen on pi, binding CAS). One predicate decides which

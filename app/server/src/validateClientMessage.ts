@@ -1342,6 +1342,12 @@ const REGISTRY = defineRegistry({
         : null,
   ),
   clearPendingRuntime: fields({ sessionId: STRING, requestId: STRING }),
+  continueOnModel: fields({
+    sessionId: STRING,
+    requestId: STRING,
+    failureAt: NUMBER,
+    model: RUNTIME_MODEL,
+  }),
   setSessionPeerTurnCap: fields({
     sessionId: STRING,
     cap: {

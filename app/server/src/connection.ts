@@ -333,6 +333,7 @@ import {
   recordRebaseHandoff,
   runPullRequestCardAction,
 } from "./pullRequestActions.ts";
+import { continueOnModel } from "./sessionContinueOffer.ts";
 import { errorText } from "./errors.ts";
 import { serverBuildInfo } from "./buildInfo.ts";
 import { resolvePaObjectLinks } from "./objectLinkResolver.ts";
@@ -1275,6 +1276,8 @@ export class Connection implements Viewer {
       case "setPendingRuntime":
       case "clearPendingRuntime":
         return this.onPendingRuntime(msg);
+      case "continueOnModel":
+        return this.onContinueOnModel(msg);
 
       case "grantApprovalForSession":
         grantApprovalForSession(
@@ -5033,6 +5036,41 @@ export class Connection implements Viewer {
     } catch (err) {
       this.send({
         type: "pendingRuntimeAnswer",
+        requestId,
+        sessionId,
+        error: errorText(err),
+      });
+    }
+  }
+
+  /**
+   * The user's "Continue on <model>" on a failure that offers it
+   * (`sessionContinueOffer.ts`). Their authority past a Stop is read NOW, as
+   * they click. The answer comes once the continuation reached the provider,
+   * or says why nothing ran (the session's failure, `messageArrival.ts`).
+   */
+  private async onContinueOnModel(
+    msg: Extract<ClientMessage, { type: "continueOnModel" }>,
+  ): Promise<void> {
+    const { sessionId, requestId } = msg;
+    const resumeHold = isSafeId(sessionId)
+      ? captureHumanResume(sessionId)
+      : undefined;
+    try {
+      if (!isSafeId(sessionId)) throw new Error("Invalid session id.");
+      // A gone worktree refuses at the prompt door, with its reason.
+      const view = await hub.acquireById(sessionId);
+      const driver = view ? this.asRuntimePromptDriver(view) : undefined;
+      if (!driver) throw new Error("That session is not available.");
+      await continueOnModel(driver, {
+        failureAt: msg.failureAt,
+        model: msg.model,
+        resumeHold,
+      });
+      this.send({ type: "continueOnModelAnswer", requestId, sessionId });
+    } catch (err) {
+      this.send({
+        type: "continueOnModelAnswer",
         requestId,
         sessionId,
         error: errorText(err),

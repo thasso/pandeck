@@ -532,10 +532,14 @@ unheld.
   owner (its authority read before the placeholder is posted); a refused send, a
   steer into the turn being stopped, or a redelivered message (an intake row
   already stored) lifts nothing. Send-now on a waiting peer prompt lifts it once
-  it claims the row as the next turn (as a steer it lifts nothing). Words of the
-  user's own handed over with review comments lift it only when delivered
-  inline; queued behind held decisions they wait with them. Peer messages,
-  background facts, approvals, reconnects, mounts and idle edges never lift it.
+  it claims the row as the next turn (as a steer it lifts nothing). "Continue on
+  <model>" on a quota failure (`session-runtime-switching.md`) carries the
+  authority its click captured: it appends no user row, so it lifts the hold
+  once its continuation reaches the provider, ahead of the queue, which then
+  resumes and follows on the new engine. Words of the user's own handed over
+  with review comments lift it only when delivered inline; queued behind held
+  decisions they wait with them. Peer messages, background facts, approvals,
+  reconnects, mounts and idle edges never lift it.
 - **What the user sees.** The session's `promptQueue` carries
   `automaticTurnsHeld: true`, sent even when nothing of the user's is queued, so
   the composer ledge stays with its Resume ("Stopped"). The permanent Assistant

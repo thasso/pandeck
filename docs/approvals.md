@@ -26,6 +26,7 @@ hidden prompt through `agentHandoffs.ts`.
 | `agentDefinition`         | `agent_create`, `agent_edit` changing `persona`, `model` (the list), `effort`, `peer-turns` or `compactionWindow` | `agentDefinition`                                                      |
 | `approvalGrantsRequest`   | `approval_grants_request`                                                                                         | none: never granted                                                    |
 | `settingsInput`           | `settings_request_input`, `accounts_sign_in`                                                                      | none: never granted                                                    |
+| `sessionRuntime`          | `session_control` `set_runtime` changing a child's model to one its definition does not list                      | none: never granted                                                    |
 
 `github_resolve_review_thread` also raises a `githubPullRequest` card, with
 operation `resolveThread`. Resolving and reopening both use `github:comment`,

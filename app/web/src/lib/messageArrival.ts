@@ -78,6 +78,7 @@ export function arrivalMessage(
     case "permanentAssistantQueue":
       return permanentAssistantQueueFailure(msg);
     case "pendingRuntimeAnswer":
+    case "continueOnModelAnswer":
       return runtimeChangeFailure(msg);
     case "draftSession":
       return msg.notice ? { severity: "info", message: msg.notice } : null;
@@ -123,13 +124,16 @@ function permanentAssistantQueueFailure(
 }
 
 /**
- * A refused runtime change (model, effort or account for the next turn) is
- * that session's failure: in place above its composer when it is on screen,
+ * A refused runtime change (model, effort or account for the next turn), or a
+ * refused "Continue on", is that session's failure: in place above its composer when it is on screen,
  * otherwise announced naming it. A change that landed says nothing; the
  * Runtime section and the composer chip show it.
  */
 function runtimeChangeFailure(
-  msg: Extract<ServerMessage, { type: "pendingRuntimeAnswer" }>,
+  msg: Extract<
+    ServerMessage,
+    { type: "pendingRuntimeAnswer" } | { type: "continueOnModelAnswer" }
+  >,
 ): ArrivalMessage | null {
   if (msg.error === undefined) return null;
   return {
@@ -208,7 +212,8 @@ function failureOnObject(
         ? { severity: msg.severity, message: msg.message, target: msg.target }
         : msg.type === "permanentAssistantQueue"
           ? permanentAssistantQueueFailure(msg)
-          : msg.type === "pendingRuntimeAnswer"
+          : msg.type === "pendingRuntimeAnswer" ||
+              msg.type === "continueOnModelAnswer"
             ? runtimeChangeFailure(msg)
             : null;
   if (!arrival || arrival.severity !== "error") return null;

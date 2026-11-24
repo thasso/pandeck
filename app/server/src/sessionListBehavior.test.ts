@@ -203,6 +203,19 @@ test("sessionStore metadata writers, lifecycle, outcomes and spawn ownership", a
     () => sessions.recordRunFailure(a, "failed", 1234),
     [a],
   );
+  await check(
+    "recordContinueOffer",
+    () =>
+      sessions.recordContinueOffer(a, 1234, [
+        {
+          provider: "openai-codex",
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          thinkingLevel: "high",
+        },
+      ]),
+    [a],
+  );
   await check("clearRunFailure", () => sessions.clearRunFailure(a), [a]);
   sessions.recordRunFailure(a, "again", 4321);
   await check(

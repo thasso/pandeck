@@ -544,7 +544,9 @@ async function assertSkillInvocation(
  * A message the user is sending right now lifts the Stop it was sent under
  * once it is APPENDED as a turn of its own: a refused send resumed nothing. A
  * steer does not count — a held session runs only the turn being stopped, and
- * a message aimed at that turn is not a resume. The token leaves the options
+ * a message aimed at that turn is not a resume. The user's "Continue on"
+ * (`sessionContinueOffer.ts`) is a continuation, which appends no row: it
+ * resumes once its turn reaches the provider. The token leaves the options
  * here, so it never reaches the runtime or the adapter.
  */
 function withHumanResume(
@@ -553,8 +555,9 @@ function withHumanResume(
 ): RuntimePromptFacadeOptions {
   const { resumeHold, ...rest } = options;
   if (!resumeHold || options.steer) return rest;
+  const resumesOn = options.continuation ? "provider-called" : "appended";
   receipt.observe((event) => {
-    if (event.type !== "appended") return;
+    if (event.type !== resumesOn) return;
     try {
       spendHumanResume(resumeHold);
     } catch (err) {

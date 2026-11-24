@@ -19,7 +19,7 @@ has no expiry. A fork does not inherit it.
 
 `app/server/src/sessionPendingRuntime.ts` owns both halves.
 
-- **Setting** (`setPendingRuntime`, or `session_control` `move_account`) is
+- **Setting** (`setPendingRuntime`, or `session_control` `set_runtime`) is
   accepted at any time, during a turn too. A change names any of the three
   parts; the server completes it from the current pending selection, else the
   session's current runtime, and clamps the effort to the target model. A target
@@ -39,7 +39,7 @@ has no expiry. A fork does not inherit it.
   each from the selection the previous one left: two partial changes both land,
   and a reset is never undone by a set asked for before it. A set recomputes
   when a turn's admission spent the selection while it read the session.
-  `move_account` asks its ownership again with the write, so a coordinator the
+  `set_runtime` asks its ownership again with the write, so a coordinator the
   user took the child over from changes nothing.
 - **Reset** (`clearPendingRuntime`) drops it. Both answer with
   `pendingRuntimeAnswer`; a refusal carries `error` and becomes the session's
@@ -56,15 +56,17 @@ has no expiry. A fork does not inherit it.
 (a user prompt, a queued prompt, a peer prompt, a background wake, a scheduled
 run, an automatic continuation). It does not apply to a steer into a running
 turn, a steer-only message, the account-recovery (failover) continuation, or a
-turn the provider already started (`beginRuntimeProviderTurn`). Order: recheck
-the target, move the account (`switchIdleSessionAccount`, the same engine switch
-as failover), then set model and effort through the runtime adapter, then
-recheck the whole target (enabled, enterprise, login, bench, offers the model at
-that effort). The final admission boundary checks it once more synchronously
-(binding, model, effort and the account rules) and the selection is cleared only
-once the turn is admitted there; a refusal anywhere before keeps it. While a
-selection applies, the disabled-account move does not run: it would replace the
-chosen account. A changed account appends the display-only marker
+turn the provider already started (`beginRuntimeProviderTurn`). The "Continue
+on" continuation (below) is not account recovery: it applies the selection its
+click set. Order: recheck the target, move the account
+(`switchIdleSessionAccount`, the same engine switch as failover), then set model
+and effort through the runtime adapter, then recheck the whole target (enabled,
+enterprise, login, bench, offers the model at that effort). The final admission
+boundary checks it once more synchronously (binding, model, effort and the
+account rules) and the selection is cleared only once the turn is admitted
+there; a refusal anywhere before keeps it. While a selection applies, the
+disabled-account move does not run: it would replace the chosen account. A
+changed account appends the display-only marker
 `Switched from A to B — chosen by you.` (or
 `— chosen by its coordinating session.`); a model or effort change appends
 nothing. A selection on another engine moves the session there instead ("Moving
@@ -114,6 +116,58 @@ The turn is **held**, never failed and never run on the old engine
   background UI included: its fact defers but still wakes), and when any account
   changes (enabled, enterprise, login, bench) for every session with a
   selection. The scheduler starts nothing when nothing waits.
+
+## Coordinator switching
+
+An owning coordinator sets its still-owned direct child's pending model, effort
+or account with `session_control` `set_runtime` (`sessionControlTool.ts`). The
+selection is the same pending selection the user sets, with `setBy`
+`coordinator`, so its marker reads `— chosen by its coordinating session.`
+
+- A model the child's frozen agent definition lists (`listedModels`, frozen at
+  spawn from the definition's model choices; `docs/agent-definitions.md`) is set
+  at once, as is an effort or account change that keeps the model.
+- Any other model, and every model change of a child not spawned from a
+  definition (or spawned before `listedModels` was frozen), asks the user: a
+  `sessionRuntime` approval card (`docs/approvals.md`) naming the child, what it
+  runs now and its next turn. Nothing changes until it is approved; the card is
+  never granted, and a newer request for the same child supersedes it.
+- Ownership is asked again at the write, also when the card is approved: a child
+  the user took over, or a coordinator no longer its owner, changes nothing and
+  the card fails.
+
+## Continue on another model
+
+A turn whose quota or rate-limit failure same-kind failover could not recover
+(`docs/account-routing.md` "Live account switching") offers "Continue on
+<model>" on its failure (`sessionContinueOffer.ts`). It is never automatic: only
+the user's click continues anything.
+
+- **Offer.** Once the failure is stored, the server lists the models another
+  engine could continue on now: the picker's visible models in the user's order,
+  each crossing engines from the session's account, whose Automatic account (the
+  router's non-degraded pick within the enterprise requirement) offers it at the
+  session's effort, clamped. The default comes first: the model at the failed
+  one's position among its own kind's. At most four. They are stored with the
+  failure (`session_index.last_error_continue_json`, migration 0105) and carried
+  as `continueOn` on its `SessionRunFailure`; a new failure, a run start, or
+  Dismiss clears them. User sessions only, never the permanent assistant.
+- **Click** (`continueOnModel`). The offer must still belong to the failure the
+  user saw (`failureAt`) and list the model, and the session must be idle;
+  otherwise nothing changes and the answer carries the error. It sets the
+  pending selection (model, clamped effort, Automatic account, `setBy` user)
+  without waking held work, then starts the continuation of the failed turn
+  through `runtimePrompt.ts`: no user row, the continue context as model-only
+  text, the switch's handoff as for any turn. Admission applies the selection as
+  above, so a refusal holds it pending like any other.
+- **Authority and order.** The click is the user's resume authority, captured
+  when it arrived: it passes a Stop's hold and spends it once the provider is
+  called. It is admitted ahead of queued work, which follows on the new engine;
+  a Stop-paused queue resumes with it.
+- **Web.** The chat's failure note becomes `ContinueOnNote`: "Continue on
+  <default>" as its action, the other models in a menu, and Dismiss. The pressed
+  action is busy until `continueOnModelAnswer`; a refusal is the session's
+  failure (`docs/messaging.md`). The inbox card keeps the plain failure.
 
 ## Web
 
@@ -538,8 +592,15 @@ Until the delete, old native data stays for returns and forks.
 
 ### Forking
 
-Until forks can cross a switch, a session with more than one binding refuses
-every fork before any engine is asked (`prepareFork` in `harnesses/fork.ts`).
+A fork of a switched session cuts the native session of the binding that wrote
+the chosen entry (`prepareFork` in `harnesses/fork.ts`). That binding owns the
+log from its `startedSeq` to the next binding's, and its native session also
+holds what the bindings it resumed (`resumedSeq`) wrote; anchors are read only
+from that chain, so an entry another engine wrote never names the cut. The fork
+runs on that binding's engine, from its native session at its account, model and
+effort; the child gets that binding only. An entry with no anchor in its owner's
+chain is refused like any anchorless fork. A session that never switched forks
+exactly as before.
 
 ### Task links
 

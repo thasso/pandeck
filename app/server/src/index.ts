@@ -280,6 +280,7 @@ import {
   sweepExpiredLeases,
   sweepPeerPromptRetries,
 } from "./peerPrompt.ts";
+import { installContinueOffers } from "./sessionContinueOffer.ts";
 import {
   installHeldDirectPeerStarts,
   nudgeHeldStartsForChild,
@@ -2121,6 +2122,9 @@ server.listen(PORT, HOST, () => {
   // A delegated child's failed turn becomes a durable notice for the
   // coordinator waiting on it, recorded before the run's closing marker.
   installDelegationFailureNotices();
+  // A terminal quota or rate-limit failure offers "Continue on" another
+  // engine's model, for the user to take (`sessionContinueOffer.ts`).
+  installContinueOffers();
   // A raised peer-turn cap starts the waiting children it now has room for.
   installHeldDirectPeerStarts();
   // An idle session is reminded of the peer requests it has not answered;

@@ -1,8 +1,9 @@
 /**
- * `session_control` `move_account`: an owning coordinator sets its child's
- * pending account, the same selection the session inspector sets, applied
- * when the child's next turn starts; it loses that authority the moment the
- * user takes the child over.
+ * `session_control` `set_runtime`: an owning coordinator sets its child's
+ * pending account, model or effort, the same selection the session inspector
+ * sets, applied when the child's next turn starts. A model the child's agent
+ * definition does not list asks the user first. It loses that authority the
+ * moment the user takes the child over.
  */
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
@@ -12,12 +13,27 @@ import { afterEach, describe, it, vi } from "vitest";
 const offers = vi.hoisted(
   () => new Map<string, { provider: string; id: string }>(),
 );
+/** What every test account offers, and the picker lists. */
+const catalog = vi.hoisted(() => [
+  { provider: "openai-codex", id: "gpt-5.5", name: "GPT-5.5", reasoning: true },
+  {
+    provider: "openai-codex",
+    id: "gpt-5.6-sol",
+    name: "GPT Sol",
+    reasoning: true,
+  },
+  {
+    provider: "openai-codex",
+    id: "gpt-5.4-mini",
+    name: "GPT Mini",
+    reasoning: true,
+  },
+]);
 vi.mock("../../harnesses/models.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../harnesses/models.ts")>()),
   modelsForAccount: async ({ id }: { id: string }) =>
-    offers.has(id)
-      ? [{ ...offers.get(id), name: "Test model", reasoning: false }]
-      : [],
+    offers.has(id) ? catalog : [],
+  pickerModels: () => catalog,
 }));
 
 const profiles = await import("../../credentialProfiles.ts");
@@ -35,6 +51,18 @@ setPendingRuntimeHostForTests({
 });
 const { sessionControlTools, setSessionControlRuntimeForTests } =
   await import("./sessionControlTool.ts");
+const {
+  approvalsForSession,
+  resolveApproval,
+  setApprovalBroadcastForTests,
+  setAutoApprovalDrainForTests,
+} = await import("../../pendingApprovals.ts");
+const { freezeSessionAgent } = await import("../../agents/sessionAgent.ts");
+setApprovalBroadcastForTests(
+  () => {},
+  () => {},
+);
+setAutoApprovalDrainForTests(async () => {});
 
 let sequence = 0;
 const sessions: string[] = [];
@@ -111,7 +139,7 @@ const context = (sessionId: string) => ({
 const move = (caller: string, target: string, accountName: unknown) =>
   tool().execute(
     {
-      operation: "move_account",
+      operation: "set_runtime",
       targetSessionId: target,
       account: accountName,
     },
@@ -136,7 +164,7 @@ afterEach(async () => {
     profiles.setCredentialProfileEnabled(id, false);
 });
 
-describe("session_control move_account", () => {
+describe("session_control set_runtime: account", () => {
   it("sets an owned child's pending account by name or id, and says so", async () => {
     const a = account("Move A");
     const b = account("Move B");
@@ -144,14 +172,14 @@ describe("session_control move_account", () => {
     const c = child(caller, a);
     assert.equal(
       text(await move(caller, c.id, "move b")),
-      `${c.id} moves to Move B when its next turn starts.`,
+      `${c.id} switches to GPT-5.5, off effort · Move B when its next turn starts.`,
     );
     assert.equal(boundTo(c.id), a, "nothing moves before the next turn");
     assert.equal(pendingTo(c.id), b);
     assert.equal(sessionStore.get(c.id)?.pendingRuntime?.setBy, "coordinator");
     assert.equal(
       text(await move(caller, c.id, a)),
-      `${c.id} stays on Move A; no account move is pending.`,
+      `${c.id} keeps what it runs on now; nothing is pending.`,
     );
     assert.equal(boundTo(c.id), a);
     assert.equal(sessionStore.get(c.id)?.pendingRuntime, undefined);
@@ -174,7 +202,7 @@ describe("session_control move_account", () => {
       [caller, /current session/],
       [unrelated, /not spawned by the current session/],
       [grandchild, /not spawned by the current session/],
-      [taken, /no longer owned.*cannot be moved here/],
+      [taken, /no longer owned.*cannot be switched here/],
     ] as const) {
       await assert.rejects(() => move(caller, target, "Owner B"), error);
       assert.equal(boundTo(target), target === caller ? undefined : a);
@@ -186,7 +214,7 @@ describe("session_control move_account", () => {
     });
     assert.match(
       text(await move(caller, running.id, "Owner B")),
-      /moves to Owner B when its next turn starts\.$/,
+      /switches to GPT-5.5, off effort · Owner B when its next turn starts\.$/,
     );
     assert.equal(boundTo(running.id), a);
   });
@@ -221,7 +249,7 @@ describe("session_control move_account", () => {
     assert.equal(pendingTo(c.id), twin2);
     await assert.rejects(
       () => move(caller, c.id, " "),
-      /requires an account name or id/,
+      /account must be an account name or id/,
     );
     assert.equal(pendingTo(c.id), twin2);
     assert.equal(boundTo(c.id), a);
@@ -245,7 +273,7 @@ describe("session_control move_account", () => {
       });
       await assert.rejects(
         () => move(caller, c.id, b),
-        /no longer owned.*cannot be moved here/,
+        /no longer owned.*cannot be switched here/,
       );
       assert.ok(reads >= takeoverAt, "the takeover landed during the move");
       assert.equal(
@@ -255,5 +283,125 @@ describe("session_control move_account", () => {
       );
       assert.equal(boundTo(c.id), a);
     }
+  });
+});
+
+describe("session_control set_runtime: model", () => {
+  const setModel = (caller: string, target: string, model: string) =>
+    tool().execute(
+      { operation: "set_runtime", targetSessionId: target, model },
+      context(caller),
+    );
+  const pendingModel = (id: string) =>
+    sessionStore.get(id)?.pendingRuntime?.model.id;
+  /** Freeze `id` as an agent that lists `listed`, or (null) a pre-list row. */
+  const asAgent = (id: string, listed: string[] | null) =>
+    freezeSessionAgent(id, {
+      name: "reviewer",
+      blob: "blob",
+      persona: "assistant",
+      provider: "openai-codex",
+      model: "gpt-5.5",
+      effort: "off",
+      runtimeSource: "definition",
+      ...(listed
+        ? {
+            listedModels: listed.map((id) => ({
+              provider: "openai-codex",
+              id,
+            })),
+          }
+        : {}),
+      denyTools: [],
+      skills: [],
+      body: "Review.",
+    });
+  const cards = (caller: string) =>
+    approvalsForSession(caller).filter(
+      (card) =>
+        card.body.kind === "sessionRuntime" && card.status === "pending",
+    );
+
+  it("sets a model the child's definition lists without asking, as its coordinator's choice", async () => {
+    const a = account("Listed A");
+    const caller = seed("Coordinator");
+    const c = child(caller, a);
+    asAgent(c.id, ["gpt-5.5", "gpt-5.6-sol"]);
+    const result = await setModel(caller, c.id, "sol");
+    assert.equal(result.terminate, undefined);
+    assert.equal(
+      text(result),
+      `${c.id} switches to GPT Sol, off effort when its next turn starts.`,
+    );
+    assert.equal(pendingModel(c.id), "gpt-5.6-sol");
+    assert.equal(sessionStore.get(c.id)?.pendingRuntime?.setBy, "coordinator");
+    assert.equal(cards(caller).length, 0);
+  });
+
+  it("asks the user for a model the definition does not list, and for any model of a child without one", async () => {
+    const a = account("Unlisted A");
+    const caller = seed("Coordinator");
+    const listed = child(caller, a);
+    asAgent(listed.id, ["gpt-5.5", "gpt-5.6-sol"]);
+    const legacy = child(caller, a);
+    // Frozen before definitions recorded their list: only its own model.
+    asAgent(legacy.id, null);
+    const plain = child(caller, a);
+    for (const [target, model] of [
+      [listed.id, "gpt-5.4-mini"],
+      [legacy.id, "gpt-5.6-sol"],
+      [plain.id, "gpt-5.6-sol"],
+    ] as const) {
+      const result = await setModel(caller, target, model);
+      assert.equal(result.terminate, true, target);
+      assert.match(text(result), /Nothing changed yet/);
+      assert.equal(
+        pendingModel(target),
+        undefined,
+        "nothing set before the card",
+      );
+    }
+    const pending = cards(caller);
+    assert.deepEqual(
+      pending.map(
+        (card) =>
+          card.body.kind === "sessionRuntime" && card.body.targetSessionId,
+      ),
+      [listed.id, legacy.id, plain.id],
+    );
+    // An effort or account alone, or the model it runs, never asks.
+    await tool().execute(
+      { operation: "set_runtime", targetSessionId: plain.id, effort: "high" },
+      context(caller),
+    );
+    assert.equal(
+      sessionStore.get(plain.id)?.pendingRuntime?.thinkingLevel,
+      "high",
+    );
+    await setModel(caller, plain.id, "gpt-5.5");
+    assert.equal(cards(caller).length, 3);
+
+    await resolveApproval(pending[0]!.id, "approved");
+    assert.equal(pendingModel(listed.id), "gpt-5.4-mini");
+    assert.equal(
+      sessionStore.get(listed.id)?.pendingRuntime?.setBy,
+      "coordinator",
+    );
+  });
+
+  it("fails an approved card when the user took the child over meanwhile", async () => {
+    const a = account("Card takeover A");
+    const caller = seed("Coordinator");
+    const c = child(caller, a);
+    await setModel(caller, c.id, "gpt-5.6-sol");
+    const [card] = cards(caller);
+    sessionStore.setSpawnedOwnership(c.id, "taken-over");
+    const { card: resolved } = await resolveApproval(card!.id, "approved");
+    assert.equal(resolved.status, "failed");
+    assert.match(
+      resolved.error ?? "",
+      /no longer owned.*cannot be switched here/,
+    );
+    assert.equal(pendingModel(c.id), undefined);
   });
 });

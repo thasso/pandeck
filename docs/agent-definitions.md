@@ -368,15 +368,16 @@ The second read is frozen in the insert-only `session_agent` table (migration
 `0079_session_agent.sql`): name, the `AGENT.md` git blob id (of the bytes on
 disk, in the library repository's own object format, SHA-1 or SHA-256), persona,
 provider, model, the concrete version a definition pinned (`claude-opus-5-5`
-rather than `opus`), effective effort, who chose that runtime (`runtimeSource`:
-`definition` for a listed model, `approval` for a proposal card; a row stored
-before this existed reads as `definition`), deny list, the definition's own
-skills, and the body text. A card-approved runtime carries no pin: it follows
-normal session model rules. Like `session_skills`, the first insert wins for the
-session's life, a fork copies the parent's row, and resumes read the row rather
-than the library. Editing or deleting a definition affects new spawns only. A
-row that does not parse fails closed: the session refuses to run rather than run
-without its role and its denied tools.
+rather than `opus`), effective effort, the models the definition lists
+(`listedModels`, the choices a runtime resolved for at spawn), who chose that
+runtime (`runtimeSource`: `definition` for a listed model, `approval` for a
+proposal card; a row stored before this existed reads as `definition`), deny
+list, the definition's own skills, and the body text. A card-approved runtime
+carries no pin: it follows normal session model rules. Like `session_skills`,
+the first insert wins for the session's life, a fork copies the parent's row,
+and resumes read the row rather than the library. Editing or deleting a
+definition affects new spawns only. A row that does not parse fails closed: the
+session refuses to run rather than run without its role and its denied tools.
 
 The session runs the model it was spawned on, never one a harness picks:
 
@@ -390,6 +391,16 @@ The session runs the model it was spawned on, never one a harness picks:
   branch's last selected model, else the frozen one, and refuses when the
   account no longer offers it. One whose model pi cannot restore refuses to
   resume rather than fall back to another (`piSdk/piStore.ts`).
+
+### Switching a child
+
+An owning coordinator may switch its still-owned direct child with
+`session_control` `set_runtime` (`session-runtime-switching.md` "Coordinator
+switching"). A model in the child's frozen `listedModels` is set at once; any
+other model, or a model change of a child spawned without a definition or before
+`listedModels` was frozen, needs a `sessionRuntime` approval card. A frozen row
+without the list is read as listing only its own model, so it never switches
+more freely than the definition allowed.
 
 ### How the definition reaches the model
 

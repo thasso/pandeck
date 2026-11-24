@@ -131,11 +131,13 @@ describe("session_control tool", () => {
       "stop",
       "dismiss_background_updates",
       "require_enterprise",
-      "move_account",
+      "set_runtime",
     ]);
     assert.deepEqual(Object.keys(schema.properties).sort(), [
       "account",
       "clearQueue",
+      "effort",
+      "model",
       "operation",
       "targetSessionId",
     ]);
@@ -168,7 +170,7 @@ describe("session_control tool", () => {
           { operation: "stop", targetSessionId: target, account: "B" },
           context(caller),
         ),
-      /account is only valid with operation "move_account"/,
+      /account is only valid with operation "set_runtime"/,
     );
   });
 

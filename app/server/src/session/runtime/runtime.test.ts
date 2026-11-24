@@ -25,6 +25,7 @@ const {
   subscribeSessionRunFailed,
   setRunFailureHook,
   subscribeSessionRunStarted,
+  subscribeSessionRunTerminallyFailed,
   subscribeSessionToolCompleted,
 } = await import("./liveSession.ts");
 type RunOutcome = import("./liveSession.ts").RunOutcome;
@@ -682,6 +683,43 @@ test("failure subscribers are isolated, removable and once per run even when the
   }
 });
 
+test("terminal failure subscribers hear a turn once, only after its failure was stored", async () => {
+  const { runtime, adapter } = makeRuntime();
+  let hookCalls = 0;
+  let stored = 0;
+  const heard: Array<{ kind: string | undefined; storedBefore: number }> = [];
+  const off = subscribeSessionRunTerminallyFailed((report) =>
+    heard.push({ kind: report.failure?.kind, storedBefore: stored }),
+  );
+  setRunFailureHook(() => {
+    hookCalls++;
+    if (hookCalls === 1) throw new Error("disk failed");
+    stored++;
+  });
+  try {
+    const run = runtime.prompt("s1", "limit");
+    await tick();
+    adapter.finishRun({
+      stopReason: "error",
+      errorMessage: "You've hit your usage limit.",
+    });
+    await assert.rejects(() => run, RunFailedError);
+    const next = runtime.prompt("s1", "after");
+    await tick();
+    adapter.finishRun({ stopReason: "end" });
+    await next;
+    assert.ok(hookCalls >= 2, "the failed store was retried");
+    assert.deepEqual(
+      heard,
+      [{ kind: "quota", storedBefore: 1 }],
+      "once, after the hook stored it",
+    );
+  } finally {
+    off();
+    setRunFailureHook(undefined);
+  }
+});
+
 test.each([
   "OpenAI Codex token refresh failed (401): raw secret",
   "Invalid API key · Please run /login",
@@ -1247,8 +1285,10 @@ test("fork anchor resolution", async () => {
   const ids = timeline.map((entry) => entry.id);
   const [u1, a1, u2, a2] = ids as [string, string, string, string];
 
+  const { seq, ...anchors } = runtime.forkAnchors("s1", a2);
+  assert.equal(typeof seq, "number", "and the entry's log position");
   assert.deepEqual(
-    runtime.forkAnchors("s1", a2),
+    anchors,
     {
       entryFound: true,
       own: "native-a2",
