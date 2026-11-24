@@ -24,7 +24,6 @@ import { pickerModels } from "./harnesses/models.ts";
 import { isPermanentAssistantSession } from "./permanentAssistant.ts";
 import { resumePromptQueueForHumanPrompt } from "./promptQueue.ts";
 import {
-  subscribeSessionRunStarted,
   subscribeSessionRunTerminallyFailed,
   type RunFailureReport,
 } from "./session/runtime/liveSession.ts";
@@ -49,9 +48,6 @@ const MAX_CHOICES = 4;
 const CONTINUE_CONTEXT =
   "Continue the interrupted turn from the existing conversation. Do not repeat completed actions.";
 
-/** Session id → the run whose failure an offer is being computed for. */
-const latestFailedRun = new Map<string, string>();
-
 /** The list rows changed: send them now, as other failure writers do. */
 function publishRows(): void {
   void import("./stateTopics.ts").then(({ publishSessionRowsNow }) =>
@@ -64,44 +60,32 @@ function publishRows(): void {
  * user session. Called once at boot; the returned uninstall is for tests.
  */
 export function installContinueOffers(): () => void {
-  const offTerminal = subscribeSessionRunTerminallyFailed((report) => {
+  return subscribeSessionRunTerminallyFailed((report) => {
     void offerFor(report).catch((err: unknown) =>
       console.warn("[continue-on] could not compute an offer:", err),
     );
   });
-  // A new run supersedes the failure, and with it any offer still computing.
-  const offStarted = subscribeSessionRunStarted((sessionId) =>
-    latestFailedRun.delete(sessionId),
-  );
-  return () => {
-    offTerminal();
-    offStarted();
-    latestFailedRun.clear();
-  };
 }
 
+/**
+ * The offer belongs to the failure of the run the report names (the attempt
+ * recovery last ran, if it ran one), and is written only while the row's
+ * failure is that run's (`recordContinueOffer`). Identity, not timing: a late
+ * or retried report of an older run's failure, a run start, or a newer
+ * failure (a run's, or a hold's that no run owns) leaves the row's failure
+ * without it.
+ */
 async function offerFor(report: RunFailureReport): Promise<void> {
   const kind = report.failure?.kind;
   if (kind !== "quota" && kind !== "rate_limit") return;
-  const { sessionId, runId } = report;
+  const { sessionId } = report;
   const row = sessionStore.get(sessionId);
   if (!row || row.scope !== "user" || isPermanentAssistantSession(sessionId))
     return;
-  latestFailedRun.set(sessionId, runId);
-  // The failure's own record (`sessionActivity.ts`, on the run's error
-  // status) lands later in this same synchronous stack, or before it for a
-  // deferred settlement; a run start clears an older one. So once this stack
-  // unwound, and before anything else is awaited, the row's failure is this
-  // turn's: the offer attaches to that failure or to none.
-  await Promise.resolve();
-  const failureAt = sessionStore.get(sessionId)?.lastError?.at;
-  if (failureAt === undefined || latestFailedRun.get(sessionId) !== runId)
-    return;
   const choices = await continueChoices(sessionId);
-  if (latestFailedRun.get(sessionId) !== runId) return;
-  latestFailedRun.delete(sessionId);
   if (choices.length === 0) return;
-  if (sessionStore.recordContinueOffer(sessionId, failureAt, choices))
+  const failedRunId = report.attemptRunId ?? report.runId;
+  if (sessionStore.recordContinueOffer(sessionId, failedRunId, choices))
     publishRows();
 }
 

@@ -626,6 +626,56 @@ test("failed run: throw + cleanup", async () => {
   assert.deepEqual(statuses, ["error"], "runStatus error emitted");
 });
 
+test("a failed run's error status names the run its failure report names, for the server only", async () => {
+  const { RuntimeTransport } = await import("../transport/gateway.ts");
+  const { runtime, adapter } = makeRuntime();
+  const statusRuns: Array<string | undefined> = [];
+  runtime.openSessionStream("s1", (e) => {
+    if (e.type === "runStatus") statusRuns.push(e.runId);
+  });
+  const viewed: unknown[] = [];
+  const transport = new RuntimeTransport(
+    "s1",
+    runtime.get("s1")!,
+    {
+      send: (m) => {
+        if (m.type === "event" && m.event.type === "runStatus")
+          viewed.push(m.event);
+      },
+    },
+    {
+      buildState: () => ({ sessionId: "s1" }) as never,
+      buildContextInfo: () => ({ sessionId: "s1" }) as never,
+    },
+  );
+  transport.attach();
+  const reported: string[] = [];
+  const off = subscribeSessionRunFailed((report) =>
+    reported.push(report.runId),
+  );
+  try {
+    const run = runtime.prompt("s1", "boom");
+    await tick();
+    adapter.emit({
+      type: "runCompleted",
+      stopReason: "error",
+      errorMessage: "kaboom",
+    });
+    adapter.finishRun({ stopReason: "error", errorMessage: "kaboom" });
+    await assert.rejects(() => run, RunFailedError);
+    assert.equal(reported.length, 1);
+    assert.deepEqual(statusRuns, reported, "one identity for both");
+    assert.deepEqual(
+      viewed,
+      [{ type: "runStatus", status: "error", message: "kaboom" }],
+      "a viewer never receives the run id",
+    );
+  } finally {
+    off();
+    transport.detach();
+  }
+});
+
 test("failure subscribers are isolated, removable and once per run even when the durable hook retries", async () => {
   const { runtime, adapter } = makeRuntime();
   const reports: import("./liveSession.ts").RunFailureReport[] = [];

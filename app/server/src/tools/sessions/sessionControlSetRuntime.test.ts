@@ -436,6 +436,67 @@ describe("session_control set_runtime: model", () => {
     assert.equal(pending?.setBy, "coordinator");
   });
 
+  it.each(["model", "effort"] as const)(
+    "measures a %s against the next turn's pending target, not what the child runs now",
+    async (field) => {
+      const a = account(`Next turn ${field}`);
+      const caller = seed("Coordinator");
+      const plain = child(caller, a);
+      const listed = child(caller, a);
+      asAgent(listed.id, ["gpt-5.5", "gpt-5.6-sol"]);
+      // Both run GPT-5.5 at off effort, with GPT Sol at high pending.
+      for (const target of [plain.id, listed.id])
+        sessionStore.setPendingRuntime(target, {
+          model: { provider: "openai-codex", id: "gpt-5.6-sol" },
+          thinkingLevel: "high",
+          account: { kind: "automatic" },
+          setBy: "user",
+        });
+      const request = (target: string, value: string) =>
+        tool().execute(
+          {
+            operation: "set_runtime",
+            targetSessionId: target,
+            ...(field === "model" ? { model: value } : { effort: value }),
+          },
+          context(caller),
+        );
+      const pendingField = (id: string) => {
+        const pending = sessionStore.get(id)?.pendingRuntime;
+        return field === "model" ? pending?.model.id : pending?.thinkingLevel;
+      };
+      const [current, pendingValue] =
+        field === "model" ? ["gpt-5.5", "gpt-5.6-sol"] : ["off", "high"];
+
+      // What the next turn runs already is no change: nothing asked, kept.
+      const same = await request(plain.id, pendingValue);
+      assert.equal(same.terminate, undefined);
+      assert.equal(pendingField(plain.id), pendingValue);
+      assert.equal(cards(caller).length, 0);
+
+      // What it runs now differs from the next turn: a real change, which a
+      // child without a definition asks the user for.
+      const asked = await request(plain.id, current);
+      assert.equal(asked.terminate, true);
+      assert.match(text(asked), /Nothing changed yet/);
+      assert.equal(pendingField(plain.id), pendingValue, "nothing set yet");
+      const [card] = cards(caller);
+      assert.ok(card);
+      await resolveApproval(card.id, "approved");
+      assert.equal(pendingField(plain.id), current);
+      assert.equal(
+        sessionStore.get(plain.id)?.pendingRuntime?.setBy,
+        "coordinator",
+      );
+
+      // A definition vouches for it: set without asking.
+      const vouched = await request(listed.id, current);
+      assert.equal(vouched.terminate, undefined);
+      assert.equal(pendingField(listed.id), current);
+      assert.equal(cards(caller).length, 0);
+    },
+  );
+
   it("fails an approved card when the user took the child over meanwhile", async () => {
     const a = account("Card takeover A");
     const caller = seed("Coordinator");

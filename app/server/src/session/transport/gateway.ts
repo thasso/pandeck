@@ -528,11 +528,14 @@ export class RuntimeTransport {
         if (event.runState === "idle") this.forgetAllStreams();
         this.sendEvent(event);
         return;
-      case "runStatus":
+      case "runStatus": {
         this.flush();
         this.forgetAllStreams();
-        this.sendEvent(event);
+        // The run id is the server's own identity of the failure, not a viewer's.
+        const { runId: _runId, ...status } = event;
+        this.sendEvent(status);
         return;
+      }
       case "sessionConfigChanged":
         this.flush();
         this.sendEvent(event);

@@ -258,14 +258,16 @@ async function setChildRuntime(
   const effort = readEffort(params.effort);
   const model =
     params.model === undefined ? undefined : resolveChildModel(params.model);
-  const changesModel =
-    model !== undefined &&
-    !sameModel(model, current?.model) &&
-    !sameModel(model, row.pendingRuntime?.model);
-  const changesEffort =
-    effort !== undefined &&
-    effort !== (current?.thinkingLevel ?? "off") &&
-    effort !== row.pendingRuntime?.thinkingLevel;
+  // A change is measured against what the next turn runs on: the pending
+  // selection when there is one, else the current runtime. Asking for the
+  // current model or effort while another is pending changes the next turn.
+  const pending = row.pendingRuntime;
+  const nextModel = pending ? pending.model : current?.model;
+  const nextEffort = pending
+    ? pending.thinkingLevel
+    : (current?.thinkingLevel ?? "off");
+  const changesModel = model !== undefined && !sameModel(model, nextModel);
+  const changesEffort = effort !== undefined && effort !== nextEffort;
   let account: { id: string; name: string; current: boolean } | undefined;
   if (params.account !== undefined) {
     if (changesModel) {
@@ -293,7 +295,7 @@ async function setChildRuntime(
     ? changesModel && !listed.some((entry) => sameModel(entry, model))
     : changesModel || changesEffort;
   if (needsCard) {
-    const next = model ?? row.pendingRuntime?.model ?? current?.model;
+    const next = model ?? nextModel;
     if (!next) throw new Error("This session has no model to change from yet.");
     return proposeChildRuntime(ctx, row, current, change, next, account, {
       changesModel,
@@ -308,10 +310,10 @@ async function setChildRuntime(
       ? { account: change.account }
       : {};
   if (!write.model && !write.thinkingLevel && !write.account)
-    return textResult(pendingText(targetSessionId, row.pendingRuntime));
+    return textResult(pendingText(targetSessionId, pending));
   // The user may take the child over while the selection resolves: the
   // ownership edge is asked again with the write itself.
-  const pending = await setSessionPendingRuntime(
+  const written = await setSessionPendingRuntime(
     targetSessionId,
     write,
     "coordinator",
@@ -320,7 +322,7 @@ async function setChildRuntime(
         requireOwnedChild(coordinator, targetSessionId, "switched"),
     },
   );
-  return textResult(pendingText(targetSessionId, pending));
+  return textResult(pendingText(targetSessionId, written));
 }
 
 /** What the child's next turn runs on now, for the coordinator. */

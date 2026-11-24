@@ -130,8 +130,10 @@ selection is the same pending selection the user sets, with `setBy`
   `docs/agent-definitions.md`) and any effort are set at once. Any other model
   asks the user.
 - A child without a definition: any model or effort change asks the user. A
-  model or effort equal to what it runs or has pending is left out of the write,
-  so only an account is ever set for it without a card.
+  change is measured against the next turn's target: the pending selection, else
+  what it runs now. So a value equal to the pending one is left out of the write
+  (only an account is ever set for it without a card), while one equal to what
+  it runs now with another pending is a change, and asks.
 - An account alone keeps the same-kind move rule and is set at once for any
   owned child.
 - Asking is a `sessionRuntime` approval card (`docs/approvals.md`) naming the
@@ -157,10 +159,14 @@ the user's click continues anything.
   one's position among its own kind's. At most four. They are stored with the
   failure (`session_index.last_error_continue_json`, migration 0105) and carried
   as `continueOn` on its `SessionRunFailure`; a new failure, a run start, or
-  Dismiss clears them. The failure an offer belongs to is read before the
-  choices are computed and the offer is written only while the row still holds
-  it, so a newer failure that started no run (a pending selection's hold) never
-  receives it. User sessions only, never the permanent assistant.
+  Dismiss clears them. The offer is bound to the failure by run identity, not
+  timing: the row records which run its failure ended
+  (`session_index.last_error_run_id`, migration 0106, from that run's error
+  status), the terminal report names the same run (for a turn recovery ran on,
+  its last attempt: `attemptRunId`), and the offer is written only while the
+  row's failure is that run's. A late or retried report of an older run's
+  failure, a newer run's failure, or one no run owns (a pending selection's
+  hold) never receives it. User sessions only, never the permanent assistant.
 - **Click** (`continueOnModel`). The offer must still belong to the failure the
   user saw (`failureAt`) and list the model, and the session must be idle;
   otherwise nothing changes and the answer carries the error. It sets the

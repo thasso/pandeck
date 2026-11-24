@@ -265,10 +265,16 @@ async function failedOnClaude(name: string) {
   claude.setTitle("continue on");
   ensureRuntimeSessionWithRuntime(sessionRuntime, claude);
   await promptRuntimeSessionWithRuntime(sessionRuntime, claude, "first ask");
-  sessionStore.recordRunFailure(id, "You've hit your usage limit.");
+  const runId = `run-${name}`;
+  sessionStore.recordRunFailure(
+    id,
+    "You've hit your usage limit.",
+    Date.now(),
+    runId,
+  );
   const failureAt = sessionStore.get(id)?.lastError?.at;
   assert.ok(failureAt !== undefined);
-  return { id, claude, failureAt };
+  return { id, claude, failureAt, runId };
 }
 
 function userTexts(id: string): string[] {
@@ -277,33 +283,43 @@ function userTexts(id: string): string[] {
     .map((record) => record.text);
 }
 
-test("the offer sits beside its own failure only, and leaves with it", async () => {
-  const { id, failureAt } = await failedOnClaude("offer");
+test("the offer sits beside its own run's failure only, and leaves with it", async () => {
+  const { id, failureAt, runId } = await failedOnClaude("offer");
   assert.equal(
-    sessionStore.recordContinueOffer(id, failureAt - 1, [SOL]),
+    sessionStore.recordContinueOffer(id, "run-older", [SOL]),
     false,
-    "an older failure's offer is never attached to a newer one",
+    "an older run's offer is never attached to a newer run's failure",
   );
   assert.equal(sessionStore.get(id)?.lastError?.continueOn, undefined);
-  assert.equal(sessionStore.recordContinueOffer(id, failureAt, [SOL]), true);
+  assert.equal(sessionStore.recordContinueOffer(id, runId, [SOL]), true);
   assert.deepEqual(sessionStore.get(id)?.lastError?.continueOn, [SOL]);
 
-  sessionStore.recordRunFailure(id, "again", failureAt + 1);
+  sessionStore.recordRunFailure(id, "again", failureAt + 1, "run-again");
   assert.equal(
     sessionStore.get(id)?.lastError?.continueOn,
     undefined,
     "a new failure starts without an offer",
   );
-  sessionStore.recordContinueOffer(id, failureAt + 1, [SOL]);
+  assert.equal(sessionStore.recordContinueOffer(id, runId, [SOL]), false);
+  // A failure no run owns (a pending selection's hold) takes no run's offer.
+  sessionStore.recordRunFailure(id, "held", failureAt + 2);
+  assert.equal(sessionStore.recordContinueOffer(id, "run-again", [SOL]), false);
+  sessionStore.recordRunFailure(id, "again", failureAt + 3, "run-again");
+  assert.equal(sessionStore.recordContinueOffer(id, "run-again", [SOL]), true);
   sessionStore.clearRunFailure(id);
   assert.equal(sessionStore.get(id)?.lastError, undefined);
+  assert.equal(
+    sessionStore.recordContinueOffer(id, "run-again", [SOL]),
+    false,
+    "a cleared failure takes no offer",
+  );
 });
 
 test("only a terminal quota or rate-limit failure is offered a model to continue on", async () => {
   const uninstall = installContinueOffers();
   try {
-    const { id } = await failedOnClaude("terminal");
-    const report = (kind: "quota" | "rate_limit" | "auth", runId: string) =>
+    const { id, runId } = await failedOnClaude("terminal");
+    const report = (kind: "quota" | "rate_limit" | "auth") =>
       terminal.listener!({
         sessionId: id,
         runId,
@@ -312,11 +328,11 @@ test("only a terminal quota or rate-limit failure is offered a model to continue
         failure: { kind },
         at: Date.now(),
       });
-    report("auth", "run-auth");
+    report("auth");
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(sessionStore.get(id)?.lastError?.continueOn, undefined);
 
-    report("quota", "run-quota");
+    report("quota");
     await vi.waitFor(() =>
       assert.deepEqual(
         sessionStore.get(id)?.lastError?.continueOn?.map((c) => c.id),
@@ -339,8 +355,8 @@ test("choices are the other engine's runnable models, the failed one's counterpa
 });
 
 test("Continue moves the session, continues the failed turn past a Stop, and leaves the queue for after", async () => {
-  const { id, claude, failureAt } = await failedOnClaude("continue");
-  sessionStore.recordContinueOffer(id, failureAt, [SOL]);
+  const { id, claude, failureAt, runId } = await failedOnClaude("continue");
+  sessionStore.recordContinueOffer(id, runId, [SOL]);
   holdAutomaticTurns(id);
   queuePrompt(id, { text: "queued ask" }, { paused: true });
   const resumeHold = captureHumanResume(id);
@@ -370,8 +386,8 @@ test("Continue moves the session, continues the failed turn past a Stop, and lea
 });
 
 test("a click on a failure that no longer offers the model changes nothing", async () => {
-  const { id, claude, failureAt } = await failedOnClaude("stale");
-  sessionStore.recordContinueOffer(id, failureAt, [SOL]);
+  const { id, claude, failureAt, runId } = await failedOnClaude("stale");
+  sessionStore.recordContinueOffer(id, runId, [SOL]);
   await assert.rejects(
     continueOnModel(claude, {
       failureAt: failureAt - 1,
@@ -413,13 +429,14 @@ test.each([
   ["a run start", (id: string) => sessionStore.clearRunFailure(id)],
   [
     "a newer failure",
-    (id: string) => sessionStore.recordRunFailure(id, "again", Date.now() + 1),
+    (id: string) =>
+      sessionStore.recordRunFailure(id, "again", Date.now() + 1, "run-newer"),
   ],
 ] as const)(
   "%s while Continue resolves its target retires the offer, and nothing is left pending",
   async (_name, retire) => {
-    const { id, claude, failureAt } = await failedOnClaude("retired");
-    sessionStore.recordContinueOffer(id, failureAt, [SOL]);
+    const { id, claude, failureAt, runId } = await failedOnClaude("retired");
+    sessionStore.recordContinueOffer(id, runId, [SOL]);
     const held = gate();
     gates.offers = held.wait;
     const click = continueOnModel(claude, {
@@ -444,12 +461,12 @@ test.each([
 test("an offer computed for one failure never attaches to a newer one that started no run", async () => {
   const uninstall = installContinueOffers();
   try {
-    const { id } = await failedOnClaude("replaced");
+    const { id, runId } = await failedOnClaude("replaced");
     const held = gate();
     gates.pick = held.wait;
     terminal.listener!({
       sessionId: id,
-      runId: "run-quota",
+      runId,
       origin: undefined,
       errorMessage: undefined,
       failure: { kind: "quota" },
@@ -469,5 +486,197 @@ test("an offer computed for one failure never attaches to a newer one that start
     assert.equal(failure?.continueOn, undefined);
   } finally {
     uninstall();
+  }
+});
+
+/**
+ * A session on a driver whose turns end in the provider's normalized failure
+ * (`runCompleted` with its facts), as a real harness reports one.
+ */
+function failingSession(name: string) {
+  const id = `continue-real-${Date.now()}-${name}`;
+  ids.push(id);
+  sessionStore.upsert({
+    id,
+    harness: "claude-sdk",
+    agentType: "assistant",
+    provider: "claude",
+    model: "sonnet",
+    credentialProfileId: "claude-default",
+  });
+  const driver = new FakeRuntimeDriver(id);
+  const next = {
+    kind: "quota" as "quota" | "auth" | undefined,
+    message: "You've hit your usage limit.",
+  };
+  const createAdapter = driver.createRuntimeAdapter.bind(driver);
+  driver.createRuntimeAdapter = () => {
+    const adapter = createAdapter();
+    const listeners = new Set<(event: unknown) => void>();
+    adapter.subscribe = (listener) => {
+      listeners.add(listener as never);
+      return () => listeners.delete(listener as never);
+    };
+    const prompt = adapter.prompt.bind(adapter);
+    adapter.prompt = async (...args) => {
+      const kind = next.kind;
+      driver.behavior = kind
+        ? { mode: "error", message: next.message }
+        : { mode: "success" };
+      const result = await prompt(...args);
+      if (kind)
+        for (const listener of listeners)
+          listener({
+            type: "runCompleted",
+            stopReason: "error",
+            errorMessage: next.message,
+            failure: { kind },
+          });
+      return result;
+    };
+    return adapter;
+  };
+  const live = ensureRuntimeSessionWithRuntime(sessionRuntime, driver);
+  const failWith = (kind: "quota" | "auth" | undefined, message = "") => {
+    next.kind = kind;
+    next.message = message;
+  };
+  return { id, driver, live, failWith };
+}
+
+const { installSessionActivityTracking } = await import("./sessionActivity.ts");
+const { setRunFailureHook } = await import("./session/runtime/liveSession.ts");
+
+test("a real quota failure's offer lands on that failure", async () => {
+  const offActivity = installSessionActivityTracking();
+  const offOffers = installContinueOffers();
+  try {
+    const { id, driver } = failingSession("ordinary");
+    await assert.rejects(
+      promptRuntimeSessionWithRuntime(sessionRuntime, driver, "quota ask"),
+    );
+    await vi.waitFor(() =>
+      assert.deepEqual(
+        sessionStore.get(id)?.lastError?.continueOn?.map((c) => c.id),
+        [SOL.id, "gpt-5.4-mini"],
+      ),
+    );
+  } finally {
+    offOffers();
+    offActivity();
+  }
+});
+
+test("a recovered turn's offer lands on its last attempt's failure, not the first's", async () => {
+  const offActivity = installSessionActivityTracking();
+  const offOffers = installContinueOffers();
+  const { id, driver, live } = failingSession("deferred");
+  // Recovery's shape (`sessionAccountSwitch.ts`): each failed attempt's
+  // settlement is deferred, the continuation runs as its own run, and once it
+  // fails too every attempt settles with its failure, the first publishing.
+  const finishes: Array<ReturnType<typeof live.deferRunSettlement>> = [];
+  const runs: string[] = [];
+  let continuation: Promise<unknown> | undefined;
+  let failed: import("./session/runtime/liveSession.ts").RunFailureReport;
+  const off = live.subscribeRuns((event) => {
+    if (event.type === "failed") {
+      failed = event.report;
+      runs.push(event.report.runId);
+      finishes.push(live.deferRunSettlement(event.report.runId));
+    } else if (event.type === "ended" && runs.length === 1)
+      setImmediate(() => {
+        continuation = promptRuntimeSessionWithRuntime(
+          sessionRuntime,
+          driver,
+          "",
+          { hidden: true, continuation: true },
+        ).catch(() => undefined);
+      });
+    else if (event.type === "ended")
+      setImmediate(() =>
+        finishes.forEach((finish, index) =>
+          finish(event.outcome, failed, index === 0),
+        ),
+      );
+  });
+  try {
+    await assert.rejects(
+      promptRuntimeSessionWithRuntime(sessionRuntime, driver, "quota ask"),
+    );
+    await continuation;
+    assert.equal(runs.length, 2, "the continuation ran as its own run");
+    await vi.waitFor(() =>
+      assert.deepEqual(
+        sessionStore.get(id)?.lastError?.continueOn?.map((c) => c.id),
+        [SOL.id, "gpt-5.4-mini"],
+      ),
+    );
+  } finally {
+    off();
+    offOffers();
+    offActivity();
+  }
+});
+
+test("a retried report of an older quota failure never offers on a newer run's failure", async () => {
+  const offActivity = installSessionActivityTracking();
+  const offOffers = installContinueOffers();
+  // The durable hook cannot store the quota failure until the auth turn: the
+  // runtime keeps the quota report and retries it at that turn's end, after
+  // the auth failure is the row's.
+  let stored = false;
+  const retried: string[] = [];
+  setRunFailureHook((report) => {
+    if (report.failure?.kind === "auth") stored = true;
+    else if (!stored) throw new Error("recorder outage");
+    else retried.push(report.runId);
+  });
+  try {
+    const { id, driver, failWith } = failingSession("retried");
+    await assert.rejects(
+      promptRuntimeSessionWithRuntime(sessionRuntime, driver, "quota ask"),
+    );
+    failWith("auth", "OAuth token has expired");
+    await assert.rejects(
+      promptRuntimeSessionWithRuntime(sessionRuntime, driver, "auth ask"),
+    );
+    assert.equal(retried.length, 1, "the quota report was published late");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const failure = sessionStore.get(id)?.lastError;
+    assert.equal(failure?.message, "OAuth token has expired");
+    assert.equal(failure?.continueOn, undefined);
+  } finally {
+    setRunFailureHook(undefined);
+    offOffers();
+    offActivity();
+  }
+});
+
+test("a retried report of a quota failure a later turn moved past offers nothing", async () => {
+  const offActivity = installSessionActivityTracking();
+  const offOffers = installContinueOffers();
+  let outage = true;
+  let retried = 0;
+  setRunFailureHook(() => {
+    if (outage) throw new Error("recorder outage");
+    retried++;
+  });
+  try {
+    const { id, driver, failWith } = failingSession("moved-past");
+    await assert.rejects(
+      promptRuntimeSessionWithRuntime(sessionRuntime, driver, "quota ask"),
+    );
+    outage = false;
+    // A later turn that answers: the retry at its boundary publishes the old
+    // report, but the row's failure went with that turn's start.
+    failWith(undefined);
+    await promptRuntimeSessionWithRuntime(sessionRuntime, driver, "next ask");
+    assert.ok(retried >= 1, "the quota report was published late");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(sessionStore.get(id)?.lastError, undefined);
+  } finally {
+    setRunFailureHook(undefined);
+    offOffers();
+    offActivity();
   }
 });

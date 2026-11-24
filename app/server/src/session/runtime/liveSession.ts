@@ -176,6 +176,13 @@ export interface RunFailureReport {
   failure: RunFailureFacts | undefined;
   /** When the runtime first saw the failure; a retried report keeps it. */
   at: number;
+  /**
+   * The run whose error the turn ended with, when recovery ran it on in
+   * another run: its last attempt, whose error status the session row shows.
+   * Absent: `runId` itself. A consumer binding something to the row's failure
+   * matches this identity, never a timestamp.
+   */
+  attemptRunId?: string;
 }
 
 /** Isolated best-effort consumers; durable hook retries never repeat these. */
@@ -476,6 +483,7 @@ export class LiveRuntimeSession {
           ...terminalFailure,
           runId,
           origin: deferred.failure?.origin ?? terminalFailure.origin,
+          attemptRunId: terminalFailure.attemptRunId ?? terminalFailure.runId,
         });
       deferred.outcome = outcome;
       const terminalEngine = this.recentEngines.get(terminal.runId);
@@ -1690,11 +1698,15 @@ export class LiveRuntimeSession {
           );
         // Clear any streams the provider left dangling on a failed/aborted run.
         if (event.stopReason !== "end") {
+          // The run its failure report names, so the row's failure and the
+          // report share one identity.
+          const failedRunId = this.openRunId();
           this.streaming.clear();
           this.emit({
             type: "runStatus",
             status: event.stopReason,
             ...(event.errorMessage ? { message: event.errorMessage } : {}),
+            ...(failedRunId ? { runId: failedRunId } : {}),
           });
         }
         // Adapter-observed completion is the authoritative end for out-of-band
