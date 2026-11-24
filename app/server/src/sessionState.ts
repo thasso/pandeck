@@ -165,6 +165,9 @@ export function buildSessionState(
     ...(facts.model !== undefined ? { model: facts.model } : {}),
     thinkingLevel: facts.thinkingLevel,
     ...(facts.mode !== undefined ? { mode: facts.mode } : {}),
+    ...(visibleStored?.pendingRuntime
+      ? { pendingRuntime: visibleStored.pendingRuntime }
+      : {}),
     ...(stored?.requiresEnterprise ? { requiresEnterprise: true } : {}),
     ...(compactionWindowValue !== undefined
       ? { compactionWindow: compactionWindowValue }

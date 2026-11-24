@@ -187,3 +187,35 @@ test("a fork inherits the parent's stored compaction window", async () => {
   assert.equal(sessionStore.get("window-child")?.compactionWindow, 180_000);
   assert.deepEqual(applied, [180_000]);
 });
+
+test("a fork copies none of the parent's held inputs, and the parent keeps them", async () => {
+  const queue = await import("../promptQueue.ts");
+  const { promptQueueStore } = await import("../db/promptQueueStore.ts");
+  vi.spyOn(claudeSdkStore, "forkSession").mockImplementation(async () => {
+    sessionStore.claimScope({
+      id: "held-child",
+      harness: "claude-sdk",
+      agentType: "developer",
+    });
+    return { sessionId: "held-child" } as never;
+  });
+  sessionStore.upsert({
+    id: "held-parent",
+    harness: "claude-sdk",
+    agentType: "developer",
+  });
+  queue.holdInput("held-parent", "/review-pr 7");
+  const prepared = prepareFork("claude-sdk", {
+    ...request,
+    id: "held-parent",
+    position: "at",
+    anchors: { entryFound: true, own: "native-2" },
+  });
+  assert.ok("fork" in prepared);
+  const child = await prepared.fork();
+  assert.deepEqual(queue.promptQueueField(child.sessionId), {});
+  assert.deepEqual(
+    promptQueueStore.listHeld("held-parent").map((input) => input.text),
+    ["/review-pr 7"],
+  );
+});

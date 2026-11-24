@@ -9,6 +9,7 @@ import {
   Fragment,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -135,6 +136,11 @@ export interface InspectorRelationGroup {
    * session's Details), placed among the relations rather than after them.
    */
   alwaysShown?: boolean;
+  /**
+   * A request to show this group: each new value opens it if folded and
+   * scrolls it into view (the composer's runtime chip, `/model` and its kin).
+   */
+  revealNonce?: number;
 }
 
 /** One object-aware action, e.g. "Start session", "Archive". */
@@ -265,6 +271,7 @@ export function InspectorSection({
   defaultOpen = true,
   collapsible = true,
   forceOpen = false,
+  revealNonce,
   contentClassName,
 }: {
   id: string;
@@ -279,6 +286,8 @@ export function InspectorSection({
   collapsible?: boolean;
   /** Keep the body visible regardless of persisted collapse, e.g. while adding. */
   forceOpen?: boolean;
+  /** Each new value opens the section if folded and scrolls it into view. */
+  revealNonce?: number | undefined;
   contentClassName?: string;
 }) {
   const storageKey = storageScope
@@ -286,6 +295,14 @@ export function InspectorSection({
     : undefined;
   const [storedOpen, toggleOpen] = useStoredOpen(storageKey, defaultOpen);
   const open = forceOpen || (collapsible && storedOpen);
+  const headerRef = useRef<HTMLDivElement>(null);
+  const openRef = useRef(open);
+  openRef.current = open;
+  useEffect(() => {
+    if (!revealNonce) return;
+    if (!openRef.current && collapsible) toggleOpen();
+    headerRef.current?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+  }, [revealNonce, collapsible, toggleOpen]);
 
   return (
     <Collapsible
@@ -295,7 +312,7 @@ export function InspectorSection({
       render={<section />}
       className="border-t border-border pt-3 first:border-t-0 first:pt-0"
     >
-      <div className="mb-2 flex w-full items-center gap-2">
+      <div ref={headerRef} className="mb-2 flex w-full items-center gap-2">
         {/* `grow`, not `flex-1`: from a zero basis the trigger's width was only
             its share of free space, so a long summary squeezed it to nothing
             and then pushed the row past the panel. From a content basis both
@@ -639,6 +656,7 @@ export function Inspector({
               summary={group.summary}
               collapsible={group.collapsible ?? true}
               defaultOpen={group.defaultOpen ?? true}
+              revealNonce={group.revealNonce}
             >
               {/* Remount per inspected object: the section itself is keyed by
                   the group id, which is the SAME across objects, so without

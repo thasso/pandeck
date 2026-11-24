@@ -543,8 +543,16 @@ export class BackgroundCompletionDelivery {
     drain: boolean,
   ): void {
     const entry: BackgroundNotice = { kind: "completion", notice };
-    if (disposition === "defer") this.defer(sessionId, entry);
-    else this.enqueueNotice(sessionId, entry, drain);
+    if (disposition === "wake") {
+      this.enqueueNotice(sessionId, entry, drain);
+      return;
+    }
+    this.defer(sessionId, entry);
+    // A deferred fact starts no turn of its own, but its work has ENDED: work
+    // held on it (a pending account switch waiting for this host, Q16) is
+    // offered again. A Stop from the background UI defers, so this is that
+    // Stop's wake. The scheduler starts nothing when nothing else waits.
+    if (drain) void this.drain(sessionId);
   }
 
   /** A notice delivered or dropped: gone from the outbox, its file removed. */

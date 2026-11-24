@@ -211,3 +211,186 @@ describe("PromptQueueLedge with unhandled background updates", () => {
     );
   });
 });
+
+describe("PromptQueueLedge held inputs", () => {
+  const held = [
+    { id: "h1", text: "/review-pr 412", createdAt: 1 },
+    { id: "h2", text: "/summarize the thread", createdAt: 2 },
+  ];
+  const heldButton = (id: string, label: string) =>
+    [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        `[data-held-input="${id}"] button`,
+      ),
+    ].find((candidate) => candidate.textContent === label);
+
+  it("shows with nothing queued, first and in order, never as a sendable row", () => {
+    render({
+      queue: {
+        items: [{ id: "q1", text: "queued words", createdAt: 3 }],
+        paused: false,
+        held,
+      },
+      running: false,
+      onPutBackHeld: vi.fn(),
+      onDiscardHeld: vi.fn(),
+    });
+    expect(container.textContent).toContain("1 queued · 2 to put back");
+    const rows = [
+      ...container.querySelectorAll<HTMLElement>(
+        "[data-held-input], [data-queued-prompt]",
+      ),
+    ];
+    expect(rows.map((row) => row.textContent)).toEqual([
+      expect.stringContaining("/review-pr 412"),
+      expect.stringContaining("/summarize the thread"),
+      expect.stringContaining("queued words"),
+    ]);
+    // Held rows offer only Put back and Discard: no Steer, no Send next.
+    expect(
+      [
+        ...container.querySelectorAll<HTMLButtonElement>(
+          '[data-held-input="h1"] button',
+        ),
+      ].map((b) => b.textContent),
+    ).toEqual(["Discard", "Put back"]);
+  });
+
+  it("renders for held inputs alone", () => {
+    render({ queue: { items: [], paused: false, held: [held[0]!] } });
+    expect(container.textContent).toContain("1 to put back");
+  });
+
+  it("Put back and Discard hand the input up and busy only the chosen button", () => {
+    const onPutBackHeld = vi.fn();
+    const onDiscardHeld = vi.fn();
+    render({
+      queue: { items: [], paused: false, held },
+      onPutBackHeld,
+      onDiscardHeld,
+    });
+    act(() => heldButton("h1", "Put back")!.click());
+    expect(onPutBackHeld).toHaveBeenCalledWith(held[0]);
+    expect(heldButton("h1", "Put back")!.getAttribute("aria-busy")).toBe(
+      "true",
+    );
+    expect(heldButton("h1", "Discard")!.disabled).toBe(true);
+    act(() => heldButton("h2", "Discard")!.click());
+    expect(onDiscardHeld).toHaveBeenCalledWith("h2");
+    expect(heldButton("h2", "Discard")!.getAttribute("aria-busy")).toBe("true");
+  });
+});
+
+describe("PromptQueueLedge held inputs settle from their own request", () => {
+  // Each row settles only from the answer to the request sent for it
+  // (`heldRemovals`, keyed by held id and request id), and a disconnect
+  // releases an answer whose outcome is unknown.
+  const held = [{ id: "h1", text: "/review-pr 412", createdAt: 1 }];
+  const heldButton = (label: string) =>
+    [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        '[data-held-input="h1"] button',
+      ),
+    ].find((candidate) => candidate.textContent === label)!;
+  const busy = (label: string) =>
+    heldButton(label).getAttribute("aria-busy") === "true";
+  const row = () => container.querySelector('[data-held-input="h1"]')!;
+
+  it("a refusal of its own request shows on the row, frees both answers, and a retry is busy again", () => {
+    const onDiscardHeld = vi.fn();
+    const base = {
+      queue: { items: [], paused: false, held },
+      onPutBackHeld: vi.fn(),
+      onDiscardHeld,
+    };
+    render(base);
+    act(() => heldButton("Discard").click());
+    render({ ...base, heldRemovals: { h1: { requestId: "r1" } } });
+    expect(busy("Discard")).toBe(true);
+    render({
+      ...base,
+      heldRemovals: {
+        h1: { requestId: "r1", answered: true, error: "refused" },
+      },
+    });
+    expect(row().querySelector('[role="alert"]')?.textContent).toBe("refused");
+    expect(busy("Discard")).toBe(false);
+    expect(heldButton("Discard").disabled).toBe(false);
+    expect(heldButton("Put back").disabled).toBe(false);
+    act(() => heldButton("Discard").click());
+    expect(onDiscardHeld).toHaveBeenCalledTimes(2);
+    // The earlier refusal is still what the row holds until the new request
+    // is sent; it neither shows nor settles the retry.
+    expect(busy("Discard")).toBe(true);
+    expect(row().textContent).not.toContain("refused");
+  });
+
+  it("Put back stays busy until the request sent after the click is answered", () => {
+    const base = {
+      queue: { items: [], paused: false, held },
+      onPutBackHeld: vi.fn(),
+      onDiscardHeld: vi.fn(),
+      heldRemovals: {
+        h1: { requestId: "r0", answered: true as const, error: "old" },
+      },
+    };
+    render(base);
+    act(() => heldButton("Put back").click());
+    render(base);
+    expect(busy("Put back")).toBe(true);
+    render({ ...base, heldRemovals: { h1: { requestId: "r1" } } });
+    expect(busy("Put back")).toBe(true);
+    render({
+      ...base,
+      heldRemovals: { h1: { requestId: "r1", answered: true } },
+    });
+    expect(busy("Put back")).toBe(false);
+    expect(row().querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("Discard and Put back are released by a disconnect and by a reconnect that keeps the id", () => {
+    const onDiscardHeld = vi.fn();
+    const onPutBackHeld = vi.fn();
+    const base = {
+      queue: { items: [], paused: false, held },
+      onPutBackHeld,
+      onDiscardHeld,
+    };
+    render({ ...base, connected: true });
+    act(() => heldButton("Discard").click());
+    expect(busy("Discard")).toBe(true);
+    // The socket drops with the answer unanswered, then comes back with the
+    // same held id: the outcome is unknown, so the row is free again.
+    render({ ...base, connected: false });
+    render({ ...base, connected: true });
+    expect(busy("Discard")).toBe(false);
+    expect(heldButton("Discard").disabled).toBe(false);
+    expect(heldButton("Put back").disabled).toBe(false);
+    act(() => heldButton("Put back").click());
+    render({ ...base, connected: false });
+    render({ ...base, connected: true });
+    expect(busy("Put back")).toBe(false);
+    act(() => heldButton("Put back").click());
+    expect(onPutBackHeld).toHaveBeenCalledTimes(2);
+  });
+
+  it("another row's answer does not settle this one", () => {
+    const two = [...held, { id: "h2", text: "/other", createdAt: 2 }];
+    const base = {
+      queue: { items: [], paused: false, held: two },
+      onPutBackHeld: vi.fn(),
+      onDiscardHeld: vi.fn(),
+    };
+    render(base);
+    act(() => heldButton("Discard").click());
+    render({
+      ...base,
+      heldRemovals: {
+        h1: { requestId: "r1" },
+        h2: { requestId: "r2", answered: true, error: "refused" },
+      },
+    });
+    expect(busy("Discard")).toBe(true);
+    expect(row().textContent).not.toContain("refused");
+  });
+});

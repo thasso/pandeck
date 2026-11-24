@@ -2440,6 +2440,137 @@ describe("a failed prompt and its optimistic echo", () => {
     expect(state.optimistic.map((entry) => entry.id)).toEqual(["creq-c2"]);
   });
 
+  it("keeps a held skill on the session's queue state, and a Resend leaves it there", () => {
+    // A `/skill` held by a pending runtime selection is never queued: its echo
+    // goes, and the server keeps its exact text as a HELD input of the session
+    // (`PromptQueueState.held`), which every client is told about. No
+    // browser-only slot holds it, so nothing the composer does can drop it.
+    const typed = "/review-pr 412 --focus security";
+    const held = [{ id: "h1", text: typed, createdAt: 1 }];
+    const viewing: UIState = {
+      ...optimisticPrompt(false),
+      session: { sessionId: "s1", harness: "pi", agentType: "developer" },
+    } as UIState;
+    let state = apply(
+      {
+        type: "error",
+        message:
+          "Couldn't switch … /review-pr did not run; it is waiting above your message box …",
+        target: { type: "session", id: "s1" },
+        failedPromptClientRequestId: "c1",
+      },
+      viewing,
+    );
+    expect(state.optimistic).toEqual([]);
+    expect(state.forkDraft).toBeNull();
+    // Held with nothing queued: the queue state stays on the session.
+    state = apply(
+      {
+        type: "promptQueue",
+        sessionId: "s1",
+        queue: { items: [], paused: false, held },
+      },
+      state,
+    );
+    expect(state.session?.promptQueue?.held).toEqual(held);
+    // Resend stages its own text in the composer; the held input is untouched.
+    state = reduceAssistantState(state, {
+      kind: "sessionDraftStaged",
+      sessionId: "s1",
+      text: "resend this",
+    });
+    expect(state.forkDraft?.text).toBe("resend this");
+    expect(state.session?.promptQueue?.held).toEqual(held);
+    // Put back or Discard on any device: the server's queue no longer has it.
+    state = apply(
+      {
+        type: "promptQueue",
+        sessionId: "s1",
+        queue: { items: [], paused: false },
+      },
+      state,
+    );
+    expect(state.session?.promptQueue).toBeUndefined();
+  });
+
+  it("settles a held input's removal only from its own request's answer, never from a session failure", () => {
+    let state = reduceAssistantState(createInitialState(), {
+      kind: "heldInputRemovalSent",
+      sessionId: "s1",
+      id: "h1",
+      requestId: "r1",
+    });
+    expect(state.heldInputRemovals).toEqual({
+      s1: { h1: { requestId: "r1" } },
+    });
+    // Any other failure of the session is the session's, not this row's.
+    state = apply(
+      {
+        type: "error",
+        message: "The selected runtime model is unavailable",
+        target: { type: "session", id: "s1" },
+      },
+      state,
+    );
+    expect(state.heldInputRemovals.s1?.h1).toEqual({ requestId: "r1" });
+    // Sent again before the first answer: only the newer request settles it.
+    state = reduceAssistantState(state, {
+      kind: "heldInputRemovalSent",
+      sessionId: "s1",
+      id: "h1",
+      requestId: "r2",
+    });
+    state = apply(
+      {
+        type: "heldInputAnswer",
+        requestId: "r1",
+        sessionId: "s1",
+        id: "h1",
+        error: "late refusal",
+      },
+      state,
+    );
+    expect(state.heldInputRemovals.s1?.h1).toEqual({ requestId: "r2" });
+    const failuresBefore = state.sessionFailures;
+    state = apply(
+      {
+        type: "heldInputAnswer",
+        requestId: "r2",
+        sessionId: "s1",
+        id: "h1",
+        error: "Unknown session.",
+      },
+      state,
+    );
+    expect(state.heldInputRemovals.s1?.h1).toEqual({
+      requestId: "r2",
+      answered: true,
+      error: "Unknown session.",
+    });
+    // One home: the refusal is the row's, never also above the composer.
+    expect(state.sessionFailures).toBe(failuresBefore);
+  });
+
+  it("a lost connection drops held removals in flight or done, and keeps refusals", () => {
+    let state: UIState = {
+      ...createInitialState(),
+      hydrationSource: "live",
+      connected: true,
+      heldInputRemovals: {
+        s1: {
+          pending: { requestId: "a" },
+          ok: { requestId: "b", answered: true },
+          refused: { requestId: "c", answered: true, error: "refused" },
+        },
+        s2: { pending: { requestId: "d" } },
+      },
+    };
+    state = reduceAssistantState(state, { kind: "status", connected: false });
+    expect(state.heldInputRemovals).toEqual({
+      s1: { refused: { requestId: "c", answered: true, error: "refused" } },
+    });
+  });
+
   it("keeps every echo for a failure that is not a prompt send", () => {
     const state = apply(
       {

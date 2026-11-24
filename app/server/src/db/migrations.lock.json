@@ -98,5 +98,6 @@
   "0097_drop_subagent_registry.sql": "fc0829dde120552e3dc085cd567db212f1de4c36086109968f9b147924c2690d",
   "0098_session_list_revisions.sql": "dfe8caaedd2961da40480bbf7191ff8bb43273a1f99f41ddb1e689ef8d33a1f8",
   "0099_openai_compatible_account_bindings.sql": "53b685a217bf16c1ae61d7d9f2712bdaa539edffe32d0f6287c1d5d505d370c3",
-  "0100_peer_prompt_withdraw.sql": "507074b4927624c7bc784654ddae955bf36259e019227091698dc6abd3925340"
+  "0100_peer_prompt_withdraw.sql": "507074b4927624c7bc784654ddae955bf36259e019227091698dc6abd3925340",
+  "0101_session_pending_runtime.sql": "bb358bafff833343b9286651c574356521560fbd7bce72b0b8610fbc7084ea76"
 }

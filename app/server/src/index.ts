@@ -318,7 +318,11 @@ import {
   subscribeSessionToolCompleted,
 } from "./session/runtime/liveSession.ts";
 import { notifySessionTurnCompleted } from "./webPush.ts";
-import { trackSessionRunHealth } from "./accountHealth.ts";
+import {
+  subscribeAccountHealthChanges,
+  trackSessionRunHealth,
+} from "./accountHealth.ts";
+import { wakePendingRuntimeSessions } from "./sessionPendingRuntime.ts";
 import { serverBuildInfo } from "./buildInfo.ts";
 import { sessionArtifactDeliveryHeaders } from "./sessionArtifactHttp.ts";
 import {
@@ -2254,6 +2258,11 @@ server.listen(PORT, HOST, () => {
   const deliveryBoot = createDeliveryBoot(deliveryScheduler);
   const offerDelivery = deliveryBoot.offer;
   setDeliveryWake(offerDelivery);
+  // A turn held by its pending runtime selection waits on its accounts: when
+  // one is enabled, logged in again or leaves its bench, the held work is
+  // offered again (`sessionPendingRuntime.ts`).
+  subscribeCredentialProfileChanges(() => wakePendingRuntimeSessions());
+  subscribeAccountHealthChanges(() => wakePendingRuntimeSessions());
   setPromptQueueHost({
     live: (sessionId) => {
       const live = hub.getLiveById(sessionId);

@@ -19,6 +19,7 @@ const listed = (requestId: string, sessionId = "s1"): ServerMessage => ({
   requestId,
   sessionId,
   accounts: [{ id: `cp-${requestId}`, name: requestId, enterprise: false }],
+  boundEligible: requestId !== "first",
 });
 
 describe("the account picker's state", () => {
@@ -60,35 +61,66 @@ describe("the account picker's state", () => {
     );
   });
 
+  it("keeps the last list shown while the same session asks again, never another session's", () => {
+    let state = reduceAssistantState(createInitialState(), {
+      kind: "accountMoveTargetsRequested",
+      sessionId: "s1",
+      requestId: "first",
+    });
+    state = server(state, listed("first"));
+    expect(state.accountMoveTargets!.boundEligible).toBe(false);
+    // The next turn's target changed: asked again, the answer stays on screen,
+    // its verdict on the bound account with it.
+    state = reduceAssistantState(state, {
+      kind: "accountMoveTargetsRequested",
+      sessionId: "s1",
+      requestId: "second",
+    });
+    expect(state.accountMoveTargets!.targets.status).toBe("refreshing");
+    expect(dataOf(state.accountMoveTargets!.targets)).toEqual([
+      { id: "cp-first", name: "first", enterprise: false },
+    ]);
+    expect(state.accountMoveTargets!.boundEligible).toBe(false);
+    state = server(state, listed("second"));
+    expect(state.accountMoveTargets!.boundEligible).toBe(true);
+    state = reduceAssistantState(state, {
+      kind: "accountMoveTargetsRequested",
+      sessionId: "s2",
+      requestId: "other",
+    });
+    expect(state.accountMoveTargets!.targets.status).toBe("loading");
+    expect(state.accountMoveTargets!.boundEligible).toBeUndefined();
+  });
+
   it("keeps a move pending until its own answer, which puts a refusal on the session", () => {
     let state = reduceAssistantState(createInitialState(), {
-      kind: "accountMoveSent",
+      kind: "runtimeChangeSent",
       sessionId: "s1",
       requestId: "m2",
     });
-    expect(state.accountMovePending).toEqual({ s1: "m2" });
+    expect(state.runtimeChangePending).toEqual({ s1: "m2" });
 
     // An answer to an earlier move does not retire the one in flight.
     state = server(state, {
-      type: "sessionAccountMoveAnswer",
+      type: "pendingRuntimeAnswer",
       requestId: "m1",
       sessionId: "s1",
     });
-    expect(state.accountMovePending).toEqual({ s1: "m2" });
+    expect(state.runtimeChangePending).toEqual({ s1: "m2" });
 
     state = server(state, {
-      type: "sessionAccountMoveAnswer",
+      type: "pendingRuntimeAnswer",
       requestId: "m2",
       sessionId: "s1",
       error: "Account B needs login.",
     });
-    expect(state.accountMovePending).toEqual({});
+    expect(state.runtimeChangePending).toEqual({});
     expect(state.sessionFailures.s1).toBe("Account B needs login.");
   });
 
   it("retires the pending controls when the connection drops", () => {
     let state = reduceAssistantState(createInitialState(), {
-      kind: "accountMoveSent",
+      kind: "runtimeChangeSent",
       sessionId: "s1",
       requestId: "m1",
     });
@@ -98,40 +130,40 @@ describe("the account picker's state", () => {
       requestId: "l1",
     });
     state = reduceAssistantState(state, { kind: "status", connected: false });
-    expect(state.accountMovePending).toEqual({});
+    expect(state.runtimeChangePending).toEqual({});
     expect(errorOf(state.accountMoveTargets!.targets)).toBe(
       "The connection was lost before the accounts arrived.",
     );
   });
 
-  it("keeps a successful move silent", () => {
+  it("keeps a landed runtime change silent", () => {
     let state = reduceAssistantState(createInitialState(), {
-      kind: "accountMoveSent",
+      kind: "runtimeChangeSent",
       sessionId: "s1",
       requestId: "m1",
     });
     state = server(state, {
-      type: "sessionAccountMoveAnswer",
+      type: "pendingRuntimeAnswer",
       requestId: "m1",
       sessionId: "s1",
     });
-    expect(state.accountMovePending).toEqual({});
+    expect(state.runtimeChangePending).toEqual({});
     expect(state.sessionFailures.s1).toBeUndefined();
   });
 
-  it("retires a refused move's failure when the session's next move is sent", () => {
+  it("retires a refused change's failure when the session's next change is sent", () => {
     let state = server(createInitialState(), {
       type: "error",
       message: "Unrelated failure",
       target: { type: "session", id: "s2" },
     });
     state = reduceAssistantState(state, {
-      kind: "accountMoveSent",
+      kind: "runtimeChangeSent",
       sessionId: "s1",
       requestId: "first",
     });
     state = server(state, {
-      type: "sessionAccountMoveAnswer",
+      type: "pendingRuntimeAnswer",
       requestId: "first",
       sessionId: "s1",
       error: "Account B needs login.",
@@ -139,17 +171,17 @@ describe("the account picker's state", () => {
     expect(state.sessionFailures.s1).toBe("Account B needs login.");
 
     state = reduceAssistantState(state, {
-      kind: "accountMoveSent",
+      kind: "runtimeChangeSent",
       sessionId: "s1",
       requestId: "retry",
     });
     expect(state.sessionFailures.s1).toBeUndefined();
     state = server(state, {
-      type: "sessionAccountMoveAnswer",
+      type: "pendingRuntimeAnswer",
       requestId: "retry",
       sessionId: "s1",
     });
-    expect(state.accountMovePending).toEqual({});
+    expect(state.runtimeChangePending).toEqual({});
     expect(state.sessionFailures.s1).toBeUndefined();
     expect(state.sessionFailures.s2).toBe("Unrelated failure");
   });

@@ -20,6 +20,7 @@ import {
   type AgentType,
   DEFAULT_SESSION_SCOPE,
   isSessionPeerTurnCap,
+  parsePendingRuntime,
   sessionModeOrDefault,
   sessionScopeOrFailClosed,
   type Harness,
@@ -28,6 +29,7 @@ import {
   type SessionMode,
   type SessionOutcomeAttention,
   type SessionOutcomeKind,
+  type SessionPendingRuntime,
   type SessionScope,
   type SettableSpawnOwnership,
   type SpawnOwnership,
@@ -135,6 +137,11 @@ export interface SessionMeta {
    */
   compactionWindow?: number;
   compactionWindowNote?: string;
+  /**
+   * The model, effort and account the next turn starts on. Only
+   * {@link setPendingRuntime} writes it (`docs/session-runtime-switching.md`).
+   */
+  pendingRuntime?: SessionPendingRuntime;
   archivedAt?: number;
   /**
    * When the user last settled this session out of the Sessions inbox working
@@ -242,6 +249,7 @@ interface DbSessionRow {
   mode: string;
   compaction_window: number | null;
   compaction_window_note: string | null;
+  pending_runtime: string | null;
   archived_at_ms: number | null;
   settled_at_ms: number | null;
   inbox_position: number | null;
@@ -291,6 +299,7 @@ function fromRow(row: DbSessionRow): SessionMeta {
     ...(row.compaction_window_note !== null
       ? { compactionWindowNote: row.compaction_window_note }
       : {}),
+    ...pendingRuntimeFields(row.pending_runtime),
     ...(row.archived_at_ms !== null ? { archivedAt: row.archived_at_ms } : {}),
     ...(row.settled_at_ms !== null ? { settledAt: row.settled_at_ms } : {}),
     ...(row.inbox_position !== null
@@ -574,6 +583,48 @@ function setCompactionWindow(
     .run(tokens, note ?? null, id);
   if (result.changes !== 1)
     throw new Error("The session was not found or has been deleted.");
+}
+
+/** A stored pending selection; an unreadable one reads as none. */
+function pendingRuntimeFields(json: string | null): {
+  pendingRuntime?: SessionPendingRuntime;
+} {
+  if (json === null) return {};
+  try {
+    const pendingRuntime = parsePendingRuntime(JSON.parse(json));
+    return pendingRuntime ? { pendingRuntime } : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * The one writer of the pending runtime selection (`null` clears it),
+ * THROWING when no live row changed. Reports the row to the session list.
+ */
+function setPendingRuntime(
+  id: string,
+  pending: SessionPendingRuntime | null,
+): void {
+  const result = getDb()
+    .prepare(
+      "UPDATE session_index SET pending_runtime = ? WHERE id = ? AND deleted_at_ms IS NULL",
+    )
+    .run(pending ? JSON.stringify(pending) : null, id);
+  if (result.changes !== 1)
+    throw new Error("The session was not found or has been deleted.");
+  touchSessionRows([id]);
+}
+
+/** Live sessions that have a pending runtime selection. */
+function sessionIdsWithPendingRuntime(): string[] {
+  return (
+    getDb()
+      .prepare(
+        "SELECT id FROM session_index WHERE pending_runtime IS NOT NULL AND deleted_at_ms IS NULL",
+      )
+      .all() as { id: string }[]
+  ).map(({ id }) => id);
 }
 
 /**
@@ -2160,6 +2211,8 @@ export const sessionStore = {
   switchCredentialProfile,
   requireEnterprise,
   setCompactionWindow,
+  setPendingRuntime,
+  sessionIdsWithPendingRuntime,
   markDeleted,
   remove,
   markRead,

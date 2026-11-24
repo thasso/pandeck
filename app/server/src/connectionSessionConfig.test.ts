@@ -154,3 +154,42 @@ test("a session-config change that settles reports nothing", async () => {
 
   assert.deepEqual(errorsIn(sent), [], "success is silent");
 });
+
+test("a started session refuses setModel and setThinkingLevel: its Runtime section changes the next turn", async () => {
+  const { sessionStore } = await import("./db/sessionStore.ts");
+  const id = "s-config-started";
+  sessionStore.upsert({
+    id,
+    harness: "pi",
+    agentType: "assistant",
+    messageCount: 2,
+  });
+  try {
+    const calls: string[] = [];
+    const { conn, sent } = makeConnection({
+      setModel: () => calls.push("model"),
+      setReasoning: () => calls.push("effort"),
+    });
+    conn.viewing = { sessionId: id, live: true };
+    const handle = (conn.handle as (m: ClientMessage) => Promise<void>).bind(
+      conn,
+    );
+    await handle({ type: "setModel", provider: "pi", id: "other" });
+    await handle({ type: "setThinkingLevel", level: "high" });
+    await Promise.resolve();
+    assert.deepEqual(calls, [], "the engine is untouched");
+    assert.deepEqual(
+      errorsIn(sent).map((error) => (error as { target?: unknown }).target),
+      [
+        { type: "session", id },
+        { type: "session", id },
+      ],
+    );
+    assert.match(
+      (errorsIn(sent)[0] as { message: string }).message,
+      /Runtime section/,
+    );
+  } finally {
+    sessionStore.remove(id);
+  }
+});

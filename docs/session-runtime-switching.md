@@ -1,15 +1,154 @@
 # Session runtime switching
 
-A started session can change its model and its effort (thinking level). This
-document is the contract for those changes. It grows with Task-1485: pending
-selections, account moves made pending and switching between harnesses are
-planned; until they land, what follows is all that exists. Account moves are
-`docs/account-routing.md` "Moving a session by choice".
+A started session can change the model, effort (thinking level) and account its
+next turn starts on. This document is the contract for those changes. It grows
+with Task-1485: switching between harnesses is planned; until it lands, every
+change stays within the session's current engine. Failover and the other moves
+the app makes itself are `docs/account-routing.md` "Live account switching".
 
-## Model and effort between turns
+## Pending selection
 
-Both harnesses apply a change at once, to every later turn. The change stays on
-the session's harness and bound account; moving to another harness is refused.
+A started session's change is a **pending selection**: one complete target
+(model, effort, account) stored on the session row
+(`session_index.pending_runtime`, migration 0101) and carried as
+`pendingRuntime` on `SessionState` and `SessionListItem`. Nothing about the
+engine changes until the next turn is admitted. Setting it or resetting it
+leaves no trace in the transcript or the native session, survives a restart, and
+has no expiry. A fork does not inherit it.
+
+`app/server/src/sessionPendingRuntime.ts` owns both halves.
+
+- **Setting** (`setPendingRuntime`, or `session_control` `move_account`) is
+  accepted at any time, during a turn too. A change names any of the three
+  parts; the server completes it from the current pending selection, else the
+  session's current runtime, and clamps the effort to the target model. A target
+  equal to what the session runs now clears the selection. Only static rules
+  refuse at set time: a model of another harness ("Another harness: not
+  available yet"), one the bound account's kind cannot run, an unknown model,
+  and for a chosen account another kind, a disabled one, one that is not
+  enterprise when the session requires it, or one that does not offer the model
+  at that effort. Health and benches are judged when the turn starts. `setBy`
+  records the user or the coordinator.
+- **Order.** Sets and resets of one session run one at a time, in request order,
+  each from the selection the previous one left: two partial changes both land,
+  and a reset is never undone by a set asked for before it. A set recomputes
+  when a turn's admission spent the selection while it read the session.
+  `move_account` asks its ownership again with the write, so a coordinator the
+  user took the child over from changes nothing.
+- **Reset** (`clearPendingRuntime`) drops it. Both answer with
+  `pendingRuntimeAnswer`; a refusal carries `error` and becomes the session's
+  failure (`docs/messaging.md`).
+- **Account.** "Automatic" keeps the bound account when it can run the target
+  and asks the router otherwise, within the bound account's kind and enterprise
+  requirement. A chosen account must still pass every move rule (below). Only a
+  subscription login moves; any other account alone serves its models.
+
+### Applying it
+
+`runtimePrompt.ts` applies the selection when it admits a new turn of any origin
+(a user prompt, a queued prompt, a peer prompt, a background wake, a scheduled
+run, an automatic continuation). It does not apply to a steer into a running
+turn, a steer-only message, the account-recovery (failover) continuation, or a
+turn the provider already started (`beginRuntimeProviderTurn`). Order: recheck
+the target, move the account (`switchIdleSessionAccount`, the same engine switch
+as failover), then set model and effort through the runtime adapter, then
+recheck the whole target (enabled, enterprise, login, bench, offers the model at
+that effort). The final admission boundary checks it once more synchronously
+(binding, model, effort and the account rules) and the selection is cleared only
+once the turn is admitted there; a refusal anywhere before keeps it. While a
+selection applies, the disabled-account move does not run: it would replace the
+chosen account. A changed account appends the display-only marker
+`Switched from A to B — chosen by you.` (or
+`— chosen by its coordinating session.`); a model or effort change appends
+nothing.
+
+### When it cannot apply
+
+The turn is **held**, never failed and never run on the old engine
+(`PendingRuntimeHeldError`, a Stop-class hold):
+
+- The selection stays pending. The reason is the session's failure and its run
+  failure, for example "Couldn't switch to Opus · High · Work: Work needs login.
+  The change is still pending; change or reset it to continue."
+- When the only obstacle is background work keeping the source engine open, the
+  reason is "Waiting for background work on Claude; stop it to switch now."
+- A user prompt is refused before anything is appended. It goes to the user's
+  queue, and the error adds "Your message is waiting in your queue."
+- A skill invocation cannot be queued (Task-1023), so the server keeps it as a
+  **held input** of the session: the exact submitted text, stored in
+  `session_prompt_queue` with `kind = 'held'` (migration 0101), in order. It
+  rides `PromptQueueState.held`, so every device sees it, after a reload and a
+  restart too. The error adds "/X did not run; it is waiting above your message
+  box to put back once the change applies or is reset."
+  - The composer's queue strip (`PromptQueueLedge`) lists each with **Put back**
+    and **Discard**. Put back puts the text into the composer: as is into an
+    empty field, else first and on its own line above what is typed, never
+    replacing it. The client sends `removeHeldInput` only once the field holds
+    the text and this browser's draft has stored it. Discard sends
+    `removeHeldInput` at once.
+  - Each `removeHeldInput` carries a `requestId`, and the server answers that
+    request alone with `heldInputAnswer` (`error` when refused). The row's
+    answer stays busy until its OWN answer arrives (or the id leaves the queue);
+    a disconnect releases it as unknown. A refusal shows on the row and nowhere
+    else, never as the session's failure above the composer; no other failure of
+    the session settles or marks the row (`docs/messaging.md`).
+  - A held input is never sent on its own: not when the selection applies or is
+    reset, not by the boot drain. Queue commands (Remove, Clear, Send next)
+    never touch it. It stays until Put back or Discard; a fork does not copy it,
+    and deleting the session removes it.
+- Queued prompts, peer prompts and background wakes stay where they were, with
+  no attempt spent.
+- Held work is offered again (a delivery wake) when the selection is changed or
+  reset, when background work of the session ends in any way (a Stop from the
+  background UI included: its fact defers but still wakes), and when any account
+  changes (enabled, enterprise, login, bench) for every session with a
+  selection. The scheduler starts nothing when nothing waits.
+
+## Web
+
+The inspector's **Runtime** section (`SessionRuntimeSection.tsx`, shown for a
+started session) has Model, Effort and Account rows for the next turn. Models of
+another harness or account kind are listed disabled with their reason
+(`lib/sessionRuntimeControl.ts`). The Account row offers Automatic and the
+accounts the server lists for the pending model
+(`listSessionAccountMoveTargets`), asked again whenever anything that list
+judges changes: the session and its bound account, its next-turn model or
+effort, its enterprise requirement, and any account's kind, enabled, enterprise
+or health projection (including `benchRevision`, so a new bench scope refreshes
+it even when the health state stays the same), and any account's model listing
+(the `models` push reloads the account projection, so a listing that gains or
+drops the next turn's model refreshes it too; `accountTargetsRefreshKey`). A
+refresh keeps the last list shown. The answer also says whether the bound
+account itself can run the next turn (`boundEligible`: enabled, enterprise
+requirement, offers the model at that effort, login, bench), judged by the rules
+a selection naming it is applied with. An account that cannot move shows as
+text. While a change is pending, a "Next turn" row states the target and what
+runs now, names a coordinator's choice, and offers Reset.
+
+While a change is pending, the composer shows a chip "Next turn: <model · effort
+· account>". Tapping it opens the inspector at the Runtime section, as the
+object dock on a phone.
+
+`/model`, `/effort` and `/account` are client slash commands
+(`lib/runtimeSlashCommand.ts`). Without an argument they open the Runtime
+section. With one they set the pending selection at once, even mid-turn, and are
+never queued. Their argument completes from the session's models, the target
+model's levels, or Automatic and that same server answer: the bound account only
+when `boundEligible`, then the listed accounts. `/account` is offered only when
+that gives more than one account, and not before the list has answered; the
+client never judges an account itself. They are offered only for a started
+session.
+
+A started session refuses `setModel` and `setThinkingLevel` with "This session
+has started: change its model or effort in the Runtime section, from its next
+turn." Those two messages serve only a session that has not started (a draft on
+the server), whose change applies at once.
+
+## Engine changes
+
+Applying a pending selection, or changing an unstarted draft, goes through each
+engine's own model and effort controls. The change stays on the session's
+harness and bound account; moving to another harness is refused.
 
 | Change              | pi                                          | Claude                                     |
 | ------------------- | ------------------------------------------- | ------------------------------------------ |
@@ -85,10 +224,9 @@ the session's harness and bound account; moving to another harness is refused.
   changed restarts once its background work allows
   (`docs/compaction-window.md`).
 
-### Web
+### Draft pickers
 
 `startedModelDisabled` (`app/web/src/lib/sessionCapabilities.ts`) disables what
-the server would refuse. A started Claude session offers the Claude models its
+the server would refuse for a Claude session's models: the Claude models its
 bound account offers, all of them while that list is unknown, and never another
-harness's. No picker for a started session is reachable today: the composer's
-runtime pickers are gone, and the inspector's Runtime section is planned.
+harness's.

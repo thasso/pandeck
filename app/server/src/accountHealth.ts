@@ -539,13 +539,35 @@ export function initializeAccountHealth(host: {
   });
   store.setGatewayServed(gatewayServed);
   host.profiles();
-  announceHealth = () => host.broadcast({ type: "accountHealthChanged" });
+  announceHealth = () => {
+    host.broadcast({ type: "accountHealthChanged" });
+    for (const listener of healthChangeListeners) {
+      try {
+        listener();
+      } catch {
+        /* Listeners are independent. */
+      }
+    }
+  };
   store.subscribeHealth(announceHealth);
   store.subscribe((accounts) =>
     host.broadcast({ type: "accountLoginAlerts", accounts }),
   );
   host.subscribeChanges(() => host.profiles());
   host.subscribeDeleted((id) => store!.forget(id));
+}
+
+const healthChangeListeners = new Set<() => void>();
+
+/**
+ * Called whenever an account's health or bench changes (a login restored, a
+ * bench expired), for server work that waits on one.
+ */
+export function subscribeAccountHealthChanges(
+  listener: () => void,
+): () => void {
+  healthChangeListeners.add(listener);
+  return () => healthChangeListeners.delete(listener);
 }
 
 /** Tells every browser an account's card changed, as a health change does. */
