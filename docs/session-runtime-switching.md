@@ -230,3 +230,48 @@ harness and bound account; moving to another harness is refused.
 the server would refuse for a Claude session's models: the Claude models its
 bound account offers, all of them while that list is unknown, and never another
 harness's.
+
+## Engine bindings
+
+A session's **engine binding** names what runs it: harness, account, provider,
+model, effort and the engine's own id for the session (its **native id**).
+Bindings live in `session_engine_binding` (migration 0102,
+`db/sessionEngineBinding.ts`), numbered from 1 per session; exactly one per
+session is active (no `ended_at_ms`). Each records the session-log cursor and
+the run it began at; the first binding has cursor 0 and no run. The migration
+gave every existing row, tombstones included, its first binding.
+
+- **Projection.** `session_index`'s `harness`, `provider`,
+  `provider_session_id`, `model`, `thinking_level` and `credential_profile_id`
+  are the active binding's projection. Only `sessionStore.upsert` and failover's
+  `switchCredentialProfile` write them, and each writes the binding in the same
+  transaction, so the row always equals the active binding. Nothing else writes
+  either (`engineBindingBoundary.test.ts`).
+- **Native id.** Claude's is the SDK session id (`provider_session_id`, absent
+  until the first query). pi's is the app id: every build so far opened the
+  transcript the app id names, whatever an older row stored. Only the binding is
+  stored, never a path. A stored pi session's transcript resolves through its
+  binding (`piSessionFile`); `canonicalPiSessionPath` derives it from the app id
+  only where no row exists yet (a fresh session, rowless recovery). A pi binding
+  whose native id differs from the app id is refused until the cross-harness
+  switch can open one.
+- **One accessor.** Capability readers ask `activeEngine(...)`
+  (`harnesses/activeEngine.ts`) what a session runs on, and native-ref readers
+  `activeNativeRef(...)`; readers holding only an id use
+  `harnessRegistry.engineOf`. Remaining direct `.harness` reads are pinned per
+  module and only shrink.
+- **Per-run attribution.** A run's `run.started` marker (server-only) records
+  the engine it starts on: harness, account, provider, model and effort as the
+  adapter reports them. Run-completion listeners receive that stamp, so usage is
+  marked against the account the run actually used; a marker without one (an
+  older log) falls back to the session's active binding. After an account move
+  the one logical completion carries the stamp of the attempt that finished it,
+  not the first attempt's, and each attempt keeps its own marker.
+- **Offline readers** (`measure:session`, `measure:tasks`) never ask the
+  binding: it lives behind `getDb()`, which migrates, even when the directory is
+  this process's own `DATA_DIR`. They read the `session_index` projection over a
+  read-only connection and derive a pi file from the app id, which every pi
+  binding's native id equals.
+
+Until the cross-harness switch lands, no writer ends a binding or starts a
+second one.

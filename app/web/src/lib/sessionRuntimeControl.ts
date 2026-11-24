@@ -21,7 +21,7 @@ import type { SessionRuntimeControl } from "../components/SessionRuntimeSection.
 import { dataOf, type LoadState } from "./loadState.ts";
 import type { RuntimeCommandContext } from "./runtimeSlashCommand.ts";
 
-/** Why another harness's model is disabled; sub-PR 3 lifts this. */
+/** Why another harness's model is disabled; the cross-harness switch (Task-1485 sub-PR 4) lifts this. */
 export const OTHER_HARNESS_REASON = "Another harness: not available yet";
 /** Why a model the bound account's kind cannot run is disabled. */
 export const OTHER_ACCOUNT_KIND_REASON = "Needs another kind of account";

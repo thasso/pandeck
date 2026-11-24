@@ -225,6 +225,8 @@ export interface PiAccountSession {
 
 export class PiLiveSession implements LiveSession {
   readonly live = true;
+  /** Our session id, separate from pi's native `engine.sessionId`. */
+  readonly appId: string;
   readonly key: string;
   /** Viewers and the idle clock; a prompt admitted but not yet running is activity too. */
   private readonly residency = new SessionResidency(
@@ -316,7 +318,11 @@ export class PiLiveSession implements LiveSession {
     ) => Promise<PiAccountSession>,
   ) {
     const engine = currentEngine;
-    this.key = engine.sessionId;
+    // Our id is fixed here, from the engine the session opened on: a pi
+    // session's first binding has native id = app id (design 20). An engine
+    // swap (account failover) keeps it; the native id is `engine.sessionId`.
+    this.appId = engine.sessionId;
+    this.key = this.appId;
     // Registered by its store (`track`) as soon as it is built.
     this.residency.hold(() => {
       this.dispose();
@@ -325,16 +331,16 @@ export class PiLiveSession implements LiveSession {
     });
     this.unsubscribe = engine.subscribe((event) => this.onAgentEvent(event));
     this.unsubscribeQuestions = subscribeAgentQuestionChanges((sessionId) => {
-      if (sessionId !== this.engine.sessionId) return;
+      if (sessionId !== this.appId) return;
       this.broadcastState();
     });
     this.unsubscribeApprovals = subscribePendingApprovalChanges((sessionId) => {
-      if (sessionId !== this.engine.sessionId) return;
+      if (sessionId !== this.appId) return;
       this.broadcastState();
     });
     this.unsubscribeTaskChoices = subscribeChoosingTaskCardChanges(
       (sessionId) => {
-        if (sessionId !== this.engine.sessionId) return;
+        if (sessionId !== this.appId) return;
         this.broadcastState();
       },
     );
@@ -344,7 +350,7 @@ export class PiLiveSession implements LiveSession {
     // the live title and then get persisted back into the session index.
     this.title = restorePiLiveTitle(
       this.engine.sessionName,
-      sessionStore.get(this.engine.sessionId)?.title,
+      sessionStore.get(this.appId)?.title,
     );
     // Registry sync: record a clean per-session metadata entry. Covers every pi
     // create path (acquireNew / acquireExisting / fork all run through track →
@@ -353,12 +359,12 @@ export class PiLiveSession implements LiveSession {
   }
 
   get sessionId(): string {
-    return this.engine.sessionId;
+    return this.appId;
   }
 
-  /** Our session id (= the pi session id; pi sessions are not re-id'd). */
+  /** Our session id; pi's own is `engine.sessionId` (equal for every session so far). */
   get id(): string {
-    return this.engine.sessionId;
+    return this.appId;
   }
 
   /** Which engine runs this session — pi, for every {@link PiLiveSession}. */
@@ -372,8 +378,9 @@ export class PiLiveSession implements LiveSession {
   }
 
   /**
-   * Write/refresh this pi session's metadata row. For pi our id IS the provider
-   * session id, and the log path is derived from the id (never stored). Only
+   * Write/refresh this pi session's metadata row: our id, and pi's native id as
+   * the provider session id (equal so far; the binding derives the transcript
+   * from the native id, `piSessionFile.ts`). Only
    * meaningful once the session has messages. Best-effort — a metadata-store
    * hiccup must never affect the run.
    */
@@ -385,7 +392,7 @@ export class PiLiveSession implements LiveSession {
       const thinkingLevelValue = this.engine.thinkingLevel as
         string | undefined;
       sessionStore.upsert({
-        id: this.engine.sessionId,
+        id: this.appId,
         harness: "pi",
         agentType: this.kind,
         ...(model?.provider !== undefined ? { provider: model?.provider } : {}),
@@ -531,7 +538,7 @@ export class PiLiveSession implements LiveSession {
     this.lastContextBroadcastAt = now;
     this.broadcast({
       type: "contextInfo",
-      sessionId: this.engine.sessionId,
+      sessionId: this.appId,
       info: this.contextInfo(),
     });
   }
@@ -539,7 +546,7 @@ export class PiLiveSession implements LiveSession {
   /* --------------------------------- events -------------------------------- */
 
   private onAgentEvent(event: AgentSessionEvent): void {
-    const sessionId = this.engine.sessionId;
+    const sessionId = this.appId;
     switch (event.type) {
       case "agent_start": {
         this.residency.cancel();
@@ -720,7 +727,7 @@ export class PiLiveSession implements LiveSession {
         // coalesce a pending-observation flush here before context is reset. The
         // manual `/compact` path already awaits its own pre-flush; flushSession is
         // single-flight, so a redundant trigger is harmless.
-        void memoryScheduler.flushBeforeReset(this.engine.sessionId);
+        void memoryScheduler.flushBeforeReset(this.appId);
         break;
       }
       case "compaction_end": {
@@ -733,7 +740,7 @@ export class PiLiveSession implements LiveSession {
         // next turn re-injects (Task 96). Idempotent, so a double reset from the
         // explicit /compact path is harmless.
         if (!event.aborted && event.result) {
-          resetMemorySessionContext(this.engine.sessionId);
+          resetMemorySessionContext(this.appId);
         }
         break;
       }
@@ -941,7 +948,7 @@ export class PiLiveSession implements LiveSession {
   /** Where this session's host-command turns are shown (`sessionKit/hostCommandTurn.ts`). */
   private get hostCommandTarget(): HostCommandTurnTarget {
     return {
-      sessionId: this.engine.sessionId,
+      sessionId: this.appId,
       broadcast: (message) => this.broadcast(message),
       adapterEvents: this.adapterEvents,
     };
@@ -959,7 +966,7 @@ export class PiLiveSession implements LiveSession {
     assertAccountRecoveryAdmission(this.sessionId);
     if (this.running)
       throw new SessionBusyError(
-        this.engine.sessionId,
+        this.appId,
         "Cannot run a slash command while the agent is streaming.",
       );
     if (this.host.isReloadQueued()) throw new Error(RELOAD_QUEUED_MESSAGE);
@@ -1104,7 +1111,7 @@ export class PiLiveSession implements LiveSession {
       skillDispatch: (name) =>
         piSkillDispatch(
           { getSkills: () => ({ skills: this.engine.skills() }) },
-          activeSkillsForSession(this.engine.sessionId, this.kind) ?? [],
+          activeSkillsForSession(this.appId, this.kind) ?? [],
           name,
         ),
       setModel: (model) => this.setModel(model as PiEngineModel),
@@ -1112,6 +1119,13 @@ export class PiLiveSession implements LiveSession {
         this.setThinkingLevel(level as ThinkingLevel),
       modelProvider: () => this.engine.model?.provider,
       modelId: () => this.engine.model?.id,
+      runFacts: () => {
+        const thinkingLevel = this.engine.thinkingLevel as string | undefined;
+        return {
+          ...(this.profileId ? { credentialProfileId: this.profileId } : {}),
+          ...(thinkingLevel ? { thinkingLevel } : {}),
+        };
+      },
       completionMetadata: () => {
         const model = (this.engine.model as unknown as PiModel | undefined)?.id;
         const usage = this.turnUsage();
@@ -1245,13 +1259,12 @@ export class PiLiveSession implements LiveSession {
     // `/skill:` token and context pi is sent.
     const titleText = options.titleText ?? promptText;
     const { promptWithFiles, images } = buildModelPromptWithAttachments(
-      this.engine.sessionId,
+      this.appId,
       promptText,
       attachments,
     );
 
-    const storedTitle =
-      this.title ?? sessionStore.get(this.engine.sessionId)?.title;
+    const storedTitle = this.title ?? sessionStore.get(this.appId)?.title;
     const shouldAutoName = shouldAutoNamePiSession({
       sessionManager: this.engine.transcript,
       ...(this.engine.sessionName !== undefined
@@ -1300,7 +1313,7 @@ export class PiLiveSession implements LiveSession {
       if (options.hidden) return;
       this.broadcast({
         type: "userMessage",
-        sessionId: this.engine.sessionId,
+        sessionId: this.appId,
         message,
         ...(options.clientRequestId !== undefined
           ? { clientRequestId: options.clientRequestId }
@@ -1437,7 +1450,7 @@ export class PiLiveSession implements LiveSession {
     }
 
     this.running = false;
-    const sessionId = this.engine.sessionId;
+    const sessionId = this.appId;
     const retryEndedBetweenAttempts =
       !this.currentAssistantId && this.awaitingRetryContinuation;
     const id = retryEndedBetweenAttempts
@@ -1706,14 +1719,14 @@ export class PiLiveSession implements LiveSession {
     const branch = this.engine.transcript.getBranch() as Parameters<
       typeof serializeSessionBranch
     >[0];
-    const ctx = { kind: this.kind, sessionId: this.engine.sessionId };
+    const ctx = { kind: this.kind, sessionId: this.appId };
     if (!this.liveTurn)
       return withPullRequestCardBlocks(
         withApprovalBlocks(
           hideMarkedMessages(serializeSessionBranch(branch, ctx)),
-          this.engine.sessionId,
+          this.appId,
         ),
-        this.engine.sessionId,
+        this.appId,
       );
     let cut = branch.length;
     for (let i = branch.length - 1; i >= 0; i--) {
@@ -1732,9 +1745,9 @@ export class PiLiveSession implements LiveSession {
           ),
           this.liveTurn,
         ],
-        this.engine.sessionId,
+        this.appId,
       ),
-      this.engine.sessionId,
+      this.appId,
     );
   }
 
@@ -1893,7 +1906,7 @@ export class PiLiveSession implements LiveSession {
 
     const projectValue = this.safeProjectContextInfo();
     return {
-      sessionId: this.engine.sessionId,
+      sessionId: this.appId,
       updatedAt: Date.now(),
       messageCounts: {
         user: stats.userMessages,
@@ -1914,7 +1927,7 @@ export class PiLiveSession implements LiveSession {
 
   private safeProjectContextInfo(): ContextInfo["project"] {
     try {
-      return sessionProjectContextInfo(this.engine.sessionId);
+      return sessionProjectContextInfo(this.appId);
     } catch (err) {
       console.warn("Failed to read session Project context:", errorText(err));
       return undefined;
@@ -1928,16 +1941,16 @@ export class PiLiveSession implements LiveSession {
       kind: this.kind,
       harness: this.harness,
       agentType: this.agentType,
-      sessionId: this.engine.sessionId,
+      sessionId: this.appId,
       file: this.engine.sessionFile,
       title: this.title,
       ...(this.titleGenerationPending ? { titleGenerationPending: true } : {}),
       messageCount: this.engine.stats().totalMessages,
       isStreaming: this.running,
       awaitingInput:
-        hasPendingAgentQuestion(this.engine.sessionId) ||
-        hasPendingApproval(this.engine.sessionId) ||
-        hasChoosingTaskCard(this.engine.sessionId),
+        hasPendingAgentQuestion(this.appId) ||
+        hasPendingApproval(this.appId) ||
+        hasChoosingTaskCard(this.appId),
       updatedAt: this.updatedAt,
       model: model
         ? { provider: model.provider, id: model.id, name: model.name }
@@ -1958,7 +1971,7 @@ export class PiLiveSession implements LiveSession {
     this.unsubscribeApprovals();
     this.unsubscribeTaskChoices();
     this.adapterEvents.clear();
-    closeToolGroupSession(this.engine.sessionId);
+    closeToolGroupSession(this.appId);
     void this.engine.dispose();
   }
 }

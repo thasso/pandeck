@@ -37,6 +37,7 @@ import type {
   HostCompactionOutcome,
 } from "./hostSlashCommands.ts";
 import { storedSessionModelOption } from "./harnesses/models.ts";
+import { activeEngine, activeNativeRef } from "./harnesses/activeEngine.ts";
 import { engineTranscript } from "./harnesses/storage.ts";
 import { DetachedSessionError } from "./session/adapters/detached.ts";
 import { sessionRuntime } from "./session/runtimeInstance.ts";
@@ -70,10 +71,10 @@ export class ViewSession implements HarnessDriver {
     this.id = meta.id;
     this.key = meta.id;
     this.sessionId = meta.id;
-    this.harness = meta.harness;
+    this.harness = activeEngine(meta).harness;
     this.kind = kindOf(meta);
     this.agentType = meta.agentType as AgentType;
-    this.sessionFile = engineTranscript(meta.harness, meta.id);
+    this.sessionFile = engineTranscript(activeNativeRef(meta));
   }
 
   /** A session that is not resident is not running; see the module comment. */

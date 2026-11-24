@@ -26,10 +26,13 @@ import type {
   RunFailureFacts,
   SkillDispatch,
 } from "./contract.ts";
-import type { AdapterEventListener } from "./nativeEvents.ts";
+import { runEngineStamp, type AdapterEventListener } from "./nativeEvents.ts";
+import type { RunEngine } from "../log/rawEntry.ts";
 
 export interface ClaudeSdkAdapterDriver {
   modelId?(): string | undefined;
+  /** The account and effort a run opening now uses, for its engine stamp. */
+  runFacts?(): { credentialProfileId?: string; thinkingLevel?: string };
   subscribeAdapterEvents(listener: AdapterEventListener): () => void;
   prompt(
     text: string,
@@ -127,6 +130,13 @@ class ClaudeSdkAdapter implements PromptableAdapter {
 
   modelId(): string | undefined {
     return this.driver.modelId?.();
+  }
+
+  runEngine(): RunEngine {
+    return runEngineStamp("claude-sdk", this.driver.runFacts?.(), {
+      provider: this.modelProvider(),
+      model: this.modelId(),
+    });
   }
 
   getBinding(): ProviderBinding {

@@ -1798,6 +1798,10 @@ export class ClaudeSdkSession implements LiveSession {
   createRuntimeAdapter(): PromptableAdapter {
     const driver: ClaudeSdkAdapterDriver = {
       modelId: () => this.modelId,
+      runFacts: () => ({
+        ...(this.profileId ? { credentialProfileId: this.profileId } : {}),
+        thinkingLevel: this.thinkingLevel,
+      }),
       subscribeAdapterEvents: (listener) =>
         this.subscribeAdapterEvents(listener),
       prompt: (text, options) => this.#promptRaw(text, options),

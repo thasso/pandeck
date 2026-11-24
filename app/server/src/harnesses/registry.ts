@@ -10,6 +10,7 @@ import { rm } from "node:fs/promises";
 import type { AgentType, Harness } from "@assistant/shared";
 import { claudeSdkStore } from "../claudeSdk/claudeSdkStore.ts";
 import { sessionStore } from "../db/sessionStore.ts";
+import { activeEngine } from "./activeEngine.ts";
 import type { HarnessHost, LiveSession } from "../harness.ts";
 import { PiSessionDeletedError, piStore } from "../piSdk/piStore.ts";
 import {
@@ -17,6 +18,7 @@ import {
   CLAUDE_SDK_STORE_DIR,
 } from "../sessionStorage.ts";
 import { sessionRefFile } from "./storage.ts";
+import { piSessionFile } from "../piSessionFile.ts";
 import { withCheckedCheckout } from "../worktrees/sessionCwd.ts";
 import { CWD } from "../config.ts";
 import { readClaudeSdkRecordCwd } from "../claudeSdk/claudeSdkRecords.ts";
@@ -102,7 +104,7 @@ const sessions: Record<Harness, HarnessSessions> = {
         if (err instanceof PiSessionDeletedError) return undefined;
         throw err;
       }),
-    cwd: (id) => readSessionHeaderCwd(canonicalPiSessionPath(id)) ?? CWD,
+    cwd: (id) => readSessionHeaderCwd(piSessionFile(id)) ?? CWD,
     // Transcripts that predate a valid row are developer coding sessions.
     rowlessAgentType: "developer",
     unopenable: () => undefined,
@@ -191,6 +193,23 @@ function residentElsewhere(id: string, harness: Harness): Harness | undefined {
 }
 
 /** The resident session for our id, from memory only. */
+/**
+ * The harness of a stored session's active engine binding, from its metadata
+ * row (whose binding columns are that binding's projection); undefined without
+ * a row.
+ */
+function boundEngine(id: string): Harness | undefined {
+  const row = sessionStore.get(id);
+  return row ? activeEngine(row).harness : undefined;
+}
+
+function engineOf(id: string): Harness | undefined {
+  return (
+    boundEngine(id) ??
+    ROWLESS_ORDER.find((harness) => sessions[harness].storedWithoutRow(id))
+  );
+}
+
 function residentInMemory(id: string): LiveSession | undefined {
   for (const harness of HARNESS_ORDER) {
     const session = sessions[harness].get(id);
@@ -249,8 +268,8 @@ export const harnessRegistry = {
   ): Harness | undefined {
     const resident = residentElsewhere(id, harness);
     if (resident) return resident;
-    const row = sessionStore.get(id);
-    if (row) return row.harness !== harness ? row.harness : undefined;
+    const bound = boundEngine(id);
+    if (bound) return bound !== harness ? bound : undefined;
     if (!onDisk) return undefined;
     // Without a row, the disk decides as `acquireById` would: Claude's record
     // first.
@@ -259,6 +278,14 @@ export const harnessRegistry = {
     );
     return holder !== harness ? holder : undefined;
   },
+
+  /**
+   * The engine that owns a stored session: its active binding's harness
+   * (`docs/session-runtime-switching.md` "Engine bindings"), or for a session
+   * without a row the engine that has it on disk. Reads the row and the disk
+   * only; opens nothing.
+   */
+  engineOf,
 
   /**
    * The resident session for our id, without loading or reopening anything
@@ -271,14 +298,14 @@ export const harnessRegistry = {
 
   /**
    * What the agent's own history holds of a turn the server died inside: the
-   * engine named by the session's row answers. Undefined when there is no row
+   * engine of the session's active binding answers. Undefined when there is no row
    * or the engine cannot tell. Reads files only; opens no harness.
    */
   interruptedTurn(
     id: string,
     since: number,
   ): InterruptedTurnEvidence | undefined {
-    const harness = sessionStore.get(id)?.harness;
+    const harness = boundEngine(id);
     return harness ? sessions[harness].interruptedTurn(id, since) : undefined;
   },
 
@@ -286,10 +313,7 @@ export const harnessRegistry = {
   cwdForSession(id: string): string | undefined {
     const resident = residentInMemory(id);
     if (resident) return resident.commitWorkflowContext().cwd ?? CWD;
-    const row = sessionStore.get(id);
-    const holder =
-      row?.harness ??
-      ROWLESS_ORDER.find((harness) => sessions[harness].storedWithoutRow(id));
+    const holder = engineOf(id);
     return holder ? sessions[holder].cwd(id) : undefined;
   },
 
@@ -311,7 +335,8 @@ export const harnessRegistry = {
       if (resident) return resident;
     }
     const record = sessionStore.get(id);
-    if (record) return sessions[record.harness].open(id, record.agentType);
+    if (record)
+      return sessions[activeEngine(record).harness].open(id, record.agentType);
     const holder = ROWLESS_ORDER.find((harness) =>
       sessions[harness].storedWithoutRow(id),
     );
@@ -357,7 +382,7 @@ export const harnessRegistry = {
       ? {
           harness,
           agentType: sessions[harness].rowlessAgentType,
-          file: sessionRefFile(harness, id),
+          file: sessionRefFile({ harness, sessionId: id }),
         }
       : undefined;
   },

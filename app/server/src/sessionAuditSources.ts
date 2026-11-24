@@ -27,10 +27,8 @@ import { objectRefsForSession } from "./db/sessionObjectStore.ts";
 import { readSessionSnapshot } from "./db/sessionSnapshotRead.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 import type { PromptConditions } from "./promptConditions.ts";
-import {
-  canonicalPiSessionPath,
-  canonicalSessionLogPath,
-} from "./sessionStorage.ts";
+import { piSessionFile } from "./piSessionFile.ts";
+import { canonicalSessionLogPath } from "./sessionStorage.ts";
 import type {
   AuditCallSource,
   PersistedUsageTotals,
@@ -107,21 +105,24 @@ function claudeTranscriptPath(
   return undefined;
 }
 
+/**
+ * The provider-call transcript. `piFile` names a pi session's native file: the
+ * caller resolves it, because only the in-process caller may consult the live
+ * store; the CLI derives it from its own data directory.
+ */
 function callTranscriptFor(
   sessionId: string,
   harness: string,
   providerSessionId: string | undefined,
   dataDir: string,
   projectsDir: string | undefined,
+  piFile: () => string,
 ): {
   transcript?: { source: AuditCallSource; path: string };
   warning?: string;
 } {
   if (harness === "pi") {
-    const path =
-      dataDir === DATA_DIR
-        ? canonicalPiSessionPath(sessionId)
-        : join(dataDir, "sessions", sessionId, "native.jsonl");
+    const path = piFile();
     if (existsSync(path)) return { transcript: { source: "pi-native", path } };
     return {
       warning:
@@ -152,18 +153,23 @@ export function resolveAuditSource(
   const resolved = resolveInspectableSession(sessionId);
   const meta = resolved.meta;
   const warnings = resolved.warning ? [resolved.warning] : [];
+  // The native transcript is the active engine binding's: its harness, its
+  // native id, and (Claude) the account whose profile holds it.
+  const binding = sessionStore.activeBinding(meta.id);
+  const harness = binding?.harness ?? meta.harness;
   const projectsDir = claudeProjectsDirFor(
     "credentialProfilesRoot" in options
       ? options.credentialProfilesRoot
       : CREDENTIAL_PROFILES_ROOT,
-    meta.credentialProfileId,
+    binding ? binding.credentialProfileId : meta.credentialProfileId,
   );
   const calls = callTranscriptFor(
     meta.id,
-    meta.harness,
-    meta.providerSessionId,
+    harness,
+    binding ? binding.nativeSessionId : meta.providerSessionId,
     DATA_DIR,
     projectsDir,
+    () => piSessionFile(meta.id),
   );
   if (calls.warning) warnings.push(calls.warning);
   const totals = sessionStore.getUsageTotals(meta.id);
@@ -173,7 +179,7 @@ export function resolveAuditSource(
     sessionId: meta.id,
     meta: {
       title: meta.title,
-      harness: meta.harness,
+      harness,
       agentType: meta.agentType,
       createdAtMs: meta.createdAt,
       updatedAtMs: meta.updatedAt,
@@ -245,6 +251,11 @@ export function resolveAuditSourceFromDataDir(
     row.providerSessionId,
     dataDir,
     projectsDir,
+    // Never `piSessionFile`: it reads the binding through `getDb()`, which
+    // migrates, even when `dataDir` is this process's own. Every pi binding's
+    // native id is its app id (`piNativeFile` refuses any other), so the
+    // directory layout alone names the file.
+    () => join(dataDir, "sessions", id, "native.jsonl"),
   );
   const conditions = parseConditions(snapshot.promptConditionsJson);
 

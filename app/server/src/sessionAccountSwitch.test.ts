@@ -200,7 +200,8 @@ function setup(
     ...(bound ? { credentialProfileId: first } : {}),
     requiresEnterprise: enterprise,
   });
-  const runtime = new SessionRuntime(new SessionLogStore(true));
+  const logs = new SessionLogStore(true);
+  const runtime = new SessionRuntime(logs);
   runtimes.push({ runtime, id });
   const events = new NativeAdapterEventSource();
   // The account's model as the fixture offers it, until a turn applies another.
@@ -244,6 +245,12 @@ function setup(
     });
   }
   const common = {
+    // As the production drivers report it: each run's stamp names the account
+    // the run opened on.
+    runFacts: () => ({
+      ...(bound ? { credentialProfileId: profileId } : {}),
+      thinkingLevel,
+    }),
     modelProvider: () => offered.provider,
     modelId: () => chosen ?? offered.id,
     subscribeAdapterEvents: events.subscribe.bind(events),
@@ -326,6 +333,7 @@ function setup(
   return {
     id,
     runtime,
+    logs,
     driver,
     calls,
     moves,
@@ -737,12 +745,16 @@ for (const harness of engines) {
       const dirty = vi
         .spyOn(usageCache, "markUsageProfileDirty")
         .mockImplementation(() => {});
-      // The boot completion subscriber marks the current account, while recovery
-      // must also dirty all moved-from accounts before this deferred completion.
+      // The boot completion subscriber (`index.ts`) marks the account its
+      // run's engine stamp names: the logical completion must carry the
+      // terminal attempt's, while recovery dirties every moved-from account.
       const unsubscribe = lifecycle.subscribeSessionRunCompleted(
-        (sessionId) => {
+        (sessionId, _stopReason, _origin, engine) => {
           if (sessionId !== s.id) return;
-          const profile = usageProfileForSession(sessionStore.get(sessionId));
+          const profile = usageProfileForSession(
+            sessionStore.get(sessionId),
+            engine,
+          );
           if (profile) usageCache.markUsageProfileDirty(profile);
         },
       );
@@ -756,6 +768,17 @@ for (const harness of engines) {
         assert.deepEqual(
           dirty.mock.calls.map(([profile]) => profile).sort(),
           accounts.sort(),
+        );
+        // Each native attempt, the failed ones included, keeps its own
+        // account on its own `run.started` stamp for history readers.
+        const started = s.logs
+          .open(s.id)
+          .rawEntries()
+          .filter((entry) => entry.type === "run.started")
+          .map((entry) => ("engine" in entry ? entry.engine : undefined));
+        assert.deepEqual(
+          started.map((engine) => engine?.credentialProfileId),
+          s.calls.map((call) => call.profileId),
         );
       } finally {
         unsubscribe();

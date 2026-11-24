@@ -12,14 +12,16 @@ import {
 import { sessionStore, type SessionMeta } from "../db/sessionStore.ts";
 import type { LiveSession } from "../harness.ts";
 import { DEFAULT_COMPACTION_SETTINGS } from "../piSdk/compactionWindow.ts";
+import { activeEngine } from "./activeEngine.ts";
 import { storedSessionModelOption } from "./models.ts";
 
 export function storedCompactionWindowInputs(
   meta: Pick<SessionMeta, "harness" | "provider" | "model">,
 ): { contextWindow?: number; underlyingReserve?: number } {
-  const capability = HARNESSES[meta.harness].compactionWindow;
+  const { harness } = activeEngine(meta);
+  const capability = HARNESSES[harness].compactionWindow;
   const contextWindow = storedSessionModelOption(
-    meta.harness,
+    harness,
     meta.provider,
     meta.model,
   )?.contextWindow;
@@ -43,7 +45,7 @@ export function storedCompactionWindowState(
   >,
 ): SessionCompactionWindow | undefined {
   return sessionCompactionWindowState(
-    HARNESSES[meta.harness].compactionWindow,
+    HARNESSES[activeEngine(meta).harness].compactionWindow,
     {
       stored: meta.compactionWindow,
       note: meta.compactionWindowNote,

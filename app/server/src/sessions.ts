@@ -41,6 +41,7 @@ import { isRetitlingSession } from "./sessionRetitlePending.ts";
 import { worktreeIdBySession } from "./db/worktreeStore.ts";
 import { worktreeMissingProbe } from "./worktrees/sessionCwd.ts";
 import { objectRefsBySession } from "./db/sessionObjectStore.ts";
+import { activeEngine, activeNativeRef } from "./harnesses/activeEngine.ts";
 import { sessionRefFile } from "./harnesses/storage.ts";
 import { canonicalPiSessionPath } from "./sessionStorage.ts";
 
@@ -553,8 +554,9 @@ export function listSessions(
     const worktreeId = worktreeBySession.get(key);
     const pullRequest = pullRequestBySession.get(key);
     const taskProgressValue = taskSessionIndex.progress.get(key);
+    const engine = activeEngine(row);
     const modelValue =
-      l?.model ?? sessionModel(row.harness, row.provider, row.model);
+      l?.model ?? sessionModel(engine.harness, row.provider, row.model);
     const thinkingLevelValue =
       l?.thinkingLevel ?? normalizeThinkingLevel(row.thinkingLevel);
     const projectIdValue = projectBySession.get(key);
@@ -564,8 +566,8 @@ export function listSessions(
     sessions.push({
       id: row.id,
       scope: row.scope,
-      file: sessionRefFile(row.harness, row.id),
-      harness: row.harness,
+      file: sessionRefFile(activeNativeRef(row)),
+      harness: engine.harness,
       agentType: row.agentType,
       title: l?.title ?? row.title,
       ...(l?.titleGenerationPending || isRetitlingSession(row.id)
