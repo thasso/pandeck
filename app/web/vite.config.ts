@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin, type ProxyOptions } from "vite";
 import react from "@vitejs/plugin-react";
@@ -274,6 +275,16 @@ export default defineConfig(({ command }) => {
     },
     resolve: {
       alias: webAliases,
+    },
+    test: {
+      // Node 25+ ships its own Web Storage on by default: `globalThis` gains
+      // a `localStorage` getter that yields undefined (with a warning) unless
+      // `--localstorage-file` is given. Vitest's jsdom environment installs
+      // only window keys the Node global lacks, so jsdom's real per-origin
+      // Storage never replaces it and `window.localStorage` stays undefined.
+      // Switching Node's off lets jsdom supply Storage as a browser does; on
+      // Node 22/24 it is already off and the flag changes nothing.
+      execArgv: ["--no-experimental-webstorage"],
     },
     // No proxy by default: the client talks to the server directly (see
     // socket.ts `defaultSocketUrl`). This keeps the Vite dev server a pure

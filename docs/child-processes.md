@@ -254,8 +254,32 @@ afterwards is only git's own check of a tree that changed in the meantime:
    never our descendant. The working directory is read once, when the scan finds
    the process. Each process is identified by pid AND start time, re-checked
    before SIGTERM and again before SIGKILL, so a pid recycled during the grace
-   is never signalled; its working directory is not re-checked.
+   is never signalled. On Linux its working directory is not re-checked; on
+   macOS, whose start time is coarse, the whole ownership test is (below).
 
-The scan is one `readlink` per process (about 10 ms for a few hundred), so a
-removal only waits when something was actually running. Without it, a dev server
-left running recreated its cache (`.vite/deps`) in the deleted folder.
+Processes are observed through `worker/processTable.ts`. One table snapshot of
+every process's parent and start time finds the Worker's descendants, and only
+those have their working directory read; on Linux that is `/proc` (about 10 ms
+for a few hundred processes), and the start tick alone tells a recycled pid
+apart. macOS has no `/proc`: the stock `/bin/ps -A -o pid=,ppid=,lstart=` gives
+the table and `/usr/sbin/lsof -a -d cwd -p <pids>` the directories, each through
+the spawn broker with a fixed environment (`LC_ALL=C`, `TZ=UTC`) and a 5 s
+timeout, so a wedged `lsof` (an unresponsive mount) cannot hang a removal: a
+read that times out is unknown. Its start time is only to the second, and stock
+macOS offers no finer one without native code, so a pid recycled within that
+second would match it. There, before SIGTERM and again before SIGKILL, the whole
+ownership test is redone from fresh reads: still at least two levels below the
+Worker and outside its ancestry, the working directory still inside the
+checkout, and then, as the last read, `ps -o pid=,ppid=,lstart= -p <pids>` must
+show the same start time and parent as when found, so an old identity is never
+paired with a recycled pid's directory. A process that left the checkout or was
+re-parented away during the grace is therefore not killed. Neither platform has
+an atomic pid handle: between the last read and the signal a gap remains, of
+microseconds for Linux's in-process `/proc` read and of roughly 10–100 ms for
+macOS's brokered `ps`, the same kind of gap in a different degree. Any failed or
+timed-out read never signals: an unreadable re-check skips the process, and an
+unreadable round of the grace counts as still running, so the process is
+reported as terminated but not killed. A platform with neither table finds
+nothing. A removal only waits when something was actually running. Without it, a
+dev server left running recreated its cache (`.vite/deps`) in the deleted
+folder.

@@ -38,7 +38,9 @@
  * - `vault-seal-existing`, with the vault stopped: seals today's plaintext
  *   token files and overwrites and removes them.
  * - `vault-reseal` and `unlock` ask the running vault over its control socket
- *   (`--control-socket`, `/run/pandeck-vault/control.sock` unless given).
+ *   (`--control-socket`; unless given, the vault's own default,
+ *   `vaultControlSocketPath`: `/run/pandeck-vault/control.sock` on Linux,
+ *   `<state-dir>/control.sock` elsewhere).
  *   `unlock` reads the PIN from the terminal with echo off, never from argv
  *   or the environment.
  */
@@ -53,7 +55,7 @@ import {
   sealExisting,
   writeRecipients,
 } from "./sealedStore.ts";
-import { askVaultControl } from "./vaultControl.ts";
+import { askVaultControl, vaultControlSocketPath } from "./vaultControl.ts";
 import {
   edgeVaultLinkFile,
   vaultTlsFile,
@@ -134,8 +136,10 @@ if (command === "vault-pair") {
   process.exit(0);
 }
 
-const controlSocket =
-  values["control-socket"] ?? "/run/pandeck-vault/control.sock";
+const controlSocket = vaultControlSocketPath(
+  stateDir,
+  values["control-socket"],
+);
 
 /**
  * The PIN from the terminal with echo off; one line from a pipe otherwise.

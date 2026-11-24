@@ -271,10 +271,17 @@ function tryRemove(path: string): boolean {
   }
 }
 
-/** The two codes a read-only directory in the tree produces; anything else is not ours to repair. */
+/**
+ * The codes a read-only directory in the tree produces; anything else is not
+ * ours to repair. Linux reports the refused unlink itself (EACCES/EPERM).
+ * Node's recursive `rmSync` on macOS swallows that and reports the parent it
+ * then could not empty instead (ENOTEMPTY), so that code is a repair cue too —
+ * a repair of a tree that was merely still being written to is a harmless
+ * no-op before the retry.
+ */
 export function isPermissionError(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException | null)?.code;
-  return code === "EACCES" || code === "EPERM";
+  return code === "EACCES" || code === "EPERM" || code === "ENOTEMPTY";
 }
 
 /**
@@ -333,9 +340,15 @@ export function restoreOwnerAccess(root: string): void {
  * its procfs name, which resolves to the object the fd holds and not to
  * whatever the original path points at by then.
  *
- * Elsewhere it is a plain read handle and `fchmodSync`, equally race-safe but
- * unable to open a directory with no read bit. Such a tree is then reported as
- * left behind rather than reclaimed; the deployment target is Linux.
+ * Elsewhere (macOS included) it is a plain read handle and `fchmodSync`,
+ * equally race-safe — the handle pins the directory the open saw, a symlink
+ * fails the open — but unable to open a directory its owner cannot read. Such a
+ * directory is FAILED CLOSED: the tree is reported as left behind, never
+ * repaired through a path. macOS has no stock no-follow chmod for that case:
+ * `O_EVTONLY`/`O_SYMLINK` opens still need read access, Node's `lchmodSync`
+ * opens for writing (EISDIR on a directory), and a chmod by volfs inode name
+ * (`/.vol/<dev>/<ino>`) holds no reference, so a removed directory's recycled
+ * inode could be a symlink that chmod follows.
  */
 function restoreDirectoryAccess(dir: string): boolean {
   const fd = openDirectoryNoFollow(dir);

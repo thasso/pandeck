@@ -6,14 +6,16 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, vi } from "vitest";
 import type { ServerMessage } from "@assistant/shared";
 import type { WorktreeRow } from "../db/worktreeStore.ts";
 
-const tmp = mkdtempSync(join(tmpdir(), "worktree-watcher-test-"));
+// Real spelling: git and the native watch name checkouts by their real
+// paths, and macOS spells the temp dir through the `/var` link.
+const tmp = mkdtempSync(join(realpathSync(tmpdir()), "worktree-watcher-test-"));
 process.env.ASSISTANT_CWD = tmp;
 
 const { createWorktree, removeWorktree } = await import("./worktrees.ts");

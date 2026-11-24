@@ -18,6 +18,7 @@ import { rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import { errorText } from "../errors.ts";
 import {
+  isPermissionError,
   removeAfterReclaim,
   removeManagedTree,
   restoreOwnerAccess,
@@ -46,7 +47,7 @@ import {
 } from "../workerProtocol/lifecycleMethods.ts";
 import { stopCheckoutProcesses } from "./checkoutProcesses.ts";
 
-/** A failed create's directory removal: `rmSync`'s own retries, then repair. */
+/** A failed create's directory removal: one attempt, repair, then `rmSync`'s own retries. */
 const DISCARD_REMOVAL_RETRIES = 10;
 const DISCARD_REMOVAL_RETRY_DELAY_MS = 200;
 
@@ -119,6 +120,15 @@ export function lifecycleHandlers(workerId: string): MethodHandlers {
     },
     [LIFECYCLE_METHODS.discardTree]: async (payload) => {
       const path = destructive(decodeLifecycleLocation(payload));
+      // One plain attempt first: a read-only directory in the checkout is
+      // answered by repairing owner access, not by `rmSync`'s backoff — Node on
+      // macOS reports such a tree as ENOTEMPTY, which it retries for seconds.
+      try {
+        rmSync(path, { recursive: true, force: true });
+        return encodeDiscardTreeResult({});
+      } catch (error) {
+        if (isPermissionError(error)) restoreOwnerAccess(path);
+      }
       try {
         rmSync(path, {
           recursive: true,
@@ -128,8 +138,8 @@ export function lifecycleHandlers(workerId: string): MethodHandlers {
         });
         return encodeDiscardTreeResult({});
       } catch (error) {
-        // A checkout with read-only directories in it is unlinkable until
-        // owner access is back; the caller's next attempt then succeeds.
+        // Still blocked (something kept writing, or locked it again): repair
+        // once more so the caller's next attempt can succeed.
         restoreOwnerAccess(path);
         return encodeDiscardTreeResult({ failed: errorText(error) });
       }

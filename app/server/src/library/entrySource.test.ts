@@ -17,6 +17,7 @@ import {
   mkdir,
   readdir,
   readFile,
+  rename,
   rm,
   stat,
   symlink,
@@ -59,6 +60,61 @@ afterEach(() => {
 });
 
 describe("withEntrySource", () => {
+  test("reads and creates beneath the opened root after its name becomes a symlink", async () => {
+    await withLibraryRoot(root, async (rootHandle) => {
+      await rename(root, join(outside, "held-root"));
+      await symlink(outside, root);
+      await withEntrySource(
+        rootHandle,
+        "folder",
+        "SKILL.md",
+        async (source) => {
+          assert.equal(await source.file.readFile("utf8"), REAL);
+          const pin = await createEntryChildFile(
+            source.folder,
+            "created.md",
+            new TextEncoder().encode("created inside the held root\n"),
+          );
+          await pin.handle.close();
+        },
+      );
+    });
+    assert.equal(
+      await readFile(
+        join(outside, "held-root", "folder", "created.md"),
+        "utf8",
+      ),
+      "created inside the held root\n",
+    );
+    assert.deepEqual((await readdir(outside)).sort(), [
+      "SKILL.md",
+      "held-root",
+    ]);
+  });
+
+  test("child reads and writes stay anchored after their parent is replaced by a symlink", async () => {
+    await withLibraryRoot(root, (rootHandle) =>
+      withEntryChild(rootHandle, "folder", async (folder) => {
+        await rename(join(root, "folder"), join(root, "held-folder"));
+        await symlink(outside, join(root, "folder"));
+        await withEntryChild(folder.handle, "SKILL.md", async (file) => {
+          assert.equal(await file.handle.readFile("utf8"), REAL);
+        });
+        const pin = await createEntryChildFile(
+          folder.handle,
+          "created.md",
+          new TextEncoder().encode("inside\n"),
+        );
+        await pin.handle.close();
+      }),
+    );
+    assert.equal(
+      await readFile(join(root, "held-folder", "created.md"), "utf8"),
+      "inside\n",
+    );
+    assert.deepEqual(await readdir(outside), ["SKILL.md"]);
+  });
+
   test("keeps reading the opened inode after the path is swapped for a link", async () => {
     const read = await withLibraryRoot(root, (rootHandle) =>
       withEntrySource(rootHandle, "folder", "SKILL.md", async (source) => {
@@ -410,6 +466,7 @@ describe("pinning", () => {
       assert.equal(placed.ino, pin.identity.ino);
     } finally {
       await pin.handle.close();
+      await pin.source?.handle.close();
     }
   });
 });

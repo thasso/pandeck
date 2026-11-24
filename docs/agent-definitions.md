@@ -42,7 +42,10 @@ Definitions live in `DATA_DIR/agents`, a dedicated Git working tree owned by the
 user. It follows every storage rule of the skills library (`docs/skills.md`):
 lazy idempotent bootstrap with `git init -b main` and nothing more, the user
 owns branches and remotes, hand-authoring is first-class, and tool mutations
-refuse to run while the tree holds uncommitted changes.
+refuse to run while the tree holds uncommitted changes. Reads, creation and
+rollback share the core's inode-anchored filesystem access on Linux and macOS;
+see
+[Working-tree scan and diagnostics](skills.md#working-tree-scan-and-diagnostics).
 
 ```text
 DATA_DIR/agents/

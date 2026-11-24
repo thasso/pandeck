@@ -20,6 +20,7 @@ import {
   resolve,
 } from "node:path";
 import { randomUUID } from "node:crypto";
+import { release } from "node:os";
 import { DATA_DIR } from "./config.ts";
 import { recordNewArtifacts } from "./mcp/toolGroups/packRuntime.ts";
 
@@ -405,6 +406,43 @@ function pathWithinRoot(root: string, candidate: string): boolean {
   return child === "" || (!child.startsWith("..") && !isAbsolute(child));
 }
 
+/**
+ * The reported path, as a path under the REAL root. An agent names its output
+ * through the spelling of the root it was handed — on macOS the temp directory
+ * is `/var/folders/…` while its real path is `/private/var/folders/…` — so a
+ * path is accepted when it lies LEXICALLY under either the canonical root or
+ * the trusted root as the caller spelled it, and the latter is rebased onto the
+ * canonical root. Only the trusted root is ever resolved: a reported path is
+ * never realpath'd, so untrusted input cannot make this touch arbitrary
+ * locations (an automount, a slow network path) or widen what is accepted.
+ * Everything below the root is then checked for symlinks by the caller.
+ */
+function underRealRoot(
+  root: string,
+  trustedSpelling: string,
+  reported: string,
+): string | undefined {
+  if (pathWithinRoot(root, reported)) return reported;
+  if (pathWithinRoot(trustedSpelling, reported))
+    return join(root, relative(trustedSpelling, reported));
+  return undefined;
+}
+
+/**
+ * macOS `O_NOFOLLOW_ANY` (`sys/fcntl.h`), which Node does not export: the open
+ * refuses a symlink in ANY component, not only the last. Under a real root that
+ * holds no symlink, that is the containment check made atomic with the open,
+ * where Linux re-reads the opened file's procfs name afterwards instead.
+ *
+ * The flag exists from macOS 11 (Darwin 20). An older kernel is not relied on
+ * to reject an unknown open flag, so capture there is refused up front
+ * (`output-identity-unavailable`) rather than opened without the guarantee.
+ */
+const O_NOFOLLOW_ANY = 0x20000000;
+const IS_DARWIN = process.platform === "darwin";
+const DARWIN_HAS_NOFOLLOW_ANY =
+  IS_DARWIN && Number.parseInt(release().split(".")[0] ?? "", 10) >= 20;
+
 function hasSymlinkComponent(root: string, candidate: string): boolean {
   const child = relative(root, candidate);
   let current = root;
@@ -490,19 +528,37 @@ export function captureTaskOutputArtifact(input: {
   let root: string;
   let candidate: string;
   try {
-    root = realpathSync(resolve(input.trustedRoot));
-    candidate = resolve(root, outputFile);
-    if (!pathWithinRoot(root, candidate))
-      return taskOutputRefusal("output-outside-trusted-root");
+    const trustedSpelling = resolve(input.trustedRoot);
+    root = realpathSync(trustedSpelling);
+    const contained = underRealRoot(
+      root,
+      trustedSpelling,
+      resolve(root, outputFile),
+    );
+    if (!contained) return taskOutputRefusal("output-outside-trusted-root");
+    candidate = contained;
     if (hasSymlinkComponent(root, candidate))
       return taskOutputRefusal("output-path-contains-symlink");
   } catch {
     return taskOutputRefusal("output-path-unavailable");
   }
 
+  if (IS_DARWIN && !DARWIN_HAS_NOFOLLOW_ANY)
+    return taskOutputRefusal("output-identity-unavailable");
+
   let fd: number | undefined;
   try {
-    fd = openSync(candidate, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      fd = openSync(
+        candidate,
+        constants.O_RDONLY |
+          (IS_DARWIN ? O_NOFOLLOW_ANY : constants.O_NOFOLLOW),
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | null)?.code === "ELOOP")
+        return taskOutputRefusal("output-path-swapped");
+      throw error;
+    }
     const opened = fstatSync(fd);
     if (!opened.isFile()) return taskOutputRefusal("output-is-not-regular");
     if ((opened.mode & 0o444) === 0)
@@ -510,14 +566,16 @@ export function captureTaskOutputArtifact(input: {
     const uid = process.getuid?.();
     if (uid !== undefined && opened.uid !== uid)
       return taskOutputRefusal("output-owner-mismatch", opened.size);
-    let openedPath: string;
-    try {
-      openedPath = realpathSync(`/proc/self/fd/${fd}`);
-    } catch {
-      return taskOutputRefusal("output-identity-unavailable", opened.size);
+    if (!IS_DARWIN) {
+      let openedPath: string;
+      try {
+        openedPath = realpathSync(`/proc/self/fd/${fd}`);
+      } catch {
+        return taskOutputRefusal("output-identity-unavailable", opened.size);
+      }
+      if (!pathWithinRoot(root, openedPath))
+        return taskOutputRefusal("output-path-swapped", opened.size);
     }
-    if (!pathWithinRoot(root, openedPath))
-      return taskOutputRefusal("output-path-swapped", opened.size);
     if (!Number.isSafeInteger(opened.size) || opened.size < 0)
       return taskOutputRefusal("output-size-invalid");
     if (opened.size > TASK_OUTPUT_SCAN_MAX_BYTES)

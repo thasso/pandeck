@@ -10,8 +10,8 @@
  * leave it behind for good. These pin the opposite: the creation is taken back,
  * and the caller sees the failure.
  *
- * The failure is injected at the descriptor itself. `O_PATH` is the flag every
- * pin uses and nothing else does, so refusing exactly those opens reproduces
+ * The failure is injected at the descriptor itself. Linux O_PATH and Darwin
+ * O_EVTONLY identify pin-only opens, so refusing those opens reproduces
  * descriptor exhaustion deterministically, without depending on the process
  * limit of whatever machine runs the tests.
  */
@@ -22,8 +22,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-/** Linux `O_PATH`, which Node does not export; the pins use it and nothing else. */
-const O_PATH = 0o010000000;
+/** Pin-only flag on each platform; Node exports neither constant. */
+const PIN_ONLY = process.platform === "darwin" ? 0x8000 : 0o010000000;
 let refusePins = false;
 /** Arms one EMFILE on the next ordinary (non-pin) open, then disarms. */
 let refuseNextOpen = false;
@@ -33,7 +33,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   return {
     ...actual,
     open: (path: string, flags?: number | string, mode?: number) => {
-      const isPin = typeof flags === "number" && (flags & O_PATH) !== 0;
+      const isPin = typeof flags === "number" && (flags & PIN_ONLY) !== 0;
       if ((refusePins && isPin) || (refuseNextOpen && !isPin)) {
         refuseNextOpen = false;
         return Promise.reject(

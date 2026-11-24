@@ -166,7 +166,11 @@ async function fakeEndpoint(secure = false): Promise<FakeEndpoint> {
     );
   } else server = http.createServer(handler);
   const host = secure ? "localhost" : "127.0.0.1";
-  await new Promise<void>((resolve) => server.listen(0, host, resolve));
+  // Keep the listener on IPv4 loopback even when TLS names it "localhost".
+  // On IPv4-only hosts Node may bind localhost to ::1 but apply ADDRCONFIG
+  // when connecting, selecting only 127.0.0.1. TLS/SNI verification remains
+  // against localhost; its DNS name is independent of this fixture's bind IP.
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address() as net.AddressInfo;
   fake.origin = `${secure ? "https" : "http"}://${host}:${port}`;
   fake.close = async () => {

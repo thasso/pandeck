@@ -1,10 +1,18 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, test } from "vitest";
 
-const tmp = mkdtempSync(join(tmpdir(), "worker-placement-test-"));
+// Real spelling: placement never resolves a requested path, so a
+// fixture under an aliased temp dir (macOS `/var`) must name it canonically.
+const tmp = mkdtempSync(join(realpathSync(tmpdir()), "worker-placement-test-"));
 process.env.ASSISTANT_CWD = tmp;
 // `DATA_DIR` (`<cwd>/assistant-data`) is itself a link here, so its real
 // spelling differs from its name.

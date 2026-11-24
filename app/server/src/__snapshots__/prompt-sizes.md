@@ -19,11 +19,11 @@ sizes only.
 | assistant | claude | 6,188 | 9,994 | 16,182 |
 | personal-assistant | pi | 8,186 | 18,957 | 27,143 |
 | personal-assistant | claude | 8,166 | 10,284 | 18,450 |
-| workshop | pi | 12,706 | 20,594 | 33,300 |
+| workshop | pi | 12,705 | 20,594 | 33,299 |
 | workshop | claude | 6,892 | 11,957 | 18,849 |
 | workflow-coordinator | pi | 3,386 | 2,232 | 5,618 |
 | workflow-coordinator | claude | 3,366 | 1,475 | 4,841 |
-| developer | pi | 13,390 | 20,107 | 33,497 |
+| developer | pi | 13,389 | 20,107 | 33,496 |
 | developer | claude | 7,576 | 11,461 | 19,037 |
 
 ## assistant — pi
@@ -141,7 +141,7 @@ sizes only.
 | `kb-guidance` | prompt | yes | 570 |
 | `memory-guidance` | prompt | yes | 1,401 |
 | `profile-suffix` | prompt | yes | 0 |
-| `project-context` | prompt | yes | 3,777 |
+| `project-context` | prompt | yes | 3,776 |
 | `assembly-overhead` | prompt | yes | 35 |
 | `tools:eager:names` | tools | yes | 214 |
 | `tools:eager:descriptions` | tools | yes | 5,876 |
@@ -161,7 +161,7 @@ sizes only.
 | `kb-guidance` | prompt | yes | 570 |
 | `memory-guidance` | prompt | yes | 1,401 |
 | `profile-suffix` | prompt | yes | 0 |
-| `project-context` | prompt | no | 3,621 |
+| `project-context` | prompt | no | 3,620 |
 | `assembly-overhead` | prompt | yes | 10 |
 | `tools:eager:names` | tools | yes | 310 |
 | `tools:eager:descriptions` | tools | yes | 2,382 |
@@ -221,7 +221,7 @@ sizes only.
 | `kb-guidance` | prompt | yes | 570 |
 | `memory-guidance` | prompt | yes | 1,401 |
 | `profile-suffix` | prompt | yes | 0 |
-| `project-context` | prompt | yes | 3,777 |
+| `project-context` | prompt | yes | 3,776 |
 | `assembly-overhead` | prompt | yes | 35 |
 | `tools:eager:names` | tools | yes | 187 |
 | `tools:eager:descriptions` | tools | yes | 5,702 |
@@ -241,7 +241,7 @@ sizes only.
 | `kb-guidance` | prompt | yes | 570 |
 | `memory-guidance` | prompt | yes | 1,401 |
 | `profile-suffix` | prompt | yes | 0 |
-| `project-context` | prompt | no | 3,621 |
+| `project-context` | prompt | no | 3,620 |
 | `assembly-overhead` | prompt | yes | 10 |
 | `tools:eager:names` | tools | yes | 274 |
 | `tools:eager:descriptions` | tools | yes | 2,208 |

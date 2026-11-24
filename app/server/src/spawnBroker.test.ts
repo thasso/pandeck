@@ -16,10 +16,12 @@ import {
   awaitGroupExit,
   brokerBoundedStdout,
   brokerExecFile,
+  brokerScriptForTests,
   setGroupIoForTests,
   spawnBrokerPidForTests,
   type GroupIo,
 } from "./spawnBroker.ts";
+import { processSample } from "./test/processState.ts";
 
 const base = { cwd: process.cwd(), env: process.env, maxBuffer: 1024 * 1024 };
 
@@ -121,16 +123,12 @@ test("with the broker disabled, the same handler runs in-process", async () => {
 });
 
 /**
- * The script the live broker was started with, read back from its command
- * line, run in a fresh process whose preload throws one uncaught error with
- * `code` and `message` once the script is running. It is then asked to run
- * one child and told the server went away.
+ * The broker's script, run in a fresh process whose preload throws one
+ * uncaught error with `code` and `message` once the script is running. It is
+ * then asked to run one child and told the server went away.
  */
 async function runBrokerScriptThrowing(code: string, message: string) {
-  const pid = await spawnBrokerPidForTests();
-  assert.ok(pid);
-  const argv = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0");
-  const script = argv[argv.indexOf("-e") + 1] ?? "";
+  const script = brokerScriptForTests();
   assert.ok(script.includes("ignoreCollectedFileHandle"));
   const dir = mkdtempSync(join(tmpdir(), "broker-uncaught-"));
   const preload = join(dir, "throw.cjs");
@@ -334,73 +332,62 @@ test("a broker that dies mid-request fails it only once its children are gone", 
   assert.equal(ok.stdout, "alive\n");
 });
 
-/** A process's `/proc` state letter; `gone` once reaped. */
-function procState(pid: number): string {
+test("on broker death, a request without an exit receipt fails at once, before one with it", async () => {
+  const pid = await spawnBrokerPidForTests();
+  assert.ok(pid);
+  const dir = mkdtempSync(join(tmpdir(), "broker-receipt-"));
+  const pidFile = join(dir, "pid");
+  const order: string[] = [];
+  let stateAtRejection: string | undefined;
   try {
-    const text = readFileSync(`/proc/${pid}/stat`, "latin1");
-    return text.slice(text.lastIndexOf(")") + 2).split(" ")[0] ?? "?";
-  } catch {
-    return "gone";
-  }
-}
-
-test.skipIf(process.platform !== "linux")(
-  "on broker death, a request without an exit receipt fails at once, before one with it",
-  async () => {
-    const pid = await spawnBrokerPidForTests();
-    assert.ok(pid);
-    const dir = mkdtempSync(join(tmpdir(), "broker-receipt-"));
-    const pidFile = join(dir, "pid");
-    const order: string[] = [];
-    let stateAtRejection: string | undefined;
-    try {
-      // Submitted first, so only the exit receipt can make it answer last.
-      const receipt = brokerExecFile({
-        ...base,
-        cwd: dir,
-        file: "sh",
-        args: ["-c", "echo $$ > pid; exec sleep 30"],
-        encoding: "utf8",
-        awaitExit: true,
-      }).then(
-        () => assert.fail("must not answer"),
-        () => {
-          stateAtRejection = procState(Number(readFileSync(pidFile, "utf8")));
-          order.push("awaitExit");
-        },
-      );
-      const plain = brokerExecFile({
-        ...base,
-        cwd: dir,
-        file: "sleep",
-        args: ["30"],
-        encoding: "utf8",
-      }).then(
-        () => assert.fail("must not answer"),
-        () => order.push("plain"),
-      );
-      const deadline = Date.now() + 10_000;
-      while (!existsSync(pidFile) || !readFileSync(pidFile, "utf8")) {
-        assert.ok(Date.now() < deadline, "the child started");
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      }
-      process.kill(pid, "SIGKILL");
-      await Promise.all([receipt, plain]);
-      assert.deepEqual(order, ["plain", "awaitExit"]);
-      assert.ok(
-        ["gone", "Z", "X"].includes(stateAtRejection ?? ""),
-        `the child was ${stateAtRejection} at rejection`,
-      );
-    } finally {
-      try {
-        process.kill(-pid, "SIGKILL");
-      } catch {
-        // Already gone — the expected case.
-      }
-      rmSync(dir, { recursive: true, force: true });
+    // Submitted first, so only the exit receipt can make it answer last.
+    const receipt = brokerExecFile({
+      ...base,
+      cwd: dir,
+      file: "sh",
+      args: ["-c", "echo $$ > pid; exec sleep 30"],
+      encoding: "utf8",
+      awaitExit: true,
+    }).then(
+      () => assert.fail("must not answer"),
+      () => {
+        stateAtRejection = processSample(
+          Number(readFileSync(pidFile, "utf8")),
+        ).state;
+        order.push("awaitExit");
+      },
+    );
+    const plain = brokerExecFile({
+      ...base,
+      cwd: dir,
+      file: "sleep",
+      args: ["30"],
+      encoding: "utf8",
+    }).then(
+      () => assert.fail("must not answer"),
+      () => order.push("plain"),
+    );
+    const deadline = Date.now() + 10_000;
+    while (!existsSync(pidFile) || !readFileSync(pidFile, "utf8")) {
+      assert.ok(Date.now() < deadline, "the child started");
+      await new Promise((resolve) => setTimeout(resolve, 5));
     }
-  },
-);
+    process.kill(pid, "SIGKILL");
+    await Promise.all([receipt, plain]);
+    assert.deepEqual(order, ["plain", "awaitExit"]);
+    assert.ok(
+      ["gone", "Z", "X"].includes(stateAtRejection ?? ""),
+      `the child was ${stateAtRejection} at rejection`,
+    );
+  } finally {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      // Already gone — the expected case.
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 const errno = (code: string) => Object.assign(new Error(code), { code });
 const statLine = (pid: number, state: string, pgrp: number, threads = 1) =>
@@ -692,42 +679,39 @@ test("a group that has not exited is reported once, at ten seconds", async () =>
   }
 });
 
-test.skipIf(process.platform !== "linux")(
-  "a receipt lost with its broker stays pending while the group cannot be proven gone",
-  async () => {
-    let uncertain = true;
-    setGroupIoForTests({
-      probe: (pgid) => {
-        if (uncertain) throw errno("EPERM");
-        process.kill(-pgid, 0);
-      },
-      list: () => {
-        if (uncertain) throw errno("EIO");
-        return readdirSync("/proc");
-      },
+test("a receipt lost with its broker stays pending while the group cannot be proven gone", async () => {
+  let uncertain = true;
+  setGroupIoForTests({
+    probe: (pgid) => {
+      if (uncertain) throw errno("EPERM");
+      process.kill(-pgid, 0);
+    },
+    list: () => {
+      if (uncertain) throw errno("EIO");
+      return readdirSync("/proc");
+    },
+  });
+  try {
+    const pid = await spawnBrokerPidForTests();
+    assert.ok(pid);
+    let rejected = false;
+    const pending = brokerExecFile({
+      ...base,
+      file: "sleep",
+      args: ["30"],
+      encoding: "utf8",
+      awaitExit: true,
+    }).catch((error: unknown) => {
+      rejected = true;
+      return error;
     });
-    try {
-      const pid = await spawnBrokerPidForTests();
-      assert.ok(pid);
-      let rejected = false;
-      const pending = brokerExecFile({
-        ...base,
-        file: "sleep",
-        args: ["30"],
-        encoding: "utf8",
-        awaitExit: true,
-      }).catch((error: unknown) => {
-        rejected = true;
-        return error;
-      });
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      process.kill(pid, "SIGKILL");
-      await new Promise((resolve) => setTimeout(resolve, 1_500));
-      assert.equal(rejected, false, "still pending after two failed scans");
-      uncertain = false;
-      assert.match(String(await pending), /exited before answering/);
-    } finally {
-      setGroupIoForTests();
-    }
-  },
-);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    process.kill(pid, "SIGKILL");
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    assert.equal(rejected, false, "still pending after two failed scans");
+    uncertain = false;
+    assert.match(String(await pending), /exited before answering/);
+  } finally {
+    setGroupIoForTests();
+  }
+});

@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, beforeAll, onTestFinished, test } from "vitest";
+import { processRuns } from "../test/processState.ts";
 import { loginChildDriver, type LoginChildOptions } from "./loginChild.ts";
 
 let dir: string;
@@ -95,17 +96,6 @@ async function until(check: () => boolean, what: string): Promise<void> {
   assert.fail(`timed out waiting for ${what}`);
 }
 
-/** Whether `pid` runs: a zombie or a reaped process does not. */
-function running(pid: number): boolean {
-  try {
-    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-    const state = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0];
-    return state !== "Z" && state !== "X";
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Starts a grandchild in the leader's group, then reports `ready`. The
  * grandchild ignores SIGTERM, writes its pid to `pidFile` and, 300 ms after
@@ -138,7 +128,11 @@ const pidOf = (pidFile: string): number =>
 
 /** The grandchild is gone at settle, and its late write never lands. */
 async function noLateWriter(pidFile: string, configDir: string): Promise<void> {
-  assert.equal(running(pidOf(pidFile)), false, "a group member outlived done");
+  assert.equal(
+    processRuns(pidOf(pidFile)),
+    false,
+    "a group member outlived done",
+  );
   await delay(600);
   assert.equal(existsSync(join(configDir, "late")), false);
 }

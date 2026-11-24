@@ -12,7 +12,7 @@
  * frontmatter appeared in a scan as a valid summary with no diagnostic.
  *
  * So the path is resolved ONCE. The library root is opened, each component
- * below it is opened relative to that descriptor through `/proc/self/fd` with
+ * below it is opened relative to that inode through `entryHandlePath` with
  * `O_NOFOLLOW`, and every subsequent operation — the identity `fstat`, the read
  * — goes to the open file description. A swap that lands after the open cannot
  * change which inode answers, and one that lands before it is refused rather
@@ -26,9 +26,9 @@
  * The handle is checked for being a regular file before anything is read from
  * it.
  *
- * The `/proc/self/fd` anchor makes this Linux-only by construction, which is
- * what the app deploys on; there is no silent pathname fallback, because a
- * fallback would be the very re-resolution this module exists to remove.
+ * Linux anchors through `/proc/self/fd`; macOS uses `/.vol/<dev>/<ino>` while
+ * the descriptor pins the inode. There is no original-pathname fallback: that
+ * would be the very re-resolution this module exists to remove.
  */
 import { randomUUID } from "node:crypto";
 import type { Dirent } from "node:fs";
@@ -43,11 +43,16 @@ import {
   readlink,
   rename,
   rmdir,
+  symlink,
   unlink,
   type FileHandle,
 } from "node:fs/promises";
 
-const PROC_FD = "/proc/self/fd";
+import {
+  ENTRY_PIN_FLAGS as PIN_FLAGS,
+  entryHandlePath,
+  verifyLibraryAnchor,
+} from "./entryHandlePath.ts";
 const ROOT_DIRECTORY_FLAGS = fsConstants.O_RDONLY | fsConstants.O_DIRECTORY;
 /**
  * Deliberately WITHOUT `O_DIRECTORY`: Linux answers `O_DIRECTORY|O_NOFOLLOW` on
@@ -83,16 +88,13 @@ const REPLACE_FLAGS =
 /**
  * `O_PATH`: a descriptor that refers to an inode WITHOUT opening it for I/O.
  *
- * Node does not export the constant (it is Linux-only, like the `/proc/self/fd`
- * anchoring this whole module is built on), so it is spelled out here. It is the
+ * Node does not export the Linux constant, so it is spelled out here. It is the
  * one open that works on every kind of entry: a symlink can be pinned with
  * `O_PATH|O_NOFOLLOW`, where an ordinary open answers `ELOOP`, and a directory
  * stays usable as an anchor through `/proc/self/fd`. `fstat` is permitted on
  * it, which is all a pin is ever asked for.
  */
 const O_PATH = 0o010000000;
-/** Pinning an inode reached through a NAME: never through a link. */
-const PIN_FLAGS = O_PATH | fsConstants.O_NOFOLLOW;
 
 interface FileIdentity {
   dev: number;
@@ -146,6 +148,7 @@ export async function withLibraryRoot<T>(
 ): Promise<T> {
   const rootHandle = await open(root, ROOT_DIRECTORY_FLAGS);
   try {
+    await verifyLibraryAnchor(rootHandle);
     return await use(rootHandle);
   } finally {
     await closeQuietly(rootHandle);
@@ -171,7 +174,7 @@ export async function withEntrySource<T>(
   let fileHandle: FileHandle | undefined;
   try {
     folderHandle = await openAnchored(
-      `${PROC_FD}/${rootHandle.fd}/${folder}`,
+      `${await entryHandlePath(rootHandle)}/${folder}`,
       SOURCE_FLAGS,
     );
     const folderStat = await folderHandle.stat();
@@ -180,7 +183,7 @@ export async function withEntrySource<T>(
     }
 
     fileHandle = await openAnchored(
-      `${PROC_FD}/${folderHandle.fd}/${manifestFile}`,
+      `${await entryHandlePath(folderHandle)}/${manifestFile}`,
       SOURCE_FLAGS,
     );
     const fileStat = await fileHandle.stat();
@@ -211,7 +214,7 @@ export async function withEntrySource<T>(
  * filesystem contract.
  */
 export async function readEntryDirectory(directory: FileHandle) {
-  return readdir(`${PROC_FD}/${directory.fd}`, { withFileTypes: true });
+  return readdir(await entryHandlePath(directory), { withFileTypes: true });
 }
 
 /**
@@ -230,7 +233,7 @@ export function iterateEntryDirectory(
 ): AsyncIterable<Dirent> {
   return {
     async *[Symbol.asyncIterator]() {
-      const dir = await opendir(`${PROC_FD}/${directory.fd}`, {
+      const dir = await opendir(await entryHandlePath(directory), {
         bufferSize: DIRECTORY_BUFFER_ENTRIES,
       });
       yield* dir;
@@ -256,7 +259,7 @@ export async function withEntryChild<T>(
 ): Promise<T> {
   assertPathComponent(name);
   const handle = await openAnchored(
-    `${PROC_FD}/${directory.fd}/${name}`,
+    `${await entryHandlePath(directory)}/${name}`,
     SOURCE_FLAGS,
   );
   try {
@@ -295,7 +298,7 @@ export async function ensureEntryChildDirectory(
 ): Promise<EntryPin | undefined> {
   assertPathComponent(name);
   try {
-    await mkdir(`${PROC_FD}/${directory.fd}/${name}`);
+    await mkdir(`${await entryHandlePath(directory)}/${name}`);
   } catch (error) {
     if (!isNodeError(error) || error.code !== "EEXIST") throw error;
     // An existing child must be a real directory: `mkdir` reports a symlink as
@@ -324,7 +327,9 @@ async function pinCreatedEntryChildDirectory(
   try {
     return await pinEntryChild(directory, name);
   } catch (error) {
-    await rmdir(`${PROC_FD}/${directory.fd}/${name}`).catch(() => undefined);
+    await rmdir(`${await entryHandlePath(directory)}/${name}`).catch(
+      () => undefined,
+    );
     throw error;
   }
 }
@@ -354,7 +359,7 @@ export async function writeEntryChildFile(
 ): Promise<EntryPin | undefined> {
   assertPathComponent(name);
   const created = await open(
-    `${PROC_FD}/${directory.fd}/${name}`,
+    `${await entryHandlePath(directory)}/${name}`,
     EXCLUSIVE_FLAGS,
     0o644,
   ).catch((error: unknown) => {
@@ -374,7 +379,7 @@ export async function writeEntryChildFile(
     }
   }
   const handle = await openAnchored(
-    `${PROC_FD}/${directory.fd}/${name}`,
+    `${await entryHandlePath(directory)}/${name}`,
     REPLACE_FLAGS,
   );
   try {
@@ -466,20 +471,22 @@ export async function unlinkEntryChildIfSame(
    * with it.
    */
   holdsExpected?: (handle: FileHandle) => Promise<boolean>,
+  /** A recreated symlink whose pin failed: verify its immutable target too. */
+  expectedLinkTarget?: Uint8Array,
 ): Promise<boolean> {
   assertPathComponent(name);
   const aside = `.pa-removing-${randomUUID()}`;
   try {
     await rename(
-      `${PROC_FD}/${directory.fd}/${name}`,
-      `${PROC_FD}/${directory.fd}/${aside}`,
+      `${await entryHandlePath(directory)}/${name}`,
+      `${await entryHandlePath(directory)}/${aside}`,
     );
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") return false;
     throw error;
   }
 
-  const asidePath = `${PROC_FD}/${directory.fd}/${aside}`;
+  const asidePath = `${await entryHandlePath(directory)}/${aside}`;
   const moved = await lstatQuietly(asidePath);
   if (moved && moved.dev === expected.dev && moved.ino === expected.ino) {
     // Read through a descriptor on the entry as it stands under the private
@@ -493,10 +500,15 @@ export async function unlinkEntryChildIfSame(
     // syscall gap, which POSIX offers no way to exclude: there is no
     // compare-and-unlink, and `unlinkat` takes no "only if unchanged" flag.
     const holds =
-      holdsExpected === undefined ||
-      (await withEntryChild(directory, aside, (child) =>
-        holdsExpected(child.handle),
-      ).catch(() => false));
+      expectedLinkTarget !== undefined
+        ? await readlink(asidePath, { encoding: "buffer" }).then(
+            (target) => target.equals(expectedLinkTarget),
+            () => false,
+          )
+        : holdsExpected === undefined ||
+          (await withEntryChild(directory, aside, (child) =>
+            holdsExpected(child.handle),
+          ).catch(() => false));
     const still = holds ? await lstatQuietly(asidePath) : undefined;
     if (
       still &&
@@ -512,27 +524,92 @@ export async function unlinkEntryChildIfSame(
   return false;
 }
 
+interface RestoredEntry {
+  sourceIdentity: FileIdentity;
+  /** A recreated symlink has no public hard link pinning its source inode. */
+  target?: Buffer;
+}
+
+/**
+ * Last-resort restoration must work under descriptor pressure. Linux needs no
+ * file pins: the new hard link keeps the inode alive. Darwin uses ONE transient
+ * source pin, then retains only the identity and immutable symlink target.
+ */
+async function restoreEntryChild(
+  fromDirectory: FileHandle,
+  name: string,
+  toDirectory: FileHandle,
+  destinationName = name,
+): Promise<RestoredEntry> {
+  assertPathComponent(name);
+  assertPathComponent(destinationName);
+  const from = `${await entryHandlePath(fromDirectory)}/${name}`;
+  const to = `${await entryHandlePath(toDirectory)}/${destinationName}`;
+  if (process.platform === "linux" && !recreateSymlinks) {
+    await link(from, to);
+    const identity = await lstat(to);
+    return { sourceIdentity: { dev: identity.dev, ino: identity.ino } };
+  }
+  const source = await pinEntryChild(fromDirectory, name);
+  try {
+    if (recreateSymlinks && (await source.handle.stat()).isSymbolicLink()) {
+      const target = await pinnedLinkTarget(source, from);
+      await symlink(target, to);
+      const actual = await readEntryChildLink(toDirectory, destinationName);
+      if (!actual || !target.equals(actual.target)) {
+        throw new IrregularEntrySourceError("symlink changed during restore");
+      }
+      return { sourceIdentity: source.identity, target };
+    }
+    await link(
+      process.platform === "darwin"
+        ? await entryHandlePath(source.handle)
+        : from,
+      to,
+    );
+    if (!sameFileIdentity(await lstat(to), source.identity)) {
+      throw new IrregularEntrySourceError("entry changed during restore");
+    }
+    return { sourceIdentity: source.identity };
+  } finally {
+    await closeQuietly(source.handle);
+  }
+}
+
 async function restoreDetachedChild(
   directory: FileHandle,
   aside: string,
   name: string,
   isDirectory: boolean,
 ): Promise<void> {
+  let copied = false;
   try {
     if (isDirectory) {
       await restoreDetachedDirectory(directory, aside, name);
       return;
     }
-    await link(
-      `${PROC_FD}/${directory.fd}/${aside}`,
-      `${PROC_FD}/${directory.fd}/${name}`,
-    );
-    await unlink(`${PROC_FD}/${directory.fd}/${aside}`);
+    const carried = await restoreEntryChild(directory, aside, directory, name);
+    copied = true;
+    if (
+      !(await unlinkEntryChildIfSame(
+        directory,
+        aside,
+        carried.sourceIdentity,
+        undefined,
+        carried.target,
+      ))
+    ) {
+      throw new IrregularEntrySourceError(
+        "detached entry changed during restore",
+      );
+    }
   } catch (error) {
     throw new IrregularEntrySourceError(
-      `"${name}" changed while it was being removed, and what was moved aside could not be put back (${
-        isNodeError(error) ? error.code : String(error)
-      }); it is at "${aside}" in the same folder`,
+      copied
+        ? `"${name}" was restored, but cleanup of "${aside}" failed; copies may remain at both names (${isNodeError(error) ? error.code : String(error)})`
+        : `"${name}" changed while it was being removed, and what was moved aside could not be put back (${
+            isNodeError(error) ? error.code : String(error)
+          }); it is at "${aside}" in the same folder`,
     );
   }
 }
@@ -544,9 +621,9 @@ async function restoreDetachedChild(
  * — and it replaces an empty directory that appeared at the name meanwhile,
  * which is undoing one accident by causing another. The tree is therefore
  * REASSEMBLED at the name instead, out of the same create-or-fail calls a
- * rename uses: `mkdir` claims the name or fails, and every file below is hard-
- * linked across, so the restored tree holds the very same inodes. The emptied
- * aside is then removed under its private name.
+ * rename uses: `mkdir` claims the name or fails, regular files are hard-linked,
+ * and macOS symlinks are recreated from pinned target bytes. Restore retains
+ * identities and target bytes, not an unbounded set of per-file descriptors.
  *
  * When the name is taken, nothing is forced: the tree stays under the aside and
  * the caller reports where it is.
@@ -556,7 +633,7 @@ async function restoreDetachedDirectory(
   aside: string,
   name: string,
 ): Promise<void> {
-  await mkdir(`${PROC_FD}/${directory.fd}/${name}`);
+  await mkdir(`${await entryHandlePath(directory)}/${name}`);
   // In passes, because the aside is not sealed: a hand author holding it open
   // from before the detach can create in it while this runs, and an entry that
   // appeared after the relink walk was never linked to the public name. Each
@@ -565,7 +642,7 @@ async function restoreDetachedDirectory(
   // finds nothing new ends it; a racer that keeps adding ends at the bound, and
   // what is left stays under the aside for the caller to name.
   for (let pass = 0; pass < MAX_RESTORE_PASSES; pass += 1) {
-    const linked = new Map<string, { dev: number; ino: number }>();
+    const linked = new Map<string, RestoredEntry>();
     await withEntryChild(directory, aside, (moved) =>
       withEntryChild(directory, name, (restored) =>
         relinkEntryTree(moved.handle, restored.handle, linked),
@@ -576,7 +653,7 @@ async function restoreDetachedDirectory(
       clearLinkedAside(moved.handle, linked),
     );
   }
-  await rmdir(`${PROC_FD}/${directory.fd}/${aside}`);
+  await rmdir(`${await entryHandlePath(directory)}/${aside}`);
 }
 
 /** How many times a restore will chase entries appearing under the aside. */
@@ -585,19 +662,20 @@ const MAX_RESTORE_PASSES = 4;
 /**
  * Empty an aside of exactly the entries a relink pass carried across.
  *
- * The proof is the INODE, and here that is the whole of it: what is unlinked is
- * a second link to a file that is now also at the public name, so its content
- * survives the removal whatever it holds. Anything else — an entry created
+ * Regular-file bytes survive through the public hard link, which keeps the
+ * source inode alive without a descriptor. Copied symlinks also require equal
+ * target bytes: adopting a recycled identity cannot destroy different content.
+ * Anything else — an entry created
  * after the relink walk passed — is left, which is what keeps the aside
  * non-empty and stops the `rmdir` that would otherwise hide it.
  */
 async function clearLinkedAside(
   directory: FileHandle,
-  linked: ReadonlyMap<string, { dev: number; ino: number }>,
+  linked: ReadonlyMap<string, RestoredEntry>,
   prefix = "",
 ): Promise<void> {
   for (const entry of await readEntryDirectory(directory)) {
-    const path = `${PROC_FD}/${directory.fd}/${entry.name}`;
+    const path = `${await entryHandlePath(directory)}/${entry.name}`;
     const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
     if (entry.isDirectory()) {
       await withEntryChild(directory, entry.name, async (child) => {
@@ -614,9 +692,24 @@ async function clearLinkedAside(
     if (
       carried &&
       current &&
-      current.dev === carried.dev &&
-      current.ino === carried.ino
+      current.dev === carried.sourceIdentity.dev &&
+      current.ino === carried.sourceIdentity.ino
     ) {
+      const expectedTarget = carried.target;
+      if (expectedTarget !== undefined) {
+        const matches = await readlink(path, { encoding: "buffer" }).then(
+          (target) => target.equals(expectedTarget),
+          () => false,
+        );
+        const after = matches ? await lstatQuietly(path) : undefined;
+        if (
+          !after ||
+          after.dev !== current.dev ||
+          after.ino !== current.ino ||
+          after.changed !== current.changed
+        )
+          continue;
+      }
       await unlink(path);
     }
   }
@@ -627,7 +720,7 @@ async function relinkEntryTree(
   from: FileHandle,
   to: FileHandle,
   /** Records what each pass carried across, so the aside is emptied of that. */
-  linked: Map<string, { dev: number; ino: number }>,
+  linked: Map<string, RestoredEntry>,
   prefix = "",
 ): Promise<void> {
   for (const entry of await readEntryDirectory(from)) {
@@ -636,7 +729,7 @@ async function relinkEntryTree(
       // `EEXIST` here is this restore's own earlier pass, never somebody else's
       // directory: the public name itself was claimed by a `mkdir` that refuses
       // an occupied name, so everything below it was made by this restore.
-      await mkdir(`${PROC_FD}/${to.fd}/${entry.name}`).catch(
+      await mkdir(`${await entryHandlePath(to)}/${entry.name}`).catch(
         (error: unknown) => {
           if (!isNodeError(error) || error.code !== "EEXIST") throw error;
         },
@@ -648,12 +741,8 @@ async function relinkEntryTree(
       );
       continue;
     }
-    await link(
-      `${PROC_FD}/${from.fd}/${entry.name}`,
-      `${PROC_FD}/${to.fd}/${entry.name}`,
-    );
-    const carried = await lstatQuietly(`${PROC_FD}/${to.fd}/${entry.name}`);
-    if (carried) linked.set(relative, { dev: carried.dev, ino: carried.ino });
+    const carried = await restoreEntryChild(from, entry.name, to);
+    linked.set(relative, carried);
   }
 }
 
@@ -717,7 +806,7 @@ async function clearEntryDirectory(
     await mustStillHold(prefix, proved, await selfChangedAt(directory));
   }
   for (const entry of await readEntryDirectory(directory)) {
-    const path = `${PROC_FD}/${directory.fd}/${entry.name}`;
+    const path = `${await entryHandlePath(directory)}/${entry.name}`;
     const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
     if (entry.isDirectory()) {
       await withEntryChild(directory, entry.name, async (child) => {
@@ -811,7 +900,7 @@ export async function withReservedEntryFolder<T>(
 ): Promise<T | null> {
   assertPathComponent(folder);
   try {
-    await mkdir(`${PROC_FD}/${rootHandle.fd}/${folder}`);
+    await mkdir(`${await entryHandlePath(rootHandle)}/${folder}`);
   } catch (error) {
     if (isNodeError(error) && error.code === "EEXIST") return null;
     throw error;
@@ -844,7 +933,7 @@ export async function withReservedEntryFolder<T>(
     // Once the caller has run, the undo is the caller's: it knows what it put
     // in the folder and holds the pins that prove it.
     if (!handedOver) {
-      await rmdir(`${PROC_FD}/${rootHandle.fd}/${folder}`).catch(
+      await rmdir(`${await entryHandlePath(rootHandle)}/${folder}`).catch(
         () => undefined,
       );
     }
@@ -883,21 +972,31 @@ export class EntryNameTakenError extends Error {}
  * this identity" therefore means "this is still the entry we created".
  *
  * A mutation pins everything it creates and keeps the pins until its commit has
- * settled, because that is when its undo needs the answer. `handle` carries no
- * I/O rights ({@link O_PATH}); it exists only to hold the number.
+ * settled, because that is when its undo needs the answer. `handle` is opened
+ * for pinning, not data I/O; it exists only to hold the number.
  */
 export interface EntryPin {
   handle: FileHandle;
   identity: { dev: number; ino: number };
+  /** Only a recreated symlink needs a second pin for its distinct source inode. */
+  source?: EntryPin;
+}
+
+interface EntryLinkPin extends EntryPin {
+  sourceIdentity: FileIdentity;
 }
 
 /** Pin the inode an open handle already refers to, resolving no name at all. */
 export async function pinEntryHandle(handle: FileHandle): Promise<EntryPin> {
-  // The magic link under `/proc/self/fd` resolves to the inode the descriptor
-  // holds, not by walking the path it was opened through, so nothing that
-  // happened to its NAME since can redirect this. Deliberately without
-  // `O_NOFOLLOW`, which would refuse the magic link itself (`ELOOP`).
-  return pinnedFrom(await open(`${PROC_FD}/${handle.fd}`, O_PATH));
+  // Reopen the PINNED inode, never its original pathname. On Linux omit
+  // O_NOFOLLOW here: the procfs magic link itself must be followed. Darwin's
+  // volfs path needs no link traversal; O_SYMLINK still pins symlinks as such.
+  return pinnedFrom(
+    await open(
+      await entryHandlePath(handle),
+      process.platform === "darwin" ? PIN_FLAGS : O_PATH,
+    ),
+  );
 }
 
 /** Pin the entry at `name` below an open directory, following no link. */
@@ -907,7 +1006,7 @@ async function pinEntryChild(
 ): Promise<EntryPin> {
   assertPathComponent(name);
   return pinnedFrom(
-    await open(`${PROC_FD}/${directory.fd}/${name}`, PIN_FLAGS),
+    await open(`${await entryHandlePath(directory)}/${name}`, PIN_FLAGS),
   );
 }
 
@@ -938,7 +1037,7 @@ export async function createEntryChildDirectory(
 ): Promise<EntryPin> {
   assertPathComponent(name);
   try {
-    await mkdir(`${PROC_FD}/${directory.fd}/${name}`);
+    await mkdir(`${await entryHandlePath(directory)}/${name}`);
   } catch (error) {
     throw asNameTaken(error, name);
   }
@@ -960,7 +1059,9 @@ export async function createEntryChildDirectory(
     await closeQuietly(pin.handle);
     // The read can fail on its own too, and the same rule holds after it as
     // before it: a directory this call made and cannot hand back goes.
-    await rmdir(`${PROC_FD}/${directory.fd}/${name}`).catch(() => undefined);
+    await rmdir(`${await entryHandlePath(directory)}/${name}`).catch(
+      () => undefined,
+    );
     throw error;
   }
 }
@@ -981,7 +1082,7 @@ export async function createEntryChildFile(
   let handle: FileHandle | undefined;
   try {
     handle = await open(
-      `${PROC_FD}/${directory.fd}/${name}`,
+      `${await entryHandlePath(directory)}/${name}`,
       EXCLUSIVE_FLAGS,
       0o644,
     );
@@ -1020,58 +1121,135 @@ async function unlinkCreatedChild(
   }
 }
 
+/** Test the macOS symlink-copy policy on Linux too, without emulating volfs. */
+let recreateSymlinks = process.platform === "darwin";
+export function setRecreateEntrySymlinksForTests(value: boolean | null): void {
+  recreateSymlinks = value ?? process.platform === "darwin";
+}
+
 /**
- * Link one child into another open directory under the same name.
- *
- * The destination name must be free. A symlink is linked as the symlink it is —
- * Linux `link` does not dereference — so a supporting link keeps pointing where
- * it pointed.
+ * Carry one child using native create-or-fail syscalls only. Linux hard-links;
+ * Darwin recreates symlinks from their pinned target, never follows them.
+ * A hard link retains one pin; only a recreated symlink needs separate source
+ * and destination pins. Callers own every returned handle.
  */
 export async function linkEntryChild(
   fromDirectory: FileHandle,
   name: string,
   toDirectory: FileHandle,
-): Promise<EntryPin> {
+  destinationName = name,
+): Promise<EntryLinkPin> {
   assertPathComponent(name);
+  assertPathComponent(destinationName);
+  const source = await pinEntryChild(fromDirectory, name);
+  let destination: EntryPin | undefined;
+  let transferred = false;
   try {
-    await link(
-      `${PROC_FD}/${fromDirectory.fd}/${name}`,
-      `${PROC_FD}/${toDirectory.fd}/${name}`,
-    );
-  } catch (error) {
-    throw asNameTaken(error, name);
-  }
-  // The two names are the same inode by definition of `link`, and the SOURCE
-  // name still holds it, so it cannot have been recycled: comparing the pin
-  // against the source is therefore a real check and not a guess. It fails only
-  // if something took the destination name over in between, which is a refusal
-  // — the pin must never end up on somebody else's entry.
-  const linked = await entryChildIdentity(fromDirectory, name);
-  let pin: EntryPin;
-  try {
-    pin = await pinEntryChild(toDirectory, name);
-  } catch (error) {
-    // As everywhere else: a name this call made but cannot pin is taken back
-    // rather than left for an undo that could not prove it owns it. The source
-    // link still holds the inode, so this unlinks that inode and nothing else.
-    if (linked) {
-      await unlinkEntryChildIfSame(toDirectory, name, linked).catch(
-        () => false,
+    const from = `${await entryHandlePath(fromDirectory)}/${name}`;
+    const to = `${await entryHandlePath(toDirectory)}/${destinationName}`;
+    const copiedLink =
+      recreateSymlinks && (await source.handle.stat()).isSymbolicLink();
+    const target = copiedLink
+      ? await pinnedLinkTarget(source, from)
+      : undefined;
+    try {
+      if (target !== undefined) {
+        await symlink(target, to);
+      } else {
+        // Darwin link(2) follows the source symlink. A pinned non-symlink's
+        // volfs identity cannot be replaced by one; Linux keeps native link().
+        await link(
+          process.platform === "darwin"
+            ? await entryHandlePath(source.handle)
+            : from,
+          to,
+        );
+      }
+    } catch (error) {
+      throw asNameTaken(error, destinationName);
+    }
+    try {
+      destination = await pinEntryChild(toDirectory, destinationName);
+    } catch (error) {
+      // Creation succeeded. If pinning failed, detach and verify exactly what
+      // we made before undoing it. A byte-identical replacement symlink is
+      // accepted as ours, like an identical mkdir-then-pin reservation.
+      const targetStillMatches =
+        target === undefined ||
+        (await readlink(to, { encoding: "buffer" }).then(
+          (actual) => actual.equals(target),
+          () => false,
+        ));
+      const identity = !targetStillMatches
+        ? undefined
+        : target === undefined
+          ? source.identity
+          : await entryChildIdentity(toDirectory, destinationName);
+      if (identity) {
+        await unlinkEntryChildIfSame(
+          toDirectory,
+          destinationName,
+          identity,
+          undefined,
+          target,
+        ).catch(() => false);
+      }
+      throw error;
+    }
+    const matches =
+      target === undefined
+        ? sameFileIdentity(source.identity, destination.identity)
+        : (await destination.handle.stat()).isSymbolicLink() &&
+          (await pinnedLinkTarget(destination, to)).equals(target);
+    if (!matches) {
+      // A foreign replacement is never ours to remove, even though the native
+      // create previously succeeded. Both names and all foreign bytes stay.
+      throw new IrregularEntrySourceError(
+        `"${destinationName}" was replaced while it was being copied into the new folder`,
       );
     }
-    throw error;
+    const shared = sameFileIdentity(source.identity, destination.identity);
+    if (shared) await closeQuietly(source.handle);
+    transferred = true;
+    return {
+      ...destination,
+      sourceIdentity: source.identity,
+      ...(shared ? {} : { source }),
+    };
+  } finally {
+    if (!transferred) {
+      await closeQuietly(destination?.handle);
+      await closeQuietly(source.handle);
+    }
   }
+}
+
+function sameFileIdentity(
+  actual: FileIdentity,
+  expected: FileIdentity,
+): boolean {
+  return actual.dev === expected.dev && actual.ino === expected.ino;
+}
+
+/** Darwin reads the pinned symlink inode itself; the Linux test seam brackets
+ * a pathname read with the pinned inode's ctime and no-follow identity. */
+async function pinnedLinkTarget(pin: EntryPin, path: string): Promise<Buffer> {
+  if (process.platform === "darwin") {
+    return readlink(await entryHandlePath(pin.handle), { encoding: "buffer" });
+  }
+  const before = await pin.handle.stat({ bigint: true });
+  const target = await readlink(path, { encoding: "buffer" });
+  const atName = await lstat(path);
+  const after = await pin.handle.stat({ bigint: true });
   if (
-    !linked ||
-    linked.dev !== pin.identity.dev ||
-    linked.ino !== pin.identity.ino
+    !sameFileIdentity(atName, pin.identity) ||
+    before.ctimeNs !== after.ctimeNs
   ) {
-    await closeQuietly(pin.handle);
     throw new IrregularEntrySourceError(
-      `"${name}" was replaced while it was being linked into the new folder`,
+      "symlink changed while its target was being read",
     );
   }
-  return pin;
+  return target;
 }
 
 function asNameTaken(error: unknown, name: string): Error {
@@ -1101,8 +1279,11 @@ export async function entryChildChangedAt(
 ): Promise<bigint | undefined> {
   assertPathComponent(name);
   try {
-    return (await lstat(`${PROC_FD}/${directory.fd}/${name}`, { bigint: true }))
-      .ctimeNs;
+    return (
+      await lstat(`${await entryHandlePath(directory)}/${name}`, {
+        bigint: true,
+      })
+    ).ctimeNs;
   } catch {
     return undefined;
   }
@@ -1127,7 +1308,7 @@ export async function readEntryChildLink(
   name: string,
 ): Promise<{ target: Uint8Array; changed: bigint } | undefined> {
   assertPathComponent(name);
-  const path = `${PROC_FD}/${directory.fd}/${name}`;
+  const path = `${await entryHandlePath(directory)}/${name}`;
   try {
     const before = await lstat(path, { bigint: true });
     if (!before.isSymbolicLink()) return undefined;
@@ -1149,7 +1330,7 @@ export async function entryChildIdentity(
 ): Promise<{ dev: number; ino: number } | undefined> {
   assertPathComponent(name);
   try {
-    const stats = await lstat(`${PROC_FD}/${directory.fd}/${name}`);
+    const stats = await lstat(`${await entryHandlePath(directory)}/${name}`);
     return { dev: stats.dev, ino: stats.ino };
   } catch {
     return undefined;
@@ -1167,7 +1348,7 @@ export async function rmdirEntryChild(
   name: string,
 ): Promise<void> {
   assertPathComponent(name);
-  await rmdir(`${PROC_FD}/${directory.fd}/${name}`);
+  await rmdir(`${await entryHandlePath(directory)}/${name}`);
 }
 
 /**
@@ -1220,8 +1401,8 @@ export async function removeVerifiedEntryTree(
   const aside = `.pa-removing-${randomUUID()}`;
   try {
     await rename(
-      `${PROC_FD}/${parent.fd}/${name}`,
-      `${PROC_FD}/${parent.fd}/${aside}`,
+      `${await entryHandlePath(parent)}/${name}`,
+      `${await entryHandlePath(parent)}/${aside}`,
     );
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") return "absent";
@@ -1262,7 +1443,7 @@ export async function removeVerifiedEntryTree(
   });
 
   if (outcome === "removed") {
-    await rmdir(`${PROC_FD}/${parent.fd}/${aside}`);
+    await rmdir(`${await entryHandlePath(parent)}/${aside}`);
     return outcome;
   }
   await restoreDetachedChild(parent, aside, name, true);
@@ -1322,7 +1503,7 @@ export async function withEntryChildForUpdate<T>(
 ): Promise<T> {
   assertPathComponent(name);
   const handle = await openAnchored(
-    `${PROC_FD}/${directory.fd}/${name}`,
+    `${await entryHandlePath(directory)}/${name}`,
     UPDATE_FLAGS,
   );
   try {

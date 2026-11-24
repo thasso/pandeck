@@ -522,15 +522,22 @@ test("discardTree removes a tree and answers nothing, then nothing again", async
   mkdirSync(locked);
   writeFileSync(join(locked, "f"), "x");
   chmodSync(locked, 0o500);
-  const first = decodeDiscardTreeResult(
-    await ask(LIFECYCLE_METHODS.discardTree, { location: here(tree) }),
+  // The read-only directory is repaired inside the ONE call, before any of
+  // `rmSync`'s backoff: Node on macOS reports it as ENOTEMPTY, which those
+  // retries would otherwise spend ~11 s on before the repair ever ran.
+  const started = Date.now();
+  assert.deepEqual(
+    decodeDiscardTreeResult(
+      await ask(LIFECYCLE_METHODS.discardTree, { location: here(tree) }),
+    ),
+    {},
   );
-  if (first.failed !== undefined) {
-    // Non-root: EACCES is not retried by `maxRetries`; the repair made the
-    // next attempt possible, as base's settle loop relies on.
-    assert.match(first.failed, /EACCES|EPERM/);
-    assert.equal(statSync(locked).mode & 0o777, 0o700);
-  }
+  assert.ok(
+    Date.now() - started < 5_000,
+    "the repair ran before the retry backoff",
+  );
+  assert.equal(existsSync(tree), false);
+  // Answered again for a tree already gone.
   assert.deepEqual(
     decodeDiscardTreeResult(
       await ask(LIFECYCLE_METHODS.discardTree, { location: here(tree) }),

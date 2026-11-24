@@ -1,14 +1,15 @@
 # Pandeck
 
-Instruction files (`CLAUDE.md`) contain only binding rules. This file is
-repo-wide; child files govern their subtrees. Update the nearest one when a
-contract or durable user preference changes. Put everything else in `docs/`,
-indexed by `docs/README.md` and governed by `docs/instruction-docs.md`. Update
-the owning document with its product, API, or storage contract.
-`docs/reference/` mirrors subtrees; it is never required reading or binding.
+`CLAUDE.md` files contain only binding rules: this one is repo-wide; children
+govern subtrees. Update the nearest when contracts or durable user preferences
+change. Put everything else in `docs/`, indexed by `docs/README.md` and governed
+by `docs/instruction-docs.md`. Update the owning document with its product, API,
+or storage contract. `docs/reference/` mirrors subtrees; it is never required
+reading or binding.
 
 ## Workspace
 
+- Use Claude implementer and reviewer subagents.
 - `app/shared/` owns the wire model, `app/server/` the runtime and integrations,
   `app/web/` the browser client.
 - `app/shell/` (the Rust/Tauri wrapper) is deliberately outside the pnpm
@@ -22,20 +23,19 @@ the owning document with its product, API, or storage contract.
 
 ## Dependencies
 
-- Use pnpm 11 for every install and script; `pnpm-lock.yaml` is committed and a
-  `package-lock.json` is never generated.
-- `pnpm-workspace.yaml` owns the package globs, the allowed dependency build
-  scripts, and the `catalog` of exact versions. A manifest references `catalog:`
-  for external dependencies and `workspace:*` for `@assistant/*`, never a
-  version literal.
-- The app's OWN version is declared in several files; only
-  `pnpm run version:set` writes them, and a new declaration belongs in
-  `scripts/release-utils.mjs` so `release:check` guards it.
+- Use pnpm 11; commit `pnpm-lock.yaml`, never generate `package-lock.json`.
+- `pnpm-workspace.yaml` owns package globs, allowed dependency build scripts and
+  the exact-version `catalog`. Manifests use `catalog:` for externals and
+  `workspace:*` for `@assistant/*`, never literal versions.
+- Only `pnpm run version:set` writes app versions. Add new declarations to
+  `scripts/release-utils.mjs` so `release:check` guards them.
 - Production Bun bundle changes (dev and tests run on Node) follow
   `docs/deployment.md#bun-package`.
 
 ## Quality gates
 
+- Fix macOS product gaps; adapt only platform-bound fixtures. Never weaken
+  assertions or filesystem, credential and process safety for green CI.
 - `pnpm run test` runs the test gate.
 - `pnpm run test:kb` runs the focused fast Knowledge Base regression and
   token/performance audit.
@@ -53,9 +53,8 @@ the owning document with its product, API, or storage contract.
   budgets in `config/prompt-budgets.json`. A breach is a decision, not a
   verdict: trim redundant text, or raise the budget with a `raises` entry — see
   `docs/prompt-budgets.md`. Never fit by deleting a rule agents need.
-- Prettier owns formatting for every tracked TypeScript, Markdown, JSON, CSS,
-  and YAML file: run `pnpm run format` and never hand-format against it. CI
-  fails on `pnpm run format:check`.
+- Prettier owns tracked TypeScript, Markdown, JSON, CSS and YAML formatting. Run
+  `pnpm run format`, never hand-format against it; CI gates `format:check`.
 
 ## Boundaries
 

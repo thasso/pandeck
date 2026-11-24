@@ -17,7 +17,7 @@
  * sees every native subscription.
  */
 import { markFilesystemFailure } from "./checkoutFileAccess.ts";
-import watcher from "./parcelWatcher.ts";
+import watcher, { nativeWatchRoot, spelledAsAsked } from "./parcelWatcher.ts";
 import { subscribeOnWorker } from "./workers/watchClient.ts";
 import { checkoutSideKey, type CheckoutSide } from "./workers/placement.ts";
 
@@ -56,8 +56,21 @@ function marked(error: unknown): unknown {
 const server: CheckoutWatch = {
   async subscribe(_root, path, callback, { ignore }) {
     try {
+      // Native at the real path, events spelled as asked ({@link nativeWatchRoot}).
+      const real = await nativeWatchRoot(path);
       // Called through the module object, so spies on it see the native call.
-      return await watcher.subscribe(path, callback, { ignore: [...ignore] });
+      return await watcher.subscribe(
+        real,
+        (err, events) =>
+          callback(
+            err,
+            events.map((event) => ({
+              ...event,
+              path: spelledAsAsked(path, real, event.path),
+            })),
+          ),
+        { ignore: [...ignore] },
+      );
     } catch (error) {
       throw marked(error);
     }

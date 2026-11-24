@@ -1955,7 +1955,9 @@ describe("an abort someone asked for is no failure", () => {
     // The runtime's own abort during a turn that then reports an error.
     child.steps.push({ kind: "hold", then: { kind: "error", message: QUOTA } });
     const running = turn(child, "stopped by the runtime");
-    await until(() => child.isRunning, "the turn");
+    // The hold is installed a tick after the runtime reports the turn running;
+    // a release before it would be lost and the turn would never end.
+    await until(() => child.isHeld, "the held provider turn");
     await sessionRuntime.abort(child.sessionId);
     child.release();
     await running;

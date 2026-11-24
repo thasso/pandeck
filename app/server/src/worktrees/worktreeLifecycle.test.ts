@@ -14,6 +14,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -23,7 +24,11 @@ import { afterEach, test, vi } from "vitest";
 
 vi.setConfig({ testTimeout: 120_000 });
 
-const tmp = mkdtempSync(join(tmpdir(), "worktree-lifecycle-test-"));
+// Real spelling: git names checkouts by their real paths, and macOS spells
+// the temp dir through the `/var` link.
+const tmp = mkdtempSync(
+  join(realpathSync(tmpdir()), "worktree-lifecycle-test-"),
+);
 process.env.ASSISTANT_CWD = tmp;
 process.env.ASSISTANT_BACKGROUND_FETCH = "0";
 

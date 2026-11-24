@@ -1,4 +1,6 @@
+import { realpath } from "node:fs/promises";
 import { createRequire } from "node:module";
+import { sep } from "node:path";
 import {
   IS_PACKAGED_RUNTIME,
   PACKAGED_PARCEL_WATCHER_ADDON,
@@ -44,3 +46,27 @@ function developmentWatcher(): ParcelWatcher {
 const watcher = IS_PACKAGED_RUNTIME ? packagedWatcher() : developmentWatcher();
 
 export default watcher;
+
+/**
+ * The root a native watch subscribes to, on either side: its real path. macOS FSEvents reports
+ * real paths whatever spelling was subscribed (`/var` is `/private/var`), and
+ * through an alias also reports spurious directory events, so the watch is
+ * native on the real path and its events are spelled back as asked
+ * ({@link spelledAsAsked}). Only notification spelling changes: parcel follows
+ * the same link itself. A root that cannot be resolved is subscribed as asked,
+ * so parcel answers its own failure.
+ */
+export async function nativeWatchRoot(path: string): Promise<string> {
+  return realpath(path).catch(() => path);
+}
+
+/** An event `path` under the native root `real`, as under the asked `root`. */
+export function spelledAsAsked(
+  root: string,
+  real: string,
+  path: string,
+): string {
+  if (real === root) return path;
+  if (path === real) return root;
+  return path.startsWith(real + sep) ? root + path.slice(real.length) : path;
+}

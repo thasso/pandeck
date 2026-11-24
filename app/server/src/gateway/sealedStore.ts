@@ -285,6 +285,19 @@ export interface SealedStoreOptions {
   requireTmpfs?: boolean | undefined;
 }
 
+/**
+ * Why a sealing vault will not start on `accountsDir`. Off Linux there is no
+ * tmpfs the vault can verify (macOS has none; a RAM disk is a host's own
+ * setup that `statfs` cannot tell from a disk), so the text says sealing
+ * needs Linux instead of suggesting a mount.
+ */
+function notTmpfsRefusal(accountsDir: string): string {
+  const refusal = `${accountsDir} is not a tmpfs: plaintext tokens would reach the disk`;
+  return process.platform === "linux"
+    ? refusal
+    : `${refusal}; a sealed vault needs Linux, where accounts/ is a tmpfs it can verify (on ${process.platform}, run the vault without recipients)`;
+}
+
 /** The store, or undefined when the vault has no recipients. */
 export function createSealedStore(
   options: SealedStoreOptions,
@@ -303,9 +316,7 @@ export function createSealedStore(
   }
   mkdirSync(accountsDir, { recursive: true, mode: 0o700 });
   if (options.requireTmpfs && statfsSync(accountsDir).type !== TMPFS_MAGIC)
-    throw new Error(
-      `${accountsDir} is not a tmpfs: plaintext tokens would reach the disk`,
-    );
+    throw new Error(notTmpfsRefusal(accountsDir));
   /** The hash of each token file as last sealed or opened. */
   const known = new Map<string, string>();
   let locked = true;

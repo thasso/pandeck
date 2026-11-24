@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "vitest";
@@ -11,6 +17,7 @@ import type {
   BackgroundWorkAdmitter,
   BackgroundWorkOutputReport,
 } from "../workerProtocol/backgroundWorkMethods.ts";
+import { processRuns } from "../test/processState.ts";
 
 const dataDir = mkdtempSync(join(tmpdir(), "pi-background-test-"));
 process.env.DATA_DIR = dataDir;
@@ -200,7 +207,8 @@ test("foreground bash delegates to upstream with streaming, cwd, PI identity and
   assert.equal(
     text?.type === "text" ? text.text : undefined,
     [
-      dataDir,
+      // The shell's physical cwd: real, though macOS spells tmp via `/var`.
+      realpathSync(dataDir),
       sessionId,
       session.sessionFile,
       "provider-probe",
@@ -1185,8 +1193,8 @@ test("the supervised local operation Stop terminates the process group", async (
   );
   await until(() => pidLine() !== undefined, "the process ids");
   const [leader, child] = pidLine()!.split(" ").map(Number);
-  assert.equal(processIsRunning(leader!), true);
-  assert.equal(processIsRunning(child!), true);
+  assert.equal(processRuns(leader!), true);
+  assert.equal(processRuns(child!), true);
   const stopped = await backgroundWorkSupervisor.stopOne({
     itemId,
     ownerSessionId,
@@ -1198,16 +1206,6 @@ test("the supervised local operation Stop terminates the process group", async (
   await assertProcessGone(child!);
 });
 
-function processIsRunning(pid: number): boolean {
-  try {
-    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-    const state = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0];
-    return state !== "Z";
-  } catch {
-    return false;
-  }
-}
-
 // SIGKILL to a process group is delivered asynchronously. The awaited promise
 // settles on the leader's `close`, which only means the inherited pipe writers
 // were released -- a descendant killed with it can still answer a /proc sample
@@ -1218,10 +1216,10 @@ function processIsRunning(pid: number): boolean {
 // sleeps for 300s and cannot go away inside it.
 async function assertProcessGone(pid: number): Promise<void> {
   const deadline = Date.now() + 5_000;
-  while (processIsRunning(pid) && Date.now() < deadline) {
+  while (processRuns(pid) && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  assert.equal(processIsRunning(pid), false, `pid ${pid} is still running`);
+  assert.equal(processRuns(pid), false, `pid ${pid} is still running`);
 }
 
 test("WebSocket monitor emits activity and Stop closes only its owned socket", async () => {

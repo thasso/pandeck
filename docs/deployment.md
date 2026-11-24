@@ -328,20 +328,25 @@ native `fs` and base code do on a twin fixture (`mkdir` and the exclusive
 and the discard and delete on a tree with 0o500 and 0o000 directories and a link
 to an outside directory; the residue scan; a missing tree): the same answer or
 failure code and message, the same survivors with their modes and link texts,
-and the outside directory untouched. A stop in a checkout must SIGTERM exactly
-the two sleepers the probe's direct child started there and SIGKILL only the one
-that ignores SIGTERM, leaving the direct child and a sleeper outside the
-checkout running, and every lifecycle request naming another Worker must be
-refused with nothing changed. Over a real local socket, both served-file routes
-must send the whole file to a client that stays. A client gone before the
-handler runs, or while its open is held, must cost at most one chunk read and
-close what was opened once. One gone mid-body must end the handler before the
-file's end, with its file closed once. Killing the broker must fail the lost
-request as an execution failure and kill the grandchild git started, and the
-broker must come back for the next call. Signal 0 to an empty process group must
-throw `ESRCH` and to a live one must not. A checkout git lost with its broker,
-with the Worker connection kept and with it ending, must reject only once its
-stand-in child is gone or a zombie. A second run under
+and the outside directory untouched. The discard's reference is written from its
+contract in `docs/workers.md` ("Checkout lifecycle"): a plain `rmSync`, an owner
+repair on a permission or not-empty failure, the retrying `rmSync`, and a final
+repair with `{failed}`. A control first shows that the locked tree needs that
+first repair: without it an unprivileged discard fails, with it the tree is
+removed and the outside directory is unchanged. A stop in a checkout must
+SIGTERM exactly the two sleepers the probe's direct child started there and
+SIGKILL only the one that ignores SIGTERM, leaving the direct child and a
+sleeper outside the checkout running, and every lifecycle request naming another
+Worker must be refused with nothing changed. Over a real local socket, both
+served-file routes must send the whole file to a client that stays. A client
+gone before the handler runs, or while its open is held, must cost at most one
+chunk read and close what was opened once. One gone mid-body must end the
+handler before the file's end, with its file closed once. Killing the broker
+must fail the lost request as an execution failure and kill the grandchild git
+started, and the broker must come back for the next call. Signal 0 to an empty
+process group must throw `ESRCH` and to a live one must not. A checkout git lost
+with its broker, with the Worker connection kept and with it ending, must reject
+only once its stand-in child is gone or a zombie. A second run under
 `ASSISTANT_SPAWN_BROKER=0` checks the in-process fallback, the exit receipt and
 the surrogate included. The probe derives a tree-watch ignore set from a small
 repository's `.gitignore`, one ignored directory at the root and one nested. In

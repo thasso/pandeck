@@ -17,7 +17,9 @@
  *
  * With recipients (`gateway-admin vault-recipient add`) it seals: `accounts/`
  * must be a tmpfs, it starts locked, and `gateway-admin unlock` unlocks it
- * over `--control-socket` (`/run/pandeck-vault/control.sock` unless given).
+ * over `--control-socket`: unless given, `/run/pandeck-vault/control.sock` (the
+ * Linux service's runtime directory) on Linux, `<state-dir>/control.sock`
+ * elsewhere (`vaultControlSocketPath`), where only unsealed vaults run.
  * `--integrations-config` names a 0600 JSON file of users' OAuth clients,
  * `{"atlassian" | "slack": {"clientId", "clientSecret"}}` plus the GitHub
  * App, `{"github": {"appId", "clientId", "clientSecret", "privateKeyFile"}}`
@@ -40,6 +42,7 @@ import {
   type IntegrationClients,
 } from "./integrationClients.ts";
 import { loginChildDriver } from "./loginChild.ts";
+import { vaultControlSocketPath } from "./vaultControl.ts";
 import { readVaultTls } from "./vaultMethods.ts";
 import { startVaultServer } from "./vaultServer.ts";
 
@@ -102,8 +105,7 @@ try {
       claude: loginChildDriver(childEntry("claude-login"), { log }),
       "openai-codex": loginChildDriver(childEntry("codex-login"), { log }),
     },
-    controlSocket:
-      values["control-socket"] ?? "/run/pandeck-vault/control.sock",
+    controlSocket: vaultControlSocketPath(stateDir, values["control-socket"]),
     requireTmpfs: true,
     integrationClients,
     log,

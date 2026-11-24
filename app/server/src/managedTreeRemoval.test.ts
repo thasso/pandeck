@@ -37,6 +37,10 @@ import {
 
 /** Root bypasses the mode checks, so the failures these fixtures need never happen. */
 const permissionsEnforced = process.getuid?.() !== 0;
+/** Only Linux can repair a directory its owner cannot read without following links. */
+const repairsUnreadable = !permissionsEnforced || process.platform === "linux";
+/** Linux reports the refused unlink; Node on macOS the parent it could not empty. */
+const unremovableCode = process.platform === "darwin" ? "ENOTEMPTY" : "EACCES";
 const selfUid = process.getuid?.() ?? 0;
 
 /**
@@ -89,7 +93,7 @@ test("an owner-locked directory is repaired, not reported as residue", async () 
 
   if (permissionsEnforced)
     assert.throws(() => rmSync(root, { recursive: true, force: true }), {
-      code: "EACCES",
+      code: unremovableCode,
     });
   // Ours, so nothing in it is foreign no matter how locked it is.
   assert.equal(scanTreeResidue(root).foreign, undefined);
@@ -260,7 +264,10 @@ test("the removal still reaches residue that a first scan could not see", async 
   chmodSync(blind, 0o000);
 
   // Removal repairs owner access BEFORE it scans, so the hidden directory is
-  // visible by the time the verdict matters.
+  // visible by the time the verdict matters — where the host can repair an
+  // unreadable directory without following links (Linux `O_PATH`). macOS
+  // cannot, so there it fails closed: still not removed, and no residue is
+  // claimed for a subtree nobody could see.
   const result = await removeManagedTree(root, {
     remove: () => false,
     reclaim: async () => ({ status: "unavailable", reason: "no runtime" }),
@@ -271,7 +278,9 @@ test("the removal still reaches residue that a first scan could not see", async 
   });
 
   assert.equal(result.removed, false);
-  assert.equal(result.residue?.path, store);
+  assert.equal(result.residue?.path, repairsUnreadable ? store : undefined);
+  if (!repairsUnreadable)
+    assert.equal(statSync(blind).mode & 0o777, 0o000, "left as it was");
 });
 
 /*

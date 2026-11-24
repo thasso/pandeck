@@ -431,10 +431,15 @@ describe("Stop-all across backends", () => {
         };
       },
     });
+    // Only `Date` is faked: the Stop-all visits backends in the order of their
+    // owner's active items, newest first (`created_at_ms DESC`, then the random
+    // id), so two rows in one millisecond would come in either order.
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.now() });
     const sessionId = owner();
     const old = controlledJob();
     const oldWatch = await launch(sessionId, old.run);
     // Newer, so the Stop-all visits the native backend first.
+    vi.setSystemTime(Date.now() + 1);
     const admission = backgroundWorkSupervisor.admit({
       ownerSessionId: sessionId,
       backend: "host-process",

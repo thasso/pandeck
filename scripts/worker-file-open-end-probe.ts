@@ -6,6 +6,7 @@ import {
   constants,
   mkdtempSync,
   openSync,
+  realpathSync,
   rmSync,
   unlinkSync,
   writeFileSync,
@@ -57,7 +58,11 @@ export async function checkWorkerFileOpenEnd(
   routes: readonly ("direct" | "grant")[] = ["direct", "grant"],
 ): Promise<void> {
   for (const route of routes) {
-    const dir = mkdtempSync(join(tmpdir(), `worker-open-end-${route}-`));
+    // Real spelling: a grant serves the document's canonical path, where the
+    // barriers below are armed (macOS spells the temp dir through `/var`).
+    const dir = mkdtempSync(
+      join(realpathSync(tmpdir()), `worker-open-end-${route}-`),
+    );
     const path = join(dir, "swapped.bin");
     const other = join(dir, "other.bin");
     const unrelated = join(dir, "unrelated.bin");

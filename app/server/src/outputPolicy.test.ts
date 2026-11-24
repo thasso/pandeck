@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { chmodSync, symlinkSync, truncateSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -322,6 +322,59 @@ describe("bounded native output policy", () => {
       chmodSync(join(dir, "task.out"), 0o600);
       deleteToolGroupSessionData(sessionId);
       await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // macOS hands agents `/var/folders/…`, whose real path is `/private/var/…`;
+  // a link standing in for that alias poses the same question on any host.
+  test("accepts output named through the trusted root's own spelling, never by resolving the reported path", async () => {
+    const outer = await mkdtemp(join(tmpdir(), "pa-task-output-alias-"));
+    const sessionId = `task-alias-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    try {
+      const real = join(outer, "real");
+      await mkdir(join(real, "root"), { recursive: true });
+      const alias = join(outer, "alias");
+      symlinkSync(real, alias);
+      await writeFile(join(real, "root", "task.out"), "aliased output\n");
+
+      for (const spelling of [alias, real]) {
+        const evidence = captureTaskOutputArtifact({
+          sessionId,
+          outputFile: join(spelling, "root", "task.out"),
+          trustedRoot: join(spelling, "root"),
+        });
+        assert.equal(evidence.text, true, JSON.stringify(evidence));
+        assert.equal(evidence.capturedBytes, "aliased output\n".length);
+      }
+
+      // An alias the CALLER did not hand over is never resolved: the reported
+      // path is compared lexically, so it is outside even though it would
+      // resolve into the root.
+      const unspelled = captureTaskOutputArtifact({
+        sessionId,
+        outputFile: join(alias, "root", "task.out"),
+        trustedRoot: join(real, "root"),
+      });
+      assert.equal(unspelled.refusalReason, "output-outside-trusted-root");
+
+      // A link INSIDE the root is still a symlink component, whatever spelling.
+      symlinkSync(join(real, "root"), join(real, "root", "loop"));
+      const looped = captureTaskOutputArtifact({
+        sessionId,
+        outputFile: join(alias, "root", "loop", "task.out"),
+        trustedRoot: join(alias, "root"),
+      });
+      assert.match(looped.refusalReason ?? "", /symlink/);
+
+      const outside = captureTaskOutputArtifact({
+        sessionId,
+        outputFile: join(alias, "task.out"),
+        trustedRoot: join(alias, "root"),
+      });
+      assert.equal(outside.refusalReason, "output-outside-trusted-root");
+    } finally {
+      deleteToolGroupSessionData(sessionId);
+      await rm(outer, { recursive: true, force: true });
     }
   });
 

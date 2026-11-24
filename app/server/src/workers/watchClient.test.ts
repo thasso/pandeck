@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, test, vi } from "vitest";
@@ -48,7 +54,9 @@ let dir: string;
 let file: string;
 
 beforeAll(() => {
-  dir = mkdtempSync(join(tmpdir(), "watch-client-"));
+  // Real spelling: the Worker subscribes natively at the real path, which the
+  // native spies match (macOS spells the temp dir through `/var`).
+  dir = mkdtempSync(join(realpathSync(tmpdir()), "watch-client-"));
   file = join(dir, "regular.txt");
   writeFileSync(file, "x\n");
 });

@@ -11,17 +11,36 @@
  * Task-208 spike failed first. So `bundle.pem` is the system CA bundle plus
  * ours, and the JVM truststore is a copy of the JDK's `cacerts` plus ours.
  */
-import { execFile } from "node:child_process";
 import { X509Certificate } from "node:crypto";
 import { existsSync } from "node:fs";
 import { chmod, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { promisify } from "node:util";
+import { getCACertificates, rootCertificates } from "node:tls";
 import forge from "node-forge";
 import { DATA_DIR } from "../config.ts";
 import { errorText } from "../errors.ts";
+import { brokerExecFile } from "../spawnBroker.ts";
+import { childProcessEnv } from "../subprocessEnv.ts";
 
-const execFileAsync = promisify(execFile);
+/** Keep Java/keytool discovery off the server's fork path, with its child overlay. */
+async function runTrustTool(file: string, args: string[]) {
+  const result = await brokerExecFile({
+    file,
+    args,
+    cwd: PACKAGE_PROXY_DIR,
+    env: childProcessEnv(),
+    maxBuffer: 1024 * 1024,
+    encoding: "utf8",
+  });
+  if (result.error) {
+    throw Object.assign(new Error(result.error.message), {
+      code: result.error.code,
+      stdout: result.stdout,
+      stderr: result.stderr,
+    });
+  }
+  return result;
+}
 
 export const PACKAGE_PROXY_DIR = join(DATA_DIR, "package-proxy");
 const CA_CERT_PATH = join(PACKAGE_PROXY_DIR, "ca.pem");
@@ -45,6 +64,7 @@ const SYSTEM_CA_BUNDLES = [
   "/etc/ssl/certs/ca-bundle.crt",
   "/etc/ssl/certs/ca-certificates.crt",
   "/etc/pki/tls/certs/ca-bundle.crt",
+  "/etc/ssl/cert.pem", // macOS/OpenSSL's exported system roots.
 ];
 
 export interface CertificatePair {
@@ -211,11 +231,33 @@ export function createLeafCertificateCache(
 }
 
 async function readSystemCaBundle(): Promise<string> {
+  // macOS stores trust in Keychains, not Linux PEM locations. Node's native
+  // system store includes trusted local roots as well as the platform roots.
+  const systemRoots = () => {
+    try {
+      return getCACertificates("system");
+    } catch {
+      return [];
+    }
+  };
+  if (process.platform === "darwin") {
+    const native = systemRoots();
+    if (native.length > 0) return native.join("\n");
+  }
   for (const candidate of SYSTEM_CA_BUNDLES) {
     if (!existsSync(candidate)) continue;
-    return await readFile(candidate, "utf8");
+    const bundle = await readFile(candidate, "utf8");
+    if (bundle.includes("-----BEGIN CERTIFICATE-----")) return bundle;
   }
-  return "";
+  // Never replace public trust with only our intercepting CA on hosts without
+  // a PEM export. Retain Node's trusted roots as the final portable fallback.
+  const native = systemRoots();
+  const trusted = native.length > 0 ? native : rootCertificates;
+  if (trusted.length === 0)
+    throw new Error(
+      "No system or bundled CA roots are available for the package proxy trust bundle.",
+    );
+  return trusted.join("\n");
 }
 
 /**
@@ -226,11 +268,10 @@ async function findJdk(): Promise<{ cacerts: string; keytool: string } | null> {
   try {
     // `java -XshowSettings:properties -version` prints the properties on STDERR
     // (and some JDKs exit non-zero), so both streams must be considered.
-    const result = await execFileAsync(
-      "java",
-      ["-XshowSettings:properties", "-version"],
-      { encoding: "utf8" },
-    ).catch((err: unknown) => {
+    const result = await runTrustTool("java", [
+      "-XshowSettings:properties",
+      "-version",
+    ]).catch((err: unknown) => {
       const failure = err as { stdout?: string; stderr?: string };
       if (
         typeof failure?.stderr === "string" ||
@@ -278,7 +319,7 @@ export async function writeTrustArtifacts(
     await copyFile(jdk.cacerts, JVM_TRUSTSTORE_PATH);
     await chmod(JVM_TRUSTSTORE_PATH, 0o644);
     // keytool refuses to re-add an existing alias, so drop it first (ignore misses).
-    await execFileAsync(jdk.keytool, [
+    await runTrustTool(jdk.keytool, [
       "-delete",
       "-alias",
       "pa-package-proxy",
@@ -287,7 +328,7 @@ export async function writeTrustArtifacts(
       "-storepass",
       JVM_TRUSTSTORE_PASSWORD,
     ]).catch(() => undefined);
-    await execFileAsync(jdk.keytool, [
+    await runTrustTool(jdk.keytool, [
       "-importcert",
       "-noprompt",
       "-alias",

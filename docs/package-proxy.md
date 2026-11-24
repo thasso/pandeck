@@ -104,7 +104,10 @@ real, publicly-trusted certificate. So the two trust artifacts the server builds
 are always the system trust plus the proxy's CA, never a replacement:
 
 - `bundle.pem` — the system CA bundle (`/etc/ssl/certs/ca-bundle.crt` or
-  equivalent) plus the proxy's CA. Used by
+  equivalent) plus the proxy's CA. macOS prefers Node's native system/Keychain
+  trust store; `/etc/ssl/cert.pem` is also recognized. Without a PEM export,
+  native system roots or Node's bundled public roots are retained. An empty root
+  store is an error, never a bundle containing only the proxy CA. Used by
   `NODE_EXTRA_CA_CERTS`/`SSL_CERT_FILE`/`CURL_CA_BUNDLE`/
   `REQUESTS_CA_BUNDLE`/`GIT_SSL_CAINFO`.
 - `jvm-truststore.p12` — the JDK's own `cacerts` (found next to `java` on PATH,
