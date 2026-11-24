@@ -1078,12 +1078,23 @@ test("a gateway write's apply is bounded at 55 s without a caller signal; it sen
   assert.equal(remoteTools.remoteToolsConnected(), true);
 });
 
-test("a gateway card whose apply times out fails MAY_HAVE_WRITTEN; the late answer changes neither the card nor its broadcasts (Task-1463 P6b)", async () => {
+test("a gateway card whose apply times out fails MAY_HAVE_WRITTEN; a late answer, valid in every other way, changes neither the card nor its broadcasts (Task-1463 P6b)", async () => {
   await import("./tools/jira/jiraTools.ts");
   const { sessionStore } = await import("./db/sessionStore.ts");
   const approvals = await import("./pendingApprovals.ts");
+  const { checkJiraResult } = await import("./jiraMutationResult.ts");
   const { createEdgeTools } = await import("./gatewayTools/index.ts");
   const { host } = createEdgeTools({ log: () => {} });
+  const item = {
+    clientId: "item-1",
+    issueKey: "OPS-1",
+    operation: "comment" as const,
+    commentBody: "Hi",
+    fieldChanges: [],
+  };
+  // The answer the edge gives too late: it would pass every client check.
+  const lateRecord = { effects: "possible" as const, resultIssueKey: "OPS-1" };
+  assert.ok(checkJiraResult(lateRecord, item, "acme.atlassian.net"));
   let applies = 0;
   let answerLate!: () => void;
   const edge = await stubEdge({
@@ -1097,16 +1108,7 @@ test("a gateway card whose apply times out fails MAY_HAVE_WRITTEN; the late answ
             encodeClientMessage({
               ok: true,
               effects: "possible",
-              results: [
-                {
-                  clientId: "item-1",
-                  issueKey: "OPS-1",
-                  operation: "comment",
-                  commentBody: "Late",
-                  fieldChanges: [],
-                  effects: "possible",
-                },
-              ],
+              results: [lateRecord],
             }),
           );
       });
@@ -1134,15 +1136,7 @@ test("a gateway card whose apply times out fails MAY_HAVE_WRITTEN; the late answ
     body: {
       kind: "jiraIssue",
       jiraHost: "acme.atlassian.net",
-      items: [
-        {
-          clientId: "item-1",
-          issueKey: "OPS-1",
-          operation: "comment",
-          commentBody: "Hi",
-          fieldChanges: [],
-        },
-      ],
+      items: [structuredClone(item)],
     },
     context: { via: "gateway" },
   });

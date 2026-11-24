@@ -109,6 +109,7 @@ After the send, one table decides the card:
 | ------------------------------------------------ | --------------------------------------------------------- |
 | not sent (no connection)                         | failed, unreachable, nothing written                      |
 | a failure the edge certifies `effects: "none"`   | failed, its message plus "Nothing was written."           |
+| the edge's `unknown_tool` refusal                | failed, the no-longer-offered text, nothing written       |
 | a failure with `effects: "possible"`             | failed, may have written; its checked results merged      |
 | a success, every record checked                  | the local summary, plus the notices below                 |
 | every item failed                                | failed, the local all-failed text, plus the notices below |

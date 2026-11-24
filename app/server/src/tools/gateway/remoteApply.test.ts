@@ -56,6 +56,9 @@ const {
   applyListing,
   installRemoteToolPort,
   markDisconnected,
+  remoteProductEnabled,
+  remoteToolDispatchable,
+  remoteToolsConnected,
 } = await import("../../remoteTools.ts");
 type RemoteApplyOutcome = Awaited<
   ReturnType<import("../../remoteTools.ts").RemoteToolPort["apply"]>
@@ -623,6 +626,91 @@ test("after the wait, a dropped link, a toggle off or a lost two-phase offer ref
   );
   assert.equal(await refusedBeforeSend(jiraCard()), NOT_OFFERED);
 });
+
+/**
+ * P6-O4: nothing is awaited between the recheck and the send, so a change on
+ * any microtask either lands before the recheck (refused, nothing sent) or
+ * after the send. Flipping the link, the listing or the toggle after `k`
+ * microtasks, for every `k` across the approval, the apply never starts
+ * while what it was checked against no longer holds. An `await` before
+ * `port.apply` breaks this for some `k`.
+ */
+test.each([
+  ["the link drops", () => markDisconnected()],
+  [
+    "the listing loses the two-phase offer",
+    () =>
+      applyListing(
+        acceptRemoteTools([LISTING[0], { ...LISTING[1], twoPhase: undefined }]),
+      ),
+  ],
+  ["the toggle goes off", () => updateConfluenceSettings({ enabled: false })],
+] as const)(
+  "no microtask lands between the recheck and the send: %s (P6-O4)",
+  async (_name, flip) => {
+    const restore = () => {
+      applyListing(acceptRemoteTools(LISTING));
+      updateConfluenceSettings({ enabled: true });
+    };
+    const confluenceCard = () =>
+      createApproval({
+        sessionId,
+        kind: "confluencePage",
+        title: "Comment on Page",
+        body: {
+          kind: "confluencePage",
+          confluenceHost: SITE,
+          items: [
+            {
+              clientId: "item-1",
+              operation: "comment",
+              pageId: "123",
+              title: "Page",
+              body: "Hi",
+            },
+          ],
+        },
+        context: { ...GATEWAY_CONTEXT },
+      });
+    let stale = 0;
+    answer = () => {
+      // What the send was checked against must still hold as it leaves.
+      if (
+        !remoteToolsConnected() ||
+        !remoteProductEnabled("confluence") ||
+        !remoteToolDispatchable("confluence_mutate_page", "two-phase")
+      )
+        stale += 1;
+      return Promise.resolve({
+        outcome: "answer",
+        answer: {
+          ok: true,
+          results: [{ effects: "possible" }],
+          effects: "possible",
+        },
+      });
+    };
+    let refused = 0;
+    let applied = 0;
+    for (let k = 0; k < 400 && applied < 5; k += 1) {
+      restore();
+      const before = sent.length;
+      const decided = approve(confluenceCard());
+      for (let tick = 0; tick < k; tick += 1) await Promise.resolve();
+      flip();
+      const { card } = await decided;
+      if (sent.length > before) applied += 1;
+      else {
+        assert.equal(card.status, "failed");
+        refused += 1;
+      }
+    }
+    restore();
+    assert.equal(stale, 0, "an apply left after its check stopped holding");
+    assert.ok(refused > 0, "some flip landed before the recheck");
+    assert.equal(applied, 5, "the sweep reached past the send");
+  },
+);
 
 test("rejecting a gateway card sends nothing", async () => {
   const card = jiraCard();
