@@ -21,6 +21,7 @@ import {
   DEFAULT_SESSION_SCOPE,
   isSessionPeerTurnCap,
   parsePendingRuntime,
+  samePendingRuntime,
   sessionModeOrDefault,
   sessionScopeOrFailClosed,
   type Harness,
@@ -40,6 +41,8 @@ import { getDb, inDbTransaction } from "./index.ts";
 import {
   activeBinding,
   bindings,
+  stampBindingRun,
+  startNextBinding,
   syncActiveBinding,
   syncActiveBindingAccount,
   type ActiveBindingFields,
@@ -619,6 +622,67 @@ function switchCredentialProfile(
         "The session's account changed or the session was deleted during the switch.",
       );
     syncActiveBindingAccount(id, next);
+  });
+  touchSessionRows([id]);
+}
+
+/** What {@link switchEngineBinding} commits. */
+interface EngineBindingSwitch {
+  /** The active binding the switch started from. */
+  expectSeq: number;
+  /** The new binding, projected onto the row. */
+  fields: ActiveBindingFields;
+  /** The engine's own id for it: pi's app id, Claude's resumed id or none. */
+  nativeSessionId: string | null;
+  /** The session log's seq cursor at the switch. */
+  startedSeq: number;
+  /** The pending selection the switch applied, cleared when still stored. */
+  pending: SessionPendingRuntime;
+}
+
+/**
+ * The cross-harness switch's commit (`docs/session-runtime-switching.md`):
+ * end the active binding, start the next one, project it onto the row and
+ * compare-and-clear the pending selection the switch applied, in ONE
+ * transaction. Throws, changing nothing, when the session was deleted or its
+ * active binding is no longer `expectSeq`.
+ */
+function switchEngineBinding(id: string, change: EngineBindingSwitch): void {
+  const { fields } = change;
+  inDbTransaction(() => {
+    const row = getDb()
+      .prepare(
+        "SELECT pending_runtime FROM session_index WHERE id = ? AND deleted_at_ms IS NULL",
+      )
+      .get(id) as { pending_runtime: string | null } | undefined;
+    if (!row) throw new Error("The session was not found or has been deleted.");
+    startNextBinding(
+      id,
+      change.expectSeq,
+      fields,
+      change.nativeSessionId,
+      change.startedSeq,
+      Date.now(),
+    );
+    const stored = pendingRuntimeFields(row.pending_runtime).pendingRuntime;
+    getDb()
+      .prepare(
+        `UPDATE session_index
+            SET harness = ?, credential_profile_id = ?, provider = ?, model = ?,
+                thinking_level = ?, provider_session_id = ?,
+                pending_runtime = CASE WHEN ? THEN NULL ELSE pending_runtime END
+          WHERE id = ?`,
+      )
+      .run(
+        fields.harness,
+        fields.credentialProfileId,
+        fields.provider,
+        fields.model,
+        fields.thinkingLevel,
+        fields.providerSessionId,
+        samePendingRuntime(stored, change.pending) ? 1 : 0,
+        id,
+      );
   });
   touchSessionRows([id]);
 }
@@ -2266,6 +2330,8 @@ export const sessionStore = {
   upsert,
   setPeerTurnCap,
   switchCredentialProfile,
+  switchEngineBinding,
+  stampBindingRun,
   activeBinding,
   bindings,
   requireEnterprise,

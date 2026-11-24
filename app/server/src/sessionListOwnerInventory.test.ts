@@ -461,7 +461,7 @@ const owners: Record<string, Owner> = {
       ),
       group(
         "read",
-        "get interruptedRunAt isRunning runProgress isBusy loadTimelineBlock loadTimelineRange locateAnchor readLog getConfig forkAnchors forkLog forkCutEntryId canForkLogAt turnEndEntryId entryText require",
+        "get interruptedRunAt isRunning runProgress isBusy loadTimelineBlock loadTimelineRange locateAnchor logCursor readLog getConfig forkAnchors forkLog forkCutEntryId canForkLogAt turnEndEntryId entryText require",
         "Read active ownership/logs/config/fork cuts; no listed mutation.",
       ),
     ],

@@ -191,6 +191,8 @@ const CLASSIFIED: Record<
       setPeerTurnCap: "projected-write",
       setPendingRuntime: "projected-write",
       switchCredentialProfile: "projected-write",
+      switchEngineBinding: "projected-write",
+      stampBindingRun: "non-projected-write",
       requireEnterprise: "projected-write",
       setCompactionWindow: "non-projected-write",
       markDeleted: "projected-write",
@@ -929,6 +931,30 @@ describe("fan-out", () => {
           "profile-a",
           "profile-b",
         ),
+      [switched],
+    );
+    await assertReported(
+      "engine binding switch",
+      () =>
+        sessionStore.switchEngineBinding(switched, {
+          expectSeq: sessionStore.activeBinding(switched)!.seq,
+          fields: {
+            harness: "claude-sdk",
+            credentialProfileId: "profile-c",
+            provider: "claude",
+            model: "opus",
+            thinkingLevel: "high",
+            providerSessionId: null,
+          },
+          nativeSessionId: null,
+          startedSeq: 0,
+          pending: {
+            model: { provider: "claude", id: "opus" },
+            thinkingLevel: "high",
+            account: { kind: "automatic" },
+            setBy: "user",
+          },
+        }),
       [switched],
     );
     await assertReported(

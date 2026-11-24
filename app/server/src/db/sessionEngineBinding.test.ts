@@ -1,9 +1,10 @@
 /**
  * The engine-binding write-through (`docs/session-runtime-switching.md`
  * "Engine bindings"): `session_index`'s six binding columns are the active
- * binding's projection, written only by `sessionStore.upsert` and
- * `switchCredentialProfile`, each writing the binding in the same transaction.
- * After every writer the row equals the active binding.
+ * binding's projection, written only by `sessionStore.upsert`,
+ * `switchCredentialProfile` and `switchEngineBinding`, each writing the binding
+ * in the same transaction. After every writer the row equals the active
+ * binding.
  *
  *   pnpm --filter @assistant/server test src/db/sessionEngineBinding.test.ts
  */
@@ -49,6 +50,49 @@ function rowAndBinding(id: string) {
     },
   };
 }
+
+type BindingFields = import("./sessionEngineBinding.ts").ActiveBindingFields;
+type Pending = import("@assistant/shared").SessionPendingRuntime;
+
+const PENDING: Pending = {
+  model: { provider: "claude", id: "opus" },
+  thinkingLevel: "high",
+  account: { kind: "automatic" },
+  setBy: "user",
+};
+
+/** Commit a switch from the active binding to `fields`. */
+function switchTo(
+  id: string,
+  fields: BindingFields,
+  options: {
+    pending?: Pending;
+    nativeSessionId?: string | null;
+    startedSeq?: number;
+  } = {},
+): void {
+  sessionStore.switchEngineBinding(id, {
+    expectSeq: sessionStore.activeBinding(id)!.seq,
+    fields,
+    nativeSessionId:
+      options.nativeSessionId !== undefined
+        ? options.nativeSessionId
+        : fields.harness === "pi"
+          ? id
+          : fields.providerSessionId,
+    startedSeq: options.startedSeq ?? 0,
+    pending: options.pending ?? PENDING,
+  });
+}
+
+const CLAUDE: BindingFields = {
+  harness: "claude-sdk",
+  credentialProfileId: "acct-c",
+  provider: "claude",
+  model: "opus",
+  thinkingLevel: "high",
+  providerSessionId: null,
+};
 
 function assertRowIsActiveBinding(id: string): void {
   const { row, binding } = rowAndBinding(id);
@@ -375,21 +419,14 @@ test("after a switch the active engine raises the message count but never lowers
     }),
   );
   assert.equal(sessionStore.get(id)?.messageCount, 38);
-  // Seed a second binding (no production writer starts one yet).
-  const db = getDb();
-  db.prepare(
-    "UPDATE session_engine_binding SET ended_at_ms = 1 WHERE session_id = ? AND ended_at_ms IS NULL",
-  ).run(id);
-  db.prepare(
-    `INSERT INTO session_engine_binding (
-       session_id, seq, harness, credential_profile_id, provider, model,
-       thinking_level, native_session_id, started_seq, started_run_id,
-       created_at_ms, ended_at_ms
-     ) VALUES (?, 2, 'claude-sdk', 'acct-c', 'claude', 'claude-opus-5-5', NULL, NULL, 90, NULL, 2, NULL)`,
-  ).run(id);
-  db.prepare(
-    "UPDATE session_index SET harness = 'claude-sdk', provider = 'claude', model = 'claude-opus-5-5', credential_profile_id = 'acct-c' WHERE id = ?",
-  ).run(id);
+  switchTo(id, {
+    harness: "claude-sdk",
+    credentialProfileId: "acct-c",
+    provider: "claude",
+    model: "claude-opus-5-5",
+    thinkingLevel: null,
+    providerSessionId: null,
+  });
   // The fresh engine counts only its own two messages: the row keeps 38.
   assert.ok(
     sessionStore.upsert({
@@ -409,4 +446,133 @@ test("after a switch the active engine raises the message count but never lowers
     }),
   );
   assert.equal(sessionStore.get(id)?.messageCount, 39);
+});
+
+test("a switch ends the active binding, starts the next and projects it, clearing the selection it applied", () => {
+  const id = freshId("switch-commit");
+  assert.ok(
+    sessionStore.upsert({
+      id,
+      harness: "pi",
+      agentType: "developer",
+      provider: "openai-codex",
+      model: "gpt-5.6-sol",
+      thinkingLevel: "medium",
+      credentialProfileId: "acct-a",
+    }),
+  );
+  sessionStore.setPendingRuntime(id, PENDING);
+  switchTo(id, CLAUDE, { startedSeq: 17 });
+  const [first, second] = sessionStore.bindings(id);
+  assert.equal(first?.harness, "pi");
+  assert.ok(first?.endedAt, "the first binding ended");
+  assert.equal(second?.seq, 2);
+  assert.equal(second?.harness, "claude-sdk");
+  assert.equal(
+    second?.nativeSessionId,
+    undefined,
+    "fresh: learned on its first query",
+  );
+  assert.equal(second?.startedSeq, 17);
+  assert.equal(second?.startedRunId, undefined);
+  assert.equal(sessionStore.get(id)?.pendingRuntime, undefined);
+  assertRowIsActiveBinding(id);
+
+  // Its first query names the native session; the active engine writes through.
+  assert.ok(
+    sessionStore.upsert({
+      id,
+      harness: "claude-sdk",
+      agentType: "developer",
+      providerSessionId: "native-1",
+    }),
+  );
+  assert.equal(sessionStore.activeBinding(id)?.nativeSessionId, "native-1");
+  assertRowIsActiveBinding(id);
+
+  // A return to pi is a new binding with pi's own id, the app id.
+  switchTo(id, {
+    harness: "pi",
+    credentialProfileId: "acct-a",
+    provider: "openai-codex",
+    model: "gpt-5.6-sol",
+    thinkingLevel: "medium",
+    providerSessionId: null,
+  });
+  assert.deepEqual(
+    sessionStore.bindings(id).map((b) => [b.seq, b.harness, b.nativeSessionId]),
+    [
+      [1, "pi", id],
+      [2, "claude-sdk", "native-1"],
+      [3, "pi", id],
+    ],
+  );
+  assertRowIsActiveBinding(id);
+});
+
+test("a switch keeps a selection set after the one it applied", () => {
+  const id = freshId("switch-newer-pending");
+  assert.ok(
+    sessionStore.upsert({
+      id,
+      harness: "pi",
+      agentType: "developer",
+      credentialProfileId: "acct-a",
+    }),
+  );
+  const newer: Pending = { ...PENDING, thinkingLevel: "low" };
+  sessionStore.setPendingRuntime(id, newer);
+  switchTo(id, CLAUDE);
+  assert.deepEqual(sessionStore.get(id)?.pendingRuntime, newer);
+});
+
+test("a switch from a binding that is no longer active, or of a deleted session, changes nothing", () => {
+  const id = freshId("switch-stale");
+  assert.ok(
+    sessionStore.upsert({
+      id,
+      harness: "pi",
+      agentType: "developer",
+      credentialProfileId: "acct-a",
+    }),
+  );
+  sessionStore.setPendingRuntime(id, PENDING);
+  const before = sessionStore.bindings(id);
+  assert.throws(
+    () =>
+      sessionStore.switchEngineBinding(id, {
+        expectSeq: 2,
+        fields: CLAUDE,
+        nativeSessionId: null,
+        startedSeq: 0,
+        pending: PENDING,
+      }),
+    /engine changed while it switched/,
+  );
+  assert.deepEqual(sessionStore.bindings(id), before);
+  assert.equal(sessionStore.get(id)?.harness, "pi");
+  assert.deepEqual(sessionStore.get(id)?.pendingRuntime, PENDING);
+
+  sessionStore.markDeleted(id);
+  assert.throws(() => switchTo(id, CLAUDE), /not found or has been deleted/);
+  assert.deepEqual(sessionStore.bindings(id), before);
+});
+
+test("the first run of a switched-to binding names it, once; a first binding is never stamped", () => {
+  const id = freshId("switch-run-stamp");
+  assert.ok(
+    sessionStore.upsert({
+      id,
+      harness: "pi",
+      agentType: "developer",
+      credentialProfileId: "acct-a",
+    }),
+  );
+  sessionStore.stampBindingRun(id, "run-before");
+  assert.equal(sessionStore.activeBinding(id)?.startedRunId, undefined);
+  switchTo(id, CLAUDE);
+  sessionStore.stampBindingRun(id, "run-1");
+  sessionStore.stampBindingRun(id, "run-2");
+  assert.equal(sessionStore.activeBinding(id)?.startedRunId, "run-1");
+  assert.equal(sessionStore.bindings(id)[0]?.startedRunId, undefined);
 });

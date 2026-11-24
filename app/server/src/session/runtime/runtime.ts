@@ -277,6 +277,15 @@ export class SessionRuntime {
   }
 
   /**
+   * The seq the session's log gives its next entry (0 without a log): where a
+   * new engine binding starts (`docs/session-runtime-switching.md`).
+   */
+  logCursor(sessionId: string): number {
+    if (!this.logStore.has(sessionId)) return 0;
+    return this.readLog(sessionId, (log) => log.seqCursor);
+  }
+
+  /**
    * Read a session's log, live or not, without leaving it resident: a log
    * opened from disk for the read is dropped again afterwards, on every exit —
    * but never while a {@link LiveRuntimeSession} owns it, which would otherwise

@@ -5,10 +5,11 @@
  * Exactly one binding per session row is active. `session_index`'s six binding
  * columns (`harness`, `provider`, `provider_session_id`, `model`,
  * `thinking_level`, `credential_profile_id`) are that binding's PROJECTION:
- * only `sessionStore.upsert` and `sessionStore.switchCredentialProfile` write
- * them, and each calls {@link syncActiveBinding} in the same transaction, so
- * the two never disagree (`docs/session-runtime-switching.md` "Engine
- * bindings"). Nothing else writes this table.
+ * only `sessionStore.upsert`, `sessionStore.switchCredentialProfile` and
+ * `sessionStore.switchEngineBinding` write them, each with this table in the
+ * same transaction, so the two never disagree
+ * (`docs/session-runtime-switching.md` "Engine bindings"). Nothing else writes
+ * this table, except {@link stampBindingRun} naming the run that began it.
  */
 import type { Harness } from "@assistant/shared";
 import { getDb } from "./index.ts";
@@ -191,4 +192,63 @@ export function bindings(sessionId: string): SessionEngineBinding[] {
       )
       .all(sessionId) as unknown as DbBindingRow[]
   ).map(fromRow);
+}
+
+/**
+ * End the active binding `expectSeq` and start the session's next one on
+ * `fields`, its native id `nativeSessionId` (none for a fresh Claude binding).
+ * Call ONLY from `sessionStore.switchEngineBinding`, inside its transaction.
+ * Throws when `expectSeq` is not the active binding.
+ */
+export function startNextBinding(
+  sessionId: string,
+  expectSeq: number,
+  fields: ActiveBindingFields,
+  nativeSessionId: string | null,
+  startedSeq: number,
+  at: number,
+): void {
+  const db = getDb();
+  const ended = db
+    .prepare(
+      `UPDATE session_engine_binding SET ended_at_ms = ?
+        WHERE session_id = ? AND seq = ? AND ended_at_ms IS NULL`,
+    )
+    .run(at, sessionId, expectSeq);
+  if (ended.changes !== 1)
+    throw new Error("The session's engine changed while it switched.");
+  db.prepare(
+    `INSERT INTO session_engine_binding (
+       session_id, seq, harness, credential_profile_id, provider, model,
+       thinking_level, native_session_id, started_seq, started_run_id,
+       created_at_ms, ended_at_ms
+     )
+     SELECT ?, MAX(seq) + 1, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL
+       FROM session_engine_binding WHERE session_id = ?`,
+  ).run(
+    sessionId,
+    fields.harness,
+    fields.credentialProfileId,
+    fields.provider,
+    fields.model,
+    fields.thinkingLevel,
+    nativeSessionId,
+    startedSeq,
+    at,
+    sessionId,
+  );
+}
+
+/**
+ * Name the run that began the active binding: the first run a switched-to
+ * engine starts. A first binding, and one already stamped, stay as they are.
+ */
+export function stampBindingRun(sessionId: string, runId: string): void {
+  getDb()
+    .prepare(
+      `UPDATE session_engine_binding SET started_run_id = ?
+        WHERE session_id = ? AND ended_at_ms IS NULL AND seq > 1
+          AND started_run_id IS NULL`,
+    )
+    .run(runId, sessionId);
 }

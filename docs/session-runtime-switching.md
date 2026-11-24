@@ -243,10 +243,11 @@ gave every existing row, tombstones included, its first binding.
 
 - **Projection.** `session_index`'s `harness`, `provider`,
   `provider_session_id`, `model`, `thinking_level` and `credential_profile_id`
-  are the active binding's projection. Only `sessionStore.upsert` and failover's
-  `switchCredentialProfile` write them, and each writes the binding in the same
-  transaction, so the row always equals the active binding. Nothing else writes
-  either (`engineBindingBoundary.test.ts`).
+  are the active binding's projection. Only `sessionStore.upsert`, failover's
+  `switchCredentialProfile` and the harness switch's `switchEngineBinding` write
+  them, and each writes the binding in the same transaction, so the row always
+  equals the active binding. Nothing else writes either
+  (`engineBindingBoundary.test.ts`).
 - **Native id.** Claude's is the SDK session id (`provider_session_id`, absent
   until the first query). pi's is the app id for every pi binding, a session's
   first or a later one: a later pi binding reopens the transcript the app id
@@ -273,8 +274,12 @@ gave every existing row, tombstones included, its first binding.
   read-only connection and derive a pi file from the app id, which every pi
   binding's native id equals.
 
-Until the cross-harness switch lands, no writer ends a binding or starts a
-second one.
+Only the harness switch ends a binding and starts the next:
+`sessionStore.switchEngineBinding` is its commit, one transaction that ends the
+active binding (refusing unless it is still the one the switch started from),
+inserts the next with the session log's cursor, projects it onto the row and
+clears the pending selection the switch applied when that is still the stored
+one. The first run the new binding starts stamps it (`started_run_id`).
 
 Only the engine that holds the active binding writes the projection. An `upsert`
 that names another harness (a late persist from an engine a switch closed, or
@@ -354,6 +359,29 @@ other under the same id; the runtime session in between is never replaced.
   persona layer and bare tool names, Claude the `claude_code` preset's append
   and its mounted server's `mcp__pa__` names
   (`claudeSdk/claudeSdkSwitchSurface.test.ts`).
+
+- **Order** (`prepareEngineSwitch`, `harnesses/engineSwitch.ts`). Before
+  anything moves, the switch finds the target engine's newest earlier binding:
+  pi resumes when the app id's transcript exists; Claude resumes the earlier
+  native session when its account still holds the transcript, or copies it to a
+  new account with the failover copier, and otherwise starts fresh. Then it
+  raises the fence, releases, opens, and hands back the session on its new
+  engine with `usable`, `commit` and `abandon`. A throw anywhere before the
+  commit, or an abandon, lets the new engine go, rolls a copy back and lifts the
+  fence: the row still names the old binding, the old engine reopens the session
+  on its next use, and the selection stays pending. The commit checks `usable`
+  again, writes the binding and lifts the fence; nothing awaits between the
+  turn's final check and it.
+
+### Switching fence
+
+From the release until the commit or the abandon, the session belongs to no
+engine for anyone else (`harnesses/engineSwitchFence.ts`): neither shows it
+resident, and `harnessRegistry.acquireById` refuses with
+`SessionSwitchingEnginesError`, a `SessionBusyError`. A viewer's command, a peer
+delivery or a background completion is refused as busy and tries again; lifting
+the fence, either way, wakes the session's delivery so that work is offered at
+once, on whichever engine the session is now bound to.
 
 ### Deleting
 
