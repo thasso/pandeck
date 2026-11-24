@@ -50,6 +50,8 @@ beforeEach(async () => {
       calls.push({ name, args, signal });
       return answer();
     },
+    prepare: () => Promise.reject(new Error("unused")),
+    apply: () => Promise.reject(new Error("unused")),
   });
   await updateJiraSettings({ enabled: true });
 });

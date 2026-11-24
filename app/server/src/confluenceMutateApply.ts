@@ -64,8 +64,7 @@ export async function applyConfluenceMutationItems(
   config: ConfluenceConfig,
   items: ConfluencePageMutationItemDisplay[],
   deps: ConfluenceApplyDeps,
-): Promise<{ succeeded: number; resultSummary: string; resultUrl?: string }> {
-  let succeeded = 0;
+): Promise<ConfluenceApplicationSummary> {
   for (const [index, item] of items.entries()) {
     stopIfAborted(deps.signal);
     deps.startItem?.(index);
@@ -77,12 +76,31 @@ export async function applyConfluenceMutationItems(
     try {
       await executeMutationItem(config, item, deps);
       delete item.error;
-      succeeded += 1;
     } catch (err) {
       if (deps.signal?.aborted) throw err;
       item.error = deps.describeError(err);
     }
   }
+  return summarizeConfluenceApplication(items);
+}
+
+/** What an apply reports: how many items succeeded, the summary and a link. */
+interface ConfluenceApplicationSummary {
+  succeeded: number;
+  resultSummary: string;
+  resultUrl?: string;
+}
+
+/**
+ * The summary of applied items, from their results alone: an item succeeded
+ * when it has no `error` at all (an empty one still failed). Throws
+ * `ConfluenceMutationError` when none did. The one definition, for the local
+ * executor and the gateway's merged results alike (Task-1463 P6b, P6B-F1).
+ */
+export function summarizeConfluenceApplication(
+  items: ConfluencePageMutationItemDisplay[],
+): ConfluenceApplicationSummary {
+  const succeeded = items.filter((item) => item.error === undefined).length;
   if (succeeded === 0)
     throw new ConfluenceMutationError(
       `All ${items.length} Confluence change(s) failed: ${items

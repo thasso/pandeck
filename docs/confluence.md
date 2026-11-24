@@ -41,11 +41,14 @@ refuses the identity call — reachability is what the tools actually need.
 In gateway client mode (Task-1439, `docs/workers.md` "Client mode") the agents'
 Confluence tools are the gateway's: the catalog's `gateway-confluence` group,
 gated by `gatewayConfluence` (the gateway is connected and Confluence is
-`enabled`; Jira's toggle plays no part), replaces the local group. Only the
-three reads are offered: `confluence_search`, `confluence_get_page` and
+`enabled`; Jira's toggle plays no part), replaces the local group. Its three
+reads are offered: `confluence_search`, `confluence_get_page` and
 `confluence_lookup`, with the edge's names and schemas, run with the gateway's
-Atlassian connection. `remoteTools.ts` accepts no other Confluence name and no
-write, so the edge's `confluence_mutate_page` (below) is not offered here and
+Atlassian connection. The edge's `confluence_mutate_page` (below) is offered
+too, in two phases: it prepares on the gateway and raises the local
+`confluencePage` approval card, which the gateway applies once approved, never
+locally (`docs/approvals.md` "Gateway-prepared cards", `docs/workers.md`
+"Gateway writes"). `remoteTools.ts` accepts no other Confluence name, so
 `confluence_download_attachment` waits for Task-1441. With Confluence off a call
 answers the local tools' text, "Confluence tools are disabled. Enable them in
 Settings → Confluence."

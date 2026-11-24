@@ -146,8 +146,11 @@ export interface ToolGroup {
 }
 
 type UnclassifiedToolGroup = Omit<ToolGroup, "tools"> & {
-  tools: AgentTool[];
-  /** The tools carry their own classification: the gateway's read tools. */
+  tools: Array<AgentTool & { remoteWrite?: true }>;
+  /**
+   * The gateway's tools: a read carries its own classification; a write
+   * (`remoteWrite`, Task-1463 P6b) takes its name's entry here.
+   */
   remote?: true;
 };
 
@@ -347,9 +350,10 @@ function classifyToolGroups(groups: UnclassifiedToolGroup[]): ToolGroup[] {
       ? group.tools.filter((tool) => !local.has(tool.name))
       : group.tools
     ).map((tool) => {
-      const sideEffects = remote
-        ? tool.sideEffects
-        : TOOL_SIDE_EFFECTS[tool.name];
+      const sideEffects =
+        remote && !tool.remoteWrite
+          ? tool.sideEffects
+          : TOOL_SIDE_EFFECTS[tool.name];
       if (!sideEffects)
         throw new Error(
           `Catalog tool ${tool.name} needs an explicit sideEffects classification.`,
@@ -614,7 +618,7 @@ function commonToolGroups(agentType: AgentType): UnclassifiedToolGroup[] {
           id: "gateway-jira",
           label: "Jira (gateway)",
           description:
-            "Jira issues read through the user's credential gateway with the user's own Atlassian account.",
+            "Jira issues through the user's credential gateway with the user's own Atlassian account: read, search, lookup, and approval-gated mutations.",
           searchHint: "jira issue ticket atlassian gateway",
           loading: "deferred",
           family: "integration",
@@ -632,13 +636,13 @@ function commonToolGroups(agentType: AgentType): UnclassifiedToolGroup[] {
           gate: "jira",
           tools: assistantJiraTools,
         },
-    // Client mode: Confluence's reads run on the gateway, which lists them.
+    // Client mode: Confluence's reads and page writes run on the gateway, which lists them.
     remoteToolPort()
       ? {
           id: "gateway-confluence",
           label: "Confluence (gateway)",
           description:
-            "Confluence pages read through the user's credential gateway with the user's own Atlassian account: CQL search, a page as Markdown, space/tree/label discovery.",
+            "Confluence pages through the user's credential gateway with the user's own Atlassian account: CQL search, a page as Markdown, space/tree/label discovery, and approval-gated page writes.",
           searchHint: "confluence wiki page space cql atlassian gateway",
           loading: "deferred",
           family: "integration",

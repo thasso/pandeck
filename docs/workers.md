@@ -2095,22 +2095,23 @@ path above.
   listing. Pandeck accepts at most 64 entries, each a read tool
   (`effect: "read"`) whose `actionKey` prefix names a mapped product, within the
   bounds the edge's `gatewayTools/tools.test.ts` checks (name, 1,024-character
-  description, 4,096-character object schema); a name listed twice is dropped.
-  One table in `remoteTools.ts` maps the products, `jira`, `slack` and
-  `confluence`, each to its Settings toggle (`jira.enabled`, `slack.enabled`,
-  `confluence.enabled`); any other prefix is dropped. A product with a read-name
-  list (`PRODUCT_READS`) accepts only those names: Confluence accepts
-  `confluence_search`, `confluence_get_page` and `confluence_lookup`, so the
-  edge's attachment download and any later Confluence tool stay out until a
-  change admits them. Jira and Slack have no list. Every name accepted in a boot
-  stays in the catalog for that boot. Each product has a deferred catalog group
-  that replaces its local group: `gateway-jira` replaces `jira` and is gated by
-  `gatewayJira` (connected and Settings → Jira enabled); `gateway-slack`
-  replaces `slack` and is gated by `gatewaySlack` (connected and Settings →
-  Slack enabled); `gateway-confluence` replaces `confluence` and is gated by
-  `gatewayConfluence` (connected and Settings → Confluence enabled, independent
-  of Jira's toggle). A connect, a lost connection and a product's toggle reach
-  live sessions as `tools/list_changed` and pi's gate command. The tools are
+  description, 4,096-character object schema), or a write named in `WRITE_TOOLS`
+  (below); a name listed twice is dropped. One table in `remoteTools.ts` maps
+  the products, `jira`, `slack` and `confluence`, each to its Settings toggle
+  (`jira.enabled`, `slack.enabled`, `confluence.enabled`); any other prefix is
+  dropped. A product with a read-name list (`PRODUCT_READS`) accepts only those
+  names: Confluence accepts `confluence_search`, `confluence_get_page` and
+  `confluence_lookup`, so the edge's attachment download and any later
+  Confluence tool stay out until a change admits them. Jira and Slack have no
+  list. Every name accepted in a boot stays in the catalog for that boot. Each
+  product has a deferred catalog group that replaces its local group:
+  `gateway-jira` replaces `jira` and is gated by `gatewayJira` (connected and
+  Settings → Jira enabled); `gateway-slack` replaces `slack` and is gated by
+  `gatewaySlack` (connected and Settings → Slack enabled); `gateway-confluence`
+  replaces `confluence` and is gated by `gatewayConfluence` (connected and
+  Settings → Confluence enabled, independent of Jira's toggle). A connect, a
+  lost connection and a product's toggle reach live sessions as
+  `tools/list_changed` and pi's gate command. The read tools are
   `sideEffects: "none"`, so Plan keeps them, and a remote name equal to another
   tool of the persona is left out. Before every call the tool checks the
   connection, its product's toggle and that the latest listing still offers it,
@@ -2122,6 +2123,18 @@ path above.
   waits up to 10 s for the boot's first listing and is otherwise refused with
   the gateway-unavailable text, so its up-front tool registration holds the
   gateway's tools.
+- **Gateway writes** (Task-1463 P6b, `WRITE_TOOLS` in `remoteTools.ts`,
+  `tools/gateway/remoteWrites.ts`, `tools/gateway/remoteApply.ts`).
+  `jira_mutate_issue` and `confluence_mutate_page`, listed by the edge as
+  two-phase writes, join their product's gateway group under the local tool's
+  name, description, schema and `sideEffects` class, so Plan leaves them out. A
+  call rechecks the connection, the toggle and the listing, then runs
+  `tools.prepare`, which writes nothing; it checks the proposal and raises the
+  local `jiraIssue` or `confluencePage` card with context `{via: "gateway"}`.
+  Only that kind's executor applies it, through `tools.apply` bounded at 55 s,
+  never with local credentials and never locally as a fallback. Its guards,
+  outcome table, texts and rollback are in `docs/approvals.md` "Gateway-prepared
+  cards".
 - **Known limitations of gateway tools.** A tool newly deployed on the gateway
   reaches a live pi session only at its next open, because pi registers its tool
   universe at open; Claude sessions get it once the next connection's listing is
@@ -2131,18 +2144,17 @@ path above.
   next open too; the edge checks arguments either way. Only Jira, Slack and
   Confluence are mapped: a gateway tool of another product needs a Pandeck
   change (table row, disabled text, gate and catalog group) before it appears.
-  Confluence offers only its three reads, which the edge lists ("Tools on the
-  edge"): `confluence_mutate_page` waits for gateway writes and
-  `confluence_download_attachment` for Task-1441. Settings → Confluence answers
-  `credentialStore: "gateway"` and `credentialsAvailable` from the gateway's
-  last Atlassian status (stored, not verified); its connection test makes no
-  call and points to Settings → Jira, which tests the shared Atlassian
-  connection. `slack_file_read` is not offered in client mode until the edge
-  runs it (Task-1441). Settings → Slack shows no gateway Slack connection status
-  (Task-1464); a Slack tool called without a Slack connection on the gateway
-  answers the edge's fixed text, which says to connect it on the gateway's page.
-  Pandeck's local Jira and Confluence tools are not offered in client mode;
-  their gateway groups replace them.
+  Confluence offers its three reads and `confluence_mutate_page`, which the edge
+  lists ("Tools on the edge"): `confluence_download_attachment` waits for
+  Task-1441. Settings → Confluence answers `credentialStore: "gateway"` and
+  `credentialsAvailable` from the gateway's last Atlassian status (stored, not
+  verified); its connection test makes no call and points to Settings → Jira,
+  which tests the shared Atlassian connection. `slack_file_read` is not offered
+  in client mode until the edge runs it (Task-1441). Settings → Slack shows no
+  gateway Slack connection status (Task-1464); a Slack tool called without a
+  Slack connection on the gateway answers the edge's fixed text, which says to
+  connect it on the gateway's page. Pandeck's local Jira and Confluence tools
+  are not offered in client mode; their gateway groups replace them.
 - **Local live test.**
   `pnpm --filter @assistant/server gateway:dev --state-dir <dir>`
   (`gatewayDevMain.ts`) runs the edge's composition (`gatewayEdge.ts`) with the
@@ -2892,8 +2904,8 @@ tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
   connect that separate `notifications/cancelled` POST to the call. So after a
   timeout or interrupt, reconcile only after that window: wait 60 s before
   reading the issues or retrying. `confluence_mutate_page` shares this
-  limitation (below). Pandeck's client mode still drops write tools from a
-  listing.
+  limitation (below). Pandeck in client mode calls both in two phases instead,
+  behind its own approval card ("Gateway writes" under Client mode).
 - **Confluence reads** (Task-1439). `confluence_search`, `confluence_get_page`
   and `confluence_lookup` run the same read path as the local tools
   (`confluenceRead.ts` with `atlassian/confluenceClient.ts` beside
@@ -3294,18 +3306,18 @@ tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
   needs the token again; a clear wins over an email or token in the same patch.
   After every connect the link reads the status and announces the Jira section,
   so a restarted Pandeck shows connected. Settings reports
-  `credentialStore: "gateway"`. Agents read Jira through the gateway's tools
-  ("Gateway tools" under Client mode). Pandeck's non-agent Jira features
-  (linked-ticket and Tempo enrichment, `isJiraConfigured`) have no credential in
-  client mode until a later slice (D3, Task-1399). Against a gateway that
-  answers `connectWith: "oauth"`, Settings reports `gatewaySignIn: true` and
-  `gatewayKind`, shows no email or token field, and keeps enable with "Save and
-  test" (only `enabled` is sent, then the connection test, which also runs when
-  the card opens; no separate Test button) and Clear while a record is stored, a
-  refused OAuth record included (a status naming a site or a `kind` counts as
-  stored); a clear keeps the gateway's last `connectWith` until a later status
-  says otherwise, also when that read fails. Users connect on the gateway's
-  page.
+  `credentialStore: "gateway"`. Agents read and change Jira through the
+  gateway's tools ("Gateway tools" and "Gateway writes" under Client mode).
+  Pandeck's non-agent Jira features (linked-ticket and Tempo enrichment,
+  `isJiraConfigured`) have no credential in client mode until a later slice (D3,
+  Task-1399). Against a gateway that answers `connectWith: "oauth"`, Settings
+  reports `gatewaySignIn: true` and `gatewayKind`, shows no email or token
+  field, and keeps enable with "Save and test" (only `enabled` is sent, then the
+  connection test, which also runs when the card opens; no separate Test button)
+  and Clear while a record is stored, a refused OAuth record included (a status
+  naming a site or a `kind` counts as stored); a clear keeps the gateway's last
+  `connectWith` until a later status says otherwise, also when that read fails.
+  Users connect on the gateway's page.
 
 #### The gateway's sign-in and UI
 

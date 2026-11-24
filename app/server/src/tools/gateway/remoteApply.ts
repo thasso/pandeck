@@ -1,0 +1,301 @@
+/**
+ * Applying a gateway-prepared card (Task-1463 P6b): what the `jiraIssue` and
+ * `confluencePage` executors run for a card whose context says
+ * `via: "gateway"`. The card's items go to the gateway's `tools.apply` and
+ * never to local credentials, whatever happens.
+ *
+ * Before the send, in order (P6-O4): the body's kind, client mode, the
+ * card's proposal form (each item without result fields) through P6a's
+ * closed check, the first listing (bounded wait); then, with no await
+ * between check and send, the connection, the product's toggle and the
+ * listing's two-phase offer. Every refusal so far says nothing was written,
+ * which holds because nothing was sent.
+ *
+ * After the send, one table decides the card (`docs/approvals.md`):
+ * - `notSent`: unreachable, nothing written;
+ * - a failed answer certified `effects: "none"`: its message with the
+ *   client's own "Nothing was written." (D6(i));
+ * - a failed answer with `effects: "possible"`: its checked results merged,
+ *   then {@link MAY_HAVE_WRITTEN};
+ * - a success: every record checked before any is merged, then the local
+ *   summary owner's text with the effects-driven suffix;
+ * - `lost`, `timeout`, `undecodable`, a record that fails its check:
+ *   {@link MAY_HAVE_WRITTEN}, nothing merged.
+ *
+ * Every merge runs inside the executor's awaited path, before it returns or
+ * throws; a late answer never reaches here (the link drops it).
+ *
+ * Imports no catalog, tool group or local tool module
+ * (`architecture.test.ts`).
+ */
+import type {
+  ApprovalCard,
+  ConfluencePageMutationItemDisplay,
+  JiraIssueMutationItemDisplay,
+} from "@assistant/shared";
+import { summarizeConfluenceApplication } from "../../confluenceMutateApply.ts";
+import { checkConfluencePageItems } from "../../confluenceMutationCheck.ts";
+import {
+  checkConfluenceResult,
+  confluenceProposalOf,
+  mergeConfluenceResult,
+  type ConfluenceResultRecord,
+} from "../../confluenceMutationResult.ts";
+import { summarizeJiraApplication } from "../../jiraMutateApply.ts";
+import { checkJiraIssueItems } from "../../jiraMutationCheck.ts";
+import {
+  checkJiraResult,
+  jiraProposalOf,
+  mergeJiraResult,
+  type JiraResultRecord,
+} from "../../jiraMutationResult.ts";
+import {
+  remoteProductEnabled,
+  remoteToolDispatchable,
+  remoteToolPort,
+  remoteToolsConnected,
+  remoteToolsReady,
+  type RemoteApplyAnswer,
+  type RemoteApplyOutcome,
+  type RemoteProduct,
+  type RemoteWriteName,
+} from "../../remoteTools.ts";
+import {
+  ATLASSIAN_SITE_RE,
+  DISABLED,
+  NOTHING_WRITTEN,
+  NOT_OFFERED,
+  withNothingWritten,
+} from "./remoteWriteRules.ts";
+
+/** How long an approval waits for the link's first listing after a boot. */
+const READY_WAIT_MS = 15_000;
+
+const NOT_CLIENT_MODE =
+  "This change was prepared on the credential gateway, which this server no longer uses. Nothing was written; ask for it again.";
+const UNREACHABLE =
+  "The credential gateway is unreachable. Nothing was written; ask for the change again.";
+const CANNOT_SEND =
+  "This proposal can't be sent to the gateway. Nothing was written; ask for it again.";
+/** Nothing confirmed what happened: the transport or the answer failed. */
+const MAY_HAVE_WRITTEN =
+  "The gateway did not confirm the result. Changes may have been written, and a change already sent can still finish within about a minute. Wait a minute, then check the site; ask again only for what is missing. Don't approve the same change again unchecked.";
+/** A confirmed answer in which a failed item may have written first. */
+const PARTIAL_EFFECTS =
+  "Some failed changes may have been partly written before they failed; the card shows each item's outcome. Check the site and ask again only for what is missing. Don't approve the same change again unchecked.";
+const TRIMMED = "Some result details were too long to return.";
+
+interface Applied {
+  resultSummary: string;
+  resultUrl?: string;
+}
+
+/** What differs between the two products. */
+interface GatewayKind<Item, Rec extends object> {
+  name: RemoteWriteName;
+  product: RemoteProduct;
+  /** The card's site and items, or undefined for another body kind. */
+  body(card: ApprovalCard): { site?: string; items: Item[] } | undefined;
+  proposalOf(item: Item): Item;
+  checkProposal(items: unknown): items is Item[];
+  checkResult(record: unknown, sent: Item, site: string): record is Rec;
+  merge(card: Item, record: Rec, trimmed: boolean): void;
+  /** The local summary owner; throws its all-failed text. */
+  summarize(items: Item[]): Applied;
+}
+
+const JIRA: GatewayKind<JiraIssueMutationItemDisplay, JiraResultRecord> = {
+  name: "jira_mutate_issue",
+  product: "jira",
+  body: (card) =>
+    card.body.kind === "jiraIssue"
+      ? {
+          ...(card.body.jiraHost !== undefined
+            ? { site: card.body.jiraHost }
+            : {}),
+          items: card.body.items,
+        }
+      : undefined,
+  proposalOf: jiraProposalOf,
+  checkProposal: checkJiraIssueItems,
+  checkResult: checkJiraResult,
+  merge: mergeJiraResult,
+  summarize: summarizeJiraApplication,
+};
+
+const CONFLUENCE: GatewayKind<
+  ConfluencePageMutationItemDisplay,
+  ConfluenceResultRecord
+> = {
+  name: "confluence_mutate_page",
+  product: "confluence",
+  body: (card) =>
+    card.body.kind === "confluencePage"
+      ? {
+          ...(card.body.confluenceHost !== undefined
+            ? { site: card.body.confluenceHost }
+            : {}),
+          items: card.body.items,
+        }
+      : undefined,
+  proposalOf: confluenceProposalOf,
+  checkProposal: checkConfluencePageItems,
+  checkResult: checkConfluenceResult,
+  merge: (card, record) => mergeConfluenceResult(card, record),
+  summarize: summarizeConfluenceApplication,
+};
+
+/**
+ * Applies a gateway-prepared card of `kind` through the gateway; the card's
+ * items get the per-item results. Throws the card's error text.
+ */
+export function applyOnGateway(
+  card: ApprovalCard,
+  kind: "jiraIssue" | "confluencePage",
+): Promise<Applied> {
+  return kind === "jiraIssue"
+    ? applyWith(JIRA, card)
+    : applyWith(CONFLUENCE, card);
+}
+
+async function applyWith<Item, Rec extends object>(
+  kind: GatewayKind<Item, Rec>,
+  card: ApprovalCard,
+): Promise<Applied> {
+  const body = kind.body(card);
+  if (!body) throw new Error(`Mismatched approval body for ${card.kind}.`);
+  if (!remoteToolPort()) throw new Error(NOT_CLIENT_MODE);
+  const { site, items } = body;
+  const sent = items.map((item) => kind.proposalOf(item));
+  if (
+    site === undefined ||
+    !ATLASSIAN_SITE_RE.test(site) ||
+    !kind.checkProposal(sent)
+  )
+    throw new Error(CANNOT_SEND);
+  try {
+    await remoteToolsReady(READY_WAIT_MS);
+  } catch {
+    throw new Error(UNREACHABLE);
+  }
+  // From here to the send nothing is awaited (P6-O4): what is checked is
+  // what holds when the request leaves.
+  const port = remoteToolPort();
+  if (!port) throw new Error(NOT_CLIENT_MODE);
+  if (!remoteToolsConnected()) throw new Error(UNREACHABLE);
+  if (!remoteProductEnabled(kind.product))
+    throw new Error(DISABLED[kind.product]);
+  if (!remoteToolDispatchable(kind.name, "two-phase"))
+    throw new Error(NOT_OFFERED);
+  const outcome = await port.apply(kind.name, site, sent);
+  return settle(kind, items, sent, site, outcome);
+}
+
+/** The card's outcome from the link's, by the table in the header. */
+function settle<Item, Rec extends object>(
+  kind: GatewayKind<Item, Rec>,
+  items: Item[],
+  sent: Item[],
+  site: string,
+  outcome: RemoteApplyOutcome,
+): Applied {
+  switch (outcome.outcome) {
+    case "notSent":
+      throw new Error(UNREACHABLE);
+    case "lost":
+    case "timeout":
+    case "undecodable":
+      throw new Error(MAY_HAVE_WRITTEN);
+    case "answer":
+      return answered(kind, items, sent, site, outcome.answer);
+  }
+}
+
+function answered<Item, Rec extends object>(
+  kind: GatewayKind<Item, Rec>,
+  items: Item[],
+  sent: Item[],
+  site: string,
+  answer: RemoteApplyAnswer,
+): Applied {
+  const trimmed = answer.trimmed === true;
+  if (!answer.ok) {
+    if (answer.effects === "none")
+      throw new Error(
+        answer.code === "unknown_tool"
+          ? NOT_OFFERED
+          : withNothingWritten(
+              answer.message || `${kind.name} failed on the gateway.`,
+            ),
+      );
+    // What the edge's working copy shows, when every record passes.
+    if (answer.results)
+      mergeChecked(kind, items, sent, site, answer.results, trimmed);
+    throw new Error(MAY_HAVE_WRITTEN);
+  }
+  const { results } = answer;
+  if (
+    (answer.effects === "none" && results.some(mayHaveWritten)) ||
+    !mergeChecked(kind, items, sent, site, results, trimmed)
+  )
+    throw new Error(MAY_HAVE_WRITTEN);
+  const notes = trimmed ? [TRIMMED] : [];
+  let summary: Applied;
+  try {
+    summary = kind.summarize(items);
+  } catch (err) {
+    // Every item failed. Only the root certificate may say nothing was
+    // written, never a count of errors.
+    const text = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      [
+        text,
+        ...notes,
+        answer.effects === "none" ? NOTHING_WRITTEN : PARTIAL_EFFECTS,
+      ].join(" "),
+    );
+  }
+  const partial = results.some(
+    (record) => mayHaveWritten(record) && failed(record),
+  );
+  const resultUrl = summary.resultUrl?.startsWith(`https://${site}/`)
+    ? summary.resultUrl
+    : undefined;
+  return {
+    resultSummary: [
+      summary.resultSummary,
+      ...notes,
+      ...(partial ? [PARTIAL_EFFECTS] : []),
+    ].join(" "),
+    ...(resultUrl ? { resultUrl } : {}),
+  };
+}
+
+/**
+ * Checks every record against the item it answers, then merges them all;
+ * false, with nothing merged, when the count or any record is wrong.
+ */
+function mergeChecked<Item, Rec extends object>(
+  kind: GatewayKind<Item, Rec>,
+  items: Item[],
+  sent: Item[],
+  site: string,
+  records: readonly object[],
+  trimmed: boolean,
+): boolean {
+  if (records.length !== sent.length) return false;
+  const checked: Rec[] = [];
+  for (const [index, record] of records.entries()) {
+    if (!kind.checkResult(record, sent[index]!, site)) return false;
+    checked.push(record);
+  }
+  for (const [index, record] of checked.entries())
+    kind.merge(items[index]!, record, trimmed);
+  return true;
+}
+
+const mayHaveWritten = (record: object): boolean =>
+  "effects" in record && record.effects !== "none";
+
+const failed = (record: object): boolean =>
+  "error" in record && record.error !== undefined;

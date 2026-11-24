@@ -20,7 +20,10 @@
  * the status and announces the Jira section, so Settings shows it. The
  * gateway's tools (Task-1398) are listed on every connect before the
  * connection is published (`remoteTools.ts`), and the agents' calls go out
- * as `tools.call`, each bounded at 40 s.
+ * as `tools.call`, each bounded at 40 s. A gateway write (gateway client 1.1,
+ * Task-1463 P6b) proposes with `tools.prepare`, bounded the same, and an
+ * approved one applies with `tools.apply`, bounded at 55 s, whose outcome
+ * says whether the edge provably never saw it.
  */
 import {
   mirrorRemoteCredentialProfiles,
@@ -34,7 +37,9 @@ import {
   decodeClientIdentity,
   decodeIntegrationStatus,
   decodeLoginEvent,
+  decodeApplyAnswer,
   decodeLoginStarted,
+  decodePrepareAnswer,
   decodeToolAnswer,
   decodeToolListing,
   encodeClientMessage,
@@ -72,6 +77,7 @@ import {
   applyListing,
   installRemoteToolPort,
   markDisconnected,
+  type RemotePrepareAnswer,
   type RemoteToolAnswer,
   type RemoteToolDescriptor,
 } from "./remoteTools.ts";
@@ -91,6 +97,25 @@ const IN_PROCESS_WORKER_ID = "local";
 const REDIAL_MS = 2_000;
 /** Bounds an agent's gateway tool call beyond the edge's own 30 s. */
 const TOOL_CALL_MS = 40_000;
+/**
+ * Bounds an approved gateway write beyond the edge's own 45 s apply deadline
+ * (Task-1463 P6b); it has no caller signal.
+ */
+const APPLY_CALL_MS = 55_000;
+
+/** An answer the link's decoder refused; `cause` is the decoder's error. */
+class UndecodableAnswer extends Error {}
+
+function decodeOrThrow<A>(
+  decode: (payload: Payload) => A,
+  payload: Payload,
+): A {
+  try {
+    return decode(payload);
+  } catch (err) {
+    throw new UndecodableAnswer("undecodable answer", { cause: err });
+  }
+}
 
 export interface GatewayClientLinkOptions {
   /** The relay's client-protocol socket. */
@@ -406,56 +431,148 @@ export function startGatewayClientLink(
       );
     },
   });
+  /**
+   * One bounded tool request: the caller's abort and the local bound share
+   * one controller, so either settles the call now with `stopped(code)` and
+   * sends a cancel; the edge's late answer retires the request and is dropped
+   * unread. An answer `decode` refuses throws {@link UndecodableAnswer}.
+   */
+  const boundedToolRequest = async <A>(
+    opened: WorkerConnection,
+    method: string,
+    payload: Payload,
+    signal: AbortSignal,
+    decode: (payload: Payload) => A,
+    stopped: (code: "timeout" | "cancelled") => A,
+  ): Promise<A> => {
+    const controller = new AbortController();
+    let timedOut = false;
+    let stop = (): void => {};
+    const settled = new Promise<A>((resolve) => {
+      stop = () => resolve(stopped(timedOut ? "timeout" : "cancelled"));
+      controller.signal.addEventListener("abort", stop, { once: true });
+    });
+    const cancel = (): void => controller.abort();
+    signal.addEventListener("abort", cancel, { once: true });
+    if (signal.aborted) cancel();
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, TOOL_CALL_MS);
+    try {
+      return await Promise.race([
+        opened
+          .request(method, payload, controller.signal)
+          .then((answer) => decodeOrThrow(decode, answer)),
+        settled,
+      ]);
+    } catch (err) {
+      // Withdrawn before it was sent: the call always read this as cancelled.
+      if (err instanceof WorkerRequestNotSentError) return stopped("cancelled");
+      throw err;
+    } finally {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", cancel);
+      controller.signal.removeEventListener("abort", stop);
+    }
+  };
+
+  /** A request the link could not make, as the tool groups' refusal. */
+  const toolRefusal = (method: string, err: unknown): RemoteToolRefusal => {
+    log(`${method}: ${failure(err)}`);
+    return new RemoteToolRefusal(
+      err instanceof WorkerRequestError && err.code === "tools_unavailable"
+        ? "tools_unavailable"
+        : "gateway_unavailable",
+    );
+  };
+
   const uninstallTools = installRemoteToolPort({
     async call(name, args, signal) {
       const opened = connection;
       if (!opened) throw new RemoteToolRefusal("gateway_unavailable");
-      // One controller for the caller's abort and the local bound: either
-      // settles the call now and sends a cancel; the edge's late answer
-      // retires the request and is dropped unread.
-      const controller = new AbortController();
-      let timedOut = false;
-      let stop = (): void => {};
-      const stopped = new Promise<RemoteToolAnswer>((resolve) => {
-        stop = () =>
-          resolve({
-            ok: false,
-            code: timedOut ? "timeout" : "cancelled",
-            message: "",
-          });
-        controller.signal.addEventListener("abort", stop, { once: true });
-      });
-      const cancel = (): void => controller.abort();
-      signal.addEventListener("abort", cancel, { once: true });
-      if (signal.aborted) cancel();
-      const timer = setTimeout(() => {
-        timedOut = true;
-        controller.abort();
-      }, TOOL_CALL_MS);
       try {
-        return await Promise.race([
-          opened
-            .request(
-              CLIENT_METHODS.toolsCall,
-              encodeClientMessage({ name, args }),
-              controller.signal,
-            )
-            .then(decodeToolAnswer),
-          stopped,
-        ]);
-      } catch (err) {
-        if (err instanceof WorkerRequestNotSentError)
-          return { ok: false, code: "cancelled", message: "" };
-        log(`${CLIENT_METHODS.toolsCall}: ${failure(err)}`);
-        throw new RemoteToolRefusal(
-          err instanceof WorkerRequestError && err.code === "tools_unavailable"
-            ? "tools_unavailable"
-            : "gateway_unavailable",
+        return await boundedToolRequest<RemoteToolAnswer>(
+          opened,
+          CLIENT_METHODS.toolsCall,
+          encodeClientMessage({ name, args }),
+          signal,
+          decodeToolAnswer,
+          (code) => ({ ok: false, code, message: "" }),
         );
+      } catch (err) {
+        throw toolRefusal(CLIENT_METHODS.toolsCall, err);
+      }
+    },
+    async prepare(name, args, signal) {
+      const opened = connection;
+      if (!opened) throw new RemoteToolRefusal("gateway_unavailable");
+      try {
+        return await boundedToolRequest<RemotePrepareAnswer>(
+          opened,
+          CLIENT_METHODS.toolsPrepare,
+          encodeClientMessage({ name, args }),
+          signal,
+          decodePrepareAnswer,
+          (code) => ({ ok: false, code, message: "" }),
+        );
+      } catch (err) {
+        if (err instanceof UndecodableAnswer) {
+          log(`${CLIENT_METHODS.toolsPrepare}: ${failure(err.cause)}`);
+          throw new RemoteToolRefusal("undecodable");
+        }
+        throw toolRefusal(CLIENT_METHODS.toolsPrepare, err);
+      }
+    },
+    async apply(name, site, items) {
+      // Not sent is claimed only when the edge provably never saw the
+      // request: no open connection right before it, or the connection's own
+      // "not sent" error. Every other failure after the request may have
+      // written (Task-1463 P6b, M2/D2), an error answer included: a
+      // `WorkerRequestError` frame is `lost`. A decoded answer, `ok: false`
+      // included, is the edge's own certificate and passes through whole;
+      // only its `effects: "none"` lets the executor say nothing was written
+      // (D6(i), M2).
+      const opened = connection;
+      if (!opened || opened.isEnded) return { outcome: "notSent" };
+      const controller = new AbortController();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const expired = new Promise<"timeout">((resolve) => {
+        timer = setTimeout(() => {
+          // Asks the edge to start no further item; a late answer is
+          // dropped unread.
+          controller.abort();
+          resolve("timeout");
+        }, APPLY_CALL_MS);
+      });
+      let payload: Payload;
+      try {
+        const sent = await Promise.race([
+          opened.request(
+            CLIENT_METHODS.toolsApply,
+            encodeClientMessage({ name, site, items }),
+            controller.signal,
+          ),
+          expired,
+        ]);
+        if (sent === "timeout") {
+          log(`${CLIENT_METHODS.toolsApply}: no answer in time`);
+          return { outcome: "timeout" };
+        }
+        payload = sent;
+      } catch (err) {
+        log(`${CLIENT_METHODS.toolsApply}: ${failure(err)}`);
+        return err instanceof WorkerRequestNotSentError
+          ? { outcome: "notSent" }
+          : { outcome: "lost" };
       } finally {
         clearTimeout(timer);
-        signal.removeEventListener("abort", cancel);
-        controller.signal.removeEventListener("abort", stop);
+      }
+      try {
+        return { outcome: "answer", answer: decodeApplyAnswer(payload) };
+      } catch (err) {
+        log(`${CLIENT_METHODS.toolsApply}: ${failure(err)}`);
+        return { outcome: "undecodable" };
       }
     },
   });

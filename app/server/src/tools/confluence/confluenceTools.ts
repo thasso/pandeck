@@ -13,17 +13,20 @@
  * page's existing ADF, and `replace` — the only destructive placement — has to
  * be asked for by name and says on the approval card what it would drop.
  */
-import type {
-  ApprovalCard,
-  ConfluencePageMutationItemDisplay,
-} from "@assistant/shared";
+import type { ApprovalCard } from "@assistant/shared";
 import { defineAgentTool, jsonResult } from "../../mcp/tool.ts";
 import { getConfluenceToolConfig } from "../../confluenceSettings.ts";
 import {
-  approvalCardReference,
   createApproval,
   registerApprovalExecutor,
 } from "../../pendingApprovals.ts";
+import {
+  CONFLUENCE_MUTATE_PAGE_LABEL,
+  CONFLUENCE_MUTATE_PAGE_SEARCH_HINT,
+  confluenceMutationTitle,
+  confluenceProposalSummary,
+  confluenceProposalText,
+} from "./confluenceProposalCard.ts";
 import type { ConfluenceApiConfig } from "../../atlassian/confluenceClient.ts";
 import {
   fetchAttachment,
@@ -56,6 +59,8 @@ import {
   type ConfluenceSearchParams,
 } from "../../confluenceRead.ts";
 import { errorText } from "../../errors.ts";
+import { applyOnGateway } from "../gateway/remoteApply.ts";
+import { GATEWAY_ROUTE } from "../gateway/remoteWriteRules.ts";
 import { stageSessionAttachment } from "../../sessionAttachments.ts";
 import {
   MAX_ATTACHMENT_BYTES,
@@ -232,10 +237,9 @@ async function resolveAttachmentInput(
 export const confluenceMutatePageTool = defineAgentTool<ConfluenceMutateParams>(
   {
     name: "confluence_mutate_page",
-    label: "Confluence: Prepare Page Changes",
+    label: CONFLUENCE_MUTATE_PAGE_LABEL,
     description: CONFLUENCE_MUTATE_PAGE_DESCRIPTION,
-    searchHint:
-      "confluence create page edit page write comment delete label wiki upload attachment file",
+    searchHint: CONFLUENCE_MUTATE_PAGE_SEARCH_HINT,
     parameters: confluenceMutateParamsSchema,
     async execute(params, ctx) {
       const config = getConfluenceToolConfig();
@@ -248,13 +252,8 @@ export const confluenceMutatePageTool = defineAgentTool<ConfluenceMutateParams>(
           freezeUpload: (request) => freezeUploadSource(sessionId, request),
         },
       );
-      const title = mutationTitle(items);
-      const summary = [
-        items.map(itemLabel).join(", "),
-        warnings.length ? `${warnings.length} warning(s)` : "",
-      ]
-        .filter(Boolean)
-        .join(" · ");
+      const title = confluenceMutationTitle(items);
+      const summary = confluenceProposalSummary(items, warnings);
       const card = createApproval({
         sessionId: ctx.session.sessionId,
         kind: "confluencePage",
@@ -263,61 +262,19 @@ export const confluenceMutatePageTool = defineAgentTool<ConfluenceMutateParams>(
         sourceToolCallId: ctx.toolCallId,
         body: { kind: "confluencePage", confluenceHost: config.host, items },
       });
-      const warnLine = warnings.length
-        ? ` Warnings: ${warnings.join("; ")}.`
-        : "";
-      const text = `Prepared a Confluence proposal for ${items.length} page(s) pending your approval.${warnLine} Do not claim Confluence changed until the approved result appears. ${approvalCardReference(card)}`;
+      const text = confluenceProposalText(items, warnings, card);
       return { content: [{ type: "text", text }], terminate: true };
     },
   },
 );
 
-function itemLabel(item: ConfluencePageMutationItemDisplay): string {
-  const fileName = item.attachment?.fileName ?? "?";
-  if (item.operation === "uploadAttachment")
-    return `upload ${fileName} to ${item.title ?? item.pageId}`;
-  if (item.operation === "deleteAttachment")
-    return `delete ${fileName} from ${item.title ?? item.pageId}`;
-  if (item.operation === "create")
-    return `create ${item.spaceKey ?? "?"}/${item.title ?? "?"}`;
-  if (item.operation === "comment")
-    return `comment ${item.title ?? item.pageId}`;
-  if (item.operation === "delete") return `delete ${item.title ?? item.pageId}`;
-  return `${item.placement ?? "append"} ${item.title ?? item.pageId}`;
-}
-
-function mutationTitle(items: ConfluencePageMutationItemDisplay[]): string {
-  if (items.length === 1) {
-    const item = items[0] as ConfluencePageMutationItemDisplay;
-    if (item.operation === "create")
-      return `Create page ${item.title ?? ""}`.trim();
-    if (item.operation === "comment")
-      return `Comment on ${item.title ?? "page"}`;
-    if (item.operation === "delete") return `Delete ${item.title ?? "page"}`;
-    if (item.operation === "uploadAttachment")
-      return `Upload ${item.attachment?.fileName ?? "attachment"}`;
-    if (item.operation === "deleteAttachment")
-      return `Delete attachment ${item.attachment?.fileName ?? ""}`.trim();
-    return `Edit ${item.title ?? "page"}`;
-  }
-  const kinds = new Set(items.map((item) => item.operation));
-  if (kinds.size === 1) {
-    const only = [...kinds][0];
-    if (only === "create") return `Create ${items.length} Confluence pages`;
-    if (only === "comment")
-      return `Comment on ${items.length} Confluence pages`;
-    if (only === "delete") return `Delete ${items.length} Confluence pages`;
-    if (only === "uploadAttachment")
-      return `Upload ${items.length} Confluence attachments`;
-    if (only === "deleteAttachment")
-      return `Delete ${items.length} Confluence attachments`;
-  }
-  return `${items.length} Confluence changes`;
-}
-
 /** Execute an approved Confluence proposal: apply each item, recording per-item results. */
 registerApprovalExecutor("confluencePage", {
-  async execute(card: ApprovalCard) {
+  // A gateway-prepared card applies on the gateway, never here (Task-1463 P6b).
+  routes: [GATEWAY_ROUTE],
+  async execute(card: ApprovalCard, context: Record<string, unknown>) {
+    if (context.via === GATEWAY_ROUTE)
+      return applyOnGateway(card, "confluencePage");
     if (card.body.kind !== "confluencePage")
       throw new Error("Mismatched approval body for confluencePage.");
     const { resultSummary, resultUrl } = await applyConfluenceMutationItems(

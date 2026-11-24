@@ -136,6 +136,8 @@ let uninstall: () => void = () => {};
 const install = () => {
   uninstall = installRemoteToolPort({
     call: () => Promise.reject(new Error("unused")),
+    prepare: () => Promise.reject(new Error("unused")),
+    apply: () => Promise.reject(new Error("unused")),
   });
 };
 
@@ -290,7 +292,7 @@ test("only bounded read tools of a mapped product are accepted", () => {
   assert.deepEqual(acceptRemoteTools({ tools: [JIRA_GET_ISSUE] }), []);
 });
 
-test("the edge's write tool is dropped while its read tools are accepted (Task-1463 AC13)", () => {
+test("a write listed without twoPhase, as a P4b2-only edge lists it, is dropped while its read tools are accepted (Task-1463 AC13, P6b AC1)", () => {
   const mutate = tool({
     name: "jira_mutate_issue",
     description: "Create, edit, transition, comment on, link, rank issues.",
@@ -309,7 +311,7 @@ test("the edge's write tool is dropped while its read tools are accepted (Task-1
   );
 });
 
-test("the edge's real confluence_mutate_page is dropped while its Confluence read is accepted (Task-1463 P5b AC12)", () => {
+test("the edge's real confluence_mutate_page is accepted only as its reserved two-phase write, beside its Confluence read (Task-1463 P5b AC12, P6b)", () => {
   // As the edge lists them, deletes on: the write's own descriptor, unedited.
   const listed = createEdgeTools({
     log: () => {},
@@ -326,10 +328,20 @@ test("the edge's real confluence_mutate_page is dropped while its Confluence rea
       ["confluence_mutate_page", "write"],
     ],
   );
-  assert.deepEqual(
-    acceptRemoteTools([...listed].reverse()).map((t) => t.name),
-    ["confluence_get_page"],
-  );
+  assert.deepEqual(acceptRemoteTools([...listed].reverse()), [
+    {
+      name: "confluence_mutate_page",
+      effect: "write",
+      actionKey: "confluence:write",
+      product: "confluence",
+      kind: "confluencePage",
+      twoPhase: true,
+    },
+    {
+      ...listed[0],
+      product: "confluence",
+    },
+  ]);
 });
 
 test("a name listed twice is not accepted; only the first 64 entries count", () => {
@@ -362,7 +374,10 @@ test("listings grow the known set, replace the current one, and notify", () => {
       acceptRemoteTools([tool({ name: "jira_b", description: "B" })]),
     );
     assert.deepEqual(
-      knownRemoteTools("jira").map((t) => [t.name, t.description]),
+      knownRemoteTools("jira").map((t) => [
+        t.name,
+        t.effect === "read" ? t.description : undefined,
+      ]),
       [
         ["jira_get_issue", JIRA_GET_ISSUE.description],
         ["jira_b", "B"],
@@ -413,4 +428,203 @@ test("a pi open waits for the boot's first listing, even an empty one", async ()
   const rejection = assert.rejects(refused, GatewayUnavailableError);
   await vi.advanceTimersByTimeAsync(10_000);
   await rejection;
+});
+
+// ---------------------------------------------------------------------------
+// Reserved write names (Task-1463 P6b v04, P6B-F4)
+
+/** A small valid schema and short description: only the field under test decides. */
+const SMALL = {
+  description: "A gateway write.",
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+};
+
+const RESERVED = [
+  { name: "jira_mutate_issue", product: "jira", other: "confluence" },
+  { name: "confluence_mutate_page", product: "confluence", other: "jira" },
+] as const;
+
+const writeEntry = (
+  name: string,
+  product: string,
+  overrides: Record<string, unknown> = {},
+) => ({
+  name,
+  ...SMALL,
+  effect: "write",
+  actionKey: `${product}:write`,
+  twoPhase: true,
+  ...overrides,
+});
+
+/** Every way a reserved entry misses its write contract (v04 tests). */
+const reservedRejections = (name: string, product: string, other: string) =>
+  [
+    [
+      "effect read with the write action key and twoPhase",
+      writeEntry(name, product, { effect: "read" }),
+    ],
+    [
+      "effect read with the read action key",
+      writeEntry(name, product, {
+        effect: "read",
+        actionKey: `${product}:read`,
+        twoPhase: undefined,
+      }),
+    ],
+    [
+      "effect write without twoPhase",
+      writeEntry(name, product, { twoPhase: undefined }),
+    ],
+    [
+      "effect write with twoPhase false",
+      writeEntry(name, product, { twoPhase: false }),
+    ],
+    [
+      "the other product's write action key",
+      writeEntry(name, product, { actionKey: `${other}:write` }),
+    ],
+  ] as const;
+
+for (const { name, product, other } of RESERVED) {
+  for (const [what, entry] of reservedRejections(name, product, other))
+    test(`reserved ${name}: ${what} is rejected, never a read`, () => {
+      assert.deepEqual(acceptRemoteTools([entry]), []);
+    });
+
+  test(`reserved ${name}: the full write contract is accepted as its write descriptor, without the listed description or schema`, () => {
+    assert.deepEqual(acceptRemoteTools([writeEntry(name, product)]), [
+      {
+        name,
+        effect: "write",
+        actionKey: `${product}:write`,
+        product,
+        kind: product === "jira" ? "jiraIssue" : "confluencePage",
+        twoPhase: true,
+      },
+    ]);
+  });
+}
+
+test("a reserved name's description and schema are neither checked nor kept: missing, empty or oversized all accept (D1)", () => {
+  for (const overrides of [
+    { description: undefined, inputSchema: undefined },
+    { description: "", inputSchema: [] },
+    {
+      description: "x".repeat(5_000),
+      inputSchema: { type: "object", description: "x".repeat(8_000) },
+    },
+  ])
+    assert.deepEqual(
+      acceptRemoteTools([
+        writeEntry("jira_mutate_issue", "jira", overrides),
+      ]).map((t) => t.name),
+      ["jira_mutate_issue"],
+    );
+});
+
+test("the edge's real jira_mutate_issue, whose schema is over the read bound, is accepted as its write (D1 positive control)", () => {
+  const listed = createEdgeTools({ log: () => {} })
+    .host.list()
+    .find((t) => t.name === "jira_mutate_issue")!;
+  assert.ok(JSON.stringify(listed.inputSchema).length > 4_096);
+  assert.equal(listed.twoPhase, true);
+  assert.deepEqual(acceptRemoteTools([listed]), [
+    {
+      name: "jira_mutate_issue",
+      effect: "write",
+      actionKey: "jira:write",
+      product: "jira",
+      kind: "jiraIssue",
+      twoPhase: true,
+    },
+  ]);
+});
+
+test("unmapped and prototype products are refused before the reserved branch; prototype names are not reserved", () => {
+  assert.deepEqual(
+    acceptRemoteTools([
+      // A reserved name under an unmapped or prototype product.
+      writeEntry("jira_mutate_issue", "tempo"),
+      writeEntry("jira_mutate_issue", "constructor"),
+      writeEntry("confluence_mutate_page", "toString"),
+      // Names equal to properties of WRITE_TOOLS's prototype are not reserved:
+      // under a mapped product they take the read path, which refuses writes.
+      writeEntry("constructor", "jira"),
+      writeEntry("hasOwnProperty", "jira"),
+      writeEntry("toString", "slack"),
+    ]),
+    [],
+  );
+  // On the read path such a name is still an ordinary read.
+  assert.deepEqual(
+    acceptRemoteTools([tool({ name: "constructor" })]).map((t) => t.name),
+    ["constructor"],
+  );
+});
+
+test("other names keep their read behavior: a Jira and a Slack read are accepted, a non-reserved write is dropped", () => {
+  assert.deepEqual(
+    acceptRemoteTools([
+      JIRA_GET_ISSUE,
+      SLACK_READS[0],
+      writeEntry("jira_other_write", "jira"),
+      writeEntry("slack_post", "slack"),
+    ]).map((t) => t.name),
+    ["jira_get_issue", "slack_search"],
+  );
+});
+
+test("dispatchable as two-phase only for a currently listed, accepted write of an enabled product", async () => {
+  install();
+  await updateJiraSettings({ enabled: true });
+  try {
+    applyListing(
+      acceptRemoteTools([
+        JIRA_GET_ISSUE,
+        writeEntry("jira_mutate_issue", "jira"),
+      ]),
+    );
+    assert.equal(
+      remoteToolDispatchable("jira_mutate_issue", "two-phase"),
+      true,
+    );
+    assert.equal(remoteToolDispatchable("jira_mutate_issue"), true);
+    assert.equal(remoteToolDispatchable("jira_get_issue", "two-phase"), false);
+    assert.equal(remoteToolDispatchable("jira_get_issue"), true);
+    // A relisting without the write keeps it known but not dispatchable.
+    applyListing(
+      acceptRemoteTools([
+        JIRA_GET_ISSUE,
+        writeEntry("jira_mutate_issue", "jira", { twoPhase: undefined }),
+      ]),
+    );
+    assert.equal(
+      remoteToolDispatchable("jira_mutate_issue", "two-phase"),
+      false,
+    );
+    assert.deepEqual(
+      knownRemoteTools("jira").map((t) => t.name),
+      ["jira_get_issue", "jira_mutate_issue"],
+    );
+    applyListing(
+      acceptRemoteTools([
+        JIRA_GET_ISSUE,
+        writeEntry("jira_mutate_issue", "jira"),
+      ]),
+    );
+    await updateJiraSettings({ enabled: false });
+    assert.equal(
+      remoteToolDispatchable("jira_mutate_issue", "two-phase"),
+      false,
+    );
+    await updateJiraSettings({ enabled: true });
+    markDisconnected();
+    assert.equal(
+      remoteToolDispatchable("jira_mutate_issue", "two-phase"),
+      false,
+    );
+  } finally {
+    await updateJiraSettings({ enabled: false });
+  }
 });

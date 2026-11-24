@@ -584,7 +584,7 @@ function linkTo(socketPath: string) {
   return link;
 }
 
-test("the real edge listing gives client mode exactly the three Confluence reads", async () => {
+test("the real edge listing gives client mode exactly the three Confluence reads and the two writes (Task-1463 P6b)", async () => {
   // The edge's own listing, as its `tools.list` answers it (Task-1439 P2).
   const { createEdgeTools } = await import("./gatewayTools/index.ts");
   const { host } = createEdgeTools({ log: () => {} });
@@ -602,6 +602,22 @@ test("the real edge listing gives client mode exactly the three Confluence reads
       ["confluence_search", "confluence:read"],
       ["confluence_get_page", "confluence:read"],
       ["confluence_lookup", "confluence:read"],
+      ["confluence_mutate_page", "confluence:write"],
+    ],
+  );
+  assert.deepEqual(
+    remoteTools
+      .knownRemoteTools("jira")
+      .filter((tool) => tool.effect === "write"),
+    [
+      {
+        name: "jira_mutate_issue",
+        effect: "write",
+        actionKey: "jira:write",
+        product: "jira",
+        kind: "jiraIssue",
+        twoPhase: true,
+      },
     ],
   );
 });
@@ -819,5 +835,327 @@ test("a malformed listing fails that connect: its dial ends and the redial publi
   assert.equal(lists, 2);
   await vi.waitFor(() => assert.ok(edge.connections[0]!.isEnded));
   assert.equal(edge.connections[1]!.isEnded, false);
+  assert.equal(remoteTools.remoteToolsConnected(), true);
+});
+
+test("a gateway write's prepare: the edge's answer and refusal, an undecodable answer, an error answer, a caller's cancel and the 40 s bound (Task-1463 P6b)", async () => {
+  const seen: AbortSignal[] = [];
+  const edge = await stubEdge({
+    [CLIENT_METHODS.toolsList]: () =>
+      Promise.resolve(encodeClientMessage({ tools: [STUB_TOOL] })),
+    [CLIENT_METHODS.toolsPrepare]: (payload, signal) => {
+      const { name, args } = payload.json as {
+        name: string;
+        args: { mode?: string };
+      };
+      assert.equal(name, "jira_mutate_issue");
+      switch (args.mode) {
+        case "ok":
+          return Promise.resolve(
+            encodeClientMessage({
+              ok: true,
+              site: "acme.atlassian.net",
+              items: [{ issueKey: "OPS-1" }],
+              warnings: ["w"],
+            }),
+          );
+        case "refused":
+          return Promise.resolve(
+            encodeClientMessage({
+              ok: false,
+              code: "tool_error",
+              message: "Refused. Nothing was written.",
+            }),
+          );
+        case "malformed":
+          return Promise.resolve(
+            encodeClientMessage({ ok: true, site: 7, items: [], warnings: [] }),
+          );
+        case "unavailable":
+          return Promise.reject(
+            new WorkerMethodError("tools_unavailable", "no tools"),
+          );
+        case "invalid":
+          return Promise.reject(new WorkerMethodError("invalid_params", "bad"));
+        default:
+          seen.push(signal);
+          return new Promise(() => {});
+      }
+    },
+  });
+  const link = linkTo(edge.socketPath);
+  assert.equal(await link.ready, true);
+  const port = remoteTools.remoteToolPort()!;
+  const prepare = (mode: string, signal = new AbortController().signal) =>
+    port.prepare("jira_mutate_issue", { mode }, signal);
+
+  assert.deepEqual(await prepare("ok"), {
+    ok: true,
+    site: "acme.atlassian.net",
+    items: [{ issueKey: "OPS-1" }],
+    warnings: ["w"],
+  });
+  assert.deepEqual(await prepare("refused"), {
+    ok: false,
+    code: "tool_error",
+    message: "Refused. Nothing was written.",
+  });
+  // A decoder refusal is told apart from a transport failure.
+  await assert.rejects(prepare("malformed"), (err: unknown) => {
+    assert.ok(err instanceof remoteTools.RemoteToolRefusal);
+    assert.equal(err.code, "undecodable");
+    return true;
+  });
+  await assert.rejects(prepare("unavailable"), (err: unknown) => {
+    assert.ok(err instanceof remoteTools.RemoteToolRefusal);
+    assert.equal(err.code, "tools_unavailable");
+    return true;
+  });
+  await assert.rejects(prepare("invalid"), (err: unknown) => {
+    assert.ok(err instanceof remoteTools.RemoteToolRefusal);
+    assert.equal(err.code, "gateway_unavailable");
+    return true;
+  });
+
+  const caller = new AbortController();
+  const cancelled = prepare("hang", caller.signal);
+  await vi.waitFor(() => assert.equal(seen.length, 1));
+  caller.abort();
+  assert.deepEqual(await cancelled, {
+    ok: false,
+    code: "cancelled",
+    message: "",
+  });
+  await vi.waitFor(() => assert.ok(seen[0]!.aborted));
+
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  open.push({ close: () => vi.useRealTimers() });
+  const silent = prepare("hang");
+  while (seen.length < 2) await new Promise((resolve) => setImmediate(resolve));
+  let settled = false;
+  void silent.then(() => (settled = true));
+  await vi.advanceTimersByTimeAsync(39_999);
+  assert.equal(settled, false);
+  await vi.advanceTimersByTimeAsync(1);
+  assert.deepEqual(await silent, { ok: false, code: "timeout", message: "" });
+  await vi.waitFor(() => assert.ok(seen[1]!.aborted));
+  vi.useRealTimers();
+});
+
+test("a gateway write's apply: an answer, an undecodable answer, an error answer and a lost connection may have written; not sent only without a connection (Task-1463 P6b, D2)", async () => {
+  const applied: { name: string; site: string; items: unknown[] }[] = [];
+  let edgeRef!: Awaited<ReturnType<typeof stubEdge>>;
+  const edge = await stubEdge({
+    [CLIENT_METHODS.toolsList]: () =>
+      Promise.resolve(encodeClientMessage({ tools: [STUB_TOOL] })),
+    [CLIENT_METHODS.toolsApply]: (payload) => {
+      const request = payload.json as {
+        name: string;
+        site: string;
+        items: { mode: string }[];
+      };
+      applied.push(request);
+      switch (request.items[0]!.mode) {
+        case "ok":
+          return Promise.resolve(
+            encodeClientMessage({
+              ok: true,
+              results: [{ effects: "possible" }],
+              effects: "possible",
+            }),
+          );
+        case "failed":
+          return Promise.resolve(
+            encodeClientMessage({
+              ok: false,
+              code: "tool_error",
+              message: "Site changed.",
+              effects: "none",
+            }),
+          );
+        case "malformed":
+          // A root `none` beside a `possible` record is undecodable.
+          return Promise.resolve(
+            encodeClientMessage({
+              ok: true,
+              results: [{ effects: "possible" }],
+              effects: "none",
+            }),
+          );
+        case "error":
+          return Promise.reject(new WorkerMethodError("invalid_params", "bad"));
+        case "drop":
+          edgeRef.connections.at(-1)!.end("dropped mid-apply");
+          return new Promise(() => {});
+      }
+      return new Promise(() => {});
+    },
+  });
+  edgeRef = edge;
+  const link = linkTo(edge.socketPath);
+  assert.equal(await link.ready, true);
+  const port = remoteTools.remoteToolPort()!;
+  const apply = (mode: string) =>
+    port.apply("jira_mutate_issue", "acme.atlassian.net", [{ mode }]);
+
+  assert.deepEqual(await apply("ok"), {
+    outcome: "answer",
+    answer: {
+      ok: true,
+      results: [{ effects: "possible" }],
+      effects: "possible",
+    },
+  });
+  assert.deepEqual(applied[0], {
+    name: "jira_mutate_issue",
+    site: "acme.atlassian.net",
+    items: [{ mode: "ok" }],
+  });
+  // A decoded failed answer is the edge's certificate, passed through whole:
+  // its `effects` decides what the executor may claim (D6(i), M2).
+  assert.deepEqual(await apply("failed"), {
+    outcome: "answer",
+    answer: {
+      ok: false,
+      code: "tool_error",
+      message: "Site changed.",
+      effects: "none",
+    },
+  });
+  assert.deepEqual(await apply("malformed"), { outcome: "undecodable" });
+  // An error answer (a `WorkerRequestError` frame, D2) instead of an apply
+  // answer is lost: it may have written.
+  assert.deepEqual(await apply("error"), { outcome: "lost" });
+  // The connection ends after the request left: it may have written.
+  assert.deepEqual(await apply("drop"), { outcome: "lost" });
+  // No published connection: the edge provably never saw it.
+  await vi.waitFor(() =>
+    assert.equal(remoteTools.remoteToolsConnected(), false),
+  );
+  const before = applied.length;
+  assert.deepEqual(await apply("ok"), { outcome: "notSent" });
+  assert.equal(applied.length, before);
+});
+
+test("a gateway write's apply is bounded at 55 s without a caller signal; it sends a cancel and drops the late answer (Task-1463 P6b)", async () => {
+  const seen: AbortSignal[] = [];
+  let answerLate!: () => void;
+  const edge = await stubEdge({
+    [CLIENT_METHODS.toolsList]: () =>
+      Promise.resolve(encodeClientMessage({ tools: [STUB_TOOL] })),
+    [CLIENT_METHODS.toolsApply]: (_payload, signal) => {
+      seen.push(signal);
+      return new Promise((resolve) => {
+        answerLate = () =>
+          resolve(
+            encodeClientMessage({
+              ok: true,
+              results: [{}],
+              effects: "possible",
+            }),
+          );
+      });
+    },
+  });
+  const link = linkTo(edge.socketPath);
+  assert.equal(await link.ready, true);
+  const port = remoteTools.remoteToolPort()!;
+
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  open.push({ close: () => vi.useRealTimers() });
+  const silent = port.apply("jira_mutate_issue", "acme.atlassian.net", [{}]);
+  while (seen.length < 1) await new Promise((resolve) => setImmediate(resolve));
+  let settled = false;
+  void silent.then(() => (settled = true));
+  await vi.advanceTimersByTimeAsync(54_999);
+  assert.equal(settled, false);
+  await vi.advanceTimersByTimeAsync(1);
+  assert.deepEqual(await silent, { outcome: "timeout" });
+  await vi.waitFor(() => assert.ok(seen[0]!.aborted));
+  vi.useRealTimers();
+  answerLate();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(remoteTools.remoteToolsConnected(), true);
+});
+
+test("a gateway card whose apply times out fails MAY_HAVE_WRITTEN; a late answer, valid in every other way, changes neither the card nor its broadcasts (Task-1463 P6b)", async () => {
+  await import("./tools/jira/jiraTools.ts");
+  const { sessionStore } = await import("./db/sessionStore.ts");
+  const approvals = await import("./pendingApprovals.ts");
+  const { checkJiraResult } = await import("./jiraMutationResult.ts");
+  const { createEdgeTools } = await import("./gatewayTools/index.ts");
+  const { host } = createEdgeTools({ log: () => {} });
+  const item = {
+    clientId: "item-1",
+    issueKey: "OPS-1",
+    operation: "comment" as const,
+    commentBody: "Hi",
+    fieldChanges: [],
+  };
+  // The answer the edge gives too late: it would pass every client check.
+  const lateRecord = { effects: "possible" as const, resultIssueKey: "OPS-1" };
+  assert.ok(checkJiraResult(lateRecord, item, "acme.atlassian.net"));
+  let applies = 0;
+  let answerLate!: () => void;
+  const edge = await stubEdge({
+    [CLIENT_METHODS.toolsList]: () =>
+      Promise.resolve(encodeClientMessage({ tools: host.list() })),
+    [CLIENT_METHODS.toolsApply]: () => {
+      applies++;
+      return new Promise((resolve) => {
+        answerLate = () =>
+          resolve(
+            encodeClientMessage({
+              ok: true,
+              effects: "possible",
+              results: [lateRecord],
+            }),
+          );
+      });
+    },
+  });
+  await updateJiraSettings({ enabled: true });
+  open.push({ close: () => updateJiraSettings({ enabled: false }) });
+  const link = linkTo(edge.socketPath);
+  assert.equal(await link.ready, true);
+
+  const sessionId = "late-apply-session";
+  sessionStore.upsert({
+    id: sessionId,
+    harness: "pi",
+    agentType: "assistant",
+    title: sessionId,
+  });
+  let broadcasts = 0;
+  approvals.setApprovalBroadcastForTests(() => broadcasts++);
+  open.push({ close: () => approvals.setApprovalBroadcastForTests(null) });
+  const card = approvals.createApproval({
+    sessionId,
+    kind: "jiraIssue",
+    title: "Comment on OPS-1",
+    body: {
+      kind: "jiraIssue",
+      jiraHost: "acme.atlassian.net",
+      items: [structuredClone(item)],
+    },
+    context: { via: "gateway" },
+  });
+
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  open.push({ close: () => vi.useRealTimers() });
+  const decided = approvals.resolveApproval(card.id, "approved");
+  while (applies < 1) await new Promise((resolve) => setImmediate(resolve));
+  await vi.advanceTimersByTimeAsync(55_000);
+  const { card: failed } = await decided;
+  assert.equal(failed.status, "failed");
+  assert.match(failed.error ?? "", /^The gateway did not confirm the result\./);
+  const atFailure = structuredClone(approvals.approvalForId(card.id)!);
+  const broadcastsAtFailure = broadcasts;
+  vi.useRealTimers();
+
+  answerLate();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.deepEqual(approvals.approvalForId(card.id), atFailure);
+  assert.equal(broadcasts, broadcastsAtFailure);
   assert.equal(remoteTools.remoteToolsConnected(), true);
 });

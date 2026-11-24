@@ -160,6 +160,8 @@ async function withTripwires(
   });
   const uninstallTools = installRemoteToolPort({
     call: (name) => refuse(`tools.call ${name}`),
+    prepare: (name) => refuse(`tools.prepare ${name}`),
+    apply: (name) => refuse(`tools.apply ${name}`),
   });
   try {
     // Seeded directly, never through a port.

@@ -24,13 +24,17 @@ Jira tools are the gateway's: the catalog's `gateway-jira` group, gated by
 `gatewayJira` (the gateway is connected and Jira is `enabled`), replaces the
 local four. The same Settings → Jira toggle governs it, and a call while it is
 off answers the same disabled text. Today the gateway offers `jira_get_issue`,
-`jira_search_issues` and `jira_lookup`; over OAuth, `jira_lookup kind=sprints`
-works for a grant made after the user signs in with Atlassian again, because the
-gateway's default list now asks for the Jira Software scopes (Task-1439 P1). A
-grant from before that keeps being refused. Against a gateway that signs in with
-Atlassian (Task-1411), Settings → Jira takes no email or token: the user
-connects on the gateway's page, and the card keeps enable with "Save and test"
-and clear (`docs/workers.md` "Credentials").
+`jira_search_issues`, `jira_lookup` and `jira_mutate_issue`. The write runs in
+two phases: it prepares on the gateway and raises the local `jiraIssue` approval
+card, which the gateway applies once approved, never locally
+(`docs/approvals.md` "Gateway-prepared cards", `docs/workers.md` "Gateway
+writes"). Over OAuth, `jira_lookup kind=sprints` works for a grant made after
+the user signs in with Atlassian again, because the gateway's default list now
+asks for the Jira Software scopes (Task-1439 P1). A grant from before that keeps
+being refused. Against a gateway that signs in with Atlassian (Task-1411),
+Settings → Jira takes no email or token: the user connects on the gateway's
+page, and the card keeps enable with "Save and test" and clear
+(`docs/workers.md` "Credentials").
 
 ## Jira cache files
 

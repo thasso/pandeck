@@ -808,6 +808,14 @@ test("client mode: a Claude session lists the gateway's Jira tool while connecte
       calls.push(name);
       return Promise.resolve({ ok: true, text: '{"key":"OPS-1"}' });
     },
+    prepare: (name) => {
+      calls.push(`prepare ${name}`);
+      return Promise.reject(new Error("unused"));
+    },
+    apply: (name) => {
+      calls.push(`apply ${name}`);
+      return Promise.reject(new Error("unused"));
+    },
   });
   await updateJiraSettings({ enabled: true });
   const listing = acceptRemoteTools([

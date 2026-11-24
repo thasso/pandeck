@@ -50,8 +50,7 @@ export async function applyJiraMutationItems(
   config: JiraConfig,
   items: JiraIssueMutationItemDisplay[],
   deps: JiraApplyDeps,
-): Promise<{ succeeded: number; resultSummary: string; resultUrl?: string }> {
-  let succeeded = 0;
+): Promise<JiraApplicationSummary> {
   for (const [index, item] of items.entries()) {
     stopIfAborted(deps.signal);
     deps.startItem?.(index);
@@ -67,12 +66,31 @@ export async function applyJiraMutationItems(
         item.resultIssueUrl =
           item.issueUrl ?? jiraIssueUrl(config, item.issueKey);
       delete item.error;
-      succeeded += 1;
     } catch (err) {
       if (deps.signal?.aborted) throw err;
       item.error = deps.describeError(err);
     }
   }
+  return summarizeJiraApplication(items);
+}
+
+/** What an apply reports: how many items succeeded, the summary and a link. */
+interface JiraApplicationSummary {
+  succeeded: number;
+  resultSummary: string;
+  resultUrl?: string;
+}
+
+/**
+ * The summary of applied items, from their results alone: an item succeeded
+ * when it has no `error` at all (an empty one still failed). Throws
+ * `JiraMutationError` when none did. The one definition, for the local
+ * executor and the gateway's merged results alike (Task-1463 P6b, P6B-F1).
+ */
+export function summarizeJiraApplication(
+  items: JiraIssueMutationItemDisplay[],
+): JiraApplicationSummary {
+  const succeeded = items.filter((item) => item.error === undefined).length;
   if (succeeded === 0)
     throw new JiraMutationError(
       `All ${items.length} Jira change(s) failed: ${items
