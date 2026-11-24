@@ -287,6 +287,10 @@ export function approvalGrantKeys(body: ApprovalBody): string[] {
       // Never granted: overriding a blocked commit review answers those exact
       // findings, so no earlier override may answer a later one.
       break;
+    case "sessionRuntime":
+      // Never granted: each card moves one child to one model the user has
+      // not let it run on, so no earlier decision may answer a later one.
+      break;
     case "approvalGrantsRequest":
       // Never granted: only the user's click may grant or raise what a request
       // asks for, so approving one request must never pre-approve the next.

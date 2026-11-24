@@ -30,10 +30,13 @@ import {
   type SessionMode,
   type SessionOutcomeAttention,
   type SessionOutcomeKind,
+  type SessionContinueChoice,
   type SessionPendingRuntime,
+  type SessionRunFailure,
   type SessionScope,
   type SettableSpawnOwnership,
   type SpawnOwnership,
+  THINKING_LEVELS,
 } from "@assistant/shared";
 import type { AgentUsage } from "@assistant/shared/session";
 import { randomUUID } from "node:crypto";
@@ -172,8 +175,12 @@ export interface SessionMeta {
    * directly owned session raises revisions ({@link recordSessionOutcome}).
    */
   outcomeAttention?: SessionOutcomeAttention;
-  /** The last run failure, cleared the moment a new run starts. */
-  lastError?: { at: number; message: string };
+  /**
+   * The last run failure, cleared the moment a new run starts, with the
+   * "Continue on" offer a terminal quota or rate-limit failure carries
+   * (`sessionContinueOffer.ts`).
+   */
+  lastError?: SessionRunFailure;
   /**
    * When a turn was cut off mid-flight by the process dying. NOT a failure: the
    * work is waiting to be continued. Cleared the moment a new run starts.
@@ -282,12 +289,41 @@ interface DbSessionRow {
   attention_at_ms: number | null;
   last_error_at_ms: number | null;
   last_error_text: string | null;
+  last_error_continue_json: string | null;
+  last_error_run_id: string | null;
   interrupted_run_at_ms: number | null;
   interrupted_run_json: string | null;
   read_at_ms: number;
   fork_origin_json: string | null;
   fork_auto_rename_pending: number;
   deleted_at_ms: number | null;
+}
+
+/** A stored offer, or nothing: an unreadable one offers no choice. */
+function continueChoicesField(raw: string | null): {
+  continueOn?: SessionContinueChoice[];
+} {
+  if (!raw) return {};
+  try {
+    const value = JSON.parse(raw) as unknown;
+    if (
+      Array.isArray(value) &&
+      value.length > 0 &&
+      value.every(
+        (choice: Partial<SessionContinueChoice> | null) =>
+          typeof choice?.provider === "string" &&
+          typeof choice.id === "string" &&
+          typeof choice.name === "string" &&
+          (THINKING_LEVELS as readonly unknown[]).includes(
+            choice.thinkingLevel,
+          ),
+      )
+    )
+      return { continueOn: value as SessionContinueChoice[] };
+  } catch {
+    // An unreadable offer is no offer.
+  }
+  return {};
 }
 
 function fromRow(row: DbSessionRow): SessionMeta {
@@ -333,7 +369,11 @@ function fromRow(row: DbSessionRow): SessionMeta {
       : {}),
     ...(row.last_error_at_ms !== null && row.last_error_text
       ? {
-          lastError: { at: row.last_error_at_ms, message: row.last_error_text },
+          lastError: {
+            at: row.last_error_at_ms,
+            message: row.last_error_text,
+            ...continueChoicesField(row.last_error_continue_json),
+          },
         }
       : {}),
     ...interruptedRunFields(row),
@@ -1202,8 +1242,15 @@ function isSettled(id: string): boolean {
  * Record the last run failure so a failed session is visible in the Sessions
  * inbox without opening it. The message is bounded here (not at the call site)
  * so no caller can persist a whole stack trace into the list projection.
+ * `runId` names the run whose error this is; a failure no run owns (a pending
+ * selection's hold) has none, so no run's offer can attach to it.
  */
-function recordRunFailure(id: string, message: string, ts = Date.now()): void {
+function recordRunFailure(
+  id: string,
+  message: string,
+  ts = Date.now(),
+  runId?: string,
+): void {
   try {
     const text = message
       .trim()
@@ -1211,9 +1258,9 @@ function recordRunFailure(id: string, message: string, ts = Date.now()): void {
       .slice(0, MAX_RUN_FAILURE_CHARS);
     getDb()
       .prepare(
-        "UPDATE session_index SET last_error_at_ms = ?, last_error_text = ? WHERE id = ? AND deleted_at_ms IS NULL",
+        "UPDATE session_index SET last_error_at_ms = ?, last_error_text = ?, last_error_continue_json = NULL, last_error_run_id = ? WHERE id = ? AND deleted_at_ms IS NULL",
       )
-      .run(ts, text || "The agent run failed.", id);
+      .run(ts, text || "The agent run failed.", runId ?? null, id);
     touchSessionRows([id]);
   } catch {
     // best-effort mirror
@@ -1262,11 +1309,36 @@ function clearInterruptedRun(id: string): void {
   }
 }
 
+/**
+ * Put the "Continue on" offer beside the failure it belongs to: only while
+ * the row's failure is the one run `runId` ended with, never a newer run's, a
+ * failure no run owns, or a row a run start cleared meanwhile. Answers whether
+ * it was written.
+ */
+function recordContinueOffer(
+  id: string,
+  runId: string,
+  choices: SessionContinueChoice[],
+): boolean {
+  try {
+    const written = getDb()
+      .prepare(
+        "UPDATE session_index SET last_error_continue_json = ? WHERE id = ? AND deleted_at_ms IS NULL AND last_error_at_ms IS NOT NULL AND last_error_run_id = ?",
+      )
+      .run(choices.length ? JSON.stringify(choices) : null, id, runId);
+    if (written.changes === 0) return false;
+    touchSessionRows([id]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function clearRunFailure(id: string): void {
   try {
     getDb()
       .prepare(
-        "UPDATE session_index SET last_error_at_ms = NULL, last_error_text = NULL WHERE id = ? AND deleted_at_ms IS NULL",
+        "UPDATE session_index SET last_error_at_ms = NULL, last_error_text = NULL, last_error_continue_json = NULL, last_error_run_id = NULL WHERE id = ? AND deleted_at_ms IS NULL",
       )
       .run(id);
     touchSessionRows([id]);
@@ -1326,6 +1398,8 @@ function dismissRunFailure(
         `UPDATE session_index
             SET last_error_at_ms = NULL,
                 last_error_text = NULL,
+                last_error_continue_json = NULL,
+                last_error_run_id = NULL,
                 settled_at_ms = CASE WHEN ${PENDING_FAILED_OUTCOME}
                   THEN NULL ELSE settled_at_ms END,
                 attention_settled_revision = CASE WHEN ${PENDING_FAILED_OUTCOME}
@@ -2420,6 +2494,7 @@ export const sessionStore = {
   worktreeMissingAck,
   worktreeMissingAckBySession,
   recordRunFailure,
+  recordContinueOffer,
   clearRunFailure,
   dismissRunFailure,
   recordInterruptedRun,

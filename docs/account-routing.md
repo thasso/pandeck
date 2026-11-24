@@ -683,6 +683,10 @@ enterprise requirement, and all accounts attempted during this turn. A degraded
 result is never a replacement. Each account is selected once for failover; an
 exhausted turn keeps its last failure and binding with a display note saying no
 other eligible account is available. A new genuine turn resets the attempt set.
+Failover ends there: it never crosses to another kind. A quota or rate-limit
+failure it could not recover offers the user "Continue on <model>" of another
+engine instead, which only their click takes
+(`docs/session-runtime-switching.md` "Continue on another model").
 
 A successful move updates the live binding, session row and engine record before
 broadcasting state. Forks, drafts, health and usage attribution therefore follow
@@ -753,7 +757,7 @@ runtime. No switch interrupts admitted work or changes running credentials.
 
 The user moves a session to another account from the inspector's Runtime section
 (or `/account`), and an owning coordinator moves its direct child with
-`session_control` `move_account`. Neither moves anything at once: both set the
+`session_control` `set_runtime`. Neither moves anything at once: both set the
 session's pending selection, and the move happens when its next turn is admitted
 (`docs/session-runtime-switching.md`). A running session accepts the change; its
 current turn finishes on the old account.
@@ -783,7 +787,8 @@ the same rules (enabled, enterprise, offers it at that effort, login, bench),
 the bound account is never eligible, and the source needs no subscription login.
 Automatic picks within the model's kind. The app never makes this switch itself:
 failover and the disabled-account move stay within one kind. `session_control`
-`move_account` keeps the same-kind rules.
+`set_runtime` keeps the same-kind rules for an account change that keeps the
+model.
 
 Setting the selection checks only the static rules (kind, enabled, enterprise,
 offers the model); login and benches are judged at apply. A move never sets or

@@ -168,6 +168,7 @@ test("a definition resolves to its model, account and the exact bytes it froze",
     model: "opus",
     effort: "high",
     runtimeSource: "definition",
+    listedModels: [{ provider: "claude-sdk", id: "opus" }],
     denyTools: ["worktree_push"],
     skills: [],
     body: "You are a test reviewer.",
@@ -209,6 +210,14 @@ test("a caller picks a listed model by any name it resolves to; the role is the 
   assert.deepEqual(
     byDefault.listed.map((choice) => choice.spec),
     ["sol", "opus"],
+  );
+  assert.deepEqual(
+    byDefault.agent.listedModels,
+    [
+      { provider: "openai-codex", id: "gpt-6.1-sol" },
+      { provider: "claude-sdk", id: "opus" },
+    ],
+    "the role freezes every listed model the spawn resolved",
   );
   for (const name of ["opus", "claude-sdk/opus", "OPUS"]) {
     const picked = await resolveAgentSpawn("test-reviewer", undefined, {

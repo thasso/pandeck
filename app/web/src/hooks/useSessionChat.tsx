@@ -1164,6 +1164,28 @@ export function useSessionChat({
     ? null // the unavailable panel already says it, in the transcript's place
     : failureOnViewedSession(state.sessionFailures, sessionId);
 
+  // A terminal quota or rate-limit failure's "Continue on" offer, kept on the
+  // session's row so it survives a reload; shown with the failure it belongs
+  // to, above the composer (`docs/session-runtime-switching.md`).
+  function continueOfferOf() {
+    const lastError = sessionRow?.lastError;
+    const choices = lastError?.continueOn;
+    if (failureShownElsewhere || !sessionId || !lastError || !choices?.length)
+      return null;
+    const outcomeRevision = sessionRow?.outcomeAttention?.revision ?? 0;
+    return {
+      message: failure ?? lastError.message,
+      choices,
+      busy: sessionId in state.continueOnPending,
+      onContinue: (choice: { provider: string; id: string }) =>
+        actions.continueOnModel(sessionId, lastError.at, choice),
+      onDismiss: () => {
+        actions.clearChatError(sessionId);
+        onDismissSessionFailure(sessionId, lastError.at, outcomeRevision);
+      },
+    };
+  }
+
   return {
     sessionId,
     commentSelection: chatCommentSelection,
@@ -1178,6 +1200,7 @@ export function useSessionChat({
     onDismissFailure: () => {
       if (sessionId) actions.clearChatError(sessionId);
     },
+    continueOffer: continueOfferOf(),
     taskLiveSource: host.taskLiveSource,
     composer: {
       onSend: onSend ?? sendToSession,

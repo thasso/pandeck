@@ -145,7 +145,7 @@ function boundAccount(
  * (`harnesses/engineSwitch.ts`): it runs on another harness, or needs another
  * kind of account than the bound one (pi's OpenAI ↔ OpenAI-compatible).
  */
-function crossesEngines(
+export function crossesEngines(
   row: SessionMeta,
   source: Pick<CredentialProfile, "id" | "provider"> | undefined,
   model: { provider: string },
@@ -225,6 +225,17 @@ const SET_ATTEMPTS = 3;
 interface PendingRuntimeWriteOptions {
   /** Throws when the caller lost its authority over the session meanwhile. */
   authorize?: () => void;
+  /**
+   * False: do not offer held work its turn. The caller starts the turn that
+   * applies the selection itself, ahead of that work ("Continue on").
+   */
+  wake?: boolean;
+  /**
+   * Run synchronously with the authorized write, whether or not it changed
+   * the selection, so the caller's own turn claims the session before anything
+   * else can start one there ("Continue on").
+   */
+  written?: () => void;
 }
 
 /**
@@ -266,10 +277,11 @@ export async function setSessionPendingRuntime(
       options.authorize?.();
       if (!samePendingRuntime(next, latest.pendingRuntime))
         sessionStore.setPendingRuntime(sessionId, next ?? null);
+      options.written?.();
       return next;
     }
   });
-  await announce(sessionId);
+  await announce(sessionId, options.wake ?? true);
   return stored;
 }
 
@@ -385,11 +397,11 @@ export async function clearSessionPendingRuntime(
  * Viewers and the list see the change, and work a held selection kept waiting
  * is offered its turn again: under the new selection, or none.
  */
-async function announce(sessionId: string): Promise<void> {
+async function announce(sessionId: string, offer = true): Promise<void> {
   const { stateChanged, publishRows, wake } = host();
   await publishRows().catch(() => {});
   await stateChanged(sessionId).catch(() => {});
-  wake(sessionId);
+  if (offer) wake(sessionId);
 }
 
 /**

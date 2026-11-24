@@ -672,6 +672,13 @@ export interface UIState {
    */
   heldInputRemovals: Record<string, Record<string, HeldInputRemoval>>;
   /**
+   * PENDING CONTROL STATE ONLY: session id → the request id of the "Continue
+   * on" (`continueOnModel`) this browser sent and has not had answered. Its
+   * answer retires it; a refusal arrives as the session's failure
+   * (`lib/messageArrival.ts`). The run itself shows in the transcript.
+   */
+  continueOnPending: Record<string, string>;
+  /**
    * Owners whose last Stop-all left a retained host open because an ordinary
    * prompted turn is still inside its safe boundary. The wait is shown; it is
    * never rendered as a completed close.
@@ -1063,6 +1070,7 @@ const emptyInitial: UIState = {
   handoffEstimate: null,
   runtimeChangePending: {},
   heldInputRemovals: {},
+  continueOnPending: {},
   backgroundHostCloseWaiting: [],
   sessionListFresh: false,
   taskListFresh: false,
@@ -2123,6 +2131,7 @@ type Action =
       id: string;
       requestId: string;
     }
+  | { kind: "continueOnSent"; sessionId: string; requestId: string }
   | { kind: "optimisticWorktreeRemove"; worktreeId: string }
   | {
       kind: "optimisticPullRequestCardAction";
@@ -5543,6 +5552,19 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
         action.sessionId,
       ),
     };
+  if (action.kind === "continueOnSent")
+    // Like a send, it retires the failure it acts on.
+    return {
+      ...state,
+      continueOnPending: {
+        ...state.continueOnPending,
+        [action.sessionId]: action.requestId,
+      },
+      sessionFailures: withoutSessionFailure(
+        state.sessionFailures,
+        action.sessionId,
+      ),
+    };
   if (action.kind === "backgroundStopSent") {
     return {
       ...state,
@@ -5915,6 +5937,7 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
         : {
             runtimeChangePending: {},
             heldInputRemovals: keepHeldInputRefusals(state.heldInputRemovals),
+            continueOnPending: {},
             accountMoveTargets:
               state.accountMoveTargets &&
               isPending(state.accountMoveTargets.targets)
@@ -6036,6 +6059,13 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
             : ready(msg.tokens),
       },
     };
+  }
+  if (msg.type === "continueOnModelAnswer") {
+    // Control feedback only, like a runtime change's answer.
+    if (state.continueOnPending[msg.sessionId] !== msg.requestId) return state;
+    const continueOnPending = { ...state.continueOnPending };
+    delete continueOnPending[msg.sessionId];
+    return { ...state, continueOnPending };
   }
   if (msg.type === "pendingRuntimeAnswer") {
     // Control feedback only: the row arrives through the session list, and a
@@ -7166,6 +7196,15 @@ export interface AssistantActions {
   setPendingRuntime: (sessionId: string, change: SessionRuntimeChange) => void;
   /** Drop that change: the next turn starts on what the session runs now. */
   clearPendingRuntime: (sessionId: string) => void;
+  /**
+   * Take a failure's "Continue on" offer: the next turn runs on `model`, and
+   * the failed turn continues on it now. `failureAt` is the failure shown.
+   */
+  continueOnModel: (
+    sessionId: string,
+    failureAt: number,
+    model: { provider: string; id: string },
+  ) => void;
   /**
    * Stop one background item, or everything one session owns, under HUMAN
    * authorization. The server calls the supervisor's Stop service directly; the
@@ -9129,6 +9168,17 @@ export function useAssistant({
         const requestId = createClientId();
         dispatch({ kind: "runtimeChangeSent", sessionId, requestId });
         send({ type: "clearPendingRuntime", sessionId, requestId });
+      },
+      continueOnModel: (sessionId, failureAt, model) => {
+        const requestId = createClientId();
+        dispatch({ kind: "continueOnSent", sessionId, requestId });
+        send({
+          type: "continueOnModel",
+          sessionId,
+          requestId,
+          failureAt,
+          model: { provider: model.provider, id: model.id },
+        });
       },
       setSpawnOwnership: (id, ownership) => {
         const requestId = trackMutation(

@@ -1,3 +1,4 @@
+import { ContinueOnNote } from "./ContinueOnNote.tsx";
 import {
   lazy,
   Profiler,
@@ -124,7 +125,12 @@ export function SessionChat({
           <ErrorNote message={chat.hopRefusal} />
         </div>
       ) : null}
-      {chat.failure ? (
+      {chat.continueOffer ? (
+        // The failure with its "Continue on" offer replaces the plain note.
+        <div className="mx-auto w-full max-w-3xl px-4 pb-2">
+          <ContinueOnNote {...chat.continueOffer} />
+        </div>
+      ) : chat.failure ? (
         <div className="mx-auto w-full max-w-3xl px-4 pb-2">
           <ErrorNote
             message={chat.failure}

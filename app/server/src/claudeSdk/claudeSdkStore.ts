@@ -475,16 +475,37 @@ class ClaudeSdkSessionStore {
       anchor: string;
       keepThroughEntryId: string;
       forkOrigin: SessionForkOrigin;
+      /**
+       * The Claude engine binding to cut, for a session that switched
+       * engines: its native session, account, model and effort, in place of
+       * the record's and the row's, which describe the latest Claude binding
+       * and the active one.
+       */
+      binding?: {
+        nativeSessionId?: string;
+        credentialProfileId?: string;
+        modelId?: string;
+        thinkingLevel?: string;
+      };
     },
   ): Promise<ClaudeSdkSession> {
     this.requireStateBuilder();
     const source = this.sessions.get(sourceId);
     if (source?.isRunning)
       throw new Error("Cannot fork a session while it is streaming.");
-    const record = this.deleted.has(sourceId)
+    const stored = this.deleted.has(sourceId)
       ? undefined
       : (source?.toRecordMeta() ??
         readClaudeSdkRecordMeta(STORE_DIR, sourceId)?.meta);
+    const cut = opts.binding;
+    const record = stored && {
+      ...stored,
+      ...(cut?.nativeSessionId
+        ? { providerSessionId: cut.nativeSessionId }
+        : {}),
+      ...(cut?.modelId ? { modelId: cut.modelId } : {}),
+      ...(cut?.thinkingLevel ? { thinkingLevel: cut.thinkingLevel } : {}),
+    };
     if (!record) throw new Error("Cannot fork: session is not available.");
     if (!record.providerSessionId)
       throw new Error("Cannot fork: this session has never run.");
@@ -492,8 +513,9 @@ class ClaudeSdkSessionStore {
     const agentType = record.agentType ?? "workshop";
     const sourceMeta = sessionStore.getIncludingDeleted(sourceId);
     const requiresEnterprise = sourceRequiresEnterprise([sourceId]);
-    const credentialProfileId =
-      sourceMeta?.credentialProfileId ?? record.credentialProfileId;
+    const credentialProfileId = cut
+      ? (cut.credentialProfileId ?? record.credentialProfileId)
+      : (sourceMeta?.credentialProfileId ?? record.credentialProfileId);
     const ensureEnterpriseAccount = () => {
       if (
         requiresEnterprise &&

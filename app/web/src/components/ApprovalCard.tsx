@@ -28,6 +28,7 @@ import {
   GitPullRequestArrow,
   GitPullRequestClosed,
   KeyRound,
+  Repeat,
   MessageSquare,
   SquarePen,
   ShieldCheck,
@@ -55,6 +56,7 @@ import type {
   ManagedPullRequestMergeApprovalBody,
   ProjectCreateApprovalBody,
   SessionSpawnApprovalBody,
+  SessionRuntimeApprovalBody,
   SessionSpawnApprovalItem,
   ThinkingLevel,
 } from "@assistant/shared";
@@ -203,6 +205,7 @@ const KIND_ICON: Partial<Record<ApprovalCardData["body"]["kind"], LucideIcon>> =
     agentDefinition: Bot,
     settingsInput: KeyRound,
     approvalGrantsRequest: ShieldCheck,
+    sessionRuntime: Repeat,
   };
 
 function headerIcon(body: ApprovalCardData["body"]): LucideIcon {
@@ -1223,6 +1226,23 @@ function AgentDefinitionBody({ body }: { body: AgentDefinitionApprovalBody }) {
   );
 }
 
+function SessionRuntimeBody({ body }: { body: SessionRuntimeApprovalBody }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <Row label="Session">
+        {body.targetTitle ?? body.targetSessionId}
+        {body.agentName ? ` · agent ${body.agentName}` : ""}
+      </Row>
+      <Row label="Now">{body.current}</Row>
+      <Row label="Next turn">
+        {body.model.name}
+        {body.thinkingLevel ? `, ${body.thinkingLevel} effort` : ""}
+        {body.account ? ` · ${body.account.name}` : ""}
+      </Row>
+    </div>
+  );
+}
+
 function GmailArchiveBody({ body }: { body: GmailArchiveApprovalBody }) {
   return (
     <div
@@ -1406,6 +1426,7 @@ function Body({
     );
   }
   if (b.kind === "gmailArchive") return <GmailArchiveBody body={b} />;
+  if (b.kind === "sessionRuntime") return <SessionRuntimeBody body={b} />;
   if (b.kind === "projectCreate") return <ProjectCreateBody body={b} />;
   if (b.kind === "agentDefinition") return <AgentDefinitionBody body={b} />;
   if (b.kind === "managedPullRequestMerge")

@@ -331,10 +331,16 @@ export class SessionRuntime {
    *
    * Reads the log directly rather than the live map: a merely persisted session
    * must be forkable without being brought live first.
+   *
+   * `seq` is the selected entry's log seq, which names the engine binding that
+   * wrote it. `nativeHolds`, when given, says which log seqs the native session
+   * being cut holds: `previous` is looked for among those alone, so after an
+   * engine switch it never names another engine's id.
    */
   forkAnchors(
     sessionId: string,
     entryId: string,
+    nativeHolds?: (seq: number) => boolean,
   ): {
     own?: string;
     ownTurnEnd?: string;
@@ -343,6 +349,7 @@ export class SessionRuntime {
     previousEntryId?: string;
     /** OUR id of the entry immediately before this one, anchored or not. */
     precedingEntryId?: string;
+    seq?: number;
     entryFound: boolean;
   } {
     const entries = this.readLog(sessionId, (log) => log.serverEntries());
@@ -355,10 +362,12 @@ export class SessionRuntime {
       ...(own ? { own } : {}),
       ...(turnEnd ? { ownTurnEnd: turnEnd } : {}),
       ...(preceding ? { precedingEntryId: preceding } : {}),
+      seq: entries[index]!.seq,
     };
     for (let i = index - 1; i >= 0; i--) {
       const previous = entries[i]?.providerMessageId;
       if (!previous) continue;
+      if (nativeHolds && !nativeHolds(entries[i]!.seq)) continue;
       return {
         entryFound: true,
         ...anchors,

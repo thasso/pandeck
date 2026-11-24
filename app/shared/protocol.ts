@@ -1833,6 +1833,21 @@ export interface SessionRunFailure {
   at: number;
   /** Bounded, human-readable failure text; never a stack trace. */
   message: string;
+  /**
+   * The models another engine can continue the failed turn on, the default
+   * first: only on a terminal quota or rate-limit failure same-kind failover
+   * could not recover (`docs/session-runtime-switching.md` "Continue on
+   * another model"). Sent back with `continueOnModel`.
+   */
+  continueOn?: SessionContinueChoice[];
+}
+
+/** One model a failed turn can continue on, at the effort it would run. */
+export interface SessionContinueChoice {
+  provider: string;
+  id: string;
+  name: string;
+  thinkingLevel: ThinkingLevel;
 }
 
 /** Why the server process that cut a turn off ended, in its own last words. */
@@ -3644,7 +3659,8 @@ export type ApprovalKind =
   | "projectCreate"
   | "agentDefinition"
   | "approvalGrantsRequest"
-  | "settingsInput";
+  | "settingsInput"
+  | "sessionRuntime";
 /**
  * pending → executing → executed | failed (approved path); rejected (declined);
  * superseded (a newer card from the same session replaced it while pending).
@@ -4255,6 +4271,27 @@ export interface ApprovalGrantsRequestBody {
   result?: ApprovalGrantsRequestResult;
 }
 
+/**
+ * A coordinator asking to switch its still-owned direct child to a model its
+ * agent definition does not list, or any model for a child not spawned from
+ * one (`docs/agent-definitions.md` "Switching a child"). Approving sets the
+ * child's pending selection, applied when its next turn starts; the
+ * coordinator must still own the child then. Never granted.
+ */
+export interface SessionRuntimeApprovalBody {
+  kind: "sessionRuntime";
+  targetSessionId: string;
+  targetTitle?: string;
+  /** The definition the child was spawned as, when it was. */
+  agentName?: string;
+  /** What the child runs on now, as display text ("Claude Opus · Work"). */
+  current: string;
+  model: { provider: string; id: string; name: string };
+  thinkingLevel?: ThinkingLevel;
+  /** Absent: the account the selection keeps (Automatic for another kind). */
+  account?: { id: string; name: string };
+}
+
 export type ApprovalBody =
   | GithubPullRequestApprovalBody
   | GithubIssueApprovalBody
@@ -4273,7 +4310,8 @@ export type ApprovalBody =
   | ProjectCreateApprovalBody
   | AgentDefinitionApprovalBody
   | ApprovalGrantsRequestBody
-  | SettingsInputApprovalBody;
+  | SettingsInputApprovalBody
+  | SessionRuntimeApprovalBody;
 
 /**
  * The user's per-row adjustments, sent WITH the approve decision rather than
@@ -7848,6 +7886,19 @@ export type ClientMessage =
   /** Drop the pending selection; leaves no trace. Answered by `pendingRuntimeAnswer`. */
   | { type: "clearPendingRuntime"; sessionId: string; requestId: string }
   /**
+   * The user's "Continue on <model>" on a failure that offers it
+   * (`SessionRunFailure.continueOn`): set the next turn to that model and
+   * continue the failed turn on it now. `failureAt` is the failure the click
+   * saw; a newer one refuses. Answered by `continueOnModelAnswer`.
+   */
+  | {
+      type: "continueOnModel";
+      sessionId: string;
+      requestId: string;
+      failureAt: number;
+      model: { provider: string; id: string };
+    }
+  /**
    * Set the scope of the session's OWN grants named in `keys`: true also
    * covers the sessions it starts, false keeps them to this session. Keys the
    * session does not hold are ignored.
@@ -8965,6 +9016,17 @@ export type ServerMessage =
    */
   | {
       type: "pendingRuntimeAnswer";
+      requestId: string;
+      sessionId: string;
+      error?: string;
+    }
+  /**
+   * The answer to `continueOnModel`: no `error` means the continuation was
+   * admitted on the chosen model (the transcript shows it run); `error` is
+   * why nothing ran.
+   */
+  | {
+      type: "continueOnModelAnswer";
       requestId: string;
       sessionId: string;
       error?: string;

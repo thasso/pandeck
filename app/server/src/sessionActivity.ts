@@ -235,10 +235,14 @@ export function installSessionActivityTracking(): () => void {
         // a failure worth badging. Attention is NOT raised here: the run's own
         // normalized completion carries the same verdict, and raising it twice
         // would spend two revisions on one outcome.
+        // The run id ties the failure to the run it ended, so what belongs to
+        // that run's failure (a "Continue on" offer) never lands on another.
         if (event.status === "error")
           sessionStore.recordRunFailure(
             sessionId,
             event.message ?? "The agent run failed.",
+            Date.now(),
+            event.runId,
           );
         return;
       }

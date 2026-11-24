@@ -211,6 +211,7 @@ const CLASSIFIED: Record<
       worktreeMissingAck: "read",
       worktreeMissingAckBySession: "read",
       recordRunFailure: "projected-write",
+      recordContinueOffer: "projected-write",
       clearRunFailure: "projected-write",
       dismissRunFailure: "projected-write",
       recordInterruptedRun: "projected-write",

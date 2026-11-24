@@ -187,6 +187,51 @@ describe("the account picker's state", () => {
   });
 });
 
+describe("a Continue on another model", () => {
+  it("retires the failure it acts on and stays pending until its own answer", () => {
+    let state = server(createInitialState(), {
+      type: "error",
+      message: "Usage limit reached.",
+      target: { type: "session", id: "s1" },
+    });
+    state = reduceAssistantState(state, {
+      kind: "continueOnSent",
+      sessionId: "s1",
+      requestId: "c2",
+    });
+    expect(state.continueOnPending).toEqual({ s1: "c2" });
+    expect(state.sessionFailures.s1).toBeUndefined();
+
+    state = server(state, {
+      type: "continueOnModelAnswer",
+      requestId: "c1",
+      sessionId: "s1",
+    });
+    expect(state.continueOnPending).toEqual({ s1: "c2" });
+
+    state = server(state, {
+      type: "continueOnModelAnswer",
+      requestId: "c2",
+      sessionId: "s1",
+      error: "This failure no longer offers that model.",
+    });
+    expect(state.continueOnPending).toEqual({});
+    expect(state.sessionFailures.s1).toBe(
+      "This failure no longer offers that model.",
+    );
+  });
+
+  it("retires the pending action when the connection drops", () => {
+    let state = reduceAssistantState(createInitialState(), {
+      kind: "continueOnSent",
+      sessionId: "s1",
+      requestId: "c1",
+    });
+    state = reduceAssistantState(state, { kind: "status", connected: false });
+    expect(state.continueOnPending).toEqual({});
+  });
+});
+
 describe("the handoff estimate's state", () => {
   const estimated = (
     requestId: string,

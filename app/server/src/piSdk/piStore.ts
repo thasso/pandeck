@@ -672,6 +672,11 @@ class PiSessionStore {
     nativeEntryId: string,
     position: "before" | "at",
     originEntryId: string,
+    /**
+     * For a session that switched engines, the account of the pi binding
+     * being cut, in place of the row's (the active binding's).
+     */
+    cut: { credentialProfileId?: string | undefined } = {},
   ): Promise<PiLiveSession> {
     for (const ls of this.live.values()) {
       if (ls.kind === kind && ls.engine.sessionFile === file && ls.isRunning) {
@@ -686,7 +691,9 @@ class PiSessionStore {
       throw new Error("Cannot fork: source session has no id.");
     const parentMeta = sessionStore.getIncludingDeleted(parentSessionId);
     const credentialProfileId =
-      parentMeta?.credentialProfileId ?? unboundPiProfileId();
+      ("credentialProfileId" in cut
+        ? cut.credentialProfileId
+        : parentMeta?.credentialProfileId) ?? unboundPiProfileId();
     const requiresEnterprise = sourceRequiresEnterprise([parentSessionId]);
     const ensureEnterpriseAccount = () => {
       if (

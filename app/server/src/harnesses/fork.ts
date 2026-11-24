@@ -7,6 +7,7 @@
  */
 import type { AgentType, Harness } from "@assistant/shared";
 import { claudeSdkStore } from "../claudeSdk/claudeSdkStore.ts";
+import type { SessionEngineBinding } from "../db/sessionEngineBinding.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import {
   linkSessionToWorktree,
@@ -15,6 +16,7 @@ import {
 import type { LiveSession } from "../harness.ts";
 import { piStore } from "../piSdk/piStore.ts";
 import { sessionRuntime } from "../session/runtimeInstance.ts";
+import { piNativeFile } from "../sessionStorage.ts";
 import { broadcastWorktreeEdgeChange } from "../worktrees/worktrees.ts";
 import { inheritCompactionWindow } from "./compactionWindow.ts";
 
@@ -30,6 +32,11 @@ interface ForkRequest {
   entryId: string;
   position: "before" | "at";
   anchors: ForkAnchors;
+  /**
+   * The binding to cut, when the session switched engines; absent, the engine
+   * cuts what the session's row and its own record name, as before.
+   */
+  binding?: SessionEngineBinding;
 }
 
 /** A fork refused before anything was written, or one ready to run. */
@@ -38,16 +45,21 @@ type PreparedFork = { refusal: string } | { fork(): Promise<LiveSession> };
 /**
  * Check that the engine can make the fork, then hand back the step that makes
  * it. A refusal comes before anything is written for the child.
+ *
+ * A session that switched engines is cut by the engine binding that OWNS the
+ * chosen entry (`docs/session-runtime-switching.md` "Forks"), which need not be
+ * the active one: its harness, native session, account, model and effort. Only
+ * that native session's own entries can name the cut. The child starts with
+ * that one binding.
  */
 export function prepareFork(
   harness: Harness,
   request: ForkRequest,
 ): PreparedFork {
-  // A fork cuts the engine that owns the chosen entry, which after a harness
-  // switch may not be the active one; until that cut exists, refuse.
-  if (sessionStore.bindings(request.id).length > 1)
-    return { refusal: SWITCHED_ENGINES };
-  const prepared = engines[harness](request);
+  const owner = owningBinding(request);
+  const prepared = owner
+    ? engines[owner.binding.harness]({ ...request, ...owner })
+    : engines[harness](request);
   if ("refusal" in prepared) return prepared;
   return {
     fork: async () => {
@@ -65,8 +77,49 @@ export function prepareFork(
   };
 }
 
-const SWITCHED_ENGINES =
-  "Forking a session that switched engines is not available yet.";
+/**
+ * The binding that wrote the chosen entry, and the anchors read within its
+ * native session, for a session with more than one binding. A session that
+ * never switched answers undefined and forks exactly as it always did.
+ *
+ * A binding owns the log entries from its `startedSeq` up to the next
+ * binding's. Its native session also holds what the bindings it resumed
+ * (`resumedSeq`, a return) wrote, so those entries may name the cut too; an
+ * entry another native session wrote never does.
+ */
+function owningBinding(
+  request: ForkRequest,
+): { binding: SessionEngineBinding; anchors: ForkAnchors } | undefined {
+  const all = sessionStore.bindings(request.id);
+  const seq = request.anchors.seq;
+  if (all.length < 2 || seq === undefined) return undefined;
+  const ordered = [...all].sort((a, b) => a.seq - b.seq);
+  const owner = ordered.filter((binding) => binding.startedSeq <= seq).at(-1);
+  if (!owner) return undefined;
+  const range = (binding: SessionEngineBinding) => {
+    const next = ordered.find((other) => other.seq === binding.seq + 1);
+    return { from: binding.startedSeq, to: next?.startedSeq ?? Infinity };
+  };
+  const chain = [range(owner)];
+  const seen = new Set([owner.seq]);
+  for (
+    let resumed = owner.resumedSeq;
+    resumed !== undefined && !seen.has(resumed);
+  ) {
+    seen.add(resumed);
+    const earlier = ordered.find((binding) => binding.seq === resumed);
+    if (!earlier) break;
+    chain.push(range(earlier));
+    resumed = earlier.resumedSeq;
+  }
+  const anchors = sessionRuntime.forkAnchors(
+    request.id,
+    request.entryId,
+    (entrySeq) =>
+      chain.some(({ from, to }) => entrySeq >= from && entrySeq < to),
+  );
+  return { binding: owner, anchors };
+}
 
 const NO_ANCHOR =
   "Failed to fork session: this message has no provider anchor to branch from.";
@@ -78,7 +131,7 @@ const engines: Record<Harness, (request: ForkRequest) => PreparedFork> = {
    * "before" cuts at the turn PRECEDING the chosen prompt. Both the native cut
    * and OUR slice stop at the same entry.
    */
-  "claude-sdk": ({ id, entryId, position, anchors }) => {
+  "claude-sdk": ({ id, entryId, position, anchors, binding }) => {
     const cut =
       position === "at"
         ? { anchor: anchors.own, entryId }
@@ -96,6 +149,7 @@ const engines: Record<Harness, (request: ForkRequest) => PreparedFork> = {
         claudeSdkStore.forkSession(id, {
           anchor,
           keepThroughEntryId,
+          ...(binding ? { binding: claudeBindingCut(binding) } : {}),
           forkOrigin: {
             harness: "claude-sdk",
             parentSessionId: id,
@@ -107,7 +161,12 @@ const engines: Record<Harness, (request: ForkRequest) => PreparedFork> = {
     };
   },
 
-  pi: ({ id, kind, file, entryId, position, anchors }) => {
+  pi: ({ id, kind, file: activeFile, entryId, position, anchors, binding }) => {
+    // Every pi binding's transcript is the app id's (D1), whichever engine is
+    // active now.
+    const file = binding
+      ? piNativeFile(id, binding.nativeSessionId ?? id)
+      : activeFile;
     // pi branches FROM the selected native entry (it walks to the parent itself
     // for a "before" fork), so it always wants that entry's OWN anchor. Our log
     // id in its place would reach the store as an id it cannot resolve.
@@ -141,6 +200,7 @@ const engines: Record<Harness, (request: ForkRequest) => PreparedFork> = {
           anchor,
           position,
           entryId,
+          binding ? { credentialProfileId: binding.credentialProfileId } : {},
         );
         // Seed the child's durable transcript. pi branches its OWN session
         // file and leaves our log untouched, so without this the fork opens on
@@ -153,6 +213,20 @@ const engines: Record<Harness, (request: ForkRequest) => PreparedFork> = {
     };
   },
 };
+
+/** What a Claude fork of an earlier binding cuts and runs on, not the record's. */
+function claudeBindingCut(binding: SessionEngineBinding) {
+  return {
+    ...(binding.nativeSessionId
+      ? { nativeSessionId: binding.nativeSessionId }
+      : {}),
+    ...(binding.credentialProfileId
+      ? { credentialProfileId: binding.credentialProfileId }
+      : {}),
+    ...(binding.model ? { modelId: binding.model } : {}),
+    ...(binding.thinkingLevel ? { thinkingLevel: binding.thinkingLevel } : {}),
+  };
+}
 
 /**
  * The two halves of a pi fork, which must name the SAME point: the native id

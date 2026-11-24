@@ -41,6 +41,13 @@ export interface SessionAgent {
   runtimeSource: SessionAgentRuntimeSource;
   /** Why an automatic spawn used a later listed model. Frozen with the runtime. */
   modelFallbackReason?: string;
+  /**
+   * Every model the definition listed that resolved at spawn: the models its
+   * coordinator may switch it to without a card
+   * (`docs/agent-definitions.md` "Switching a child"). A row frozen before
+   * this existed lists none, so every model change of it asks the user.
+   */
+  listedModels?: Array<{ provider: string; id: string }>;
   denyTools: string[];
   skills: string[];
   body: string;
@@ -52,6 +59,21 @@ export class SessionAgentUnreadableError extends Error {}
 function isStringList(value: unknown): value is string[] {
   return (
     Array.isArray(value) && value.every((item) => typeof item === "string")
+  );
+}
+
+function isModelList(
+  value: unknown,
+): value is Array<{ provider: string; id: string }> {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (item: unknown) =>
+        typeof item === "object" &&
+        item !== null &&
+        typeof (item as { provider?: unknown }).provider === "string" &&
+        typeof (item as { id?: unknown }).id === "string",
+    )
   );
 }
 
@@ -80,6 +102,7 @@ function parseSessionAgent(sessionId: string, raw: string): SessionAgent {
       )) &&
     (value.modelFallbackReason === undefined ||
       typeof value.modelFallbackReason === "string") &&
+    (value.listedModels === undefined || isModelList(value.listedModels)) &&
     isStringList(value.denyTools) &&
     isStringList(value.skills) &&
     typeof value.body === "string"
@@ -99,6 +122,9 @@ function parseSessionAgent(sessionId: string, raw: string): SessionAgent {
         "definition",
       ...(typeof value.modelFallbackReason === "string"
         ? { modelFallbackReason: value.modelFallbackReason }
+        : {}),
+      ...(isModelList(value.listedModels)
+        ? { listedModels: value.listedModels }
         : {}),
       denyTools: value.denyTools,
       skills: value.skills,

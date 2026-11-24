@@ -306,11 +306,21 @@ export type AgentRole = Omit<
   | "modelFallbackReason"
 >;
 
-function roleOf({ manifest, blob }: AgentDefinitionRead): AgentRole {
+function roleOf({ manifest, blob, listed }: AgentDefinitionRead): AgentRole {
   return {
     name: manifest.name,
     blob,
     persona: manifest.persona,
+    listedModels: listed.flatMap((choice) =>
+      choice.runtime
+        ? [
+            {
+              provider: choice.runtime.model.provider,
+              id: choice.runtime.model.id,
+            },
+          ]
+        : [],
+    ),
     denyTools: [...manifest.denyTools],
     skills: [...manifest.skills],
     body: manifest.body.trim(),

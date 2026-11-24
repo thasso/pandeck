@@ -309,6 +309,7 @@ test("a first send naming an agent runs as that definition and freezes it", asyn
       model: "opus",
       effort: "high",
       runtimeSource: "definition",
+      listedModels: [{ provider: "claude-sdk", id: "opus" }],
       denyTools: [],
       skills: [],
       body: "Research carefully.",
