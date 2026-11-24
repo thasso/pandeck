@@ -5527,7 +5527,9 @@ export class Connection implements Viewer {
     const viewing = this.viewing;
     if (!viewing) return undefined;
     const ready = this.asRuntimePromptDriver(viewing);
-    if (ready) return ready;
+    // A released driver (its engine let the session go, as a switch does)
+    // reopens through the registry like a storage-backed view.
+    if (ready && !ready.released) return ready;
     return this.openHarnessFor(viewing.sessionId);
   }
 
@@ -5583,7 +5585,11 @@ export class Connection implements Viewer {
     const viewing = this.viewing;
     if (!viewing) return;
     const sessionId = viewing.sessionId;
-    if (!viewing.live && !(await this.openHarnessFor(sessionId))) return;
+    if (
+      (!viewing.live || viewing.released) &&
+      !(await this.openHarnessFor(sessionId))
+    )
+      return;
     const driver = this.viewing;
     if (!driver || driver.sessionId !== sessionId) return;
     await act(driver, this.runtimeView);
@@ -5591,7 +5597,8 @@ export class Connection implements Viewer {
 
   /**
    * Another owner opened the harness for the session this connection is showing
-   * from storage. Re-attach so live state reaches this reader too.
+   * from storage, or on a driver its engine has since released (an engine
+   * switch). Re-attach so live state reaches this reader too.
    */
   sessionHarnessOpened(driver: HarnessDriver): void {
     this.upgradeViewingDriver(driver);
@@ -5618,7 +5625,10 @@ export class Connection implements Viewer {
    */
   private upgradeViewingDriver(driver: HarnessDriver): void {
     const viewing = this.viewing;
-    if (!viewing || viewing.live) return;
+    // A live view moves only off a driver its store released: a session that
+    // switched engines is driven by another instance under the same id.
+    if (!viewing || viewing === driver) return;
+    if (viewing.live && !viewing.released) return;
     if (viewing.sessionId !== driver.sessionId || this.disposed) return;
     if (this.engineStateViewer)
       this.engineStateViewer.live.removeViewer(this.engineStateViewer.viewer);

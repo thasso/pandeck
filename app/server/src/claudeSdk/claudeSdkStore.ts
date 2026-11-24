@@ -7,6 +7,8 @@
  * persist writes only the entries the log does not hold yet. Deleted ids are
  * tombstoned so a late event can't resurrect a removed session.
  */
+import { getSettings } from "../settings.ts";
+import { permanentAssistantProfileInstructions } from "../permanentAssistantProfile.ts";
 import { randomUUID } from "node:crypto";
 import {
   type AgentType,
@@ -224,10 +226,21 @@ class ClaudeSdkSessionStore {
     // The session's stored scope, so the claim confirms it rather than
     // contradicting an agent- or workflow-scoped session.
     const scope = sessionStore.get(id)?.scope;
+    // The permanent assistant's profile suffix comes from settings at every
+    // open, as pi reads it, so both engines render the same one.
+    const additionalSystemPrompt =
+      binding.agentType === "personal-assistant"
+        ? permanentAssistantProfileInstructions(
+            getSettings().permanentAssistant,
+          )
+        : undefined;
     return this.open(
       id,
       {
         agentType: binding.agentType,
+        ...(additionalSystemPrompt !== undefined
+          ? { additionalSystemPrompt }
+          : {}),
         ...(scope ? { scope } : {}),
         ...(binding.cwd !== undefined ? { cwd: binding.cwd } : {}),
       },
@@ -255,8 +268,9 @@ class ClaudeSdkSessionStore {
     const modeValue = binding?.mode ?? record?.mode ?? opts.mode;
     const agentTypeValue =
       binding?.agentType ?? record?.agentType ?? opts.agentType;
-    const additionalSystemPromptValue =
-      record?.additionalSystemPrompt ?? opts.additionalSystemPrompt;
+    const additionalSystemPromptValue = binding
+      ? opts.additionalSystemPrompt
+      : (record?.additionalSystemPrompt ?? opts.additionalSystemPrompt);
     const cwdValue =
       worktreeCwdForSession(id, checkout) ?? record?.cwd ?? opts.cwd;
     // An unbound session runs as the protected default where the install has

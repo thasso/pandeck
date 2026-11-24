@@ -196,7 +196,7 @@ export async function prepareEngineSwitch(
       );
     });
   };
-  let lift: (() => void) | undefined;
+  let lift: ((committed: boolean) => void) | undefined;
   let driver: LiveSession;
   try {
     admit();
@@ -206,7 +206,7 @@ export async function prepareEngineSwitch(
     driver = await open(row, target, resumed, cwd);
   } catch (error) {
     await rollback();
-    lift?.();
+    lift?.(false);
     throw error;
   }
   const lifted = lift;
@@ -223,7 +223,7 @@ export async function prepareEngineSwitch(
       },
     );
     await rollback();
-    lifted();
+    lifted(false);
   };
   try {
     admit();
@@ -275,7 +275,7 @@ export async function prepareEngineSwitch(
         pending,
       });
       ended = true;
-      lifted();
+      lifted(true);
       void transfer?.commit().catch(() => {
         console.warn(
           `[engine-switch] ${sessionId}: removing the earlier account's Claude transcript failed; session deletion will retry.`,

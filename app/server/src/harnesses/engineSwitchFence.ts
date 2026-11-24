@@ -5,13 +5,16 @@
  * Neither engine shows it resident and opening it refuses as busy, so a
  * viewer's command, a background completion or a peer delivery cannot reopen
  * the engine it is leaving, or reach the one it is moving to before the
- * binding commits. Lanes treat busy as "try later"; lifting the fence offers
- * the session its waiting work again.
+ * binding commits. Lanes treat busy as "try later"; a commit, or a rollback
+ * after the fence refused someone, offers the session its waiting work again.
+ * A rollback that refused no one wakes nothing: the switching turn's own work
+ * is held, and waking it would only retry the failed switch.
  */
 import { wakeSessionDelivery } from "../deliveryWake.ts";
 import { SessionBusyError } from "../session/runtime/errors.ts";
 
-const switching = new Set<string>();
+/** Each switching session, and whether its fence refused anyone yet. */
+const switching = new Map<string, { refused: boolean }>();
 
 /** Refused while the session moves between engines; retry once it has. */
 export class SessionSwitchingEnginesError extends SessionBusyError {
@@ -29,20 +32,33 @@ export function isSwitchingEngines(sessionId: string): boolean {
   return switching.has(sessionId);
 }
 
+/** The refusal for driving a fenced session, noted so its lift wakes delivery. */
+export function engineSwitchRefusal(
+  sessionId: string,
+): SessionSwitchingEnginesError {
+  const fence = switching.get(sessionId);
+  if (fence) fence.refused = true;
+  return new SessionSwitchingEnginesError(sessionId);
+}
+
 /**
  * Raise the fence for one switch. The answer lifts it once (later calls do
- * nothing) and wakes the session's delivery, so work refused meanwhile is
- * offered again on whichever engine the session is now bound to.
+ * nothing). Lifting after a commit always wakes the session's delivery, so
+ * work that waited is offered on the new engine; lifting after a rollback
+ * wakes it only when the fence refused someone meanwhile.
  */
-export function raiseEngineSwitchFence(sessionId: string): () => void {
+export function raiseEngineSwitchFence(
+  sessionId: string,
+): (committed: boolean) => void {
   if (switching.has(sessionId))
     throw new SessionSwitchingEnginesError(sessionId);
-  switching.add(sessionId);
+  const fence = { refused: false };
+  switching.set(sessionId, fence);
   let lifted = false;
-  return () => {
+  return (committed) => {
     if (lifted) return;
     lifted = true;
     switching.delete(sessionId);
-    wakeSessionDelivery(sessionId);
+    if (committed || fence.refused) wakeSessionDelivery(sessionId);
   };
 }

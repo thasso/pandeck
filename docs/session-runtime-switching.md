@@ -293,15 +293,37 @@ lower it (0 would hide a started session from the list).
 
 A session can move to a model of another harness (pi ↔ Claude) under the same
 app id. The switch closes the session in its current engine and opens it in the
-other with a new binding; the parts below are built, and the switch itself is
-not reachable yet (setting such a target still refuses).
+other with a new binding. Applying a pending selection that names another
+harness performs the switch (`applyPendingRuntime`); setting such a selection
+still refuses, so no user reaches it yet.
+
+### Applying a switch
+
+- **Account.** A chosen account must serve the target model, be enabled, meet
+  the enterprise requirement, be logged in, not be benched, and list the model.
+  Automatic takes the router's non-degraded pick of the model's kind; the bound
+  account serves another kind and is never kept.
+- **Move.** The store move below runs inside the turn's admission. Its refusals
+  hold the turn as on one engine; background work on Claude holds it with
+  "Waiting for background work on Claude; stop it to switch now."
+- **Turn.** The turn runs on the new engine's driver (`deliverWithRuntime`),
+  which rebinds the detached runtime session. A refusal after the move and
+  before the commit (the final admission included) abandons it. The commit runs
+  right after the turn's `admit`.
+- **Viewers.** A connection showing the session on the released driver moves to
+  the new one when it binds (`upgradeViewingDriver`), and a command it sends
+  meanwhile reopens through the registry like a storage-backed view.
 
 ### Handoff
 
 The new engine gets no summary and asks the old engine nothing. It gets a
 budgeted, verbatim selection of the session's own app log (`sessionHandoff.ts`),
-delivered once as model-only context on the first turn after the switch, headed
-by a switch note.
+headed by a switch note. It rides as model-only context
+(`RuntimePromptOptions.contextBlock`, ahead of any other) on every new turn
+until the new engine has replied once (`sessionSwitchHandoff.ts`): owed while
+the active binding is not the first and the log holds no assistant entry after
+its `started_seq`. A steer joins a turn that already carries it, and the log
+keeps the clean user text.
 
 - **Entries** are the records `session_read` reads: user prompts (hidden ones
   too, since the model saw them), assistant text, tool calls and tool results.
@@ -313,13 +335,12 @@ by a switch note.
   cap, shortened with a pointer to `session_read` at its id.
 - **Range:** a fresh native session gets the whole log. An engine that ran the
   session before and resumes its own native session gets only the entries after
-  it last ran.
+  it last ran: those after the `started_seq` of the binding that followed it.
 - **Cap:** `AppSettings.sessionSwitching.handoffTokenCap` (Settings → Models,
   default 16,000, clamped to 1,000–64,000), and never more than the target
-  model's context window, less what a resumed native session already holds, less
-  a reserve of the larger of 16,000 tokens or a quarter of the window. When
-  nothing fits, only the note goes. Tokens are estimated at four characters
-  each.
+  model's context window, less a reserve of the larger of 16,000 tokens or a
+  quarter of the window. When nothing fits, only the note goes. Tokens are
+  estimated at four characters each.
 - **Switch note:** what changed ("moved from GPT-6 · OpenAI to Claude Opus ·
   Work"); that reasoning and tool state did not carry over; the session's own id
   with `session_read({ sessionId, at, includeToolResults: true })` and
@@ -379,9 +400,10 @@ From the release until the commit or the abandon, the session belongs to no
 engine for anyone else (`harnesses/engineSwitchFence.ts`): neither shows it
 resident, and `harnessRegistry.acquireById` refuses with
 `SessionSwitchingEnginesError`, a `SessionBusyError`. A viewer's command, a peer
-delivery or a background completion is refused as busy and tries again; lifting
-the fence, either way, wakes the session's delivery so that work is offered at
-once, on whichever engine the session is now bound to.
+delivery or a background completion is refused as busy and tries again. A commit
+wakes the session's delivery, so that work is offered at once on the new engine.
+A rollback wakes it only when the fence refused someone meanwhile: the switching
+turn's own work is held, and waking it would only retry the failed switch.
 
 ### Deleting
 

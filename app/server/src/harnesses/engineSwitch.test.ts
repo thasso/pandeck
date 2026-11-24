@@ -4,7 +4,8 @@
  * session leaves Claude for pi (and returns) under the same app id, nothing
  * reaches it while it moves, the binding commits in one transaction, and every
  * way out before the commit leaves it on its old binding with its selection
- * pending. Lifting the fence, either way, offers the session its waiting work.
+ * pending. A commit offers the session its waiting work; a rollback does when
+ * the fence refused someone meanwhile.
  */
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -201,7 +202,11 @@ test("a failed open leaves the session on its old binding with its selection, an
     /is not available/,
   );
   assert.equal(isSwitchingEngines(id), false);
-  assert.deepEqual(wakes, [id]);
+  assert.deepEqual(
+    wakes,
+    [],
+    "nothing was refused meanwhile, so nothing retries the failed switch",
+  );
   assert.equal(sessionStore.get(id)?.harness, "claude-sdk");
   assert.deepEqual(sessionStore.get(id)?.pendingRuntime, PENDING_PI);
   assert.equal(sessionStore.bindings(id).length, 1);
@@ -223,6 +228,11 @@ test("an admission that fails mid-switch, or an abandon, undoes the move", async
     if (!admissible) throw new Error("no longer admissible");
   };
   const prepared = await prepareEngineSwitch(id, TO_PI, PENDING_PI, admit);
+  // A delivery refused while the fence is up is offered again once it lifts.
+  await assert.rejects(
+    harnessRegistry.acquireById(id),
+    SessionSwitchingEnginesError,
+  );
   await prepared.abandon();
   assert.equal(isSwitchingEngines(id), false);
   assert.deepEqual(wakes, [id]);

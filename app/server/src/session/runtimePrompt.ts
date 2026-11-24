@@ -50,6 +50,7 @@ import {
   prepareAccountRecoveryTurn,
 } from "../sessionAccountSwitch.ts";
 import { applyPendingRuntime } from "../sessionPendingRuntime.ts";
+import { owedSwitchContext } from "../sessionSwitchHandoff.ts";
 import {
   assertAccountRecoveryAdmission,
   type AccountRecoveryTicket,
@@ -423,41 +424,51 @@ async function deliverWithRuntime(
           () => ensureRuntimeSessionWithRuntime(runtime, driver),
         )
       : undefined;
-    assertTurnAllowed(driver.sessionId, options.resumeHold);
-    assertRecoveryAdmission();
-    // An account recovery continuation has already chosen its account, and a
-    // steer-only message starts no turn. An applied pending selection already
-    // chose an eligible account; a move off it now would replace the chosen
-    // account, so its final check holds the turn instead.
-    const accountMove =
-      accountRecovery || options.steerOnly || pendingSwitch
-        ? undefined
-        : await moveOffDisabledAccount(driver, () => {
-            assertTurnAllowed(driver.sessionId, options.resumeHold);
-            assertRecoveryAdmission();
-          });
-    assertTurnAllowed(driver.sessionId, options.resumeHold);
-    assertRecoveryAdmission();
-    // Nothing below awaits before the append. The enterprise check runs before
-    // `admit`, which must stay the last check: a peer admission reserves its
-    // delivery, and a refusal after that reservation could strand the prompt.
-    pendingSwitch?.usable();
-    accountMove?.usable();
-    assertSessionEnterpriseAccount(driver);
-    // Setup may have finished while this send awaited above.
-    assertNotFinishedSetup(driver.sessionId);
-    admit?.();
-    // Admitted on the target: only now is the pending selection spent.
-    pendingSwitch?.commit();
-    const live = ensureRuntimeSessionWithRuntime(runtime, driver);
+    // A selection naming another engine moved the session there; the turn
+    // runs on that engine's driver, and every refusal up to its commit puts
+    // the session back on its old binding.
+    const turnDriver = pendingSwitch?.driver ?? driver;
+    let accountMove: Awaited<ReturnType<typeof moveOffDisabledAccount>>;
+    try {
+      assertTurnAllowed(driver.sessionId, options.resumeHold);
+      assertRecoveryAdmission();
+      // An account recovery continuation has already chosen its account, and a
+      // steer-only message starts no turn. An applied pending selection already
+      // chose an eligible account; a move off it now would replace the chosen
+      // account, so its final check holds the turn instead.
+      accountMove =
+        accountRecovery || options.steerOnly || pendingSwitch
+          ? undefined
+          : await moveOffDisabledAccount(driver, () => {
+              assertTurnAllowed(driver.sessionId, options.resumeHold);
+              assertRecoveryAdmission();
+            });
+      assertTurnAllowed(driver.sessionId, options.resumeHold);
+      assertRecoveryAdmission();
+      // Nothing below awaits before the append. The enterprise check runs before
+      // `admit`, which must stay the last check: a peer admission reserves its
+      // delivery, and a refusal after that reservation could strand the prompt.
+      pendingSwitch?.usable();
+      accountMove?.usable();
+      assertSessionEnterpriseAccount(turnDriver);
+      // Setup may have finished while this send awaited above.
+      assertNotFinishedSetup(driver.sessionId);
+      admit?.();
+      // Admitted on the target: only now is the pending selection spent.
+      pendingSwitch?.commit();
+    } catch (error) {
+      await pendingSwitch?.abandon?.();
+      throw error;
+    }
+    const live = ensureRuntimeSessionWithRuntime(runtime, turnDriver);
     if (pendingSwitch?.notice) live.appendNotice(pendingSwitch.notice);
     if (accountMove) live.appendNotice(accountMove.notice);
     prepareAccountRecoveryTurn(live, accountRecovery);
     return await runPromptWithRuntime(
       runtime,
-      driver,
+      turnDriver,
       text,
-      withHumanResume(options, receipt),
+      withHumanResume(withSwitchContext(turnDriver, options), receipt),
       excludedFromMemoryCapture,
       receipt,
     );
@@ -465,6 +476,27 @@ async function deliverWithRuntime(
     releaseAdmission();
     releaseRun();
   }
+}
+
+/**
+ * A new turn on an engine the session switched to carries the switch's
+ * handoff (`sessionSwitchHandoff.ts`) until that engine has replied once,
+ * ahead of any other model-only context. A steer joins a turn that already
+ * has it.
+ */
+function withSwitchContext<T extends RuntimePromptOptions>(
+  driver: RuntimePromptDriver,
+  options: T,
+): T {
+  if (options.steerOnly || (options.steer && driver.isRunning)) return options;
+  const handoff = owedSwitchContext(driver.sessionId);
+  if (!handoff) return options;
+  return {
+    ...options,
+    contextBlock: options.contextBlock
+      ? `${handoff}\n\n${options.contextBlock}`
+      : handoff,
+  };
 }
 
 /**

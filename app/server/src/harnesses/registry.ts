@@ -12,8 +12,8 @@ import { claudeSdkStore } from "../claudeSdk/claudeSdkStore.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import { activeEngine } from "./activeEngine.ts";
 import {
+  engineSwitchRefusal,
   isSwitchingEngines,
-  SessionSwitchingEnginesError,
 } from "./engineSwitchFence.ts";
 import type { HarnessHost, LiveSession } from "../harness.ts";
 import { PiSessionDeletedError, piStore } from "../piSdk/piStore.ts";
@@ -332,12 +332,12 @@ export const harnessRegistry = {
    * has it on disk (a pi transcript as a developer session, the persona those
    * predate the row for). Undefined when nothing holds the session or the row
    * is tombstoned, or when a pi session has no transcript to reopen from.
-   * Throws {@link SessionSwitchingEnginesError} while the session switches
+   * Throws `SessionSwitchingEnginesError` (busy) while the session switches
    * engines.
    */
   async acquireById(id: string): Promise<LiveSession | undefined> {
     // Busy, not absent: the caller tries again once the switch lifts its fence.
-    if (isSwitchingEngines(id)) throw new SessionSwitchingEnginesError(id);
+    if (isSwitchingEngines(id)) throw engineSwitchRefusal(id);
     // A fresh pi session may be resident before its first prompt creates a
     // transcript or metadata row, so a singleton or system session can be
     // viewed as soon as it is created.

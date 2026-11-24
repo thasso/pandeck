@@ -11,6 +11,8 @@ import { afterAll, beforeAll, test } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { AGENT_TYPES } from "../agentTypes.ts";
+import { permanentAssistantProfileInstructions } from "../permanentAssistantProfile.ts";
+import { getSettings } from "../settings.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import { externalToolName } from "../mcp/names.ts";
 import { resolvePiEngineStart } from "../piSdk/piEngineStart.ts";
@@ -33,6 +35,7 @@ installClaudeStateBuilder(claudeSdkStore);
 await seedLegacyDefaultAccounts();
 
 const ID = `switch-surface-${Date.now()}`;
+const PA_ID = `switch-surface-pa-${Date.now()}`;
 const queries: ClaudeQueryParams[] = [];
 
 beforeAll(() =>
@@ -46,7 +49,10 @@ beforeAll(() =>
     }),
   ),
 );
-afterAll(() => claudeSdkStore.remove(ID));
+afterAll(() => {
+  claudeSdkStore.remove(ID);
+  claudeSdkStore.remove(PA_ID);
+});
 
 /**
  * What the session froze when it started on pi: a first prompt with user
@@ -163,4 +169,45 @@ test("each engine renders its own prompt and tools from the one frozen record", 
     record,
     "neither engine rewrote the record",
   );
+});
+
+test("the permanent assistant's profile suffix comes from settings on both engines", async () => {
+  assert.ok(
+    sessionStore.upsert({
+      id: PA_ID,
+      harness: "pi",
+      agentType: "personal-assistant",
+      provider: "openai-codex",
+      model: "gpt-5.6-sol",
+      credentialProfileId: "cp_pi",
+    }),
+  );
+  const conditions = sessionPromptConditions(
+    PA_ID,
+    "personal-assistant",
+    undefined,
+    { ...FROZEN, memoryWrite: true },
+  );
+  const expected = `${AGENT_TYPES["personal-assistant"].systemPrompt({ conditions })}\n\n## Personal profile instructions\n\n${permanentAssistantProfileInstructions(getSettings().permanentAssistant)}`;
+
+  const pi = await resolvePiEngineStart({
+    kind: "personal-assistant",
+    credentialProfileId: "cp_pi",
+    knownId: PA_ID,
+  });
+  assert.deepEqual(pi.persona.systemPrompt, { replace: expected });
+
+  const claude = claudeSdkStore.openForBinding(PA_ID, {
+    model: "claude-opus-5-5",
+    thinkingLevel: "high",
+    credentialProfileId: "claude-default",
+    providerSessionId: undefined,
+    agentType: "personal-assistant",
+    mode: "build",
+    title: "Switched",
+    createdAt: Date.now(),
+  });
+  ensureRuntimeSessionWithRuntime(sessionRuntime, claude);
+  await sessionRuntime.prompt(PA_ID, "carry on");
+  assert.equal(queries.at(-1)?.options?.systemPrompt, expected);
 });
