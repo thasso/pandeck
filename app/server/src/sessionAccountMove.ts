@@ -313,6 +313,8 @@ export async function accountMoveChoices(sessionId: string): Promise<{
   accounts: SessionAccountMoveTarget[];
   boundEligible: boolean;
 }> {
+  const cross = await crossKindChoices(sessionId);
+  if (cross) return cross;
   const { row, source, selection } = await nextTurnSelection(sessionId);
   const profiles = listCredentialProfiles();
   const [boundRefusal, ...refusals] = await Promise.all([
@@ -330,6 +332,58 @@ export async function accountMoveChoices(sessionId: string): Promise<{
         enterprise: target.enterprise === true,
       })),
     boundEligible: !boundRefusal,
+  };
+}
+
+/**
+ * The accounts that could run a pending model of another harness or account
+ * kind (`docs/session-runtime-switching.md`): every account of that kind that
+ * is enabled, meets the enterprise requirement, offers the model at its
+ * effort, needs no login and has no bench on it. The bound account is of
+ * another kind, so it never runs that turn. Undefined when the next turn stays
+ * on the session's own kind.
+ */
+async function crossKindChoices(sessionId: string): Promise<
+  | {
+      accounts: SessionAccountMoveTarget[];
+      boundEligible: false;
+    }
+  | undefined
+> {
+  const row = sessionStore.get(sessionId);
+  if (!row) throw new Error("Session does not exist or was deleted.");
+  const pending = row.pendingRuntime;
+  if (!pending || row.scope !== "user") return undefined;
+  const source = row.credentialProfileId
+    ? credentialProfileById(row.credentialProfileId)
+    : undefined;
+  const sameKind = source
+    ? accountServesModel(source, pending.model.provider)
+    : harnessForModelProvider(pending.model.provider) ===
+      activeEngine(row).harness;
+  if (sameKind) return undefined;
+  const candidates = listCredentialProfiles().filter((profile) =>
+    accountServesModel(profile, pending.model.provider),
+  );
+  const refusals = await Promise.all(
+    candidates.map(async (summary) => {
+      const target = credentialProfileById(summary.id);
+      if (!target) return "The account no longer exists.";
+      return (
+        boundAccountRulesRefusal(row, target) ??
+        (await modelRefusal(target, pending))
+      );
+    }),
+  );
+  return {
+    accounts: candidates
+      .filter((_, index) => !refusals[index])
+      .map((target) => ({
+        id: target.id,
+        name: target.name,
+        enterprise: target.enterprise === true,
+      })),
+    boundEligible: false,
   };
 }
 

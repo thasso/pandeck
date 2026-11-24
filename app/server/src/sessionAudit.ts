@@ -64,6 +64,7 @@ import type { PromptConditions } from "./promptConditions.ts";
 import { FIND_TOOLS_NAME, MCP_SERVER_NAME } from "./mcp/names.ts";
 import { personaPromptInventory } from "./promptAssets.ts";
 import { forEachJsonlLine } from "./tools/sessions/sessionInspection.ts";
+import { runReportsRunningUsageTotal } from "./harnesses/runUsage.ts";
 
 /** Report shape version — bump when a consumer-visible field changes meaning. */
 const SESSION_AUDIT_VERSION = 1;
@@ -238,6 +239,14 @@ interface AuditTotals extends AuditUsage {
    * so the report carries both and the persisted value must equal one of them.
    */
   costMicrosSingleRounding: number;
+  /**
+   * Cost in MICROS under the PER-ENGINE accumulation of a session that moved
+   * between engines: pi's runs rounded per entry, plus every Claude run's
+   * floats summed and rounded once (the switched-to Claude binding writes its
+   * record's total over the usage before it). Only for a log whose runs name
+   * both Claude and another engine.
+   */
+  costMicrosPerEngine?: number;
   /** Assistant entries the store would count as usage turns. */
   usageBearingRuns: number;
   /** Wall clock from the session's first to its last log entry. */
@@ -406,12 +415,17 @@ interface UsageAgreement {
  *   record's already-accumulated float, rounded ONCE, so the stored value is
  *   `round(Σ c)`.
  *
- * The report computes both from the log and reconciles against whichever
+ * - `per-engine` — a session that moved between engines: pi's runs per entry,
+ *   Claude's runs (attributed by their `run.started` engine) rounded once, as
+ *   a switched-to Claude binding writes its record's total over a base
+ *   (`sessionStore.replaceEngineUsage`).
+ *
+ * The report computes each from the log and reconciles against whichever
  * matches, naming it. Surveyed over the live data dir, every session whose two
  * regimes differ matched its harness's regime exactly; a session matching
  * NEITHER is a real divergence and is reported as a difference.
  */
-type CostAccumulation = "per-entry" | "single-rounding";
+type CostAccumulation = "per-entry" | "single-rounding" | "per-engine";
 
 interface DrilldownBlock {
   kind: string;
@@ -695,6 +709,16 @@ interface LogScan {
    * the per-turn sums because floating addition is not associative.
    */
   costUsdSum: number;
+  /**
+   * The {@link CostAccumulation} `per-engine` parts: the float sum of runs on
+   * an engine reporting a running total (Claude), every other run's per-entry
+   * micros, and which kinds of run the log held.
+   */
+  perEngine: {
+    runningUsdSum: number;
+    perRunMicros: number;
+    kinds: Set<"running" | "per-run" | "unstamped">;
+  };
   /** Entries the store would have counted as a usage turn (`usageDelta.hasUsage`). */
   usageBearingRuns: number;
   /** The last `contextWindowTokens` any run reported. */
@@ -770,6 +794,7 @@ function scanLog(
     generationSpans: 0,
     costMicros: 0,
     costUsdSum: 0,
+    perEngine: { runningUsdSum: 0, perRunMicros: 0, kinds: new Set() },
     usageBearingRuns: 0,
     compactions: 0,
     malformed: 0,
@@ -781,6 +806,9 @@ function scanLog(
   scan.turns.push(turn);
   let turnOpened = false;
   const toolNameByCallId = new Map<string, string>();
+  // Whether the current run's engine reports a running native usage total
+  // (Claude) or counts run by run (pi), from its `run.started` marker.
+  let runningTotal: boolean | undefined;
 
   const track = (ms: number | undefined): void => {
     if (ms === undefined || Number.isNaN(ms)) return;
@@ -810,6 +838,9 @@ function scanLog(
     scan.lines += 1;
     const createdAt = str(row.createdAt);
     track(createdAt ? Date.parse(createdAt) : undefined);
+
+    if (row.type === "run.started")
+      runningTotal = runReportsRunningUsageTotal(row);
 
     if (row.type === "message" && row.role === "user") {
       // A user prompt starts a turn; the first one adopts the pre-opened row.
@@ -869,6 +900,19 @@ function scanLog(
         if (hasCost) {
           scan.costMicros += Math.round(usage.costUSD * 1_000_000);
           scan.costUsdSum += usage.costUSD;
+          if (runningTotal === true)
+            scan.perEngine.runningUsdSum += usage.costUSD;
+          else
+            scan.perEngine.perRunMicros += Math.round(
+              usage.costUSD * 1_000_000,
+            );
+          scan.perEngine.kinds.add(
+            runningTotal === undefined
+              ? "unstamped"
+              : runningTotal
+                ? "running"
+                : "per-run",
+          );
         }
       }
       // Occupancy after this run: the harness snapshot when it reports one,
@@ -1621,7 +1665,15 @@ function persistedAgreement(
       ? "per-entry"
       : totals.costMicrosSingleRounding === persistedCost
         ? "single-rounding"
-        : undefined;
+        : totals.costMicrosPerEngine === persistedCost
+          ? "per-engine"
+          : undefined;
+  const reportedCost =
+    costAccumulation === "single-rounding"
+      ? totals.costMicrosSingleRounding
+      : costAccumulation === "per-engine"
+        ? (totals.costMicrosPerEngine ?? 0)
+        : totals.costMicros;
   const compare: UsageAgreement[] = [
     {
       field: "uncachedInputTokens",
@@ -1649,15 +1701,9 @@ function persistedAgreement(
     },
     {
       field: "costMicros",
-      report:
-        costAccumulation === "single-rounding"
-          ? totals.costMicrosSingleRounding
-          : totals.costMicros,
+      report: reportedCost,
       persisted: persistedCost,
-      delta:
-        (costAccumulation === "single-rounding"
-          ? totals.costMicrosSingleRounding
-          : totals.costMicros) - persistedCost,
+      delta: reportedCost - persistedCost,
       ...(costAccumulation === undefined
         ? { alternative: totals.costMicrosSingleRounding }
         : {}),
@@ -1730,6 +1776,7 @@ export function auditSession(
       generationSpans: 0,
       costMicros: 0,
       costUsdSum: 0,
+      perEngine: { runningUsdSum: 0, perRunMicros: 0, kinds: new Set() },
       usageBearingRuns: 0,
       compactions: 0,
       malformed: 0,
@@ -1828,6 +1875,13 @@ export function auditSession(
     ...(scan.generationSpans > 0 ? { generationMs: scan.generationMs } : {}),
     costMicros: scan.costMicros,
     costMicrosSingleRounding: Math.round(scan.costUsdSum * 1_000_000),
+    ...(scan.perEngine.kinds.has("running") && scan.perEngine.kinds.size > 1
+      ? {
+          costMicrosPerEngine:
+            Math.round(scan.perEngine.runningUsdSum * 1_000_000) +
+            scan.perEngine.perRunMicros,
+        }
+      : {}),
     usageBearingRuns: scan.usageBearingRuns,
     transcriptBytes: scan.bytes,
     toolResultBytes,

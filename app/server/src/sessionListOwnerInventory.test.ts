@@ -143,8 +143,8 @@ const owners: Record<string, Owner> = {
       ),
       group(
         "projected",
-        "autoNameFromFirstPrompt autoNameForkFromFirstPrompt",
-        "Detached naming promises own public pending flags and completion titles.",
+        "autoNameFromFirstPrompt autoNameForkFromFirstPrompt autoNameFromFirstPromptRun autoNameForkFromFirstPromptRun naming",
+        "Detached naming promises own public pending flags and completion titles; the private naming funnel counts runs so a switch can hold on them, and a released instance's run writes nothing.",
         pi + "Pi autoName start",
         pi + "Pi autoName completion",
         pi + "Pi autoNameFork completion",
@@ -270,8 +270,8 @@ const owners: Record<string, Owner> = {
       ),
       group(
         "read",
-        "requireStateBuilder seam get exists unreadableRecord list metaForRemoval",
-        "Read callbacks, current handles, records or a binding error; no classification/membership write.",
+        "requireStateBuilder seam get exists unreadableRecord list metaForRemoval nativeUsage",
+        "Read callbacks, current handles, records, native usage counters or a binding error; no classification/membership write.",
       ),
     ],
   },

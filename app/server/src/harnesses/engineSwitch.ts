@@ -11,6 +11,7 @@
  * or drives the one it moves to before its binding commits.
  */
 import {
+  accountServesModel,
   sessionModeOrDefault,
   type Harness,
   type SessionPendingRuntime,
@@ -21,11 +22,17 @@ import {
   claudeTranscriptResumable,
   copyClaudeSessionForAccount,
 } from "../claudeSdk/profileSessionStore.ts";
+import { existsSync } from "node:fs";
+import { credentialProfileById } from "../credentialProfiles.ts";
 import { sessionStore, type SessionMeta } from "../db/sessionStore.ts";
-import type { SessionEngineBinding } from "../db/sessionEngineBinding.ts";
+import type {
+  SessionEngineBinding,
+  UsageCounters,
+} from "../db/sessionEngineBinding.ts";
 import type { LiveSession } from "../harness.ts";
 import { piStore } from "../piSdk/piStore.ts";
 import { sessionRuntime } from "../session/runtimeInstance.ts";
+import { piNativeFile } from "../sessionStorage.ts";
 import { subscribeSessionRunStarted } from "../session/runtime/liveSession.ts";
 import { withCheckedCheckout } from "../worktrees/sessionCwd.ts";
 import {
@@ -120,6 +127,47 @@ async function planResume(
   }
 }
 
+/**
+ * Whether the target needs another kind of account than the active binding's:
+ * within pi, OpenAI and OpenAI-compatible accounts are separate bindings of
+ * one transcript, so a move between them is a switch like another harness.
+ */
+function changesAccountKind(
+  active: SessionEngineBinding,
+  target: EngineSwitchTarget,
+): boolean {
+  const from = active.credentialProfileId
+    ? credentialProfileById(active.credentialProfileId)
+    : undefined;
+  return !!from && !accountServesModel(from, target.model.provider);
+}
+
+/**
+ * The earlier binding whose native session a switch onto `harness` would
+ * resume: the newest one on that engine, judged as {@link planResume} and the
+ * open judge it but without touching native data. For the inspector's handoff
+ * estimate (Q29). pi: the app id's transcript is there (D1). Claude: the same
+ * account still holds it, or another account would get a copy.
+ */
+export async function bindingSwitchWouldResume(
+  sessionId: string,
+  harness: Harness,
+  targetAccountId: string | undefined,
+): Promise<SessionEngineBinding | undefined> {
+  const earlier = sessionStore
+    .bindings(sessionId)
+    .filter((binding) => binding.harness === harness)
+    .at(-1);
+  if (!earlier) return undefined;
+  if (earlier.harness === "pi")
+    return existsSync(piNativeFile(sessionId, sessionId)) ? earlier : undefined;
+  const native = earlier.nativeSessionId;
+  const from = earlier.credentialProfileId;
+  if (!native || !from) return undefined;
+  if (targetAccountId && targetAccountId !== from) return earlier;
+  return (await claudeTranscriptResumable(from, native)) ? earlier : undefined;
+}
+
 /** Let the session go from `harness`, inside the switching turn's admission. */
 function release(
   harness: Harness,
@@ -133,19 +181,27 @@ function release(
 
 /**
  * Open the session on the target engine, on the binding the switch starts.
- * Answers the driver and the earlier binding whose native session the open
- * actually resumed: pi's transcript may be gone, and pi then starts over.
+ * Answers the driver, the earlier binding whose native session the open
+ * actually resumed (pi's transcript may be gone, and pi then starts over),
+ * and what the engine's native usage counter already holds when it reports a
+ * running total (Claude), null when it counts run by run (pi).
  */
 async function open(
   row: SessionMeta,
   target: EngineSwitchTarget,
   plan: { earlier?: SessionEngineBinding; resumed?: SessionEngineBinding },
   cwd: string | undefined,
-): Promise<{ driver: LiveSession; resumed?: SessionEngineBinding }> {
+  bindingSeq: number,
+): Promise<{
+  driver: LiveSession;
+  resumed?: SessionEngineBinding;
+  nativeUsage: UsageCounters | null;
+}> {
   const mode = sessionModeOrDefault(row.mode);
   if (target.harness === "pi") {
     const opened = await piStore.openForBinding(row.id, {
       kind: row.agentType,
+      bindingSeq,
       model: target.model,
       thinkingLevel: target.thinkingLevel,
       credentialProfileId: target.credentialProfileId,
@@ -155,6 +211,7 @@ async function open(
     return {
       driver: opened.session,
       ...(opened.resumed && plan.earlier ? { resumed: plan.earlier } : {}),
+      nativeUsage: null,
     };
   }
   const { resumed } = plan;
@@ -162,6 +219,7 @@ async function open(
     claudeSdkStore.openForBinding(
       row.id,
       {
+        bindingSeq,
         model: target.model.id,
         thinkingLevel: target.thinkingLevel,
         credentialProfileId: target.credentialProfileId,
@@ -175,7 +233,11 @@ async function open(
       checkout,
     ),
   );
-  return { driver, ...(resumed ? { resumed } : {}) };
+  return {
+    driver,
+    ...(resumed ? { resumed } : {}),
+    nativeUsage: claudeSdkStore.nativeUsage(row.id),
+  };
 }
 
 /** The session as the engine `harness` holds it resident, if it does. */
@@ -221,13 +283,17 @@ export async function prepareEngineSwitch(
   let active: SessionEngineBinding | undefined;
   let driver: LiveSession;
   let resumed: SessionEngineBinding | undefined;
+  let nativeUsage: UsageCounters | null;
   try {
     // Read under the fence, so no other switch moves the binding meanwhile.
     row = sessionStore.get(sessionId);
     active = sessionStore.activeBinding(sessionId);
     if (!row || !active)
       throw new Error("Session does not exist or was deleted.");
-    if (active.harness === target.harness)
+    if (
+      active.harness === target.harness &&
+      !changesAccountKind(active, target)
+    )
       throw new Error(
         "The session already runs on that engine; no switch is needed.",
       );
@@ -236,7 +302,15 @@ export async function prepareEngineSwitch(
     admit();
     await release(active.harness, sessionId, admit);
     admit();
-    ({ driver, resumed } = await open(row, target, plan, cwd));
+    // The target writes as the binding the commit starts: until then its
+    // writes are foreign, and the binding it leaves stays as it is.
+    ({ driver, resumed, nativeUsage } = await open(
+      row,
+      target,
+      plan,
+      cwd,
+      active.seq + 1,
+    ));
   } catch (error) {
     await rollback();
     lifted(false);
@@ -275,7 +349,12 @@ export async function prepareEngineSwitch(
       throw new Error("The session's engine changed while it switched.");
     if (residentOn(target.harness, sessionId) !== driver)
       throw new Error("The new engine let the session go while it switched.");
-    if (residentOn(source.harness, sessionId))
+    // Within one store (pi's account kind change) the resident check above
+    // already tells the new session from the old.
+    if (
+      source.harness !== target.harness &&
+      residentOn(source.harness, sessionId)
+    )
       throw new Error(
         "The old engine took the session back while it switched.",
       );
@@ -307,6 +386,10 @@ export async function prepareEngineSwitch(
         startedSeq: sessionRuntime.logCursor(sessionId),
         ...(resumed ? { resumedSeq: resumed.seq } : {}),
         pending,
+        // The session's usage stays the sum over its bindings: Claude's
+        // record totals count on top of what the session used before, less
+        // what a return's record already holds.
+        nativeUsage,
       });
       ended = true;
       lifted(true);

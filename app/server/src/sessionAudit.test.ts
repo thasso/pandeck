@@ -183,6 +183,45 @@ describe("session audit totals", () => {
     assert.deepEqual(single.persisted?.differences, []);
   });
 
+  it("reconciles a session that moved between engines under the per-engine accumulation (F027)", () => {
+    // Three pi runs at $0.0000005 (1 micro each, per entry) and three Claude
+    // runs at $0.0000003 (0.9 micros, rounded once): per entry 3, one rounding
+    // of everything 2, per engine 3 + 1 = 4, as the switched-to Claude
+    // binding writes its record's total over pi's.
+    const switched = (costMicros: number): SessionAuditSource =>
+      fixtureSource({
+        logPath: `${FIXTURE}log-cost-switched.jsonl`,
+        callTranscript: undefined,
+        persistedUsage: {
+          inputTokens: 60,
+          outputTokens: 30,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          reasoningTokens: 0,
+          totalTokens: 90,
+          costMicros,
+          usageTurns: 6,
+          assistantTurns: 6,
+          contextTokens: 10,
+        },
+      });
+    const report = auditSession(switched(4));
+    assert.equal(report.totals.costMicros, 3);
+    assert.equal(report.totals.costMicrosSingleRounding, 2);
+    assert.equal(report.totals.costMicrosPerEngine, 4);
+    assert.equal(report.persisted?.agrees, true);
+    assert.equal(report.persisted?.costAccumulation, "per-engine");
+    assert.deepEqual(report.persisted?.differences, []);
+    // A log whose runs name one engine offers no per-engine figure.
+    const single = auditSession(
+      fixtureSource({
+        logPath: `${FIXTURE}log-cost-rounding.jsonl`,
+        callTranscript: undefined,
+      }),
+    );
+    assert.equal(single.totals.costMicrosPerEngine, undefined);
+  });
+
   it("reports a cost that matches neither accumulation, with both values", () => {
     const source = fixtureSource();
     const report = auditSession({

@@ -90,7 +90,7 @@ function makeSessionReadTool() {
     name: "session_read",
     label: "Read Session Log",
     description:
-      "Read a bounded window of another app session's transcript directly from a copied session id.",
+      "Read a bounded window of an app session's transcript by session id, including your own session's earlier turns on another model.",
     parameters: sessionReadSchema,
     async execute(params, _ctx) {
       let sessionId: string;

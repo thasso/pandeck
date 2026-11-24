@@ -252,6 +252,17 @@ export async function accountLacksModel(
   return !claudeModelRuns(profileId, modelId, pin);
 }
 
+/** {@link storedSessionModelOption} for a binding-shaped record. */
+export function storedBindingModelOption(end: {
+  harness?: Harness | undefined;
+  provider?: string | undefined;
+  model?: string | undefined;
+}): ModelOption | undefined {
+  return end.harness
+    ? storedSessionModelOption(end.harness, end.provider, end.model)
+    : undefined;
+}
+
 /** The display option of the model a stored session names, when it is known. */
 export function storedSessionModelOption(
   harness: Harness,

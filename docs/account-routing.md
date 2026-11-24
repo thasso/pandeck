@@ -776,6 +776,15 @@ source may be disabled. The target must:
   displayed bench names another model.
 - be an enterprise account if the session requires one.
 
+A pending model of another kind than the bound account's is an engine switch
+(`docs/session-runtime-switching.md` "Moving to another harness"), not an
+account move. The list then holds every account of the model's kind that passes
+the same rules (enabled, enterprise, offers it at that effort, login, bench),
+the bound account is never eligible, and the source needs no subscription login.
+Automatic picks within the model's kind. The app never makes this switch itself:
+failover and the disabled-account move stay within one kind. `session_control`
+`move_account` keeps the same-kind rules.
+
 Setting the selection checks only the static rules (kind, enabled, enterprise,
 offers the model); login and benches are judged at apply. A move never sets or
 clears `requiresEnterprise`. The list reads the model of a resident session, or

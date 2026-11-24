@@ -1323,6 +1323,10 @@ const REGISTRY = defineRegistry({
     sessionId: STRING,
     requestId: STRING,
   }),
+  estimateSessionHandoff: fields({
+    sessionId: STRING,
+    requestId: STRING,
+  }),
   setPendingRuntime: fields(
     { sessionId: STRING, requestId: STRING },
     {

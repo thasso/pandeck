@@ -1,8 +1,8 @@
 /**
  * A started session's pending runtime selection
  * (`docs/session-runtime-switching.md`): the model, effort and account its
- * NEXT turn starts on. Setting one refuses another engine for now; applying
- * one that names another engine moves the session there
+ * NEXT turn starts on. One naming a model of another harness or account kind
+ * moves the session to that engine when it applies
  * (`harnesses/engineSwitch.ts`).
  *
  * Setting or clearing it changes only the session row: no native model
@@ -17,6 +17,7 @@
  */
 import {
   ACCOUNT_KINDS,
+  accountKindForModelProvider,
   accountServesModel,
   clampThinkingLevelForModel,
   harnessForModelProvider,
@@ -24,6 +25,7 @@ import {
   samePendingRuntime,
   type ModelOption,
   type SessionPendingRuntime,
+  type SessionRuntimeAccount,
   type SessionRuntimeChange,
   type SessionRuntimeChooser,
 } from "@assistant/shared";
@@ -32,6 +34,7 @@ import { pickAccount } from "./accountRouter.ts";
 import { AutomaticTurnsHeldError } from "./automaticTurnHold.ts";
 import {
   credentialProfileById,
+  listCredentialProfiles,
   type CredentialProfile,
 } from "./credentialProfiles.ts";
 import { sessionStore, type SessionMeta } from "./db/sessionStore.ts";
@@ -40,7 +43,7 @@ import { sessionClaudePin } from "./harnesses/curatedModels.ts";
 import type { PreparedEngineSwitch } from "./harnesses/engineSwitch.ts";
 import { SessionSwitchingEnginesError } from "./harnesses/engineSwitchFence.ts";
 import { SessionSettlingError } from "./harness.ts";
-import { pickerModels } from "./harnesses/models.ts";
+import { pickerModels, storedSessionModelOption } from "./harnesses/models.ts";
 import { AccountSwitchBlockedError } from "./session/runtime/accountRecoveryAdmission.ts";
 import type { SessionRuntime } from "./session/runtime/runtime.ts";
 import type { RuntimePromptDriver } from "./session/runtimePrompt.ts";
@@ -53,6 +56,7 @@ import {
   sessionSelection,
 } from "./sessionAccountMove.ts";
 import { switchIdleSessionAccount } from "./sessionAccountSwitch.ts";
+import { estimateSwitchHandoffTokens } from "./sessionSwitchHandoff.ts";
 
 /**
  * A turn held because the pending selection cannot apply yet. A Stop's hold
@@ -136,18 +140,52 @@ function boundAccount(
   return id ? credentialProfileById(id) : undefined;
 }
 
-/** The engine rules a model must pass to be a same-engine target. */
-function modelEngineRefusal(
+/**
+ * Whether running `model` moves the session to another engine binding
+ * (`harnesses/engineSwitch.ts`): it runs on another harness, or needs another
+ * kind of account than the bound one (pi's OpenAI ↔ OpenAI-compatible).
+ */
+function crossesEngines(
   row: SessionMeta,
-  source: CredentialProfile | undefined,
+  source: Pick<CredentialProfile, "id" | "provider"> | undefined,
+  model: { provider: string },
+): boolean {
+  return (
+    harnessForModelProvider(model.provider) !== activeEngine(row).harness ||
+    (source !== undefined && !accountServesModel(source, model.provider))
+  );
+}
+
+/**
+ * Set time for a model on another engine: some enabled account of its kind,
+ * within the session's enterprise requirement, offers it at that effort.
+ * Login and benches change by themselves and are judged when it applies.
+ */
+async function crossTargetRefusal(
+  row: Pick<SessionMeta, "requiresEnterprise">,
   model: { provider: string; id: string },
-): string | undefined {
-  const name = modelName(model);
-  if (harnessForModelProvider(model.provider) !== activeEngine(row).harness)
-    return `${name} runs on another harness; moving a session between harnesses is not available yet.`;
-  if (source && !accountServesModel(source, model.provider))
-    return `${name} needs another kind of account than ${source.name}; moving a session there is not available yet.`;
-  return undefined;
+  thinkingLevel: SessionPendingRuntime["thinkingLevel"],
+): Promise<string | undefined> {
+  const candidates = listCredentialProfiles().filter(
+    (profile) =>
+      accountServesModel(profile, model.provider) &&
+      profile.enabled &&
+      (!row.requiresEnterprise || profile.enterprise),
+  );
+  for (const candidate of candidates) {
+    const profile = credentialProfileById(candidate.id);
+    if (
+      profile &&
+      (await accountOffersSelection(profile, { model, thinkingLevel }))
+    )
+      return undefined;
+  }
+  return `No enabled ${row.requiresEnterprise ? "enterprise " : ""}${ACCOUNT_KINDS[accountKindForModelProvider(model.provider)].label} account offers ${modelName(model)}${candidates.length ? " at that effort" : ""}.`;
+}
+
+function accountServesModelById(id: string, modelProvider: string): boolean {
+  const account = credentialProfileById(id);
+  return !!account && accountServesModel(account, modelProvider);
 }
 
 function sameModel(
@@ -191,9 +229,10 @@ interface PendingRuntimeWriteOptions {
 
 /**
  * Set the pending selection from a change, completing it from the current
- * pending selection, else the session's current runtime. Refuses a target
- * outside the session's engine, an unknown model, and an account that could
- * never run it; the effort is clamped to the target model. A target equal to
+ * pending selection, else the session's current runtime. Refuses an unknown
+ * model, a model of another engine no enabled account of its kind offers, and
+ * an account that could never run it; the effort is clamped to the target
+ * model. A target equal to
  * what the session runs now clears the selection. Allowed at any time, during
  * a turn too. Answers what is now pending.
  *
@@ -256,8 +295,6 @@ async function pendingTarget(
   };
 
   const model = change.model ?? base.model;
-  const refusal = modelEngineRefusal(row, source, model);
-  if (refusal) throw new Error(refusal);
   // The model the session runs now stays choosable even when the picker's
   // catalog does not list it; its own adapter clamps the effort.
   const option = modelOption(model);
@@ -267,8 +304,34 @@ async function pendingTarget(
   const thinkingLevel = option
     ? clampThinkingLevelForModel(option, requested)
     : requested;
-  const account = change.account ?? base.account;
-  if (account.kind === "account") {
+  const cross = crossesEngines(row, source, model);
+  // Picking only a model leaves the account on Automatic (design 7): an
+  // account chosen for the earlier target cannot run another kind's model.
+  const kept = change.account ?? base.account;
+  const account: SessionRuntimeAccount =
+    !change.account &&
+    kept.kind === "account" &&
+    !accountServesModelById(kept.id, model.provider)
+      ? { kind: "automatic" }
+      : kept;
+  if (cross) {
+    const refusal = await crossTargetRefusal(row, model, thinkingLevel);
+    if (refusal) throw new Error(refusal);
+  }
+  if (account.kind === "account" && cross) {
+    const target = credentialProfileById(account.id);
+    if (!target) throw new Error("The chosen account no longer exists.");
+    const name = option?.name ?? model.id;
+    if (!accountServesModel(target, model.provider))
+      throw new Error(`${target.name} cannot run ${name}.`);
+    if (!target.enabled) throw new Error(`${target.name} is disabled.`);
+    if (row.requiresEnterprise && !target.enterprise)
+      throw new Error(
+        `This session requires an enterprise account, and ${target.name} is not one.`,
+      );
+    if (!(await accountOffersSelection(target, { model, thinkingLevel })))
+      throw new Error(`${target.name} does not offer ${name}.`);
+  } else if (account.kind === "account") {
     const target = credentialProfileById(account.id);
     if (!target) throw new Error("The chosen account no longer exists.");
     if (
@@ -513,16 +576,18 @@ export async function applyPendingRuntime(
       id,
       `Couldn't switch to ${targetText(pending, account)}: ${reason.replace(/\.$/, "")}. The change is still pending; change or reset it to continue.`,
     );
-  if (
-    harnessForModelProvider(pending.model.provider) !==
-    activeEngine(row).harness
-  )
-    return applyEngineSwitch(row, source, pending, couldNot, () => {
-      admit();
-      unchanged();
-    });
-  const engineRefusal = modelEngineRefusal(row, source, pending.model);
-  if (engineRefusal) throw couldNot(engineRefusal);
+  if (crossesEngines(row, source, pending.model))
+    return applyEngineSwitch(
+      row,
+      source,
+      pending,
+      driver.modelSelection?.().model,
+      couldNot,
+      () => {
+        admit();
+        unchanged();
+      },
+    );
   const running = driver.modelSelection?.().model ?? {
     provider: row.provider ?? "",
     id: row.model ?? "",
@@ -716,6 +781,7 @@ async function applyEngineSwitch(
   row: SessionMeta,
   source: CredentialProfile | undefined,
   pending: SessionPendingRuntime,
+  running: { provider: string; id: string } | undefined,
   couldNot: (reason: string, account?: CredentialProfile) => Error,
   recheck: () => void,
 ): Promise<AppliedPendingRuntime> {
@@ -774,6 +840,7 @@ async function applyEngineSwitch(
     throw error;
   }
   return {
+    notice: engineSwitchNotice(row, source, running, pending, target),
     driver: prepared.driver,
     abandon: prepared.abandon,
     usable: () => {
@@ -805,6 +872,86 @@ async function applyEngineSwitch(
         .catch(() => {});
     },
   };
+}
+
+/**
+ * The display-only transcript marker of an engine switch (Q21): "Switched from
+ * GPT-6 · OpenAI to Claude Opus · Work — chosen by you." Never model context.
+ */
+function engineSwitchNotice(
+  row: SessionMeta,
+  source: CredentialProfile | undefined,
+  running: { provider: string; id: string } | undefined,
+  pending: SessionPendingRuntime,
+  target: CredentialProfile,
+): string {
+  const fromModel =
+    running ??
+    (row.provider && row.model
+      ? { provider: row.provider, id: row.model }
+      : undefined);
+  // The running model may name its provider as its engine does, which the
+  // picker does not list; the engine's own catalog names it then.
+  const fromName = fromModel
+    ? (modelOption(fromModel)?.name ??
+      storedSessionModelOption(
+        activeEngine(row).harness,
+        fromModel.provider,
+        fromModel.id,
+      )?.name ??
+      fromModel.id)
+    : undefined;
+  const from = [
+    fromName,
+    source ? ACCOUNT_KINDS[source.provider].label : undefined,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const chooser =
+    pending.setBy === "coordinator" ? "its coordinating session" : "you";
+  return `Switched ${from ? `from ${from} ` : ""}to ${targetText(pending, target)} — chosen by ${chooser}.`;
+}
+
+/**
+ * The inspector's handoff estimate (Q29): how many tokens of earlier
+ * conversation the pending selection's engine switch would hand over if it
+ * applied now, by the same selection and budget the switch delivers. Null when
+ * nothing is pending, the selection stays on the session's engine, or nothing
+ * would be handed over. Reads only: no account moves and no native data.
+ */
+export async function pendingSwitchHandoffTokens(
+  sessionId: string,
+): Promise<number | null> {
+  const row = sessionStore.get(sessionId);
+  if (!row) throw new Error("Session does not exist or was deleted.");
+  const pending = row.pendingRuntime;
+  if (!pending || !crossesEngines(row, boundAccount(row), pending.model))
+    return null;
+  // The account the switch would pick now; Automatic may have none yet, and
+  // the estimate then names the kind's accounts generally.
+  const account =
+    pending.account.kind === "account"
+      ? credentialProfileById(pending.account.id)
+      : (await resolveEngineAccount(row, pending)).target;
+  const harness = harnessForModelProvider(pending.model.provider);
+  const { bindingSwitchWouldResume } =
+    await import("./harnesses/engineSwitch.ts");
+  const resumed = await bindingSwitchWouldResume(
+    sessionId,
+    harness,
+    account?.id,
+  );
+  const tokens = estimateSwitchHandoffTokens(
+    sessionId,
+    {
+      harness,
+      provider: pending.model.provider,
+      model: pending.model.id,
+      credentialProfileId: account?.id,
+    },
+    resumed,
+  );
+  return tokens > 0 ? tokens : null;
 }
 
 function errorText(error: unknown): string {

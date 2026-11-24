@@ -575,6 +575,7 @@ test("Claude engine-switch release and open on a binding report the live overlay
     "ClaudeStore.openForBinding",
     () =>
       claudeSdkStore.openForBinding(live.id, {
+        bindingSeq: sessionStore.activeBinding(live.id)!.seq + 1,
         model: "claude-opus-4-6",
         thinkingLevel: "high",
         credentialProfileId: profile,

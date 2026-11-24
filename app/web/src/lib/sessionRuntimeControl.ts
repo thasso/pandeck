@@ -5,6 +5,8 @@
  * tested without the app.
  */
 import {
+  ACCOUNT_KINDS,
+  accountKindForModelProvider,
   accountServesModel,
   harnessForModelProvider,
   isSubscriptionAccountKind,
@@ -21,11 +23,6 @@ import type { SessionRuntimeControl } from "../components/SessionRuntimeSection.
 import { dataOf, type LoadState } from "./loadState.ts";
 import type { RuntimeCommandContext } from "./runtimeSlashCommand.ts";
 
-/** Why another harness's model is disabled; the cross-harness switch (Task-1485 sub-PR 4) lifts this. */
-export const OTHER_HARNESS_REASON = "Another harness: not available yet";
-/** Why a model the bound account's kind cannot run is disabled. */
-export const OTHER_ACCOUNT_KIND_REASON = "Needs another kind of account";
-
 interface Account {
   id: string;
   name: string;
@@ -33,19 +30,19 @@ interface Account {
 }
 
 /**
- * Why `model` cannot be the next model of a session on `harness` bound to
- * `account`, or undefined when it can: the server refuses the same targets.
+ * Whether running `model` moves a session on `harness` bound to `account` to
+ * another engine: another harness, or another kind of account (pi's OpenAI ↔
+ * OpenAI-compatible). The server judges the same (`crossesEngines`).
  */
-export function runtimeModelRefusal(
-  model: Pick<ModelOption, "provider">,
+export function crossesEngines(
+  model: { provider: string },
   harness: Harness,
-  account: Account | undefined,
-): string | undefined {
-  if (harnessForModelProvider(model.provider) !== harness)
-    return OTHER_HARNESS_REASON;
-  if (account && !accountServesModel(account, model.provider))
-    return OTHER_ACCOUNT_KIND_REASON;
-  return undefined;
+  account: Pick<Account, "id" | "provider"> | undefined,
+): boolean {
+  return (
+    harnessForModelProvider(model.provider) !== harness ||
+    (account !== undefined && !accountServesModel(account, model.provider))
+  );
 }
 
 /** The section's control, or undefined for a session that has not started. */
@@ -60,9 +57,12 @@ export function sessionRuntimeControl(input: {
   accounts: readonly Account[];
   models: readonly ModelOption[];
   targets: LoadState<SessionAccountMoveTarget[]> | undefined;
+  /** The server's handoff estimate for this session's pending switch. */
+  handoff: LoadState<number | null> | undefined;
   busy: boolean;
   actions: {
     listSessionAccountMoveTargets: (sessionId: string) => void;
+    estimateSessionHandoff: (sessionId: string) => void;
     setPendingRuntime: (
       sessionId: string,
       change: SessionRuntimeChange,
@@ -72,12 +72,19 @@ export function sessionRuntimeControl(input: {
 }): SessionRuntimeControl | undefined {
   const { sessionId, harness, account, actions } = input;
   if (!sessionId || !input.started) return undefined;
-  const refusal = (model: ModelOption) =>
-    runtimeModelRefusal(model, harness, account);
-  // This engine's models first, then the ones it cannot switch to yet.
+  // This engine's models first, then the ones a switch moves to.
   const models = [...input.models].sort(
-    (a, b) => Number(!!refusal(a)) - Number(!!refusal(b)),
+    (a, b) =>
+      Number(crossesEngines(a, harness, account)) -
+      Number(crossesEngines(b, harness, account)),
   );
+  const target = input.pending?.model ?? input.model;
+  const cross =
+    input.pending !== undefined &&
+    crossesEngines(input.pending.model, harness, account);
+  const targetKind = target
+    ? accountKindForModelProvider(target.provider)
+    : account?.provider;
   return {
     current: {
       model: input.model,
@@ -86,11 +93,11 @@ export function sessionRuntimeControl(input: {
     },
     pending: input.pending,
     models,
-    modelRefusal: refusal,
-    // Only a subscription login ever moves; any other account alone serves
-    // its models (the server refuses those too).
+    // Only a subscription login ever moves, and Automatic picks among its
+    // kind; any other account alone serves its models (the server refuses
+    // the others too).
     accounts:
-      account && isSubscriptionAccountKind(account.provider)
+      targetKind && isSubscriptionAccountKind(targetKind)
         ? {
             targets: input.targets,
             onOpen: () => actions.listSessionAccountMoveTargets(sessionId),
@@ -98,6 +105,24 @@ export function sessionRuntimeControl(input: {
               input.accounts.find((candidate) => candidate.id === id)?.name,
           }
         : undefined,
+    ...(cross && target
+      ? {
+          engineSwitch: {
+            kindLabel:
+              ACCOUNT_KINDS[accountKindForModelProvider(target.provider)].label,
+            // An endpoint model runs only on the account it belongs to.
+            ...(targetKind && !isSubscriptionAccountKind(targetKind)
+              ? {
+                  fixedAccountName: input.accounts.find(
+                    (candidate) => candidate.id === target.provider,
+                  )?.name,
+                }
+              : {}),
+            handoff: input.handoff,
+            onEstimate: () => actions.estimateSessionHandoff(sessionId),
+          },
+        }
+      : {}),
     busy: input.busy,
     onChange: (change) => actions.setPendingRuntime(sessionId, change),
     onReset: () => actions.clearPendingRuntime(sessionId),
@@ -107,15 +132,16 @@ export function sessionRuntimeControl(input: {
 /**
  * The accounts `/account` may name, exactly as the SERVER judged them for the
  * model and effort the session's next turn starts on
- * (`listSessionAccountMoveTargets`, the inspector's list: same kind, enabled,
- * enterprise requirement, offers the model at that effort, login, bench): the
- * bound account only when that answer says it can run the turn itself, then
- * the accounts it may move to. `/account` is offered only when there is more
- * than one; none until that list has answered, and none for an account that
- * cannot move.
+ * (`listSessionAccountMoveTargets`, the inspector's list: the target model's
+ * kind, enabled, enterprise requirement, offers the model at that effort,
+ * login, bench): the bound account only when it serves that model and the
+ * answer says it can run the turn itself, then the other accounts. `/account`
+ * is offered only when there is more than one; none until that list has
+ * answered, and none for a kind whose account cannot change.
  */
 export function runtimeAccountChoices(
   account: Account | undefined,
+  targetModel: { provider: string } | undefined,
   answer:
     | {
         targets: LoadState<SessionAccountMoveTarget[]>;
@@ -123,17 +149,51 @@ export function runtimeAccountChoices(
       }
     | undefined,
 ): { id: string; name: string }[] {
-  if (!account || !isSubscriptionAccountKind(account.provider)) return [];
+  const kind = targetModel
+    ? accountKindForModelProvider(targetModel.provider)
+    : account?.provider;
+  if (!kind || !isSubscriptionAccountKind(kind)) return [];
   const judged = answer ? dataOf(answer.targets) : undefined;
   if (!judged) return [];
+  const bound =
+    account !== undefined &&
+    (!targetModel || accountServesModel(account, targetModel.provider)) &&
+    answer?.boundEligible === true;
   return [
-    ...(answer?.boundEligible === true
-      ? [{ id: account.id, name: account.name }]
-      : []),
+    ...(bound && account ? [{ id: account.id, name: account.name }] : []),
     ...judged
-      .filter((target) => target.id !== account.id)
+      .filter((target) => target.id !== account?.id)
       .map(({ id, name }) => ({ id, name })),
   ];
+}
+
+/**
+ * When the handoff estimate must be asked for again: the session, its pending
+ * target, the log's size and last change (each turn changes what is handed
+ * over), and the accounts (Automatic's pick names one in the note).
+ */
+export function handoffEstimateRefreshKey(input: {
+  sessionId: string | undefined;
+  pending: SessionPendingRuntime | undefined;
+  messageCount: number | undefined;
+  updatedAt: number | undefined;
+  profiles: readonly Pick<
+    CredentialProfileSummary,
+    "id" | "enabled" | "enterprise" | "health"
+  >[];
+}): string {
+  return JSON.stringify([
+    input.sessionId,
+    input.pending,
+    input.messageCount,
+    input.updatedAt,
+    input.profiles.map(({ id, enabled, enterprise, health }) => [
+      id,
+      enabled,
+      enterprise,
+      health,
+    ]),
+  ]);
 }
 
 /**
@@ -185,7 +245,6 @@ export function runtimeCommandContext(commands: {
   const target = control.pending?.model ?? control.current.model;
   return {
     models: control.models,
-    modelRefusal: control.modelRefusal,
     targetModel: target
       ? control.models.find(
           (model) =>

@@ -1,5 +1,6 @@
 import {
   accountTargetsRefreshKey,
+  handoffEstimateRefreshKey,
   runtimeAccountChoices,
   sessionRuntimeControl,
 } from "./lib/sessionRuntimeControl.ts";
@@ -5645,6 +5646,11 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
           state.accountMoveTargets.sessionId === displayCurrentId
             ? state.accountMoveTargets.targets
             : undefined,
+        handoff:
+          state.handoffEstimate &&
+          state.handoffEstimate.sessionId === displayCurrentId
+            ? state.handoffEstimate.estimate
+            : undefined,
         busy:
           displayCurrentId !== undefined &&
           displayCurrentId in state.runtimeChangePending,
@@ -5662,6 +5668,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       credentialProfiles,
       pickerModels,
       state.accountMoveTargets,
+      state.handoffEstimate,
       state.runtimeChangePending,
       actions,
     ],
@@ -5675,6 +5682,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
             // list the inspector's account picker shows.
             accountChoices: runtimeAccountChoices(
               displayCredentialProfile,
+              displayPendingRuntime?.model ?? displaySession?.model,
               sessionRuntime.accounts &&
                 state.accountMoveTargets &&
                 state.accountMoveTargets.sessionId === displayCurrentId
@@ -5687,6 +5695,8 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     [
       sessionRuntime,
       displayCredentialProfile,
+      displayPendingRuntime?.model,
+      displaySession?.model,
       displayCurrentId,
       state.accountMoveTargets,
       openRuntimeSection,
@@ -5712,6 +5722,23 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   useEffect(() => {
     if (accountTargetsKey !== undefined) requestAccountTargetsRef.current?.();
   }, [accountTargetsKey]);
+  // The handoff estimate, while a change that switches engines is pending:
+  // asked again whenever what it measures changes (`handoffEstimateRefreshKey`).
+  const requestHandoffEstimate = sessionRuntime?.engineSwitch?.onEstimate;
+  const handoffEstimateKey = requestHandoffEstimate
+    ? handoffEstimateRefreshKey({
+        sessionId: displayCurrentId,
+        pending: displayPendingRuntime,
+        messageCount: displaySessionListItem?.messageCount,
+        updatedAt: displaySessionListItem?.updatedAt,
+        profiles: credentialProfiles,
+      })
+    : undefined;
+  const requestHandoffEstimateRef = useRef(requestHandoffEstimate);
+  requestHandoffEstimateRef.current = requestHandoffEstimate;
+  useEffect(() => {
+    if (handoffEstimateKey !== undefined) requestHandoffEstimateRef.current?.();
+  }, [handoffEstimateKey]);
   const chat = useSessionChat({
     state,
     actions,
