@@ -366,14 +366,20 @@ test.each(byProduct)(
       remote(product).execute({ items: [] }, ctx()),
       `${cut}… Nothing was written.`,
     );
-    // Even when the cut text happens to end with the claim's words.
+    // A cut text that still holds the whole claim keeps it, once (F006).
     const ending = `${"x".repeat(479)} nothing was written.`;
     assert.equal(ending.length, 500);
     answer = () =>
       Promise.resolve({ ok: false, code: "tool_error", message: ending });
+    await fails(remote(product).execute({ items: [] }, ctx()), `${ending}…`);
+    // A claim the cut broke is no claim: the client adds its own.
+    const broken = `${"x".repeat(484)} nothing was wri`;
+    assert.equal(broken.length, 500);
+    answer = () =>
+      Promise.resolve({ ok: false, code: "tool_error", message: broken });
     await fails(
       remote(product).execute({ items: [] }, ctx()),
-      `${ending}… Nothing was written.`,
+      `${broken}… Nothing was written.`,
     );
   },
 );

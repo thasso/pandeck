@@ -67,6 +67,8 @@ type RemoteApplyOutcome = Awaited<
 await import("../jira/jiraTools.ts");
 await import("../confluence/confluenceTools.ts");
 const { GATEWAY_CONTEXT } = await import("./remoteWriteRules.ts");
+// The edge's own wording, so a change on either side shows here (F006).
+const { SITE_CHANGED } = await import("../../gatewayTools/twoPhase.ts");
 
 const SITE = "acme.atlassian.net";
 const NOT_CLIENT_MODE =
@@ -377,6 +379,31 @@ const ROWS: Row[] = [
     status: "failed",
     text: "Refused. Nothing was written.",
     certified: true,
+  },
+  {
+    name: "a certified failure in the edge's SITE_CHANGED wording keeps its own claim, once",
+    outcome: edgeFailure("none", {}, SITE_CHANGED),
+    status: "failed",
+    text: SITE_CHANGED,
+    certified: true,
+  },
+  {
+    name: "a certified failure cut at 500 that already said so earlier",
+    outcome: edgeFailure(
+      "none",
+      {},
+      `Refused; nothing was written. ${"x".repeat(470)}`,
+    ),
+    status: "failed",
+    text: `Refused; nothing was written. ${"x".repeat(470)}…`,
+    certified: true,
+  },
+  {
+    name: "a failure with possible effects whose message says nothing was written",
+    outcome: edgeFailure("possible", {}, SITE_CHANGED),
+    status: "failed",
+    text: MAY_HAVE_WRITTEN,
+    certified: false,
   },
   {
     name: "a certified failure without a message",

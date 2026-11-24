@@ -14,7 +14,8 @@ import * as linkDecoders from "../../gateway/clientMethods.ts";
 import { encodeAtlassianCredential } from "../../gatewayTools/atlassian.ts";
 import { createToolHost } from "../../gatewayTools/host.ts";
 import { edgeTools } from "../../gatewayTools/tools.ts";
-import { STOPPED } from "../../gatewayTools/twoPhase.ts";
+import { UPLOAD_UNAVAILABLE } from "../../gatewayTools/confluenceMutatePage.ts";
+import { SITE_CHANGED, STOPPED } from "../../gatewayTools/twoPhase.ts";
 import { updateJiraSettings } from "../../jiraSettings.ts";
 import {
   approvalsForSession,
@@ -72,15 +73,23 @@ interface Run {
   stored: string;
 }
 
+interface Options {
+  credential?: string;
+  /** The credential the apply reads, when not the prepare's. */
+  applyCredential?: string;
+  /** Reaches only the apply's caller. */
+  applySignal?: AbortSignal;
+}
+
 /**
- * Proposes `items` with the gateway's write for `product` and approves the
- * card. `applySignal` reaches only the apply's caller.
+ * Connects the real edge for `product` and runs the gateway's write with
+ * `items`: the session it proposed in. Throws the tool's refusal.
  */
-async function proposeAndApprove(
+async function propose(
   product: "jira" | "confluence",
   items: unknown[],
-  options: { credential?: string; applySignal?: AbortSignal } = {},
-): Promise<Run> {
+  options: Options,
+): Promise<{ sessionId: string; uninstall: () => void }> {
   setApprovalBroadcastForTests(() => {});
   const credential = options.credential ?? TOKEN;
   const host = createToolHost(edgeTools(), { log: () => {} });
@@ -89,7 +98,11 @@ async function proposeAndApprove(
     host,
     () => ({
       clientId: "client-1",
-      credential: () => Promise.resolve({ ok: true as const, credential }),
+      credential: () =>
+        Promise.resolve({
+          ok: true as const,
+          credential: (applying && options.applyCredential) || credential,
+        }),
       ...(applying && options.applySignal
         ? { signal: options.applySignal }
         : {}),
@@ -115,6 +128,21 @@ async function proposeAndApprove(
       session: { sessionId },
       toolCallId: "call-1",
     } as never);
+    return { sessionId, uninstall };
+  } catch (err) {
+    uninstall();
+    throw err;
+  }
+}
+
+/** Proposes `items` with the gateway's write for `product` and approves the card. */
+async function proposeAndApprove(
+  product: "jira" | "confluence",
+  items: unknown[],
+  options: Options = {},
+): Promise<Run> {
+  const { sessionId, uninstall } = await propose(product, items, options);
+  try {
     const proposed = approvalsForSession(sessionId).at(-1)!;
     const { card, outcomePrompt } = await resolveApproval(
       proposed.id,
@@ -125,6 +153,25 @@ async function proposeAndApprove(
     uninstall();
   }
 }
+
+/** The refusal the agent sees when the edge's prepare refuses `items`. */
+async function prepareRefusal(
+  product: "jira" | "confluence",
+  items: unknown[],
+): Promise<string> {
+  const refused = await propose(product, items, {}).then(
+    ({ uninstall }) => {
+      uninstall();
+      return undefined;
+    },
+    (err: unknown) => (err instanceof Error ? err.message : String(err)),
+  );
+  assert.ok(refused !== undefined, "the prepare was not refused");
+  return refused;
+}
+
+/** How often `text` says nothing was written. */
+const claims = (text: string) => text.match(/nothing was written/gi)?.length;
 
 const jiraItems = (card: ApprovalCard) =>
   card.body.kind === "jiraIssue" ? card.body.items : [];
@@ -272,4 +319,77 @@ test("P6a v03: a created page id equal to a 16-digit token finishes with a null 
   assert.equal(item?.resultPageUrl, undefined);
   assert.ok(seen.some((request) => request.method === "POST"));
   assert.ok(!stored.includes(fakeAccess), "the token reached the card");
+});
+
+// --- the edge's own "nothing was written" (final-b C2, F006) -------------
+
+test("a prepare refusal in the edge's D-W2 wording keeps its own claim and gains no second one", async () => {
+  stubJiraFetch((request) =>
+    request.path === "/rest/api/3/issue/STAR-404"
+      ? json({ errorMessages: ["Issue does not exist"] }, 404)
+      : fakeJiraAnswer(request),
+  );
+  const text = await prepareRefusal("jira", [
+    { issue: "STAR-404", summary: "Renamed" },
+  ]);
+  assert.equal(text, "Jira answered HTTP 404. Nothing was written to Jira.");
+  assert.equal(claims(text), 1, text);
+});
+
+test("a Confluence prepare gate's refusal is the edge's text as is", async () => {
+  stubConfluenceWriteFetch();
+  const text = await prepareRefusal("confluence", [
+    { operation: "uploadAttachment", page: "123", sourcePath: "/x" },
+  ]);
+  assert.equal(text, UPLOAD_UNAVAILABLE);
+  assert.equal(claims(text), 1, text);
+});
+
+test("an apply refused because the gateway's site changed is SITE_CHANGED as is, certified, nothing sent", async () => {
+  const seen = stubJiraFetch((request) => fakeJiraAnswer(request));
+  const { card, outcomePrompt } = await proposeAndApprove(
+    "jira",
+    [{ operation: "comment", issue: "STAR-1", commentBody: "One" }],
+    {
+      applyCredential: encodeAtlassianCredential({
+        site: "other.atlassian.net",
+        email: "me@x.test",
+        token: SENTINEL,
+      }),
+    },
+  );
+  assert.equal(card.status, "failed");
+  assert.equal(card.error, SITE_CHANGED);
+  assert.equal(claims(card.error), 1);
+  assert.ok(outcomePrompt.includes(SITE_CHANGED));
+  assert.deepEqual(
+    seen.filter((request) => request.method !== "GET"),
+    [],
+  );
+});
+
+test("an upstream reason that says nothing was written, on a path that may have written, gains no claim: the card ends with PARTIAL_EFFECTS", async () => {
+  stubJiraFetch((request) =>
+    request.method === "PUT" && request.path === "/rest/api/3/issue/STAR-1"
+      ? json({ errorMessages: ["Nothing was written."] }, 400)
+      : fakeJiraAnswer(request),
+  );
+  const { card } = await proposeAndApprove("jira", [
+    {
+      issue: "STAR-1",
+      summary: "Linked summary",
+      linkChanges: [
+        { op: "add", type: "Blocks", direction: "outward", issue: "STAR-2" },
+      ],
+    },
+  ]);
+  const [item] = jiraItems(card);
+  assert.equal(card.status, "failed");
+  // The upstream reason, quoted by the edge in the item's own error.
+  assert.match(item?.error ?? "", /Nothing was written\./);
+  assert.equal(
+    card.error,
+    `All 1 Jira change(s) failed: ${item!.error} ${PARTIAL_EFFECTS}`,
+  );
+  assert.equal(claims(card.error), 1, "only the quoted upstream reason");
 });

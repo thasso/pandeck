@@ -2904,8 +2904,8 @@ tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
   connect that separate `notifications/cancelled` POST to the call. So after a
   timeout or interrupt, reconcile only after that window: wait 60 s before
   reading the issues or retrying. `confluence_mutate_page` shares this
-  limitation (below). Pandeck's client mode still drops write tools from a
-  listing.
+  limitation (below). Pandeck in client mode calls both in two phases instead,
+  behind its own approval card ("Gateway writes" under Client mode).
 - **Confluence reads** (Task-1439). `confluence_search`, `confluence_get_page`
   and `confluence_lookup` run the same read path as the local tools
   (`confluenceRead.ts` with `atlassian/confluenceClient.ts` beside
@@ -3306,18 +3306,18 @@ tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
   needs the token again; a clear wins over an email or token in the same patch.
   After every connect the link reads the status and announces the Jira section,
   so a restarted Pandeck shows connected. Settings reports
-  `credentialStore: "gateway"`. Agents read Jira through the gateway's tools
-  ("Gateway tools" under Client mode). Pandeck's non-agent Jira features
-  (linked-ticket and Tempo enrichment, `isJiraConfigured`) have no credential in
-  client mode until a later slice (D3, Task-1399). Against a gateway that
-  answers `connectWith: "oauth"`, Settings reports `gatewaySignIn: true` and
-  `gatewayKind`, shows no email or token field, and keeps enable with "Save and
-  test" (only `enabled` is sent, then the connection test, which also runs when
-  the card opens; no separate Test button) and Clear while a record is stored, a
-  refused OAuth record included (a status naming a site or a `kind` counts as
-  stored); a clear keeps the gateway's last `connectWith` until a later status
-  says otherwise, also when that read fails. Users connect on the gateway's
-  page.
+  `credentialStore: "gateway"`. Agents read and change Jira through the
+  gateway's tools ("Gateway tools" and "Gateway writes" under Client mode).
+  Pandeck's non-agent Jira features (linked-ticket and Tempo enrichment,
+  `isJiraConfigured`) have no credential in client mode until a later slice (D3,
+  Task-1399). Against a gateway that answers `connectWith: "oauth"`, Settings
+  reports `gatewaySignIn: true` and `gatewayKind`, shows no email or token
+  field, and keeps enable with "Save and test" (only `enabled` is sent, then the
+  connection test, which also runs when the card opens; no separate Test button)
+  and Clear while a record is stored, a refused OAuth record included (a status
+  naming a site or a `kind` counts as stored); a clear keeps the gateway's last
+  `connectWith` until a later status says otherwise, also when that read fails.
+  Users connect on the gateway's page.
 
 #### The gateway's sign-in and UI
 

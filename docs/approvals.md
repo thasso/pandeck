@@ -105,15 +105,15 @@ written."). After the wait there is no reconnect wait.
 
 After the send, one table decides the card:
 
-| What came back                                   | The card                                                  |
-| ------------------------------------------------ | --------------------------------------------------------- |
-| not sent (no connection)                         | failed, unreachable, nothing written                      |
-| a failure the edge certifies `effects: "none"`   | failed, its message plus "Nothing was written."           |
-| the edge's `unknown_tool` refusal                | failed, the no-longer-offered text, nothing written       |
-| a failure with `effects: "possible"`             | failed, may have written; its checked results merged      |
-| a success, every record checked                  | the local summary, plus the notices below                 |
-| every item failed                                | failed, the local all-failed text, plus the notices below |
-| lost, timed out (55 s), unreadable, a bad record | failed, may have written; nothing merged                  |
+| What came back                                   | The card                                                                  |
+| ------------------------------------------------ | ------------------------------------------------------------------------- |
+| not sent (no connection)                         | failed, unreachable, nothing written                                      |
+| a failure the edge certifies `effects: "none"`   | failed, its message plus "Nothing was written." unless it says so already |
+| the edge's `unknown_tool` refusal                | failed, the no-longer-offered text, nothing written                       |
+| a failure with `effects: "possible"`             | failed, may have written; its checked results merged                      |
+| a success, every record checked                  | the local summary, plus the notices below                                 |
+| every item failed                                | failed, the local all-failed text, plus the notices below                 |
+| lost, timed out (55 s), unreadable, a bad record | failed, may have written; nothing merged                                  |
 
 "May have written" reads: "The gateway did not confirm the result. Changes may
 have been written, and a change already sent can still finish within about a
@@ -123,9 +123,11 @@ details were too long to return." when the edge trimmed results, and "Some
 failed changes may have been partly written before they failed; …" when an item
 that failed may have written. An all-failed card ends "Nothing was written."
 only when the edge certifies no write left it. Only a request never sent, or an
-answer certified `effects: "none"`, claims nothing was written. Every record is
-checked before any is merged, so a card is never half-merged. An answer that
-arrives after the 55 s bound is dropped and never changes the decided card.
+answer certified `effects: "none"`, claims nothing was written; an item's error
+can still quote Jira's or Confluence's own reason, whatever it says, and that
+quote never decides a claim. Every record is checked before any is merged, so a
+card is never half-merged. An answer that arrives after the 55 s bound is
+dropped and never changes the decided card.
 
 Items apply in order. An item that started finishes; once the connection drops
 or the bound expires the edge starts no further item, and the card says it may

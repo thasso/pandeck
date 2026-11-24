@@ -4,10 +4,11 @@
  * the client's own "nothing was written" claim. A leaf: it imports only
  * `remoteTools.ts` types.
  *
- * The claim is the client's, never the edge's wording, which the link may
- * have cut (P6a L-a): a prepare refusal always earns it, since prepare never
- * writes; an apply failure only when the edge certifies `effects: "none"`
- * (D6(i)).
+ * WHETHER the claim is made is the client's decision, never the edge's
+ * wording, which the link may have cut (P6a L-a): a prepare refusal always
+ * earns it, since prepare never writes; an apply failure only when the edge
+ * certifies `effects: "none"` (D6(i)). The wording alone never decides it:
+ * no other path passes an edge message through here.
  */
 import type { RemoteProduct } from "../../remoteTools.ts";
 
@@ -42,14 +43,16 @@ export const DISABLED: Record<RemoteProduct, string> = {
 
 /**
  * An edge message with the client's own claim: "…" where the link cut it,
- * then "Nothing was written." unless it already ends so. Only for a case
- * where nothing was written: a prepare refusal, or an apply the edge
- * certified `effects: "none"`.
+ * then "Nothing was written." unless the message already says nothing was
+ * written anywhere in it ("…; nothing was written. Ask for a new
+ * proposal.", "Nothing was written to Jira."), so the claim is never
+ * doubled. Only for a case where nothing was written: a prepare refusal, or
+ * an apply the edge certified `effects: "none"`.
  */
 export function withNothingWritten(message: string): string {
   const shown =
     message.length >= EDGE_MESSAGE_MAX ? `${message}…` : message.trimEnd();
-  return /nothing was written\.$/i.test(shown)
+  return /nothing was written/i.test(shown)
     ? shown
     : `${shown} ${NOTHING_WRITTEN}`;
 }
