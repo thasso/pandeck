@@ -768,13 +768,12 @@ class ClaudeSdkSessionStore {
           updatedAt: record.updatedAt,
           messageCount,
           provider: "claude",
-          ...(record.providerSessionId !== undefined
-            ? { providerSessionId: record.providerSessionId }
-            : {}),
-          ...(record.modelId !== undefined ? { model: record.modelId } : {}),
-          ...(record.thinkingLevel !== undefined
-            ? { thinkingLevel: record.thinkingLevel }
-            : {}),
+          // The binding mirrors what the session holds, an absent value
+          // included: a cleared native session must not survive in the
+          // binding, which a switched binding's reopen reads over the record.
+          providerSessionId: record.providerSessionId ?? null,
+          model: record.modelId ?? null,
+          thinkingLevel: record.thinkingLevel ?? null,
           ...(record.credentialProfileId !== undefined
             ? { credentialProfileId: record.credentialProfileId }
             : {}),

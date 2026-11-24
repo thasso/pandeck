@@ -549,6 +549,10 @@ describe("store persistence", () => {
       "the metadata row counts the whole timeline from the log's figures",
     );
     assert.equal(sessionStore.get(id)?.messageCount, 4);
+    assert.equal(
+      sessionStore.activeBinding(id)?.nativeSessionId,
+      "provider-store",
+    );
 
     // A clear replaces the provider context, never our transcript.
     const outcome = await session.clearContext();
@@ -556,6 +560,9 @@ describe("store persistence", () => {
     const cleared = readClaudeSdkRecord(dir, id);
     assert.equal(cleared?.record.providerSessionId, undefined);
     assert.deepEqual(cleared?.record.entries, committed);
+    // The row and its binding forget the native session with the record.
+    assert.equal(sessionStore.get(id)?.providerSessionId, undefined);
+    assert.equal(sessionStore.activeBinding(id)?.nativeSessionId, undefined);
 
     claudeSdkStore.remove(id);
     assert.equal(existsSync(metaFile(dir, id)), false);

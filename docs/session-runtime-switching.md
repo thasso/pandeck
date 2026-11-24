@@ -437,7 +437,14 @@ names the other engine.
   switch started its native session too (none until its first query); pi passes
   a switched-to binding's model and effort over its transcript's last selection.
   A crash between the commit and the new engine's first save therefore resumes
-  the committed binding, not the one before it.
+  the committed binding, not the one before it. Because the binding wins, every
+  change of the session's native identity must reach it: Claude's registry sync
+  writes the native id, model and effort it holds on every save, an absent one
+  as `null` (`sessionStore.upsert` clears on `null` and keeps on omission). A
+  `/clear` forgets the native session in the binding too, so a reopen does not
+  bring the cleared conversation back; a native session a later query learns
+  replaces it there at the turn's save. pi's native id is its app id and never
+  changes.
 
 ### Deleting
 

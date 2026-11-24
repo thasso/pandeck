@@ -154,6 +154,38 @@ test("a Claude row's native id arrives with its first query and writes through",
   assertRowIsActiveBinding(id);
 });
 
+test("a null native id, model or effort clears the binding and row; an omission keeps them", () => {
+  const id = freshId("claude-clear");
+  sessionStore.upsert({
+    id,
+    harness: "claude-sdk",
+    agentType: "workshop",
+    providerSessionId: "sdk-session-1",
+    model: "sonnet",
+    thinkingLevel: "high",
+  });
+  sessionStore.upsert({ id, harness: "claude-sdk", agentType: "workshop" });
+  assert.equal(
+    sessionStore.activeBinding(id)?.nativeSessionId,
+    "sdk-session-1",
+  );
+  sessionStore.upsert({
+    id,
+    harness: "claude-sdk",
+    agentType: "workshop",
+    providerSessionId: null,
+    model: null,
+    thinkingLevel: null,
+  });
+  const binding = sessionStore.activeBinding(id);
+  assert.equal(binding?.nativeSessionId, undefined);
+  assert.equal(binding?.model, undefined);
+  assert.equal(binding?.thinkingLevel, undefined);
+  assert.equal(sessionStore.get(id)?.providerSessionId, undefined);
+  assert.equal(sessionStore.bindings(id).length, 1);
+  assertRowIsActiveBinding(id);
+});
+
 test("updates write through and omissions preserve, without a second binding", () => {
   const id = freshId("pi-update");
   sessionStore.upsert({

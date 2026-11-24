@@ -525,6 +525,74 @@ test("a restart right after a return to Claude commits reopens the committed bin
   assert.equal(sessionStore.activeBinding(id)?.seq, 3);
 });
 
+test("a clear on a switched Claude binding stays cleared across a restart (F022)", async () => {
+  const id = freshId();
+  const native = `native-${id}`;
+  claudeThenPi(id, native, "claude-default");
+  const project = join(claudeConfigDir("claude-default"), "projects", "p");
+  mkdirSync(project, { recursive: true });
+  writeFileSync(join(project, `${native}.jsonl`), "{}\n");
+  sessionStore.setPendingRuntime(id, PENDING_CLAUDE);
+  const back = await prepareEngineSwitch(
+    id,
+    TO_CLAUDE,
+    PENDING_CLAUDE,
+    () => {},
+  );
+  assert.equal(back.resumed?.seq, 1, "the return resumes the native session");
+  back.commit();
+  assert.equal(sessionStore.activeBinding(id)?.nativeSessionId, native);
+
+  const session = claudeSdkStore.get(id)!;
+  assert.equal(session.toRecordMeta().providerSessionId, native);
+  assert.equal((await session.clearContext()).kind, "cleared");
+  // The clear reaches the binding and its projection, not only the record.
+  assert.equal(sessionStore.activeBinding(id)?.nativeSessionId, undefined);
+  assert.equal(sessionStore.get(id)?.providerSessionId, undefined);
+
+  crashClaude(id);
+  assert.ok(await harnessRegistry.acquireById(id));
+  assert.equal(
+    claudeSdkStore.get(id)!.toRecordMeta().providerSessionId,
+    undefined,
+    "the cleared conversation does not come back",
+  );
+  assert.equal(sessionStore.activeBinding(id)?.seq, 3);
+});
+
+test("a native session a switched Claude binding learns later reaches the binding", async () => {
+  const id = freshId();
+  claudeThenPi(id, `native-${id}`, "claude-source");
+  sessionStore.setPendingRuntime(id, PENDING_CLAUDE);
+  // No transcript under the target account: the return starts fresh.
+  const back = await prepareEngineSwitch(
+    id,
+    TO_CLAUDE,
+    PENDING_CLAUDE,
+    () => {},
+  );
+  assert.equal(back.resumed, undefined);
+  back.commit();
+  assert.equal(sessionStore.activeBinding(id)?.nativeSessionId, undefined);
+
+  // Its first query learns a new native session; the turn-end persist moves
+  // the binding to it, so a restart resumes that one.
+  const session = claudeSdkStore.get(id)!;
+  (session as unknown as { providerSessionId: string }).providerSessionId =
+    "learned-native";
+  session.onPersist();
+  assert.equal(
+    sessionStore.activeBinding(id)?.nativeSessionId,
+    "learned-native",
+  );
+  crashClaude(id);
+  assert.ok(await harnessRegistry.acquireById(id));
+  assert.equal(
+    claudeSdkStore.get(id)!.toRecordMeta().providerSessionId,
+    "learned-native",
+  );
+});
+
 test("deleting a session while its first move to Claude is prepared leaves nothing to reopen (F017)", async () => {
   const id = freshId();
   assert.ok(

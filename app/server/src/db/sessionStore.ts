@@ -190,7 +190,10 @@ export interface SessionMeta {
  * (`id`, `harness`, `agentType`) is required; every other field is MERGED —
  * omitting one preserves the stored value rather than nulling it. This is the
  * key contract that lets, say, a title refresh not wipe the model, and a learned
- * provider binding not wipe the title.
+ * provider binding not wipe the title. The active binding's native id, model and
+ * effort also take `null`, which CLEARS the stored value: an engine whose
+ * session no longer has one (a Claude `/clear` forgets its native session) says
+ * so, or the binding would hand the old one back on reopen.
  */
 interface SessionUpsert {
   id: string;
@@ -209,9 +212,9 @@ interface SessionUpsert {
   updatedAt?: number;
   messageCount?: number;
   provider?: string;
-  providerSessionId?: string;
-  model?: string;
-  thinkingLevel?: string;
+  providerSessionId?: string | null;
+  model?: string | null;
+  thinkingLevel?: string | null;
   credentialProfileId?: string;
   requiresEnterprise?: boolean;
   peerTurnCap?: number;
