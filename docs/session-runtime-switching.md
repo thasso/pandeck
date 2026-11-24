@@ -536,9 +536,12 @@ keeps the clean user text.
   a reserve of the larger of 16,000 tokens or a quarter of the window. What it
   holds is the context size its last reply reported (walking back the resume
   chain while a binding still names that native session: one a /clear replaced
-  was resumed no further); when it never reported one, every log record before
-  it was left, estimated, which can only overstate it. When nothing fits, only
-  the note goes. Tokens are estimated at four characters each.
+  was resumed no further). A report from before a binding's last /clear card
+  measured the dropped conversation and never counts, and the walk ends at that
+  binding. When it never reported one (a run that fails early reports no usage),
+  every log record before it was left, estimated, which can only overstate it.
+  When nothing fits, only the note goes. Tokens are estimated at four characters
+  each.
 - **Switch note:** what changed ("moved from GPT-6 · OpenAI to Claude Opus ·
   Work"); that reasoning and tool state did not carry over; the session's own id
   with `session_read({ sessionId, at, includeToolResults: true })` and

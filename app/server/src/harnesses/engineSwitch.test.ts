@@ -58,6 +58,8 @@ import {
 } from "./engineSwitchFence.ts";
 import { routingSpendLines } from "../workflow/runSpend.ts";
 import { harnessRegistry } from "./registry.ts";
+import { pickerModels, storedSessionModelOption } from "./models.ts";
+import { runClearForHost } from "../hostSlashCommands.ts";
 import { enableClaudeSdkForTests } from "../test/claudeSdkEnabled.ts";
 
 beforeEach(enableClaudeSdkForTests);
@@ -1420,5 +1422,97 @@ test("a clear between returns keeps the earlier native session where it stayed: 
     vi.restoreAllMocks();
     claudeSdkStore.setSeam(() => Promise.resolve(claudeTurnSeam));
     setCredentialProfileEnabled(b.id, false);
+  }
+});
+
+test("a return after a real /clear whose next run reported no usage sizes the new native session from the log, never the cleared one's report (F041)", async () => {
+  const id = freshId();
+  const n = `native-n-${id}`;
+  const m = `native-m-${id}`;
+  let native = n;
+  let reports = true;
+  // As `answeringAs`, and once `reports` is off a result with no usage, as a
+  // run that fails before any report ends.
+  claudeSdkStore.setSeam(() =>
+    Promise.resolve({
+      ...claudeTurnSeam,
+      query(...args: Parameters<typeof claudeTurnSeam.query>) {
+        const turn = claudeTurnSeam.query(...args);
+        return {
+          async *[Symbol.asyncIterator]() {
+            for await (const message of turn) {
+              const own = { ...message, session_id: native };
+              yield (
+                !reports && own.type === "result"
+                  ? { ...own, total_cost_usd: 0, modelUsage: {} }
+                  : own
+              ) as typeof message;
+            }
+          },
+        };
+      },
+    }),
+  );
+  const window =
+    pickerModels().find(
+      (option) =>
+        option.provider === TO_CLAUDE.model.provider &&
+        option.id === TO_CLAUDE.model.id,
+    )?.contextWindow ??
+    storedSessionModelOption(
+      "claude-sdk",
+      TO_CLAUDE.model.provider,
+      TO_CLAUDE.model.id,
+    )?.contextWindow;
+  assert.ok(window, "the return target has a known window");
+  const assistants = () =>
+    readFileSync(logPathFor(id), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((row) => row.type === "message" && row.role === "assistant");
+  let transcript: string | undefined;
+  try {
+    await onClaude(id);
+    assert.ok(assistants()[0]?.usage, "N's run reported its (light) context");
+    const live = claudeSdkStore.get(id)!;
+    await runClearForHost(live);
+    native = m;
+    reports = false;
+    await sessionRuntime.prompt(id, "x ".repeat(window * 2));
+    assert.equal(sessionStore.activeBinding(id)?.nativeSessionId, m);
+    assert.equal(assistants().length, 2);
+    assert.equal(assistants()[1]?.usage, undefined, "M's run reported none");
+    // M's transcript, where the return looks for it.
+    const account = sessionStore.activeBinding(id)!.credentialProfileId!;
+    transcript = join(claudeConfigDir(account), "projects", "p", `${m}.jsonl`);
+    mkdirSync(join(transcript, ".."), { recursive: true });
+    writeFileSync(transcript, "{}\n");
+
+    piOpensForReal();
+    (await prepareEngineSwitch(id, TO_PI, PENDING_PI, () => {})).commit();
+    const piStart = sessionStore.activeBinding(id)!.startedSeq;
+    // pi's turn, written to the log once the detached runtime let go of it (as
+    // its view grace ends).
+    await sessionRuntime.disposeSession(id);
+    const row = (seq: number, role: string, text: string) =>
+      `${JSON.stringify({ type: "message", role, seq, id: `m${seq}`, content: [{ type: "text", text }] })}\n`;
+    writeFileSync(
+      logPathFor(id),
+      row(piStart, "user", "asked on pi") +
+        row(piStart + 1, "assistant", "pi answered"),
+      { flag: "a" },
+    );
+    assert.equal(sessionRuntime.logCursor(id), piStart + 2);
+    (
+      await prepareEngineSwitch(id, TO_CLAUDE, PENDING_CLAUDE, () => {})
+    ).commit();
+    assert.equal(sessionStore.activeBinding(id)?.resumedSeq, 1);
+    const owed = owedSwitchContext(id) ?? "";
+    assert.match(owed, /You ran this session before/);
+    assert.doesNotMatch(owed, /pi answered/, "M may already fill its window");
+  } finally {
+    claudeSdkStore.setSeam(() => Promise.resolve(claudeTurnSeam));
+    if (transcript) rmSync(transcript, { force: true });
   }
 });

@@ -25,7 +25,7 @@ import {
   type HandoffRecord,
 } from "./sessionHandoff.ts";
 import { getSettings } from "./settings.ts";
-import { lastReportedContextTokens } from "./tools/sessions/sessionInspection.ts";
+import { reportedContextSince } from "./tools/sessions/sessionInspection.ts";
 
 /**
  * Sessions whose active binding already replied, by that binding's seq: the
@@ -58,11 +58,14 @@ function modelFor(end: SwitchEnd) {
 /**
  * What a resumed native session already holds: the context size it last
  * reported, from the newest binding along its resume chain that reported one.
- * The chain is followed only while a binding still names that native session:
- * one a /clear replaced was resumed no further, so an earlier binding's report
- * measures another conversation. Unknown (it never replied): every record it
- * could hold, estimated, which can only overstate it (a compacted session
- * holds less).
+ * Only its own reports count. The chain is followed only while a binding still
+ * names that native session: one a /clear replaced was resumed no further, so
+ * an earlier binding's report measures another conversation. Inside a binding,
+ * a report before the binding's last /clear measured the conversation the
+ * clear dropped, and the native session started after that clear never ran in
+ * an earlier binding, so the walk stops there. Unknown (it never reported, as a
+ * run that failed early does not): every record it could hold, estimated, which
+ * can only overstate it (a compacted session holds less).
  */
 function resumedContextTokens(
   sessionId: string,
@@ -81,12 +84,13 @@ function resumedContextTokens(
   ) {
     const next = all.find((other) => other.seq === binding!.seq + 1);
     try {
-      const reported = lastReportedContextTokens(
+      const { tokens, cleared } = reportedContextSince(
         logPath,
         binding.startedSeq,
         next?.startedSeq ?? beforeSeq,
       );
-      if (reported !== undefined) return reported;
+      if (tokens !== undefined) return tokens;
+      if (cleared) break;
     } catch {
       break;
     }

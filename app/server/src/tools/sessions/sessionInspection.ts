@@ -637,25 +637,38 @@ export function forEachSessionRecord(
 }
 
 /**
- * The context size the LAST assistant row with `fromSeq <= seq < beforeSeq`
- * reported (its usage's `contextTokens`, else its input-side token sum, as the
- * session stats read it); undefined when no row in the range reported usage.
- * A harness switch's handoff budget reads what a resumed native session last
- * held from this (`sessionSwitchHandoff.ts`).
+ * What the log's range `fromSeq <= seq < beforeSeq` reports of the context its
+ * engine holds now: the size the LAST assistant row after the range's last
+ * `/clear` card reported (its usage's `contextTokens`, else its input-side
+ * token sum, as the session stats read it), undefined when none did, and
+ * whether such a card lies in the range. A report before a clear measured the
+ * conversation the clear dropped, never the one that followed, so it is not
+ * answered. A harness switch's handoff budget reads what a resumed native
+ * session last held from this (`sessionSwitchHandoff.ts`).
  */
-export function lastReportedContextTokens(
+export function reportedContextSince(
   logPath: string,
   fromSeq: number,
   beforeSeq: number,
-): number | undefined {
+): { tokens: number | undefined; cleared: boolean } {
   let last: number | undefined;
+  let cleared = false;
   forEachJsonlLine(logPath, 0, (line) => {
     const row = parseLine(line);
-    if (!row || row.type !== "message" || row.role !== "assistant")
-      return "continue";
+    if (!row) return "continue";
     const seq = typeof row.seq === "number" ? row.seq : undefined;
     if (seq === undefined || seq < fromSeq || seq >= beforeSeq)
       return "continue";
+    if (
+      row.type === "command.result" &&
+      isRecord(row.card) &&
+      row.card.kind === "contextClear"
+    ) {
+      cleared = true;
+      last = undefined;
+      return "continue";
+    }
+    if (row.type !== "message" || row.role !== "assistant") return "continue";
     const usage = isRecord(row.usage) ? row.usage : undefined;
     if (!usage) return "continue";
     const count = (value: unknown) =>
@@ -669,7 +682,7 @@ export function lastReportedContextTokens(
     if (size > 0) last = size;
     return "continue";
   });
-  return last;
+  return { tokens: last, cleared };
 }
 
 /* ---------------------------- windowed reads ------------------------------ */

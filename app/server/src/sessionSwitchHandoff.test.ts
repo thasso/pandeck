@@ -377,6 +377,99 @@ test("a return's budget never takes the size an earlier native session reported 
   assert.doesNotMatch(owedSwitchContext(id) ?? "", /pi answered/);
 });
 
+/**
+ * One Claude binding: N reports `before`, a /clear card, then M's run with a
+ * window-filling prompt whose answer reported `after` (none: an early failure
+ * reports no usage). Then pi, and a return to M.
+ */
+function clearedInOneBinding(
+  id: string,
+  window: number,
+  after: number | undefined,
+): void {
+  const m = `native-m-${id}`;
+  // The binding names M: the run after the clear started it.
+  onClaude(id, m);
+  append(id, [
+    message(1, "user", "small ask on N"),
+    {
+      ...message(2, "assistant", "N answered"),
+      usage: { contextTokens: 2_000, contextWindowTokens: window },
+    },
+    {
+      type: "command.result",
+      commandId: "cmd-clear",
+      name: "contextClear",
+      card: { kind: "contextClear", id: "clear", contextClear: {} },
+      seq: 3,
+      id: "e3-command",
+    },
+    message(4, "user", "x ".repeat(window * 2)),
+    after === undefined
+      ? { ...message(5, "assistant", "M failed early"), stopReason: "error" }
+      : {
+          ...message(5, "assistant", "M answered"),
+          usage: { contextTokens: after, contextWindowTokens: window },
+        },
+  ]);
+  toPi(id, 1, 6);
+  append(id, [
+    message(6, "user", "asked on pi"),
+    message(7, "assistant", "pi answered"),
+  ]);
+  sessionStore.switchEngineBinding(id, {
+    nativeUsage: null,
+    expectSeq: 2,
+    fields: {
+      harness: "claude-sdk",
+      credentialProfileId: "claude-default",
+      provider: "claude",
+      model: "opus",
+      thinkingLevel: "high",
+      providerSessionId: m,
+    },
+    nativeSessionId: m,
+    startedSeq: 8,
+    resumedSeq: 1,
+    pending: { ...PENDING, model: { provider: "claude", id: "opus" } },
+  });
+}
+
+test("a return's budget never takes a report from before a clear in the same binding when the run after it reported none (F041)", () => {
+  const window = pickerModels().find(
+    (option) => option.provider === "claude" && option.id === "opus",
+  )?.contextWindow;
+  assert.ok(window);
+  const id = `switch-handoff-${Date.now()}-cleared-in-binding`;
+  clearedInOneBinding(id, window, undefined);
+  // What M holds is unknown, so it is estimated from the log (which fills the
+  // window), never taken from N's 2k.
+  const owed = owedSwitchContext(id) ?? "";
+  assert.match(owed, /You ran this session before/);
+  assert.doesNotMatch(owed, /pi answered/, "no room in M's window");
+});
+
+test("a return's budget takes the report of the run after a clear in the same binding (F041)", () => {
+  const window = pickerModels().find(
+    (option) => option.provider === "claude" && option.id === "opus",
+  )?.contextWindow;
+  assert.ok(window);
+  const light = `switch-handoff-${Date.now()}-cleared-light`;
+  clearedInOneBinding(light, window, 3_000);
+  assert.match(
+    owedSwitchContext(light) ?? "",
+    /pi answered/,
+    "M reported a light context, so the delta fits",
+  );
+  const full = `switch-handoff-${Date.now()}-cleared-full`;
+  clearedInOneBinding(full, window, window - 1_000);
+  assert.doesNotMatch(
+    owedSwitchContext(full) ?? "",
+    /pi answered/,
+    "M reported a full context",
+  );
+});
+
 test("a kind change within pi owes nothing: its transcript resumed holds the whole session", () => {
   const id = `switch-handoff-${Date.now()}-pi-kind`;
   ids.push(id);
