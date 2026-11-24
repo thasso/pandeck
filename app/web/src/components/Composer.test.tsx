@@ -673,6 +673,17 @@ describe("Composer runtime commands", () => {
     ]);
     // A complete value closes the menu so Enter sends it.
     expect(state("/model claude-opus ").active).toBe(false);
+    // An id two endpoints offer completes, from its bare id, to each
+    // provider/id (F024).
+    expect(
+      slashState("/model llama3", commands, [], "developer", "pi", () => [
+        { value: "openai-compatible-a/llama3", label: "Llama 3" },
+        { value: "openai-compatible-b/llama3", label: "Llama 3" },
+      ]).items.map((item) => item.name),
+    ).toEqual([
+      "model openai-compatible-a/llama3",
+      "model openai-compatible-b/llama3",
+    ]);
     expect(
       slashState("/model claude", commands, [], "developer", "claude-sdk")
         .active,

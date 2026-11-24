@@ -806,6 +806,9 @@ export function slashState(
       .filter(
         (option) =>
           option.value.toLowerCase().startsWith(typed) ||
+          // A `provider/id` value (an id two providers offer) also completes
+          // from its bare id.
+          option.value.toLowerCase().split("/").at(-1)!.startsWith(typed) ||
           option.label.toLowerCase().startsWith(typed),
       )
       .slice(0, 8)

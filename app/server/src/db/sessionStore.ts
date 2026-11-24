@@ -451,6 +451,31 @@ const upsertSql = `
   WHERE session_index.deleted_at_ms IS NULL
 `;
 
+/**
+ * Each session an engine switch is opening a target engine for, and that
+ * target's harness. Until the switch commits, the target holds no binding, so
+ * nothing it writes may reach the active one, even when it runs on the same
+ * harness (a kind change within pi).
+ */
+const uncommittedSwitchTargets = new Map<string, Harness>();
+
+/**
+ * Mark `harness` as the uncommitted target of `id`'s engine switch, before it
+ * opens there. Every `upsert` naming that harness is then a foreign write
+ * until the answer is called: after the commit, or once the target let the
+ * session go on abandon.
+ */
+function holdSwitchTarget(id: string, harness: Harness): () => void {
+  uncommittedSwitchTargets.set(id, harness);
+  let held = true;
+  return () => {
+    if (!held) return;
+    held = false;
+    if (uncommittedSwitchTargets.get(id) === harness)
+      uncommittedSwitchTargets.delete(id);
+  };
+}
+
 /** Insert-or-merge a metadata record. Omitted fields preserve stored values. */
 function upsert(input: SessionUpsert): boolean {
   try {
@@ -471,12 +496,15 @@ function upsert(input: SessionUpsert): boolean {
       input.forkOrigin !== undefined
         ? JSON.stringify(input.forkOrigin)
         : (prev?.fork_origin_json ?? null);
-    // An engine that no longer holds the session's active binding (a late
+    // An engine that does not hold the session's active binding (a late
     // persist from the engine a harness switch closed, or the target before
-    // the switch commits) keeps its other fields but never rewrites the
-    // projection: only the switch itself moves a session between engines
-    // (`docs/session-runtime-switching.md` "Engine bindings").
-    const foreign = prev !== undefined && prev.harness !== input.harness;
+    // the switch commits, whatever its harness) keeps its other fields but
+    // never rewrites the projection: only the switch itself moves a session
+    // between engines (`docs/session-runtime-switching.md` "Engine bindings").
+    const foreign =
+      prev !== undefined &&
+      (prev.harness !== input.harness ||
+        uncommittedSwitchTargets.get(input.id) === input.harness);
     // The active engine binding's projection, merged once and written to both
     // the row and the binding in one transaction (`sessionEngineBinding.ts`).
     const binding: ActiveBindingFields = foreign
@@ -2337,6 +2365,7 @@ export const sessionStore = {
   setPeerTurnCap,
   switchCredentialProfile,
   switchEngineBinding,
+  holdSwitchTarget,
   stampBindingRun,
   activeBinding,
   bindings,

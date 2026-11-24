@@ -42,16 +42,53 @@ export interface RuntimeCommandContext {
 
 const normalize = (text: string) => text.trim().toLowerCase();
 
+/** A model's `provider/id`: one row even when two providers offer the id. */
+const qualified = (model: ModelOption) => `${model.provider}/${model.id}`;
+
+/** The models, one per `provider/id`. */
+function distinct(models: readonly ModelOption[]): ModelOption[] {
+  const seen = new Map<string, ModelOption>();
+  for (const model of models) {
+    const key = normalize(qualified(model));
+    if (!seen.has(key)) seen.set(key, model);
+  }
+  return [...seen.values()];
+}
+
+/**
+ * The text that names `model` and no other: its bare id while only one
+ * provider offers that id, else `provider/id` (two OpenAI-compatible endpoints
+ * may both offer `llama3`).
+ */
+function modelArgument(
+  model: ModelOption,
+  models: readonly ModelOption[],
+): string {
+  const sameId = models.filter(
+    (other) => normalize(other.id) === normalize(model.id),
+  );
+  return sameId.length > 1 ? qualified(model) : model.id;
+}
+
 /** The arguments a command offers, for the composer's autocomplete. */
 export function runtimeArgumentOptions(
   name: RuntimeCommandName,
   context: RuntimeCommandContext,
 ): RuntimeArgumentOption[] {
-  if (name === "model")
-    return context.models.map((model) => ({
-      value: model.id,
-      label: model.name,
-    }));
+  if (name === "model") {
+    const models = distinct(context.models);
+    return models.map((model) => {
+      const value = modelArgument(model, models);
+      return {
+        value,
+        label: model.name,
+        // Same-named models are told apart by where they run.
+        ...(value !== model.id
+          ? { detail: model.providerName ?? model.provider }
+          : {}),
+      };
+    });
+  }
   if (name === "effort")
     return effortLevels(context.targetModel).map((level) => ({
       value: level,
@@ -85,14 +122,27 @@ export function resolveRuntimeCommand(
   const wanted = normalize(rawArgs);
   if (!wanted) return { kind: "open" };
   if (name === "model") {
-    const model =
-      context.models.find((option) => normalize(option.id) === wanted) ??
-      context.models.find((option) => normalize(option.name) === wanted);
-    if (!model)
+    const models = distinct(context.models);
+    // `provider/id` first, then the bare id, then the display name. A bare id
+    // or name that more than one provider offers is refused, never guessed:
+    // the first match could send the session to another endpoint.
+    const tiers = [
+      models.filter((option) => normalize(qualified(option)) === wanted),
+      models.filter((option) => normalize(option.id) === wanted),
+      models.filter((option) => normalize(option.name) === wanted),
+    ];
+    const matches = tiers.find((tier) => tier.length > 0) ?? [];
+    if (matches.length === 0)
       return {
         kind: "error",
         message: `No model is named "${rawArgs.trim()}".`,
       };
+    if (matches.length > 1)
+      return {
+        kind: "error",
+        message: `More than one model is named "${rawArgs.trim()}"; name one as provider/id: ${matches.map(qualified).join(", ")}.`,
+      };
+    const model = matches[0]!;
     return {
       kind: "change",
       change: { model: { provider: model.provider, id: model.id } },

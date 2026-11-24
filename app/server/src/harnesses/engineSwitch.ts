@@ -262,6 +262,9 @@ export async function prepareEngineSwitch(
       );
     });
   };
+  // Lifted with the fence: until the commit, the target engine writes no
+  // binding, even on the source's own harness (a kind change within pi).
+  let releaseTarget = () => {};
   let row: SessionMeta | undefined;
   let active: SessionEngineBinding | undefined;
   let driver: LiveSession;
@@ -284,9 +287,11 @@ export async function prepareEngineSwitch(
     admit();
     await release(active.harness, sessionId, admit);
     admit();
+    releaseTarget = sessionStore.holdSwitchTarget(sessionId, target.harness);
     ({ driver, resumed } = await open(row, target, plan, cwd));
   } catch (error) {
     await rollback();
+    releaseTarget();
     lifted(false);
     throw error;
   }
@@ -304,6 +309,7 @@ export async function prepareEngineSwitch(
       },
     );
     await rollback();
+    releaseTarget();
     lifted(false);
   };
   try {
@@ -362,6 +368,7 @@ export async function prepareEngineSwitch(
         pending,
       });
       ended = true;
+      releaseTarget();
       lifted(true);
       void transfer?.commit().catch(() => {
         console.warn(

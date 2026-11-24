@@ -162,6 +162,11 @@ kind's accounts: the bound account only when it serves the target and
 `boundEligible`, then the listed accounts. `/account` is offered only when that
 gives more than one account, and not before the list has answered; the client
 never judges an account itself. They are offered only for a started session.
+`/model` names a model by its bare id while one provider offers it, else as
+`provider/id` (two OpenAI-compatible endpoints may both offer `llama3`): the
+completion inserts that, also when typed as the bare id, and a bare id or name
+that more than one provider offers is refused with the `provider/id` choices,
+never resolved to the first.
 
 A started session refuses `setModel` and `setThinkingLevel` with "This session
 has started: change its model or effort in the Runtime section, from its next
@@ -310,12 +315,16 @@ clears the pending selection the switch applied when that is still the stored
 one. The first run the new binding starts stamps it (`started_run_id`).
 
 Only the engine that holds the active binding writes the projection. An `upsert`
-that names another harness (a late persist from an engine a switch closed, or
-the target engine before its switch commits) leaves the six binding columns and
-the binding as they are, and its title, activity time and message count too:
-those describe only its own native stretch. After a switch the active engine
-counts only what it ran, so its message count may raise the row's but never
-lower it (0 would hide a started session from the list).
+that names another harness (a late persist from an engine a switch closed), or
+any write from the target engine before its switch commits, whatever its harness
+(`sessionStore.holdSwitchTarget`, held from just before the target opens until
+the commit, or until the target let the session go on abandon), leaves the six
+binding columns and the binding as they are, and its title, activity time and
+message count too: those describe only its own native stretch. A kind change
+within pi therefore leaves the binding it left exactly as it was, and an
+abandoned one changes nothing. After a switch the active engine counts only what
+it ran, so its message count may raise the row's but never lower it (0 would
+hide a started session from the list).
 
 ## Moving to another harness
 
