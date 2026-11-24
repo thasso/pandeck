@@ -141,8 +141,10 @@ export function runtimeAccountChoices(
  * the server's judgement reads — the session and its bound account, the model
  * and effort its next turn starts on, the enterprise requirement, and every
  * account's kind, enabled, enterprise and whole health projection (login state
- * AND `benchRevision`: a new bench scope can leave the state as it was). A
- * model-listing refresh alone has no client signal.
+ * AND `benchRevision`: a new bench scope can leave the state as it was), and
+ * each account's model listing: a listing refresh alone (the `models` push
+ * reloading the projection) can add or drop the next turn's model on one
+ * account while nothing else changes.
  */
 export function accountTargetsRefreshKey(input: {
   sessionId: string | undefined;
@@ -154,6 +156,8 @@ export function accountTargetsRefreshKey(input: {
     CredentialProfileSummary,
     "id" | "provider" | "enabled" | "enterprise" | "health"
   >[];
+  /** The projection's `modelsByProfile`: account id → models it offers. */
+  modelListings: Readonly<Record<string, readonly ModelOption[]>>;
 }): string {
   return JSON.stringify([
     input.sessionId,
@@ -167,6 +171,7 @@ export function accountTargetsRefreshKey(input: {
       enabled,
       enterprise,
       health,
+      input.modelListings[id] ?? null,
     ]),
   ]);
 }

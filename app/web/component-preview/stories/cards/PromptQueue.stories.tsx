@@ -9,7 +9,7 @@ import { PromptQueueLedge } from "../../../src/components/PromptQueueLedge.tsx";
 import type { AssistantActions } from "../../../src/hooks/useAssistant.ts";
 
 export type PromptQueueScenario =
-  "running" | "paused" | "stopped" | "unhandled";
+  "running" | "paused" | "stopped" | "unhandled" | "held";
 
 export interface PromptQueueStoryProps {
   frameWidth: number;
@@ -30,6 +30,25 @@ function queueFor(scenario: PromptQueueScenario): PromptQueueState {
     return { paused: false, items: [], automaticTurnsHeld: true };
   // Idle, with updates a failed turn was given: only Recover and Dismiss.
   if (scenario === "unhandled") return { paused: false, items: [] };
+  // Idle, with two skill commands a pending runtime selection refused: they
+  // never send on their own, so each offers only Put back and Discard.
+  if (scenario === "held")
+    return {
+      paused: false,
+      items: [],
+      held: [
+        {
+          id: "h1",
+          text: "/review-pr 412 --focus security, then summarize the risks",
+          createdAt: Date.now() - 40_000,
+        },
+        {
+          id: "h2",
+          text: "/release-notes v0.66",
+          createdAt: Date.now() - 15_000,
+        },
+      ],
+    };
   return {
     paused: scenario === "paused",
     items: [
@@ -66,7 +85,8 @@ function queueFor(scenario: PromptQueueScenario): PromptQueueState {
 
 /** What other sessions sent, waiting behind the drafts; one is mid-steer. */
 function peersFor(scenario: PromptQueueScenario): QueuedPeerPrompt[] {
-  if (scenario === "stopped" || scenario === "unhandled") return [];
+  if (scenario === "stopped" || scenario === "unhandled" || scenario === "held")
+    return [];
   return [
     {
       id: "p1",
@@ -136,6 +156,8 @@ export function PromptQueueStory({
               onResume={() => {}}
               onSendPeerNow={() => {}}
               onWithdrawPeer={() => {}}
+              onPutBackHeld={() => {}}
+              onDiscardHeld={() => {}}
             />
           }
         />
@@ -154,7 +176,7 @@ const meta = {
     frameWidth: { control: { type: "range", min: 360, max: 960, step: 1 } },
     scenario: {
       control: "radio",
-      options: ["running", "paused", "stopped", "unhandled"],
+      options: ["running", "paused", "stopped", "unhandled", "held"],
     },
   },
 } satisfies Meta<typeof PromptQueueStory>;
@@ -176,6 +198,10 @@ export const Stopped: Story = {
 
 export const Unhandled: Story = {
   args: { frameWidth: 720, scenario: "unhandled" },
+};
+
+export const Held: Story = {
+  args: { frameWidth: 720, scenario: "held" },
 };
 
 export const Phone: Story = {

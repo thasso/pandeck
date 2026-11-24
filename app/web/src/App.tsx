@@ -5704,6 +5704,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
           displayPendingRuntime?.thinkingLevel ?? displaySession?.thinkingLevel,
         requiresEnterprise: displaySession?.requiresEnterprise === true,
         profiles: credentialProfiles,
+        modelListings: credentialProfileModels,
       })
     : undefined;
   const requestAccountTargetsRef = useRef(requestAccountTargets);

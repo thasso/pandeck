@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantActions, UIState } from "../../hooks/useAssistant.ts";
 import type { SessionChatHost } from "../../hooks/useSessionChat.tsx";
 import type { Composer } from "../Composer.tsx";
@@ -335,4 +335,148 @@ it("subscribes the skills its composer describes, on its own connection", async 
   } as unknown as UIState);
   expect(actions.setTopics).toHaveBeenLastCalledWith(["skills"]);
   expect(seen.composer?.skillSummaries).toEqual(entries);
+});
+
+describe("held inputs on the composer's queue strip", () => {
+  // A `/skill` a pending runtime selection refused is kept by the SERVER as a
+  // held input of the session (`PromptQueueState.held`). The strip offers it
+  // back on every device and after every reload, Resend or fork, until the
+  // user puts it back or discards it.
+  const HELD = "/review-pr 412 --focus security";
+  const KEY = "test.panel-draft";
+  const queueActions = {
+    ...actions,
+    promptQueue: vi.fn(),
+    retireSessionDraft: vi.fn(),
+  } as unknown as AssistantActions;
+  const withHeld = (
+    held = [{ id: "h1", text: HELD, createdAt: 1 }],
+    extra: Partial<UIState> = {},
+  ) =>
+    ({
+      ...fixtureState(),
+      session: {
+        ...SESSION,
+        agentType: "developer",
+        promptQueue: { items: [], paused: false, held },
+      },
+      ...extra,
+    }) as unknown as UIState;
+  const show = (state: UIState) =>
+    act(async () => {
+      root.render(
+        <PanelSessionChat
+          state={state}
+          actions={queueActions}
+          session={state.session!}
+          host={host}
+          visible
+          pinned={false}
+          draftStorageKey={KEY}
+          title="Title"
+          onOpenInMain={() => {}}
+        />,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  const rows = () =>
+    [...container.querySelectorAll<HTMLElement>("[data-held-input]")].map(
+      (row) => row.textContent,
+    );
+  const field = () => container.querySelector("textarea")!;
+  const click = async (id: string, label: string) => {
+    const button = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        `[data-held-input="${id}"] button`,
+      ),
+    ].find((candidate) => candidate.textContent === label);
+    if (!button) throw new Error(`no ${label} on ${id}`);
+    await act(async () => button.click());
+  };
+  const removals = () =>
+    vi
+      .mocked(queueActions.promptQueue)
+      .mock.calls.map(([command]) => command)
+      .filter((command) => command.type === "removeHeldInput");
+
+  beforeEach(() => {
+    seen.realComposer = true;
+    Element.prototype.scrollIntoView = vi.fn();
+    window.localStorage.clear();
+  });
+
+  it("lists every held input in order, with Put back and Discard", async () => {
+    await show(
+      withHeld([
+        { id: "h1", text: "/first one", createdAt: 1 },
+        { id: "h2", text: "/second one", createdAt: 2 },
+      ]),
+    );
+    expect(rows()).toEqual([
+      expect.stringContaining("/first one"),
+      expect.stringContaining("/second one"),
+    ]);
+    expect(container.textContent).toContain("2 to put back");
+  });
+
+  it("Put back fills an empty field as is, and only then asks the server to drop it", async () => {
+    let storedWhenRemoved: string | null = "unset";
+    vi.mocked(queueActions.promptQueue).mockImplementation((command) => {
+      if (command.type === "removeHeldInput")
+        storedWhenRemoved = window.localStorage.getItem(KEY);
+    });
+    await show(withHeld());
+    await click("h1", "Put back");
+    expect(field().value).toBe(HELD);
+    expect(removals()).toEqual([
+      { type: "removeHeldInput", sessionId: "s1", id: "h1" },
+    ]);
+    expect(storedWhenRemoved).toBe(HELD);
+  });
+
+  it("Put back over newer text goes above it on its own line, never replacing it", async () => {
+    window.localStorage.setItem(KEY, "typed since");
+    await show(withHeld());
+    await click("h1", "Put back");
+    expect(field().value).toBe(`${HELD}\ntyped since`);
+  });
+
+  it("Discard asks the server to drop it and leaves the field alone", async () => {
+    window.localStorage.setItem(KEY, "typed since");
+    await show(withHeld());
+    await click("h1", "Discard");
+    expect(removals()).toEqual([
+      { type: "removeHeldInput", sessionId: "s1", id: "h1" },
+    ]);
+    expect(field().value).toBe("typed since");
+  });
+
+  it("survives a Resend, a fork elsewhere and a reload: the server keeps offering it", async () => {
+    // R2-A2-res2 paths 1-3: each replaced or lost the one browser-only slot
+    // the command used to live in.
+    await show(withHeld());
+    // Resend (or any fork handoff) stages its own draft into this composer.
+    await show(
+      withHeld(undefined, {
+        forkDraft: { sessionId: "s1", text: "resent prompt", token: 9 },
+      }),
+    );
+    expect(field().value).toBe("resent prompt");
+    expect(rows()).toEqual([expect.stringContaining(HELD)]);
+    // A fork to another session moves the same slot elsewhere.
+    await show(
+      withHeld(undefined, {
+        forkDraft: { sessionId: "other", text: "fork text", token: 10 },
+      }),
+    );
+    expect(rows()).toEqual([expect.stringContaining(HELD)]);
+    // Reload: a fresh mount from the server's session state.
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await show(withHeld());
+    expect(rows()).toEqual([expect.stringContaining(HELD)]);
+    expect(removals()).toEqual([]);
+    await click("h1", "Put back");
+    expect(field().value).toBe(`${HELD}\nresent prompt`);
+  });
 });

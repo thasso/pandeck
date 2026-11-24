@@ -113,7 +113,9 @@ CLI's cannot be edited or reliably withdrawn, and pi's dies with its process.
   (`docs/session-runtime-switching.md`). A user prompt it holds is appended
   nowhere and goes to this queue (unpaused). Queued and peer prompts stay where
   they were with no attempt spent. Changing or resetting the selection wakes
-  delivery so they are offered again.
+  delivery so they are offered again. A skill command it holds cannot be queued:
+  it is kept beside the queue as a held input (`kind = 'held'`), which is never
+  sent and waits for the user's Put back or Discard.
 - **Attachments** are saved to the session attachment store when queued. The row
   keeps only their metadata, and the send reads the bytes back.
 - **Skill commands are neither steered nor queued.** A user's `/<skill>` starts

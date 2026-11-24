@@ -84,3 +84,31 @@ test("existing sessions have no pending runtime selection after 0101", () => {
   );
   db.close();
 });
+
+test("existing queued messages stay ordinary queued rows after 0101, and nothing else may be stored as a kind", () => {
+  const files = readdirSync(MIGRATIONS_DIR)
+    .filter((name) => /^\d+_.+\.sql$/.test(name))
+    .sort();
+  const at = files.indexOf(MIGRATION);
+  const db = new DatabaseSync(":memory:");
+  apply(db, files.slice(0, at));
+  db.prepare(
+    "INSERT INTO session_prompt_queue (id, session_id, position, text, created_at_ms, updated_at_ms) VALUES ('q1', 's1', 0, 'queued before the upgrade', 1, 1)",
+  ).run();
+  apply(db, files.slice(at, at + 1));
+  assert.deepEqual(
+    db
+      .prepare("SELECT id, text, kind FROM session_prompt_queue")
+      .all()
+      .map((entry) => ({ ...entry })),
+    [{ id: "q1", text: "queued before the upgrade", kind: "queued" }],
+  );
+  assert.throws(() =>
+    db
+      .prepare(
+        "INSERT INTO session_prompt_queue (id, session_id, position, text, created_at_ms, updated_at_ms, kind) VALUES ('q2', 's1', 1, 'x', 1, 1, 'sent')",
+      )
+      .run(),
+  );
+  db.close();
+});

@@ -199,8 +199,39 @@ describe("accountTargetsRefreshKey", () => {
         health: { state: "limited" as const, since: 1, benchRevision: 3 },
       },
     ],
+    modelListings: {
+      "cp-a": [
+        { provider: "openai-codex", id: "gpt-5.5", name: "GPT-5.5" },
+      ] as ModelOption[],
+    },
   };
   const key = accountTargetsRefreshKey(base);
+
+  it("changes when only an account's model listing changes (F010)", () => {
+    // A listing refresh can drop the next turn's model from an account (or
+    // add it) while the profile, its health and the selected model all stay.
+    expect(
+      accountTargetsRefreshKey({ ...base, modelListings: { "cp-a": [] } }),
+    ).not.toBe(key);
+    expect(
+      accountTargetsRefreshKey({
+        ...base,
+        modelListings: {
+          "cp-a": [
+            ...base.modelListings["cp-a"]!,
+            { provider: "openai-codex", id: "gpt-6", name: "GPT-6" },
+          ] as ModelOption[],
+        },
+      }),
+    ).not.toBe(key);
+    expect(
+      accountTargetsRefreshKey({
+        ...base,
+        modelListings: { "cp-a": [...base.modelListings["cp-a"]!] },
+      }),
+      "same content, new arrays: no refetch",
+    ).toBe(key);
+  });
 
   it("changes with a new bench scope even when the health state stays the same", () => {
     expect(

@@ -23,13 +23,7 @@ import type {
   PromptAttachment,
   SlashCommandInfo,
 } from "@assistant/shared";
-import {
-  createInitialState,
-  reduceAssistantState,
-  type AssistantActions,
-  type ForkDraft,
-  type UIState,
-} from "../hooks/useAssistant.ts";
+import type { AssistantActions, ForkDraft } from "../hooks/useAssistant.ts";
 import type {
   NewPendingChatComment,
   PendingChatCommentsController,
@@ -1999,25 +1993,24 @@ describe("Composer staged drafts", () => {
   });
 });
 
-describe("Composer restore drafts, from the reducer", () => {
-  // A `/skill` held by a pending runtime selection comes back on the server's
-  // error as `restoreDraft`; the reducer stages it, the composer takes it.
-  const SESSION = "s-restore";
-  const SESSION_KEY = composerDraftStorageKey(SESSION, false);
+describe("Composer insert (a held input put back)", () => {
+  // Put back hands the composer a held input's exact text. It joins the field,
+  // never replaces it, and is acknowledged only once it is in the field AND in
+  // this browser's draft, so the server never lets go of a command the field
+  // does not hold.
+  const KEY_A = composerDraftStorageKey("s-held-a", false);
+  const KEY_B = composerDraftStorageKey("s-held-b", false);
   const HELD = "/review-pr 412 --focus security";
   const actions = {} as unknown as AssistantActions;
-  let dispatch: ((next: (state: UIState) => UIState) => void) | null = null;
-  let latest: UIState = createInitialState();
+  const inserted: { token: number; stored: string | null }[] = [];
 
-  /** `App` + the reducer: the fork-draft slot outlives the composer. */
-  function Host({ mounted = true }: { mounted?: boolean }) {
-    const [state, setState] = useState<UIState>(() => latest);
-    dispatch = (next) =>
-      setState((current) => {
-        latest = next(current);
-        return latest;
-      });
-    if (!mounted) return null;
+  function Host({
+    storageKey = KEY_A,
+    insert = null,
+  }: {
+    storageKey?: string;
+    insert?: { token: number; text: string } | null;
+  }) {
     return (
       <Composer
         onSend={() => {}}
@@ -2028,16 +2021,13 @@ describe("Composer restore drafts, from the reducer", () => {
         session={{ agentType: "developer", harness: "claude-sdk" } as never}
         models={[]}
         slashCommands={[]}
-        draft={state.forkDraft}
-        draftAutoFocus={false}
-        draftStorageKey={SESSION_KEY}
-        onDraftConsumed={(token) =>
-          dispatch?.((current) =>
-            reduceAssistantState(current, {
-              kind: "sessionDraftConsumed",
-              token,
-            }),
-          )
+        draftStorageKey={storageKey}
+        insert={insert}
+        onInserted={(token) =>
+          inserted.push({
+            token,
+            stored: window.localStorage.getItem(storageKey),
+          })
         }
         actions={actions}
       />
@@ -2051,14 +2041,13 @@ describe("Composer restore drafts, from the reducer", () => {
     act(() => root?.unmount());
     root = null;
     container = null;
-    dispatch = null;
-    latest = createInitialState();
+    inserted.length = 0;
     window.localStorage.clear();
   });
 
-  function render(): HTMLTextAreaElement {
+  function render(node: React.ReactElement): HTMLTextAreaElement {
     ({ container, root } = mount());
-    act(() => root!.render(<Host />));
+    act(() => root!.render(node));
     return textarea();
   }
 
@@ -2068,91 +2057,43 @@ describe("Composer restore drafts, from the reducer", () => {
     return field;
   }
 
-  function type(field: HTMLTextAreaElement, value: string) {
-    const setter = Object.getOwnPropertyDescriptor(
-      HTMLTextAreaElement.prototype,
-      "value",
-    )?.set;
-    act(() => {
-      setter?.call(field, value);
-      field.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-  }
+  it("puts the text into an empty field as is, and acknowledges it once stored", () => {
+    render(<Host />);
+    act(() => root!.render(<Host insert={{ token: 1, text: HELD }} />));
+    expect(textarea().value).toBe(HELD);
+    expect(inserted).toEqual([{ token: 1, stored: HELD }]);
+    // The same request again (a re-render) is not a second insert.
+    act(() => root!.render(<Host insert={{ token: 1, text: HELD }} />));
+    expect(textarea().value).toBe(HELD);
+    expect(inserted).toHaveLength(1);
+  });
 
-  function refuseHeldSkill() {
+  it("puts the text above what is typed, on its own line, never replacing it", () => {
+    window.localStorage.setItem(KEY_A, "newer text typed since");
+    render(<Host />);
+    act(() => root!.render(<Host insert={{ token: 2, text: HELD }} />));
+    const merged = `${HELD}\nnewer text typed since`;
+    expect(textarea().value).toBe(merged);
+    expect(inserted).toEqual([{ token: 2, stored: merged }]);
+  });
+
+  it("lands in the destination's own stored draft when the session key changes in the same commit", () => {
+    // R2-A2-res2 path 4: for one render after a key change the field still
+    // holds the previous session's text. The insert must wait for the
+    // destination's text, never merge into (or overwrite with) the old one.
+    window.localStorage.setItem(KEY_A, "session A draft");
+    window.localStorage.setItem(KEY_B, "session B draft");
+    render(<Host storageKey={KEY_A} />);
     act(() =>
-      dispatch?.((current) =>
-        reduceAssistantState(current, {
-          kind: "server",
-          msg: {
-            type: "error",
-            message:
-              "Couldn't switch … /review-pr did not run; your message box offers it back …",
-            target: { type: "session", id: SESSION },
-            failedPromptClientRequestId: "skill-1",
-            restoreDraft: { sessionId: SESSION, text: HELD },
-          },
-        }),
+      root!.render(
+        <Host storageKey={KEY_B} insert={{ token: 3, text: HELD }} />,
       ),
     );
-  }
-
-  function held(): HTMLElement | null {
-    return (
-      container?.querySelector<HTMLElement>(
-        '[data-testid="composer-held-return"]',
-      ) ?? null
-    );
-  }
-
-  function click(label: string) {
-    const button = [...(held()?.querySelectorAll("button") ?? [])].find(
-      (b) => b.textContent === label,
-    );
-    if (!button) throw new Error(`no ${label} button`);
-    act(() => button.click());
-  }
-
-  it("puts the held command back into an empty field, as typed", () => {
-    const field = render();
-    refuseHeldSkill();
-    expect(field.value).toBe(HELD);
-    expect(held()).toBeNull();
-    expect(latest.forkDraft).toBeNull();
-  });
-
-  it("never replaces text typed while the refusal was on its way; offers the command back instead", () => {
-    const field = render();
-    type(field, "new text typed after sending skill");
-    refuseHeldSkill();
-    expect(field.value).toBe("new text typed after sending skill");
-    expect(window.localStorage.getItem(SESSION_KEY)).toBe(
-      "new text typed after sending skill",
-    );
-    expect(held()?.textContent).toContain(HELD);
-    // Held, not spent: leaving and coming back offers it again.
-    expect(latest.forkDraft).toMatchObject({ text: HELD, restore: true });
-    act(() => root!.render(<Host mounted={false} />));
-    act(() => root!.render(<Host />));
-    expect(textarea().value).toBe("new text typed after sending skill");
-    expect(held()?.textContent).toContain(HELD);
-
-    click("Put back");
-    expect(textarea().value).toBe(
-      `${HELD}\n\nnew text typed after sending skill`,
-    );
-    expect(held()).toBeNull();
-    expect(latest.forkDraft).toBeNull();
-  });
-
-  it("discarding the held command leaves the newer text alone", () => {
-    const field = render();
-    type(field, "something else");
-    refuseHeldSkill();
-    click("Discard");
-    expect(field.value).toBe("something else");
-    expect(held()).toBeNull();
-    expect(latest.forkDraft).toBeNull();
+    const merged = `${HELD}\nsession B draft`;
+    expect(textarea().value).toBe(merged);
+    expect(window.localStorage.getItem(KEY_B)).toBe(merged);
+    expect(window.localStorage.getItem(KEY_A)).toBe("session A draft");
+    expect(inserted).toEqual([{ token: 3, stored: merged }]);
   });
 });
 

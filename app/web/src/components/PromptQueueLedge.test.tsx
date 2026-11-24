@@ -211,3 +211,72 @@ describe("PromptQueueLedge with unhandled background updates", () => {
     );
   });
 });
+
+describe("PromptQueueLedge held inputs", () => {
+  const held = [
+    { id: "h1", text: "/review-pr 412", createdAt: 1 },
+    { id: "h2", text: "/summarize the thread", createdAt: 2 },
+  ];
+  const heldButton = (id: string, label: string) =>
+    [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        `[data-held-input="${id}"] button`,
+      ),
+    ].find((candidate) => candidate.textContent === label);
+
+  it("shows with nothing queued, first and in order, never as a sendable row", () => {
+    render({
+      queue: {
+        items: [{ id: "q1", text: "queued words", createdAt: 3 }],
+        paused: false,
+        held,
+      },
+      running: false,
+      onPutBackHeld: vi.fn(),
+      onDiscardHeld: vi.fn(),
+    });
+    expect(container.textContent).toContain("1 queued · 2 to put back");
+    const rows = [
+      ...container.querySelectorAll<HTMLElement>(
+        "[data-held-input], [data-queued-prompt]",
+      ),
+    ];
+    expect(rows.map((row) => row.textContent)).toEqual([
+      expect.stringContaining("/review-pr 412"),
+      expect.stringContaining("/summarize the thread"),
+      expect.stringContaining("queued words"),
+    ]);
+    // Held rows offer only Put back and Discard: no Steer, no Send next.
+    expect(
+      [
+        ...container.querySelectorAll<HTMLButtonElement>(
+          '[data-held-input="h1"] button',
+        ),
+      ].map((b) => b.textContent),
+    ).toEqual(["Discard", "Put back"]);
+  });
+
+  it("renders for held inputs alone", () => {
+    render({ queue: { items: [], paused: false, held: [held[0]!] } });
+    expect(container.textContent).toContain("1 to put back");
+  });
+
+  it("Put back and Discard hand the input up and busy only the chosen button", () => {
+    const onPutBackHeld = vi.fn();
+    const onDiscardHeld = vi.fn();
+    render({
+      queue: { items: [], paused: false, held },
+      onPutBackHeld,
+      onDiscardHeld,
+    });
+    act(() => heldButton("h1", "Put back")!.click());
+    expect(onPutBackHeld).toHaveBeenCalledWith(held[0]);
+    expect(heldButton("h1", "Put back")!.getAttribute("aria-busy")).toBe(
+      "true",
+    );
+    expect(heldButton("h1", "Discard")!.disabled).toBe(true);
+    act(() => heldButton("h2", "Discard")!.click());
+    expect(onDiscardHeld).toHaveBeenCalledWith("h2");
+    expect(heldButton("h2", "Discard")!.getAttribute("aria-busy")).toBe("true");
+  });
+});

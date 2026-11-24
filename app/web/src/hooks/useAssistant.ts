@@ -390,13 +390,6 @@ export interface ForkDraft {
   sessionId: string;
   text: string;
   token: number;
-  /**
-   * Input the server handed BACK (a send that could not wait): it lands only
-   * in an empty field or one still holding exactly it. Over newer text the
-   * composer keeps that text and offers this back instead, and the draft stays
-   * unconsumed until the user puts it back or discards it.
-   */
-  restore?: true;
 }
 
 /** Navigation signal emitted whenever a fork completes, so the UI switches to it. */
@@ -6630,19 +6623,6 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
           setupFinishedRefusals: msg.setupFinished
             ? state.setupFinishedRefusals + 1
             : state.setupFinishedRefusals,
-          // A send that could not wait in the queue comes back to its
-          // session's composer as typed, through the fork draft's handoff,
-          // marked as a RESTORE so it never replaces what was typed since.
-          ...(msg.restoreDraft
-            ? {
-                forkDraft: {
-                  sessionId: msg.restoreDraft.sessionId,
-                  text: msg.restoreDraft.text,
-                  token: Date.now(),
-                  restore: true,
-                },
-              }
-            : {}),
         },
         {
           liveStreams: [],
@@ -6688,7 +6668,9 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       return {
         ...state,
         session:
-          msg.queue.items.length > 0 || msg.queue.automaticTurnsHeld
+          msg.queue.items.length > 0 ||
+          (msg.queue.held?.length ?? 0) > 0 ||
+          msg.queue.automaticTurnsHeld
             ? { ...rest, promptQueue: msg.queue }
             : rest,
       };

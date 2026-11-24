@@ -12,6 +12,7 @@ import {
   type AgentQuestionResponse,
   type CredentialProfileProvider,
   type EntrySummary,
+  type HeldInput,
   type ModelOption,
   type PromptAttachment,
   type SessionListItem,
@@ -671,6 +672,49 @@ export function useSessionChat({
   const queueSessionId = surface === "session" ? session?.sessionId : undefined;
   const sendPromptQueue = actions.promptQueue;
   const shownPromptQueue = queueSessionId ? session?.promptQueue : undefined;
+  // Put back (a held input, `PromptQueueLedge`): the text goes into this
+  // session's composer first, and the server lets go of it only once the
+  // composer reports it in the field and stored (`onInserted`). A reload, a
+  // session switch or a failure in between leaves it held, never lost.
+  const [putBacks, setPutBacks] = useState<
+    readonly { token: number; sessionId: string; id: string; text: string }[]
+  >([]);
+  const putBacksRef = useRef(putBacks);
+  putBacksRef.current = putBacks;
+  const putBackTokenRef = useRef(0);
+  const putBackHeldInput = useCallback(
+    (input: HeldInput) => {
+      if (!queueSessionId) return;
+      if (putBacksRef.current.some((request) => request.id === input.id))
+        return;
+      const token = ++putBackTokenRef.current;
+      setPutBacks((current) => [
+        ...current,
+        { token, sessionId: queueSessionId, id: input.id, text: input.text },
+      ]);
+    },
+    [queueSessionId],
+  );
+  // One at a time, and only into the session it was put back from.
+  const composerInsert =
+    putBacks.find((request) => request.sessionId === queueSessionId) ?? null;
+  const onComposerInserted = useCallback(
+    (token: number) => {
+      const done = putBacksRef.current.find(
+        (request) => request.token === token,
+      );
+      if (!done) return;
+      setPutBacks((current) =>
+        current.filter((request) => request.token !== token),
+      );
+      sendPromptQueue({
+        type: "removeHeldInput",
+        sessionId: done.sessionId,
+        id: done.id,
+      });
+    },
+    [sendPromptQueue],
+  );
   // Alt+Enter queues a message AND steers it in at once, so it is seen in the
   // queue on its way. The server names the row, so the steer waits for the
   // queue update that brings a new row with exactly this text.
@@ -898,9 +942,18 @@ export function useSessionChat({
             })
           }
           onOpenSession={onOpenSession}
+          onPutBackHeld={putBackHeldInput}
+          onDiscardHeld={(id) =>
+            sendPromptQueue({
+              type: "removeHeldInput",
+              sessionId: queueSessionId,
+              id,
+            })
+          }
         />
       ) : undefined,
     [
+      putBackHeldInput,
       heldAssistantSessionId,
       assistantHeld,
       shownPromptQueue,
@@ -1142,6 +1195,8 @@ export function useSessionChat({
       onCommentDraftChange: setChatCommentDraft,
       draft: stagedDraft ?? forkDraft,
       onDraftConsumed: retireStagedDraft,
+      insert: composerInsert,
+      onInserted: onComposerInserted,
       hideRuntimeControls: surface === "assistant",
       ledge: composerLedge,
       dictation,

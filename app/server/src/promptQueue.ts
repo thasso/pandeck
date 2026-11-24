@@ -15,6 +15,12 @@
  * and everything later in the idle chain sees a running session. A Stop pauses
  * the queue rather than feeding it the next message; so does a failed send,
  * which keeps its row with the error.
+ *
+ * Beside the queue the session keeps its HELD inputs: sends a pending runtime
+ * selection refused that cannot be queued (a library skill invocation). They
+ * are the user's exact text, shown with the queue on every device, and never
+ * sent from here: they stay until the user puts one back into the composer or
+ * discards it, and go only with the session.
  */
 import { randomUUID } from "node:crypto";
 import type {
@@ -87,15 +93,17 @@ export function stopPromptQueueDelivery(): void {
 }
 
 /**
- * The session state's queue field; absent when nothing is queued and a Stop
- * holds nothing, since a held session with an empty queue still needs its
- * Resume.
+ * The session state's queue field; absent when nothing is queued or held and
+ * a Stop holds nothing, since a held session with an empty queue still needs
+ * its Resume.
  */
 export function promptQueueField(sessionId: string): {
   promptQueue?: PromptQueueState;
 } {
   const state = queueState(sessionId);
-  return state.items.length > 0 || state.automaticTurnsHeld
+  return state.items.length > 0 ||
+    (state.held?.length ?? 0) > 0 ||
+    state.automaticTurnsHeld
     ? { promptQueue: state }
     : {};
 }
@@ -107,6 +115,7 @@ function queueState(sessionId: string): PromptQueueState {
     items: state.items.map((item) =>
       sending.has(item.id) ? { ...item, sending: true as const } : item,
     ),
+    ...(state.held ? { held: state.held } : {}),
     paused: isHeld(sessionId),
     ...(automaticTurnsHeld(sessionId) ? { automaticTurnsHeld: true } : {}),
   };
@@ -278,9 +287,27 @@ export async function sendQueuedPromptNow(
   resumePromptQueue(sessionId);
 }
 
-/** Forget a deleted session's queue; its attachments go with the session. */
+/**
+ * Keep an input the user sent that a pending runtime selection refused and
+ * that cannot wait in the queue, exactly as typed. Nothing is drained: a held
+ * input is never sent from here, only put back or discarded by the user.
+ */
+export function holdInput(sessionId: string, text: string): void {
+  promptQueueStore.appendHeld({ id: randomUUID(), sessionId, text });
+  publish(sessionId);
+}
+
+/** The user put a held input back into the composer, or discarded it. */
+export function removeHeldInput(sessionId: string, id: string): void {
+  if (promptQueueStore.removeHeld(sessionId, id)) publish(sessionId);
+}
+
+/**
+ * Forget a deleted session's queue and held inputs; its attachments go with
+ * the session.
+ */
 export function deleteSessionPromptQueue(sessionId: string): void {
-  promptQueueStore.clear(sessionId);
+  promptQueueStore.deleteSession(sessionId);
 }
 
 /* -------------------------------- delivery -------------------------------- */

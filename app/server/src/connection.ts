@@ -216,6 +216,8 @@ import {
   pausePromptQueueForStop,
   queuePrompt,
   removeQueuedPrompt,
+  holdInput,
+  removeHeldInput,
   resumePromptQueue,
   resumePromptQueueForHumanPrompt,
   sendQueuedPromptNow,
@@ -909,7 +911,9 @@ export class Connection implements Viewer {
           // message waits in the user's queue, offered again once the
           // selection can apply or is changed or reset (`sessionPendingRuntime.ts`).
           // A skill invocation cannot be queued (Task-1023): its exact text
-          // goes back to the composer instead, so nothing typed is lost.
+          // is kept as a HELD input beside the queue instead, stored with the
+          // session, on every device, until the user puts it back or
+          // discards it. Nothing typed is lost, and nothing runs unasked.
           const pendingHeld =
             err instanceof PendingRuntimeHeldError ? err : undefined;
           const held =
@@ -919,6 +923,8 @@ export class Connection implements Viewer {
               text: msg.text,
               ...(attachments.length ? { attachments } : {}),
             });
+          if (pendingHeld && skillInvocation)
+            holdInput(driver.sessionId, msg.text);
           if (withdrawn)
             queuePrompt(
               driver.sessionId,
@@ -939,7 +945,7 @@ export class Connection implements Viewer {
             message: held
               ? `${held.message} Your message is waiting in your queue.`
               : pendingHeld && skillInvocation
-                ? `${pendingHeld.message} /${skillInvocation.name} did not run; your message box offers it back to send again once the change applies or is reset.`
+                ? `${pendingHeld.message} /${skillInvocation.name} did not run; it is waiting above your message box to put back once the change applies or is reset.`
                 : withdrawn
                   ? withdrawn.uncertain
                     ? `The response stopped, and Claude may already have read your message. It is held in your queue: ${STEER_MAY_HAVE_BEEN_READ.toLowerCase()}`
@@ -950,14 +956,6 @@ export class Connection implements Viewer {
             target: { type: "session", id: driver.id },
             ...(msg.clientRequestId !== undefined
               ? { failedPromptClientRequestId: msg.clientRequestId }
-              : {}),
-            ...(pendingHeld && skillInvocation
-              ? {
-                  restoreDraft: {
-                    sessionId: driver.sessionId,
-                    text: msg.text,
-                  },
-                }
               : {}),
             ...(setupFinished ? { setupFinished: true as const } : {}),
           });
@@ -988,6 +986,7 @@ export class Connection implements Viewer {
       case "queuePrompt":
       case "updateQueuedPrompt":
       case "removeQueuedPrompt":
+      case "removeHeldInput":
       case "moveQueuedPrompt":
       case "clearPromptQueue":
       case "sendQueuedPromptNow":
@@ -3551,6 +3550,8 @@ export class Connection implements Viewer {
           return updateQueuedPrompt(sessionId, msg.id, msg.text);
         case "removeQueuedPrompt":
           return removeQueuedPrompt(sessionId, msg.id);
+        case "removeHeldInput":
+          return removeHeldInput(sessionId, msg.id);
         case "moveQueuedPrompt":
           return moveQueuedPrompt(sessionId, msg.id, msg.toIndex);
         case "clearPromptQueue":

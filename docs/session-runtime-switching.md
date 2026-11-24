@@ -73,14 +73,23 @@ The turn is **held**, never failed and never run on the old engine
 - When the only obstacle is background work keeping the source engine open, the
   reason is "Waiting for background work on Claude; stop it to switch now."
 - A user prompt is refused before anything is appended. It goes to the user's
-  queue, and the error adds "Your message is waiting in your queue." A skill
-  invocation cannot be queued (Task-1023): the error carries `restoreDraft`, and
-  the client hands the exact typed command back to that session's composer as a
-  RESTORE draft. It lands only in an empty field (or one still holding exactly
-  it). Over text typed since, the composer keeps that text and offers the
-  command back with Put back (the command first, on its own line, above the
-  newer text) or Discard; until one is chosen the draft stays unconsumed, so a
-  remount offers it again.
+  queue, and the error adds "Your message is waiting in your queue."
+- A skill invocation cannot be queued (Task-1023), so the server keeps it as a
+  **held input** of the session: the exact submitted text, stored in
+  `session_prompt_queue` with `kind = 'held'` (migration 0101), in order. It
+  rides `PromptQueueState.held`, so every device sees it, after a reload and a
+  restart too. The error adds "/X did not run; it is waiting above your message
+  box to put back once the change applies or is reset."
+  - The composer's queue strip (`PromptQueueLedge`) lists each with **Put back**
+    and **Discard**. Put back puts the text into the composer: as is into an
+    empty field, else first and on its own line above what is typed, never
+    replacing it. The client sends `removeHeldInput` only once the field holds
+    the text and this browser's draft has stored it. Discard sends
+    `removeHeldInput` at once.
+  - A held input is never sent on its own: not when the selection applies or is
+    reset, not by the boot drain. Queue commands (Remove, Clear, Send next)
+    never touch it. It stays until Put back or Discard; a fork does not copy it,
+    and deleting the session removes it.
 - Queued prompts, peer prompts and background wakes stay where they were, with
   no attempt spent.
 - Held work is offered again (a delivery wake) when the selection is changed or
@@ -100,14 +109,15 @@ accounts the server lists for the pending model
 judges changes: the session and its bound account, its next-turn model or
 effort, its enterprise requirement, and any account's kind, enabled, enterprise
 or health projection (including `benchRevision`, so a new bench scope refreshes
-it even when the health state stays the same; `accountTargetsRefreshKey`). A
-model-listing refresh alone has no client signal. A refresh keeps the last list
-shown. The answer also says whether the bound account itself can run the next
-turn (`boundEligible`: enabled, enterprise requirement, offers the model at that
-effort, login, bench), judged by the rules a selection naming it is applied
-with. An account that cannot move shows as text. While a change is pending, a
-"Next turn" row states the target and what runs now, names a coordinator's
-choice, and offers Reset.
+it even when the health state stays the same), and any account's model listing
+(the `models` push reloads the account projection, so a listing that gains or
+drops the next turn's model refreshes it too; `accountTargetsRefreshKey`). A
+refresh keeps the last list shown. The answer also says whether the bound
+account itself can run the next turn (`boundEligible`: enabled, enterprise
+requirement, offers the model at that effort, login, bench), judged by the rules
+a selection naming it is applied with. An account that cannot move shows as
+text. While a change is pending, a "Next turn" row states the target and what
+runs now, names a coordinator's choice, and offers Reset.
 
 While a change is pending, the composer shows a chip "Next turn: <model · effort
 · account>". Tapping it opens the inspector at the Runtime section, as the

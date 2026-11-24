@@ -2440,30 +2440,57 @@ describe("a failed prompt and its optimistic echo", () => {
     expect(state.optimistic.map((entry) => entry.id)).toEqual(["creq-c2"]);
   });
 
-  it("stages a send that could not wait in the queue back in its session's composer, as typed", () => {
+  it("keeps a held skill on the session's queue state, and a Resend leaves it there", () => {
     // A `/skill` held by a pending runtime selection is never queued: its echo
-    // goes, and its exact text comes back to the composer instead.
+    // goes, and the server keeps its exact text as a HELD input of the session
+    // (`PromptQueueState.held`), which every client is told about. No
+    // browser-only slot holds it, so nothing the composer does can drop it.
     const typed = "/review-pr 412 --focus security";
-    const state = apply(
+    const held = [{ id: "h1", text: typed, createdAt: 1 }];
+    const viewing: UIState = {
+      ...optimisticPrompt(false),
+      session: { sessionId: "s1", harness: "pi", agentType: "developer" },
+    } as UIState;
+    let state = apply(
       {
         type: "error",
         message:
-          "Couldn't switch … /review-pr did not run; your message box offers it back …",
+          "Couldn't switch … /review-pr did not run; it is waiting above your message box …",
         target: { type: "session", id: "s1" },
         failedPromptClientRequestId: "c1",
-        restoreDraft: { sessionId: "s1", text: typed },
       },
-      optimisticPrompt(false),
+      viewing,
     );
     expect(state.optimistic).toEqual([]);
-    // Marked a restore: the composer never lets it replace newer text.
-    expect(state.forkDraft).toMatchObject({
+    expect(state.forkDraft).toBeNull();
+    // Held with nothing queued: the queue state stays on the session.
+    state = apply(
+      {
+        type: "promptQueue",
+        sessionId: "s1",
+        queue: { items: [], paused: false, held },
+      },
+      state,
+    );
+    expect(state.session?.promptQueue?.held).toEqual(held);
+    // Resend stages its own text in the composer; the held input is untouched.
+    state = reduceAssistantState(state, {
+      kind: "sessionDraftStaged",
       sessionId: "s1",
-      text: typed,
-      restore: true,
+      text: "resend this",
     });
-    // Ordinary failures stage nothing.
-    expect(failed(optimisticPrompt(false)).forkDraft).toBeNull();
+    expect(state.forkDraft?.text).toBe("resend this");
+    expect(state.session?.promptQueue?.held).toEqual(held);
+    // Put back or Discard on any device: the server's queue no longer has it.
+    state = apply(
+      {
+        type: "promptQueue",
+        sessionId: "s1",
+        queue: { items: [], paused: false },
+      },
+      state,
+    );
+    expect(state.session?.promptQueue).toBeUndefined();
   });
 
   it("keeps every echo for a failure that is not a prompt send", () => {

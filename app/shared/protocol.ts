@@ -6629,9 +6629,23 @@ export type QueuedPromptAttachment = Omit<PromptAttachment, "data">;
  * turn or a delivery failed: nothing is sent until they resume it or send a
  * message themselves.
  */
+/**
+ * An input a pending runtime selection refused that cannot wait in the queue
+ * (a library skill invocation: Task-1023), kept for the user exactly as they
+ * submitted it. Never sent on its own: it stays until the user puts it back
+ * into the composer or discards it (`docs/session-runtime-switching.md`).
+ */
+export interface HeldInput {
+  id: string;
+  text: string;
+  createdAt: number;
+}
+
 export interface PromptQueueState {
   items: QueuedPrompt[];
   paused: boolean;
+  /** Held inputs, oldest first; absent when there are none. */
+  held?: HeldInput[];
   /**
    * The user stopped this session, so nothing that was waiting — what agents
    * and the app queued (peer prompts, background updates, approval outcomes)
@@ -7639,6 +7653,7 @@ export type PromptQueueCommand = Extract<
       | "resumePromptQueue"
       | "sendQueuedPeerPromptNow"
       | "withdrawQueuedPeerPrompt"
+      | "removeHeldInput"
       | "recoverBackgroundUpdates"
       | "dismissBackgroundUpdates";
   }
@@ -7676,6 +7691,11 @@ export type ClientMessage =
   /** Replace a queued message's text (it went back into the composer to edit). */
   | { type: "updateQueuedPrompt"; sessionId: string; id: string; text: string }
   | { type: "removeQueuedPrompt"; sessionId: string; id: string }
+  /**
+   * Remove one held input ({@link HeldInput}): the user discarded it, or put
+   * it back into the composer, which sends this once the text is there.
+   */
+  | { type: "removeHeldInput"; sessionId: string; id: string }
   /** Move one queued message to `toIndex` in send order. */
   | {
       type: "moveQueuedPrompt";
@@ -9095,14 +9115,6 @@ export type ServerMessage =
        * one. Distinct from `requestId`, which belongs to mutation correlation.
        */
       failedPromptClientRequestId?: string;
-      /**
-       * Set when a prompt send that never ran cannot wait in the queue and goes
-       * back to the user instead, exactly as submitted: a `/skill` invocation
-       * held by the session's pending runtime selection (skills are never
-       * queued). The client stages `text` in that session's composer so the
-       * command is retried without retyping.
-       */
-      restoreDraft?: { sessionId: string; text: string };
       /**
        * Set when the send was refused because its session is the guided setup
        * conversation and setup is finished (`docs/onboarding.md`): the client
