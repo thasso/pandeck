@@ -132,7 +132,7 @@ export type RemotePrepareAnswer =
 type RemoteEffects = "none" | "possible";
 
 /** The edge's answer to `tools.apply`, as the link decodes it (shallow). */
-type RemoteApplyAnswer =
+export type RemoteApplyAnswer =
   | { ok: true; results: object[]; effects: RemoteEffects; trimmed?: true }
   | (RemoteToolFailure & {
       effects: RemoteEffects;
@@ -148,7 +148,7 @@ type RemoteApplyAnswer =
  * anything was written (D6(i)); every other outcome, an error frame (`lost`)
  * included, may have written (D2).
  */
-type RemoteApplyOutcome =
+export type RemoteApplyOutcome =
   | { outcome: "notSent" }
   | { outcome: "answer"; answer: RemoteApplyAnswer }
   | { outcome: "lost" }

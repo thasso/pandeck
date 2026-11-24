@@ -38,6 +38,7 @@ import {
 } from "./jiraMutationResult.ts";
 import {
   ERROR_FALLBACK,
+  IDENTIFIER_FORMATS,
   ITEM_ERROR_MAX,
   ITEM_WARNING_MAX,
   NESTED_ERROR_OMITTED,
@@ -568,6 +569,28 @@ describe("buildJiraResultRecord vets every result on its raw value (A1)", () => 
       applied.sprint!.result = bad;
       expect(build(applied).sprintResult).toBeUndefined();
     }
+  });
+});
+
+describe("an instant names a real moment (Task-1463 P6b, L-b)", () => {
+  test.each([
+    ["2028-02-29T09:00:00Z", true],
+    ["2000-02-29T09:00:00.5+01:00", true],
+    ["2026-12-31T23:59:59.999999999-12:30", true],
+    ["2026-02-29T09:00:00Z", false],
+    ["1900-02-29T09:00:00Z", false],
+    ["2026-02-31T09:00:00Z", false],
+    ["2026-04-31T09:00:00Z", false],
+    ["2026-00-10T09:00:00Z", false],
+    ["2026-13-10T09:00:00Z", false],
+    ["2026-11-00T09:00:00Z", false],
+    ["2026-11-23T24:00:00Z", false],
+    ["2026-11-23T09:60:00Z", false],
+    ["2026-11-23T09:00:60Z", false],
+    ["2026-11-23T09:00:00+25:00", false],
+    ["2026-11-23T09:00:00+01:60", false],
+  ])("%s: %s", (instant, valid) => {
+    expect(IDENTIFIER_FORMATS.instant(instant)).toBe(valid);
   });
 });
 

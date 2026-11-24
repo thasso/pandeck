@@ -599,8 +599,8 @@ test.each(CASES.map((oracle) => [oracle.name, oracle] as const))(
 // ---------------------------------------------------------------------------
 // The gateway path (Task-1463 P6b, P6B-F2): given the proposal the shared
 // prepare builds for the same input on the same fake site, the remote tool
-// raises the card and tool text pinned above, literal for literal. Applying a
-// gateway card is M2's.
+// raises the card and tool text pinned above, literal for literal. Applying it
+// follows at the end of this file.
 
 const { updateConfluenceSettings } =
   await import("../../confluenceSettings.ts");
@@ -681,5 +681,171 @@ test.each(CASES.map((oracle) => [oracle.name, oracle] as const))(
       text,
       body,
     });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Applying the gateway card (Task-1463 P6b, M2): the port runs the edge's own
+// tool host, prepare and apply, through the wire's decoders, against the same
+// fake site. The card raised is the literal above; approved, it ends with the
+// literal status, summary, URL and error, plus exactly the suffix the apply
+// table adds for that case (`remoteApply.ts`), and its items as the local
+// apply leaves them.
+
+const { createToolHost } = await import("../../gatewayTools/host.ts");
+const { edgeTools } = await import("../../gatewayTools/tools.ts");
+const { encodeAtlassianCredential } =
+  await import("../../gatewayTools/atlassian.ts");
+const { edgeRemotePort } = await import("../../test/edgeRemotePort.ts");
+const linkDecoders = await import("../../gateway/clientMethods.ts");
+const { approvalForId } = await import("../../pendingApprovals.ts");
+
+const PARTIAL_EFFECTS =
+  "Some failed changes may have been partly written before they failed; the card shows each item's outcome. Check the site and ask again only for what is missing. Don't approve the same change again unchecked.";
+
+/** What the gateway adds to a case's literal; every other case adds nothing. */
+const GATEWAY_SUFFIX: Record<string, string> = {
+  // The refused write reached Confluence: it may have written.
+  "partial failure: the comment is refused": PARTIAL_EFFECTS,
+  "all failed: the only edit is refused": PARTIAL_EFFECTS,
+};
+
+/** The edge's own text for an item, where it differs from the local one. */
+interface EdgeTexts {
+  error?: string;
+  warning?: string;
+}
+
+/**
+ * The edge's own texts by case and item: it never passes an upstream body
+ * on (P6a vetting), so these replace the local item errors and warnings,
+ * an error inside the all-failed text too.
+ */
+const GATEWAY_ITEM_TEXTS: Record<string, (EdgeTexts | undefined)[]> = {
+  "label change whose label write fails": [
+    {
+      warning:
+        "label changes failed: add x: Atlassian rejected the credential; reconnect Jira in Pandeck's Settings.",
+    },
+  ],
+  "partial failure: the comment is refused": [
+    undefined,
+    { error: "Confluence refused the change (HTTP 400)." },
+  ],
+  "all failed: the only edit is refused": [
+    { error: "Confluence refused the change (HTTP 409)." },
+  ],
+};
+
+const withSuffix = (text: string | undefined, suffix: string | undefined) =>
+  text === undefined || suffix === undefined ? text : `${text} ${suffix}`;
+
+type AppliedBody = { items: EdgeTexts[] };
+
+/** The local items with the edge's item texts, and the error text to match. */
+function withEdgeTexts(
+  name: string,
+  local: AppliedBody,
+  error: string | undefined,
+): { body: AppliedBody; error: string | undefined } {
+  const edge = GATEWAY_ITEM_TEXTS[name] ?? [];
+  // Every local error and warning has its edge text pinned.
+  local.items.forEach((item, index) => {
+    expect(item.error !== undefined).toBe(edge[index]?.error !== undefined);
+    expect(item.warning !== undefined).toBe(edge[index]?.warning !== undefined);
+  });
+  let shown = error;
+  const body = structuredClone(local);
+  body.items.forEach((item, index) => {
+    const texts = edge[index];
+    if (texts?.error !== undefined) {
+      shown = shown?.replace(item.error!, texts.error);
+      item.error = texts.error;
+    }
+    if (texts?.warning !== undefined) item.warning = texts.warning;
+  });
+  return { body, error: shown };
+}
+
+async function observeGatewayApply(
+  oracle: OracleCase,
+): Promise<Observed & { applied: unknown }> {
+  stubConfluenceWriteFetch(oracle.answer?.(), oracle.options);
+  const credential = encodeAtlassianCredential({
+    site: SITE.host,
+    email: SITE.atlassianEmail,
+    token: SITE.atlassianToken,
+  });
+  const host = createToolHost(
+    edgeTools({ confluenceDeletes: { page: true, attachment: true } }),
+    { log: () => {} },
+  );
+  const uninstall = installRemoteToolPort(
+    edgeRemotePort(
+      host,
+      () => ({
+        clientId: "oracle-client",
+        credential: () => Promise.resolve({ ok: true as const, credential }),
+      }),
+      linkDecoders,
+    ),
+  );
+  updateConfluenceSettings({ enabled: true });
+  try {
+    applyListing(acceptRemoteTools(host.list()));
+    const tool = remoteToolsFor("confluence").find(
+      (candidate) => candidate.name === "confluence_mutate_page",
+    )!;
+    const sessionId = `confluence-oracle-apply-${(session += 1)}`;
+    const result = await tool.execute({ items: oracle.items }, {
+      session: { sessionId },
+      toolCallId: "call-1",
+    } as never);
+    const part = result.content[0];
+    const proposed = approvalsForSession(sessionId).at(-1)!;
+    const body = structuredClone(proposed.body);
+    const { card } = await resolveApproval(proposed.id, "approved");
+    return {
+      title: proposed.title,
+      summary: proposed.summary,
+      text: withoutCardId(part?.type === "text" ? part.text : ""),
+      body,
+      status: card.status,
+      resultSummary: card.resultSummary,
+      resultUrl: card.resultUrl,
+      error: card.error,
+      applied: approvalForId(proposed.id)?.body,
+    };
+  } finally {
+    uninstall();
+    updateConfluenceSettings({ enabled: false });
+  }
+}
+
+/** The local apply's items for the same case, the gateway's reference. */
+async function locallyApplied(oracle: OracleCase): Promise<unknown> {
+  await observe(oracle);
+  const sessionId = `confluence-oracle-${session}`;
+  return approvalForId(approvalsForSession(sessionId).at(-1)!.id)?.body;
+}
+
+test.each(CASES.map((oracle) => [oracle.name, oracle] as const))(
+  "gateway confluence_mutate_page apply oracle: %s",
+  async (name, oracle) => {
+    const local = await locallyApplied(oracle);
+    vi.unstubAllGlobals();
+    const { applied, ...observed } = await observeGatewayApply(oracle);
+    const suffix = GATEWAY_SUFFIX[name];
+    const edge = withEdgeTexts(
+      name,
+      local as AppliedBody,
+      oracle.expected.error,
+    );
+    expect(observed).toEqual({
+      ...oracle.expected,
+      resultSummary: withSuffix(oracle.expected.resultSummary, suffix),
+      error: withSuffix(edge.error, suffix),
+    });
+    expect(applied).toEqual(edge.body);
   },
 );

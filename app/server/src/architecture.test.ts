@@ -730,8 +730,9 @@ test("only tests and the probe set the gateway's Claude token endpoint", () => {
 
 /**
  * The gateway write modules are leaves of the tool graph (Task-1463 P6b,
- * P6B-F1): `catalog → remoteToolGroup → remoteWrites → card leaves` and the
- * local tools share only the leaves, so no load order can meet a cycle.
+ * P6B-F1): `catalog → remoteToolGroup → remoteWrites → card leaves`, the
+ * local executors reach `remoteApply` (M2), and both share only the leaves,
+ * so no load order can meet a cycle.
  */
 test("the gateway write tool and the card leaves reach no catalog, tool group or local tool module", () => {
   const FORBIDDEN = [
@@ -742,6 +743,7 @@ test("the gateway write tool and the card leaves reach no catalog, tool group or
   ];
   for (const entry of [
     "tools/gateway/remoteWrites.ts",
+    "tools/gateway/remoteApply.ts",
     "tools/jira/jiraProposalCard.ts",
     "tools/confluence/confluenceProposalCard.ts",
   ]) {
@@ -759,4 +761,28 @@ test("the gateway write tool and the card leaves reach no catalog, tool group or
     ),
     "the walk reaches the leaves",
   );
+  // The texts both share load nothing at all.
+  assert.deepEqual(staticReach("tools/gateway/remoteWriteRules.ts").modules, [
+    "tools/gateway/remoteWriteRules.ts",
+  ]);
+});
+
+/**
+ * One summary owner per product (Task-1463 P6b, M2): the local apply and the
+ * gateway's apply count and word a result through the same function, so
+ * the two paths cannot drift apart.
+ */
+test("each product's apply summary is defined exactly once", () => {
+  for (const name of [
+    "summarizeJiraApplication",
+    "summarizeConfluenceApplication",
+  ]) {
+    const definitions: string[] = [];
+    for (const path of sourceFiles(SRC_ROOT)) {
+      const source = readFileSync(path, "utf8");
+      if (new RegExp(`function ${name}\\b`).test(source))
+        definitions.push(relative(SRC_ROOT, path));
+    }
+    assert.equal(definitions.length, 1, `${name}: ${definitions.join(", ")}`);
+  }
 });

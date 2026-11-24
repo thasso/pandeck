@@ -14,7 +14,6 @@ import { approvalStore } from "../../db/approvalStore.ts";
 import { updateJiraSettings } from "../../jiraSettings.ts";
 import type { ToolCallContext } from "../../mcp/tool.ts";
 import {
-  ROUTE_UNSUPPORTED,
   approvalsForSession,
   resolveApproval,
   setApprovalBroadcastForTests,
@@ -30,7 +29,7 @@ import {
 import { confluenceMutatePageTool } from "../confluence/confluenceTools.ts";
 import { jiraMutateIssueTool } from "../jira/jiraTools.ts";
 import { remoteToolsFor } from "./remoteToolGroup.ts";
-import { GATEWAY_CONTEXT } from "./remoteWrites.ts";
+import { GATEWAY_CONTEXT } from "./remoteWriteRules.ts";
 
 setApprovalBroadcastForTests(() => {});
 
@@ -175,13 +174,17 @@ test("a proposal becomes the local card with the gateway context, the local text
   ]);
 });
 
-test("until the executors route gateway cards, approving one fails closed before any apply (M1 interim, P6B-F3)", async () => {
+test("approving a gateway card routes it to the gateway's apply, never the local executor", async () => {
   await remote("jira").execute({ items: [] }, ctx());
   const [card] = approvalsForSession(sessionId);
   const { card: decided } = await resolveApproval(card!.id, "approved");
+  // The fake link answers that the request never left.
   assert.equal(decided.status, "failed");
-  assert.equal(decided.error, ROUTE_UNSUPPORTED);
-  assert.deepEqual(applied, []);
+  assert.equal(
+    decided.error,
+    "The credential gateway is unreachable. Nothing was written; ask for the change again.",
+  );
+  assert.deepEqual(applied, ["jira_mutate_issue"]);
 });
 
 test("before prepare: no link, a product toggle off, or a listing without the two-phase write refuse with nothing written (AC3)", async () => {
@@ -378,7 +381,7 @@ test("the client's site pattern is the edge's, text for text (D3)", () => {
     return match[1];
   };
   assert.equal(
-    pattern("./remoteWrites.ts", "ATLASSIAN_SITE_RE"),
+    pattern("./remoteWriteRules.ts", "ATLASSIAN_SITE_RE"),
     pattern("../../gatewayTools/atlassian.ts", "SITE_RE"),
   );
 });

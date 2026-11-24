@@ -11,21 +11,23 @@ import { afterEach, test, vi } from "vitest";
 /** Imports `load()` in a fresh registry and returns the kinds it registered. */
 async function freshImport<M>(
   load: () => Promise<M>,
-): Promise<{ module: M; registered: string[] }> {
+): Promise<{ module: M; registered: string[]; routes: string[][] }> {
   vi.resetModules();
   const registered: string[] = [];
+  const routes: string[][] = [];
   vi.doMock("../../pendingApprovals.ts", async (original) => {
     const actual = await original<typeof import("../../pendingApprovals.ts")>();
     return {
       ...actual,
       registerApprovalExecutor: ((kind, executor) => {
         registered.push(kind);
+        routes.push([...(executor.routes ?? [])]);
         return actual.registerApprovalExecutor(kind, executor);
       }) as typeof actual.registerApprovalExecutor,
     };
   });
   const module = await load();
-  return { module, registered };
+  return { module, registered, routes };
 }
 
 afterEach(() => {
@@ -87,4 +89,25 @@ test("remoteWrites.ts loads alone and builds both write tools from the leaves", 
     ),
     [],
   );
+});
+
+test("remoteApply.ts loads alone and registers no executor (M2)", async () => {
+  const { module, registered } = await freshImport(
+    () => import("./remoteApply.ts"),
+  );
+  assert.equal(typeof module.applyOnGateway, "function");
+  assert.deepEqual(registered, []);
+});
+
+test("loaded alone, the local executors route gateway cards to the gateway's apply (M2)", async () => {
+  for (const load of [
+    (): Promise<unknown> => import("../jira/jiraTools.ts"),
+    (): Promise<unknown> => import("../confluence/confluenceTools.ts"),
+  ]) {
+    const { registered, routes } = await freshImport(load);
+    const index = registered.findIndex(
+      (kind) => kind === "jiraIssue" || kind === "confluencePage",
+    );
+    assert.deepEqual(routes[index], ["gateway"]);
+  }
 });

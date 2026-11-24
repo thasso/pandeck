@@ -50,6 +50,8 @@ import {
   type SearchIssuesParams,
 } from "../../jiraSearch.ts";
 import { errorText } from "../../errors.ts";
+import { applyOnGateway } from "../gateway/remoteApply.ts";
+import { GATEWAY_ROUTE } from "../gateway/remoteWriteRules.ts";
 import { resolveUserNames } from "../../jiraUsers.ts";
 import {
   JIRA_MUTATE_ISSUE_LABEL,
@@ -281,7 +283,10 @@ export const jiraMutateIssueTool = defineAgentTool<JiraMutationParams>({
 
 /** Execute an approved Jira issue mutation: apply each item, recording per-item results. */
 registerApprovalExecutor("jiraIssue", {
-  async execute(card: ApprovalCard) {
+  // A gateway-prepared card applies on the gateway, never here (Task-1463 P6b).
+  routes: [GATEWAY_ROUTE],
+  async execute(card: ApprovalCard, context: Record<string, unknown>) {
+    if (context.via === GATEWAY_ROUTE) return applyOnGateway(card, "jiraIssue");
     if (card.body.kind !== "jiraIssue")
       throw new Error("Mismatched approval body for jiraIssue.");
     const config = getJiraToolConfig();

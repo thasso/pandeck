@@ -45,7 +45,7 @@ const JIRA_KEY_RE = /^[A-Z][A-Z0-9_]*-[1-9][0-9]*$/;
 const PAGE_ID_RE = /^[0-9]{1,20}$/;
 const ATTACHMENT_ID_RE = /^att[0-9]{1,20}$/;
 const INSTANT_RE =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|[+-](\d{2}):(\d{2}))$/;
 /** Printable ASCII without space; `"` and `\` are refused separately. */
 const URL_CHARS_RE = /^[\x21-\x7e]+$/;
 
@@ -66,6 +66,38 @@ function isPlainName(value: string): boolean {
   return true;
 }
 
+/**
+ * An ISO 8601 instant that names a real moment (Task-1463 P6b, L-b): the
+ * shape, then the calendar and the clock, leap years included; no leap
+ * second.
+ */
+function isInstant(value: string): boolean {
+  const parts = INSTANT_RE.exec(value);
+  if (!parts) return false;
+  const [year, month, day, hour, minute, second] = parts
+    .slice(1, 7)
+    .map(Number) as [number, number, number, number, number, number];
+  const offsetHour = Number(parts[7] ?? 0);
+  const offsetMinute = Number(parts[8] ?? 0);
+  return (
+    month >= 1 &&
+    month <= 12 &&
+    day >= 1 &&
+    day <= daysIn(year, month) &&
+    hour <= 23 &&
+    minute <= 59 &&
+    second <= 59 &&
+    offsetHour <= 23 &&
+    offsetMinute <= 59
+  );
+}
+
+function daysIn(year: number, month: number): number {
+  if (month !== 2) return [4, 6, 9, 11].includes(month) ? 30 : 31;
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  return leap ? 29 : 28;
+}
+
 /** Each identifier kind's format, checked only after the secret check. */
 export const IDENTIFIER_FORMATS: Readonly<
   Record<IdentifierKind, (value: string) => boolean>
@@ -73,7 +105,7 @@ export const IDENTIFIER_FORMATS: Readonly<
   jiraKey: (value) => value.length <= JIRA_KEY_MAX && JIRA_KEY_RE.test(value),
   pageId: (value) => PAGE_ID_RE.test(value),
   attachmentId: (value) => ATTACHMENT_ID_RE.test(value),
-  instant: (value) => INSTANT_RE.test(value),
+  instant: isInstant,
   sprintName: (value) => value.length <= SPRINT_NAME_MAX && isPlainName(value),
 };
 

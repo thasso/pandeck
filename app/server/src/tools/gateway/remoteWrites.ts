@@ -37,7 +37,6 @@ import {
   remoteToolPort,
   remoteToolsConnected,
   type RemotePrepareAnswer,
-  type RemoteProduct,
   type RemoteWriteDescriptor,
   type RemoteWriteName,
 } from "../../remoteTools.ts";
@@ -54,49 +53,21 @@ import {
   jiraProposalSummary,
   jiraProposalText,
 } from "../jira/jiraProposalCard.ts";
-
-/**
- * The approval context of a card the gateway prepared: its executor applies
- * it with `tools.apply` and never locally (`pendingApprovals.ts` routes).
- */
-export const GATEWAY_CONTEXT = { via: "gateway" } as const;
-
-/**
- * The edge's SSRF site pattern, a copy: `gatewayTools/atlassian.ts` `SITE_RE`
- * is edge code this server may not import (`workerBoundary.test.ts`), and
- * `remoteWrites.test.ts` fails when the two texts differ (D3).
- */
-const ATLASSIAN_SITE_RE = /^[a-z0-9][a-z0-9-]{0,62}\.atlassian\.net$/;
-
-const NOTHING_WRITTEN = "Nothing was written.";
-/** The link's decoder cuts an edge message here; a cut one gets "…". */
-const EDGE_MESSAGE_MAX = 500;
+import {
+  ATLASSIAN_SITE_RE,
+  DISABLED,
+  GATEWAY_CONTEXT,
+  NOTHING_WRITTEN,
+  NOT_OFFERED,
+  withNothingWritten,
+} from "./remoteWriteRules.ts";
 
 const UNEXPECTED_ANSWER =
   "The gateway answered something this server can't show as a proposal; nothing was prepared.";
 const UNREACHABLE = `The credential gateway is unreachable. ${NOTHING_WRITTEN}`;
 const NO_TOOLS = `The credential gateway runs no tools. ${NOTHING_WRITTEN}`;
-const NOT_OFFERED = `The gateway no longer offers this change. ${NOTHING_WRITTEN}`;
 const TIMED_OUT = `The gateway did not prepare the change in time. ${NOTHING_WRITTEN}`;
 const CANCELLED = `The call was cancelled. ${NOTHING_WRITTEN}`;
-/** A product's toggle is off. */
-const DISABLED: Record<RemoteProduct, string> = {
-  jira: `Jira tools are disabled. Enable them in Settings → Jira. ${NOTHING_WRITTEN}`,
-  slack: `Slack tools are disabled. Enable them in Settings → Slack. ${NOTHING_WRITTEN}`,
-  confluence: `Confluence tools are disabled. Enable them in Settings → Confluence. ${NOTHING_WRITTEN}`,
-};
-
-/**
- * An edge message with the client's own claim: "…" where the link cut it,
- * then "Nothing was written." unless it already ends so.
- */
-function withNothingWritten(message: string): string {
-  const shown =
-    message.length >= EDGE_MESSAGE_MAX ? `${message}…` : message.trimEnd();
-  return /nothing was written\.$/i.test(shown)
-    ? shown
-    : `${shown} ${NOTHING_WRITTEN}`;
-}
 
 /** A prepare the edge refused, in text that says nothing was written. */
 function prepareFailureText(

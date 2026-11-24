@@ -59,6 +59,8 @@ import {
   type ConfluenceSearchParams,
 } from "../../confluenceRead.ts";
 import { errorText } from "../../errors.ts";
+import { applyOnGateway } from "../gateway/remoteApply.ts";
+import { GATEWAY_ROUTE } from "../gateway/remoteWriteRules.ts";
 import { stageSessionAttachment } from "../../sessionAttachments.ts";
 import {
   MAX_ATTACHMENT_BYTES,
@@ -268,7 +270,11 @@ export const confluenceMutatePageTool = defineAgentTool<ConfluenceMutateParams>(
 
 /** Execute an approved Confluence proposal: apply each item, recording per-item results. */
 registerApprovalExecutor("confluencePage", {
-  async execute(card: ApprovalCard) {
+  // A gateway-prepared card applies on the gateway, never here (Task-1463 P6b).
+  routes: [GATEWAY_ROUTE],
+  async execute(card: ApprovalCard, context: Record<string, unknown>) {
+    if (context.via === GATEWAY_ROUTE)
+      return applyOnGateway(card, "confluencePage");
     if (card.body.kind !== "confluencePage")
       throw new Error("Mismatched approval body for confluencePage.");
     const { resultSummary, resultUrl } = await applyConfluenceMutationItems(

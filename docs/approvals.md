@@ -77,8 +77,80 @@ at the start of a resolution, before `prepare` or `execute` runs and whether a
 click or a grant approved it, a card whose route its executor does not list
 fails with "This change was prepared for a route this server version can't
 apply. Nothing was written; ask for it again." A card without a route runs as
-before, and a rejection never consults the executor. No executor lists a route
-yet, so a routed card left behind by a reverted release fails closed.
+before, and a rejection never consults the executor. The `jiraIssue` and
+`confluencePage` executors list `gateway` (below); a routed card left behind by
+a release that no longer lists its route fails closed.
+
+## Gateway-prepared cards
+
+In gateway client mode (`docs/workers.md` "Client mode"), `jira_mutate_issue`
+and `confluence_mutate_page` prepare on the gateway and raise the same
+`jiraIssue` or `confluencePage` card as the local tools, with context
+`{via: "gateway"}` (Task-1463 P6b). The card, its grant keys and the idle and
+boot paths are unchanged. Approved, by a click or a grant, the kind's executor
+sends the card's items to the gateway's `tools.apply`
+(`tools/gateway/remoteApply.ts`); it never reads local credentials, on any path.
+
+Before it sends, in order: the body's kind; client mode, else "This change was
+prepared on the credential gateway, which this server no longer uses. Nothing
+was written; ask for it again."; the items without result fields through the
+closed proposal check and the Atlassian site pattern, else "This proposal can't
+be sent to the gateway. Nothing was written; ask for it again."; then a wait of
+up to 15 s for the link's first listing after a boot. With nothing awaited
+between check and send it then rechecks the connection ("The credential gateway
+is unreachable. Nothing was written; ask for the change again."), the product's
+toggle (its disabled text plus "Nothing was written.") and the listing's
+two-phase offer ("The gateway no longer offers this change. Nothing was
+written."). After the wait there is no reconnect wait.
+
+After the send, one table decides the card:
+
+| What came back                                   | The card                                                  |
+| ------------------------------------------------ | --------------------------------------------------------- |
+| not sent (no connection)                         | failed, unreachable, nothing written                      |
+| a failure the edge certifies `effects: "none"`   | failed, its message plus "Nothing was written."           |
+| a failure with `effects: "possible"`             | failed, may have written; its checked results merged      |
+| a success, every record checked                  | the local summary, plus the notices below                 |
+| every item failed                                | failed, the local all-failed text, plus the notices below |
+| lost, timed out (55 s), unreadable, a bad record | failed, may have written; nothing merged                  |
+
+"May have written" reads: "The gateway did not confirm the result. Changes may
+have been written, and a change already sent can still finish within about a
+minute. Wait a minute, then check the site; ask again only for what is missing.
+Don't approve the same change again unchecked." A summary gains "Some result
+details were too long to return." when the edge trimmed results, and "Some
+failed changes may have been partly written before they failed; …" when an item
+that failed may have written. An all-failed card ends "Nothing was written."
+only when the edge certifies no write left it. Only a request never sent, or an
+answer certified `effects: "none"`, claims nothing was written. Every record is
+checked before any is merged, so a card is never half-merged. An answer that
+arrives after the 55 s bound is dropped and never changes the decided card.
+
+Items apply in order. An item that started finishes; once the connection drops
+or the bound expires the edge starts no further item, and the card says it may
+have written.
+
+### Rolling P6b back
+
+Reverting P6b registers both executors without `routes`, so every gateway card
+fails closed with the route text above: approved by hand, under a grant at idle,
+at boot, or after a switch to local mode. A card that was `executing` at the
+restart is never retried. The operator approves each step:
+
+1. Decide the rollback and note the time. Nothing is deleted from approval data
+   by hand, ever.
+2. Deploy the revert. New proposals stop, since the remote write tools are gone.
+   Pending gateway cards stay pending, approving one fails closed, and the user
+   may deny them.
+3. For each card that was `executing` at the restart, and each card that failed
+   with "may have written", wait at least two minutes after the deploy, then
+   check the target issue or page in Atlassian and record only "written" or "not
+   written" per card. No identifiers or content leave the machine.
+4. Only after step 3, switch modes if wanted. The guard still refuses gateway
+   cards in local mode.
+5. Reverting P6a as well needs steps 1-4 first and no pending gateway card left
+   (the user denies them): without P6a's guard, a gateway card would reach the
+   local executor.
 
 ## Proposed text
 

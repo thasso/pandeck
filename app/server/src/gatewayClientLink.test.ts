@@ -1077,3 +1077,91 @@ test("a gateway write's apply is bounded at 55 s without a caller signal; it sen
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(remoteTools.remoteToolsConnected(), true);
 });
+
+test("a gateway card whose apply times out fails MAY_HAVE_WRITTEN; the late answer changes neither the card nor its broadcasts (Task-1463 P6b)", async () => {
+  await import("./tools/jira/jiraTools.ts");
+  const { sessionStore } = await import("./db/sessionStore.ts");
+  const approvals = await import("./pendingApprovals.ts");
+  const { createEdgeTools } = await import("./gatewayTools/index.ts");
+  const { host } = createEdgeTools({ log: () => {} });
+  let applies = 0;
+  let answerLate!: () => void;
+  const edge = await stubEdge({
+    [CLIENT_METHODS.toolsList]: () =>
+      Promise.resolve(encodeClientMessage({ tools: host.list() })),
+    [CLIENT_METHODS.toolsApply]: () => {
+      applies++;
+      return new Promise((resolve) => {
+        answerLate = () =>
+          resolve(
+            encodeClientMessage({
+              ok: true,
+              effects: "possible",
+              results: [
+                {
+                  clientId: "item-1",
+                  issueKey: "OPS-1",
+                  operation: "comment",
+                  commentBody: "Late",
+                  fieldChanges: [],
+                  effects: "possible",
+                },
+              ],
+            }),
+          );
+      });
+    },
+  });
+  await updateJiraSettings({ enabled: true });
+  open.push({ close: () => updateJiraSettings({ enabled: false }) });
+  const link = linkTo(edge.socketPath);
+  assert.equal(await link.ready, true);
+
+  const sessionId = "late-apply-session";
+  sessionStore.upsert({
+    id: sessionId,
+    harness: "pi",
+    agentType: "assistant",
+    title: sessionId,
+  });
+  let broadcasts = 0;
+  approvals.setApprovalBroadcastForTests(() => broadcasts++);
+  open.push({ close: () => approvals.setApprovalBroadcastForTests(null) });
+  const card = approvals.createApproval({
+    sessionId,
+    kind: "jiraIssue",
+    title: "Comment on OPS-1",
+    body: {
+      kind: "jiraIssue",
+      jiraHost: "acme.atlassian.net",
+      items: [
+        {
+          clientId: "item-1",
+          issueKey: "OPS-1",
+          operation: "comment",
+          commentBody: "Hi",
+          fieldChanges: [],
+        },
+      ],
+    },
+    context: { via: "gateway" },
+  });
+
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  open.push({ close: () => vi.useRealTimers() });
+  const decided = approvals.resolveApproval(card.id, "approved");
+  while (applies < 1) await new Promise((resolve) => setImmediate(resolve));
+  await vi.advanceTimersByTimeAsync(55_000);
+  const { card: failed } = await decided;
+  assert.equal(failed.status, "failed");
+  assert.match(failed.error ?? "", /^The gateway did not confirm the result\./);
+  const atFailure = structuredClone(approvals.approvalForId(card.id)!);
+  const broadcastsAtFailure = broadcasts;
+  vi.useRealTimers();
+
+  answerLate();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.deepEqual(approvals.approvalForId(card.id), atFailure);
+  assert.equal(broadcasts, broadcastsAtFailure);
+  assert.equal(remoteTools.remoteToolsConnected(), true);
+});
