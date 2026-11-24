@@ -479,4 +479,54 @@ describe("held inputs on the composer's queue strip", () => {
     await click("h1", "Put back");
     expect(field().value).toBe(`${HELD}\nresent prompt`);
   });
+
+  const heldButton = (label: string) =>
+    [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        '[data-held-input="h1"] button',
+      ),
+    ].find((candidate) => candidate.textContent === label)!;
+
+  it("Discard is retryable after a reconnect that keeps the held id", async () => {
+    await show(withHeld(undefined, { connected: true }));
+    await click("h1", "Discard");
+    expect(heldButton("Discard").getAttribute("aria-busy")).toBe("true");
+    // The socket drops with the request unanswered; the reconnect snapshot
+    // still lists the id, so the outcome is unknown and the row is free.
+    await show(withHeld(undefined, { connected: false }));
+    await show(withHeld(undefined, { connected: true }));
+    expect(heldButton("Discard").getAttribute("aria-busy")).toBeNull();
+    expect(heldButton("Discard").disabled).toBe(false);
+    await click("h1", "Discard");
+    expect(removals()).toHaveLength(2);
+  });
+
+  it("Put back is retryable after a reconnect that keeps the held id", async () => {
+    await show(withHeld(undefined, { connected: true }));
+    await click("h1", "Put back");
+    await show(withHeld(undefined, { connected: false }));
+    await show(withHeld(undefined, { connected: true }));
+    expect(heldButton("Put back").getAttribute("aria-busy")).toBeNull();
+    expect(heldButton("Put back").disabled).toBe(false);
+    await click("h1", "Put back");
+    expect(removals()).toHaveLength(2);
+  });
+
+  it("a failed Discard shows its failure on the row and can be given again", async () => {
+    await show(withHeld());
+    await click("h1", "Discard");
+    await show(
+      withHeld(undefined, {
+        sessionFailures: { s1: "Failed to update the queue: refused" },
+      }),
+    );
+    expect(rows()).toEqual([
+      expect.stringContaining("Failed to update the queue: refused"),
+    ]);
+    expect(heldButton("Discard").getAttribute("aria-busy")).toBeNull();
+    expect(heldButton("Discard").disabled).toBe(false);
+    expect(heldButton("Put back").disabled).toBe(false);
+    await click("h1", "Discard");
+    expect(removals()).toHaveLength(2);
+  });
 });

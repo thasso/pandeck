@@ -280,3 +280,99 @@ describe("PromptQueueLedge held inputs", () => {
     expect(heldButton("h2", "Discard")!.getAttribute("aria-busy")).toBe("true");
   });
 });
+
+describe("PromptQueueLedge held inputs after a failed or unknown answer", () => {
+  const held = [{ id: "h1", text: "/review-pr 412", createdAt: 1 }];
+  const heldButton = (label: string) =>
+    [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        '[data-held-input="h1"] button',
+      ),
+    ].find((candidate) => candidate.textContent === label)!;
+
+  it("Discard is retryable after its request fails", () => {
+    const onDiscardHeld = vi.fn();
+    const base = {
+      queue: { items: [], paused: false, held },
+      onPutBackHeld: vi.fn(),
+      onDiscardHeld,
+    };
+    render({ ...base, requestFailure: null });
+    act(() => heldButton("Discard").click());
+    expect(heldButton("Discard").getAttribute("aria-busy")).toBe("true");
+    render({
+      ...base,
+      requestFailure: { message: "Failed to update the queue" },
+    });
+    expect(
+      container.querySelector('[data-held-input="h1"]')!.textContent,
+    ).toContain("Failed to update the queue");
+    expect(heldButton("Discard").disabled).toBe(false);
+    expect(heldButton("Discard").getAttribute("aria-busy")).toBeNull();
+    expect(heldButton("Put back").disabled).toBe(false);
+    act(() => heldButton("Discard").click());
+    expect(onDiscardHeld).toHaveBeenCalledTimes(2);
+  });
+
+  it("Put back is retryable after its request fails", () => {
+    const onPutBackHeld = vi.fn();
+    const base = {
+      queue: { items: [], paused: false, held },
+      onPutBackHeld,
+      onDiscardHeld: vi.fn(),
+    };
+    render({ ...base, requestFailure: null });
+    act(() => heldButton("Put back").click());
+    render({
+      ...base,
+      requestFailure: { message: "Failed to update the queue" },
+    });
+    expect(heldButton("Put back").getAttribute("aria-busy")).toBeNull();
+    expect(heldButton("Put back").disabled).toBe(false);
+    expect(heldButton("Discard").disabled).toBe(false);
+    act(() => heldButton("Put back").click());
+    expect(onPutBackHeld).toHaveBeenCalledTimes(2);
+  });
+
+  it("Discard and Put back are released by a disconnect and by a reconnect that keeps the id", () => {
+    const onDiscardHeld = vi.fn();
+    const onPutBackHeld = vi.fn();
+    const base = {
+      queue: { items: [], paused: false, held },
+      onPutBackHeld,
+      onDiscardHeld,
+    };
+    render({ ...base, connected: true });
+    act(() => heldButton("Discard").click());
+    expect(heldButton("Discard").getAttribute("aria-busy")).toBe("true");
+    // The socket drops with the answer unanswered, then comes back with the
+    // same held id: the outcome is unknown, so the row is free again.
+    render({ ...base, connected: false });
+    render({ ...base, connected: true });
+    expect(heldButton("Discard").getAttribute("aria-busy")).toBeNull();
+    expect(heldButton("Discard").disabled).toBe(false);
+    expect(heldButton("Put back").disabled).toBe(false);
+    act(() => heldButton("Put back").click());
+    render({ ...base, connected: false });
+    render({ ...base, connected: true });
+    expect(heldButton("Put back").getAttribute("aria-busy")).toBeNull();
+    expect(heldButton("Put back").disabled).toBe(false);
+    act(() => heldButton("Put back").click());
+    expect(onPutBackHeld).toHaveBeenCalledTimes(2);
+  });
+
+  it("a failure that arrives before the answer does not mark it", () => {
+    const base = {
+      queue: { items: [], paused: false, held },
+      onPutBackHeld: vi.fn(),
+      onDiscardHeld: vi.fn(),
+    };
+    // The same failure object is what the viewed session still holds: nothing
+    // new arrived, so the answer stays in flight.
+    const old = { message: "old failure" };
+    render({ ...base, requestFailure: old });
+    act(() => heldButton("Discard").click());
+    render({ ...base, requestFailure: old });
+    expect(heldButton("Discard").getAttribute("aria-busy")).toBe("true");
+  });
+});

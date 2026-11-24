@@ -848,6 +848,15 @@ export function useSessionChat({
     surface === "assistant" && (assistantHeld || shownUnhandledBackground > 0)
       ? session?.sessionId
       : undefined;
+  // The failure of this session's last request, new on every arrival: a held
+  // answer in flight takes it as its own (`PromptQueueLedge`).
+  const queueRequestFailure = useMemo(() => {
+    const message = failureOnViewedSession(
+      state.sessionFailures,
+      queueSessionId,
+    );
+    return message ? { message } : null;
+  }, [state.sessionFailures, queueSessionId]);
   const promptQueueLedge = useMemo(
     () =>
       heldAssistantSessionId ? (
@@ -950,10 +959,14 @@ export function useSessionChat({
               id,
             })
           }
+          connected={state.connected}
+          requestFailure={queueRequestFailure}
         />
       ) : undefined,
     [
       putBackHeldInput,
+      state.connected,
+      queueRequestFailure,
       heldAssistantSessionId,
       assistantHeld,
       shownPromptQueue,

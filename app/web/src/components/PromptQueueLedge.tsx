@@ -63,6 +63,18 @@ export interface PromptQueueLedgeProps {
   onPutBackHeld?: ((input: HeldInput) => void) | undefined;
   /** Discard a held input. */
   onDiscardHeld?: ((id: string) => void) | undefined;
+  /**
+   * The connection the held answers were sent on. A change either way ends an
+   * answer whose outcome is unknown: its busy release, and the next snapshot
+   * says what landed.
+   */
+  connected?: boolean;
+  /**
+   * The viewed session's latest failure. A new one while an answer is in
+   * flight is that answer's failure, shown on its row, and the answer can be
+   * given again.
+   */
+  requestFailure?: { message: string } | null | undefined;
 }
 
 /**
@@ -124,6 +136,8 @@ export function PromptQueueLedge({
   onOpenSession,
   onPutBackHeld,
   onDiscardHeld,
+  connected = true,
+  requestFailure,
 }: PromptQueueLedgeProps) {
   const [open, setOpen] = useState(true);
   const heldInputs = queue.held ?? EMPTY_HELD;
@@ -147,10 +161,11 @@ export function PromptQueueLedge({
     if (fresh) setOpen(true);
   }, [queue.items, peers, heldInputs]);
   // Held inputs the user already answered, by the answer, busy on its button
-  // until the server's queue drops them.
-  const [settling, setSettling] = useState<
-    ReadonlyMap<string, "putBack" | "discard">
-  >(() => new Map());
+  // until the server's queue drops them. A request that failed keeps its row
+  // with the failure in place, and both buttons free again.
+  const [settling, setSettling] = useState<ReadonlyMap<string, HeldSettling>>(
+    () => new Map(),
+  );
   useEffect(() => {
     setSettling((current) => {
       const ids = new Set(heldInputs.map((input) => input.id));
@@ -158,6 +173,28 @@ export function PromptQueueLedge({
       return next.size === current.size ? current : next;
     });
   }, [heldInputs]);
+  // Unknown outcome: an answer in flight on a connection that dropped, or
+  // that a reconnect replaced, is released. Its snapshot decides.
+  useEffect(() => {
+    setSettling((current) => {
+      const next = new Map([...current].filter(([, s]) => s.failed));
+      return next.size === current.size ? current : next;
+    });
+  }, [connected]);
+  // A failure of this session's requests while answers are in flight belongs
+  // to them: each shows it on its row and is free to be given again.
+  useEffect(() => {
+    if (!requestFailure) return;
+    setSettling((current) => {
+      if (![...current.values()].some((s) => !s.failed)) return current;
+      return new Map(
+        [...current].map(([id, s]) => [
+          id,
+          s.failed ? s : { ...s, failed: requestFailure.message },
+        ]),
+      );
+    });
+  }, [requestFailure]);
   // Sends this browser asked for, shown as under way before the server's
   // `sending` arrives; a row leaves the set when it leaves the queue.
   const [asked, setAsked] = useState<ReadonlySet<string>>(() => new Set());
@@ -188,7 +225,7 @@ export function PromptQueueLedge({
     answer: "putBack" | "discard",
     act: () => void,
   ) => {
-    setSettling((current) => new Map(current).set(id, answer));
+    setSettling((current) => new Map(current).set(id, { answer }));
     act();
   };
   const steering = running && canSteer;
@@ -234,7 +271,12 @@ export function PromptQueueLedge({
               <HeldInputRow
                 key={`held:${input.id}`}
                 input={input}
-                settling={settling.get(input.id)}
+                settling={
+                  settling.get(input.id)?.failed
+                    ? undefined
+                    : settling.get(input.id)?.answer
+                }
+                failure={settling.get(input.id)?.failed}
                 {...(onPutBackHeld
                   ? {
                       onPutBack: (chosen: HeldInput) =>
@@ -319,6 +361,13 @@ export function PromptQueueLedge({
 
 const EMPTY_HELD: readonly HeldInput[] = [];
 
+/** A held-input answer this browser sent, and what became of it. */
+interface HeldSettling {
+  answer: "putBack" | "discard";
+  /** The failure that ended the request; the answer is free to be given again. */
+  failed?: string;
+}
+
 /**
  * A held input: what the user sent that a pending runtime selection refused
  * and that cannot wait in the queue. It never sends on its own; Put back
@@ -327,12 +376,15 @@ const EMPTY_HELD: readonly HeldInput[] = [];
 const HeldInputRow = memo(function HeldInputRow({
   input,
   settling,
+  failure,
   onPutBack,
   onDiscard,
 }: {
   input: HeldInput;
   /** The user's answer, while the server has not dropped it yet. */
   settling: "putBack" | "discard" | undefined;
+  /** Why the last answer failed, until the user gives an answer again. */
+  failure: string | undefined;
   onPutBack?: (input: HeldInput) => void;
   onDiscard?: (id: string) => void;
 }) {
@@ -350,7 +402,17 @@ const HeldInputRow = memo(function HeldInputRow({
           >
             {input.text}
           </span>
-          <span className="shrink-0 text-xs">did not run</span>
+          {failure ? (
+            <span
+              role="alert"
+              className="min-w-0 truncate text-xs text-destructive"
+              title={failure}
+            >
+              {failure}
+            </span>
+          ) : (
+            <span className="shrink-0 text-xs">did not run</span>
+          )}
         </div>
         <ItemActions className="shrink-0 gap-0.5">
           {onDiscard ? (
