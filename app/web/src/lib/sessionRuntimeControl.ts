@@ -9,6 +9,7 @@ import {
   harnessForModelProvider,
   isSubscriptionAccountKind,
   type CredentialProfileProvider,
+  type CredentialProfileSummary,
   type Harness,
   type ModelOption,
   type SessionAccountMoveTarget,
@@ -104,26 +105,70 @@ export function sessionRuntimeControl(input: {
 }
 
 /**
- * The accounts `/account` may name: the bound account, and the accounts the
- * SERVER judged the session may move to for the model and effort its next turn
- * starts on (`listSessionAccountMoveTargets`, the inspector's list: same kind,
- * enabled, enterprise requirement, offers the model at that effort, login,
- * bench). `/account` is offered only when there is more than one; none until
- * that list has answered, and none for an account that cannot move.
+ * The accounts `/account` may name, exactly as the SERVER judged them for the
+ * model and effort the session's next turn starts on
+ * (`listSessionAccountMoveTargets`, the inspector's list: same kind, enabled,
+ * enterprise requirement, offers the model at that effort, login, bench): the
+ * bound account only when that answer says it can run the turn itself, then
+ * the accounts it may move to. `/account` is offered only when there is more
+ * than one; none until that list has answered, and none for an account that
+ * cannot move.
  */
 export function runtimeAccountChoices(
   account: Account | undefined,
-  targets: LoadState<SessionAccountMoveTarget[]> | undefined,
+  answer:
+    | {
+        targets: LoadState<SessionAccountMoveTarget[]>;
+        boundEligible?: boolean;
+      }
+    | undefined,
 ): { id: string; name: string }[] {
   if (!account || !isSubscriptionAccountKind(account.provider)) return [];
-  const judged = targets ? dataOf(targets) : undefined;
+  const judged = answer ? dataOf(answer.targets) : undefined;
   if (!judged) return [];
   return [
-    { id: account.id, name: account.name },
+    ...(answer?.boundEligible === true
+      ? [{ id: account.id, name: account.name }]
+      : []),
     ...judged
       .filter((target) => target.id !== account.id)
       .map(({ id, name }) => ({ id, name })),
   ];
+}
+
+/**
+ * When `/account`'s server list must be asked for again: a key over everything
+ * the server's judgement reads — the session and its bound account, the model
+ * and effort its next turn starts on, the enterprise requirement, and every
+ * account's kind, enabled, enterprise and whole health projection (login state
+ * AND `benchRevision`: a new bench scope can leave the state as it was). A
+ * model-listing refresh alone has no client signal.
+ */
+export function accountTargetsRefreshKey(input: {
+  sessionId: string | undefined;
+  boundAccountId: string | undefined;
+  model: unknown;
+  thinkingLevel: string | undefined;
+  requiresEnterprise: boolean;
+  profiles: readonly Pick<
+    CredentialProfileSummary,
+    "id" | "provider" | "enabled" | "enterprise" | "health"
+  >[];
+}): string {
+  return JSON.stringify([
+    input.sessionId,
+    input.boundAccountId,
+    input.model,
+    input.thinkingLevel,
+    input.requiresEnterprise,
+    input.profiles.map(({ id, provider, enabled, enterprise, health }) => [
+      id,
+      provider,
+      enabled,
+      enterprise,
+      health,
+    ]),
+  ]);
 }
 
 /** What `/model`, `/effort` and `/account` resolve against. */

@@ -1,4 +1,5 @@
 import {
+  accountTargetsRefreshKey,
   runtimeAccountChoices,
   sessionRuntimeControl,
 } from "./lib/sessionRuntimeControl.ts";
@@ -5674,30 +5675,36 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
             // list the inspector's account picker shows.
             accountChoices: runtimeAccountChoices(
               displayCredentialProfile,
-              sessionRuntime.accounts?.targets,
+              sessionRuntime.accounts &&
+                state.accountMoveTargets &&
+                state.accountMoveTargets.sessionId === displayCurrentId
+                ? state.accountMoveTargets
+                : undefined,
             ),
             open: openRuntimeSection,
           }
         : undefined,
-    [sessionRuntime, displayCredentialProfile, openRuntimeSection],
+    [
+      sessionRuntime,
+      displayCredentialProfile,
+      displayCurrentId,
+      state.accountMoveTargets,
+      openRuntimeSection,
+    ],
   );
   // `/account`'s choices come from that server list, so it is asked for
-  // whenever what it judges changes: the session, the model and effort its
-  // next turn starts on, and the accounts (enabled, enterprise, login).
+  // whenever anything it judges changes (`accountTargetsRefreshKey`).
   const requestAccountTargets = sessionRuntime?.accounts?.onOpen;
   const accountTargetsKey = requestAccountTargets
-    ? JSON.stringify([
-        displayCurrentId,
-        displayPendingRuntime?.model ?? displaySession?.model,
-        displayPendingRuntime?.thinkingLevel ?? displaySession?.thinkingLevel,
-        displaySession?.requiresEnterprise === true,
-        credentialProfiles.map(({ id, enabled, enterprise, health }) => [
-          id,
-          enabled,
-          enterprise,
-          health.state,
-        ]),
-      ])
+    ? accountTargetsRefreshKey({
+        sessionId: displayCurrentId,
+        boundAccountId: displayCredentialProfile?.id,
+        model: displayPendingRuntime?.model ?? displaySession?.model,
+        thinkingLevel:
+          displayPendingRuntime?.thinkingLevel ?? displaySession?.thinkingLevel,
+        requiresEnterprise: displaySession?.requiresEnterprise === true,
+        profiles: credentialProfiles,
+      })
     : undefined;
   const requestAccountTargetsRef = useRef(requestAccountTargets);
   requestAccountTargetsRef.current = requestAccountTargets;

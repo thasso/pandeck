@@ -80,7 +80,8 @@ function loadBrowserDraft(storageKey: string | undefined): string {
   return readBrowserDraft(storageKey);
 }
 
-function readBrowserDraft(storageKey: string | undefined): string {
+/** The draft stored under `storageKey` right now ("" when none). */
+export function readBrowserDraft(storageKey: string | undefined): string {
   if (!storageKey) return "";
   try {
     return persistentStore().getItem(storageKey) ?? "";

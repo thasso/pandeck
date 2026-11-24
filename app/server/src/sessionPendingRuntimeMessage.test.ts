@@ -86,7 +86,11 @@ function account(name: string, enterprise = false): string {
   return p.id;
 }
 
-function session(from: string, scope: "user" | "internal" = "user") {
+function session(
+  from: string,
+  scope: "user" | "internal" = "user",
+  requiresEnterprise = false,
+) {
   const id = `account-move-message-${sequence++}`;
   sessionStore.upsert({
     id,
@@ -94,6 +98,7 @@ function session(from: string, scope: "user" | "internal" = "user") {
     agentType: "assistant",
     scope,
     credentialProfileId: from,
+    ...(requiresEnterprise ? { requiresEnterprise } : {}),
   });
   sessions.push(id);
   const driver = new FakeRuntimeDriver(id) as InstanceType<
@@ -105,10 +110,9 @@ function session(from: string, scope: "user" | "internal" = "user") {
     };
     switchAccount(profileId: string, admit: () => void): Promise<void>;
   };
-  driver.modelSelection = () => ({
-    model: offers.get(from)!,
-    thinkingLevel: "off",
-  });
+  // The model it runs is fixed at its start, whatever its account offers later.
+  const model = offers.get(from)!;
+  driver.modelSelection = () => ({ model, thinkingLevel: "off" });
   driver.switchAccount = async () => {
     throw new Error("setting a pending account never switches");
   };
@@ -200,6 +204,57 @@ test("lists the eligible accounts; picking one makes it pending, a reset drops i
     });
     assert.equal(sessionStore.get(id)?.pendingRuntime, undefined);
     assert.equal(answers(sent, "error").length, 0);
+  } finally {
+    connection.dispose();
+  }
+});
+
+test("the list says whether the bound account itself can run the next turn, by the rules a selection naming it applies with", async () => {
+  const a = account("Bound A");
+  const b = account("Bound B", true);
+  const id = session(a);
+  const { sent, connection } = connect();
+  const verdict = async (sessionId: string, requestId: string) => {
+    await connection.handle({
+      type: "listSessionAccountMoveTargets",
+      sessionId,
+      requestId,
+    });
+    const answer = answers(sent, "sessionAccountMoveTargets").at(-1);
+    assert.equal(answer?.requestId, requestId);
+    assert.equal(answer?.error, undefined);
+    return {
+      boundEligible: answer?.boundEligible,
+      listed: (answer?.accounts ?? [])
+        .map((target) => target.id)
+        .filter((target) => [a, b].includes(target)),
+    };
+  };
+  try {
+    assert.deepEqual(await verdict(id, "ok"), {
+      boundEligible: true,
+      listed: [b],
+    });
+    // Disabled: B is the only account that can run it.
+    profiles.setCredentialProfileEnabled(a, false);
+    assert.deepEqual(await verdict(id, "disabled"), {
+      boundEligible: false,
+      listed: [b],
+    });
+    profiles.setCredentialProfileEnabled(a, true);
+    // Its listing no longer offers the session's model.
+    offers.set(a, { provider: "openai-codex", id: "gpt-other" });
+    assert.deepEqual(await verdict(id, "lacks-model"), {
+      boundEligible: false,
+      listed: [b],
+    });
+    offers.set(a, { provider: "openai-codex", id: "gpt-5.5" });
+    // A session requiring an enterprise account, bound to a personal one.
+    const enterprise = session(a, "user", true);
+    assert.deepEqual(await verdict(enterprise, "enterprise"), {
+      boundEligible: false,
+      listed: [b],
+    });
   } finally {
     connection.dispose();
   }

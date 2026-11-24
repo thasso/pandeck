@@ -23,7 +23,13 @@ import type {
   PromptAttachment,
   SlashCommandInfo,
 } from "@assistant/shared";
-import type { AssistantActions, ForkDraft } from "../hooks/useAssistant.ts";
+import {
+  createInitialState,
+  reduceAssistantState,
+  type AssistantActions,
+  type ForkDraft,
+  type UIState,
+} from "../hooks/useAssistant.ts";
 import type {
   NewPendingChatComment,
   PendingChatCommentsController,
@@ -1990,6 +1996,163 @@ describe("Composer staged drafts", () => {
     act(() => root!.render(<Host mounted={false} />));
     act(() => root!.render(<Host />));
     expect(textarea().value).toBe("my own prompt");
+  });
+});
+
+describe("Composer restore drafts, from the reducer", () => {
+  // A `/skill` held by a pending runtime selection comes back on the server's
+  // error as `restoreDraft`; the reducer stages it, the composer takes it.
+  const SESSION = "s-restore";
+  const SESSION_KEY = composerDraftStorageKey(SESSION, false);
+  const HELD = "/review-pr 412 --focus security";
+  const actions = {} as unknown as AssistantActions;
+  let dispatch: ((next: (state: UIState) => UIState) => void) | null = null;
+  let latest: UIState = createInitialState();
+
+  /** `App` + the reducer: the fork-draft slot outlives the composer. */
+  function Host({ mounted = true }: { mounted?: boolean }) {
+    const [state, setState] = useState<UIState>(() => latest);
+    dispatch = (next) =>
+      setState((current) => {
+        latest = next(current);
+        return latest;
+      });
+    if (!mounted) return null;
+    return (
+      <Composer
+        onSend={() => {}}
+        onAbort={() => {}}
+        streaming={false}
+        disabled={false}
+        contextInfo={null}
+        session={{ agentType: "developer", harness: "claude-sdk" } as never}
+        models={[]}
+        slashCommands={[]}
+        draft={state.forkDraft}
+        draftAutoFocus={false}
+        draftStorageKey={SESSION_KEY}
+        onDraftConsumed={(token) =>
+          dispatch?.((current) =>
+            reduceAssistantState(current, {
+              kind: "sessionDraftConsumed",
+              token,
+            }),
+          )
+        }
+        actions={actions}
+      />
+    );
+  }
+
+  let root: Root | null = null;
+  let container: HTMLDivElement | null = null;
+
+  afterEach(() => {
+    act(() => root?.unmount());
+    root = null;
+    container = null;
+    dispatch = null;
+    latest = createInitialState();
+    window.localStorage.clear();
+  });
+
+  function render(): HTMLTextAreaElement {
+    ({ container, root } = mount());
+    act(() => root!.render(<Host />));
+    return textarea();
+  }
+
+  function textarea(): HTMLTextAreaElement {
+    const field = container?.querySelector("textarea");
+    if (!field) throw new Error("composer textarea did not render");
+    return field;
+  }
+
+  function type(field: HTMLTextAreaElement, value: string) {
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )?.set;
+    act(() => {
+      setter?.call(field, value);
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+
+  function refuseHeldSkill() {
+    act(() =>
+      dispatch?.((current) =>
+        reduceAssistantState(current, {
+          kind: "server",
+          msg: {
+            type: "error",
+            message:
+              "Couldn't switch … /review-pr did not run; your message box offers it back …",
+            target: { type: "session", id: SESSION },
+            failedPromptClientRequestId: "skill-1",
+            restoreDraft: { sessionId: SESSION, text: HELD },
+          },
+        }),
+      ),
+    );
+  }
+
+  function held(): HTMLElement | null {
+    return (
+      container?.querySelector<HTMLElement>(
+        '[data-testid="composer-held-return"]',
+      ) ?? null
+    );
+  }
+
+  function click(label: string) {
+    const button = [...(held()?.querySelectorAll("button") ?? [])].find(
+      (b) => b.textContent === label,
+    );
+    if (!button) throw new Error(`no ${label} button`);
+    act(() => button.click());
+  }
+
+  it("puts the held command back into an empty field, as typed", () => {
+    const field = render();
+    refuseHeldSkill();
+    expect(field.value).toBe(HELD);
+    expect(held()).toBeNull();
+    expect(latest.forkDraft).toBeNull();
+  });
+
+  it("never replaces text typed while the refusal was on its way; offers the command back instead", () => {
+    const field = render();
+    type(field, "new text typed after sending skill");
+    refuseHeldSkill();
+    expect(field.value).toBe("new text typed after sending skill");
+    expect(window.localStorage.getItem(SESSION_KEY)).toBe(
+      "new text typed after sending skill",
+    );
+    expect(held()?.textContent).toContain(HELD);
+    // Held, not spent: leaving and coming back offers it again.
+    expect(latest.forkDraft).toMatchObject({ text: HELD, restore: true });
+    act(() => root!.render(<Host mounted={false} />));
+    act(() => root!.render(<Host />));
+    expect(textarea().value).toBe("new text typed after sending skill");
+    expect(held()?.textContent).toContain(HELD);
+
+    click("Put back");
+    expect(textarea().value).toBe(
+      `${HELD}\n\nnew text typed after sending skill`,
+    );
+    expect(held()).toBeNull();
+    expect(latest.forkDraft).toBeNull();
+  });
+
+  it("discarding the held command leaves the newer text alone", () => {
+    const field = render();
+    type(field, "something else");
+    refuseHeldSkill();
+    click("Discard");
+    expect(field.value).toBe("something else");
+    expect(held()).toBeNull();
+    expect(latest.forkDraft).toBeNull();
   });
 });
 

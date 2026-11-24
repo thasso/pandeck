@@ -19,6 +19,7 @@ const listed = (requestId: string, sessionId = "s1"): ServerMessage => ({
   requestId,
   sessionId,
   accounts: [{ id: `cp-${requestId}`, name: requestId, enterprise: false }],
+  boundEligible: requestId !== "first",
 });
 
 describe("the account picker's state", () => {
@@ -67,7 +68,9 @@ describe("the account picker's state", () => {
       requestId: "first",
     });
     state = server(state, listed("first"));
-    // The next turn's target changed: asked again, the answer stays on screen.
+    expect(state.accountMoveTargets!.boundEligible).toBe(false);
+    // The next turn's target changed: asked again, the answer stays on screen,
+    // its verdict on the bound account with it.
     state = reduceAssistantState(state, {
       kind: "accountMoveTargetsRequested",
       sessionId: "s1",
@@ -77,12 +80,16 @@ describe("the account picker's state", () => {
     expect(dataOf(state.accountMoveTargets!.targets)).toEqual([
       { id: "cp-first", name: "first", enterprise: false },
     ]);
+    expect(state.accountMoveTargets!.boundEligible).toBe(false);
+    state = server(state, listed("second"));
+    expect(state.accountMoveTargets!.boundEligible).toBe(true);
     state = reduceAssistantState(state, {
       kind: "accountMoveTargetsRequested",
       sessionId: "s2",
       requestId: "other",
     });
     expect(state.accountMoveTargets!.targets.status).toBe("loading");
+    expect(state.accountMoveTargets!.boundEligible).toBeUndefined();
   });
 
   it("keeps a move pending until its own answer, which puts a refusal on the session", () => {

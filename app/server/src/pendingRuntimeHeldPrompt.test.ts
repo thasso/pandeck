@@ -128,7 +128,7 @@ test("a skill held by a pending selection is never queued, and goes back to the 
     ) as Extract<ServerMessage, { type: "error" }>[];
     assert.equal(
       error?.message,
-      `${held.message} /review-pr did not run; it is back in your message box to send again once the change applies or is reset.`,
+      `${held.message} /review-pr did not run; your message box offers it back to send again once the change applies or is reset.`,
     );
     assert.equal(error?.failedPromptClientRequestId, "skill-1");
     assert.deepEqual(error?.restoreDraft, { sessionId: id, text: typed });

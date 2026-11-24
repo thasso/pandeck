@@ -390,6 +390,13 @@ export interface ForkDraft {
   sessionId: string;
   text: string;
   token: number;
+  /**
+   * Input the server handed BACK (a send that could not wait): it lands only
+   * in an empty field or one still holding exactly it. Over newer text the
+   * composer keeps that text and offers this back instead, and the draft stays
+   * unconsumed until the user puts it back or discards it.
+   */
+  restore?: true;
 }
 
 /** Navigation signal emitted whenever a fork completes, so the UI switches to it. */
@@ -613,6 +620,11 @@ export interface UIState {
     sessionId: string;
     requestId: string;
     targets: LoadState<SessionAccountMoveTarget[]>;
+    /**
+     * The same answer's verdict on the bound account running the next turn
+     * itself; undefined until a list for this session has answered.
+     */
+    boundEligible?: boolean;
   } | null;
   /**
    * PENDING CONTROL STATE ONLY: session id → the request id of the runtime
@@ -5430,6 +5442,9 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
         sessionId: action.sessionId,
         requestId: action.requestId,
         targets: shown ? refreshing(shown) : loading(),
+        ...(shown && state.accountMoveTargets?.boundEligible !== undefined
+          ? { boundEligible: state.accountMoveTargets.boundEligible }
+          : {}),
       },
     };
   }
@@ -5882,11 +5897,18 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
     if (state.accountMoveTargets?.requestId !== msg.requestId) return state;
     return {
       ...state,
-      accountMoveTargets: {
-        ...state.accountMoveTargets,
-        targets:
-          msg.error !== undefined ? failed(msg.error) : ready(msg.accounts),
-      },
+      accountMoveTargets:
+        msg.error !== undefined
+          ? {
+              sessionId: state.accountMoveTargets.sessionId,
+              requestId: state.accountMoveTargets.requestId,
+              targets: failed(msg.error),
+            }
+          : {
+              ...state.accountMoveTargets,
+              targets: ready(msg.accounts),
+              boundEligible: msg.boundEligible,
+            },
     };
   }
   if (msg.type === "pendingRuntimeAnswer") {
@@ -6609,13 +6631,15 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
             ? state.setupFinishedRefusals + 1
             : state.setupFinishedRefusals,
           // A send that could not wait in the queue comes back to its
-          // session's composer as typed, through the fork draft's handoff.
+          // session's composer as typed, through the fork draft's handoff,
+          // marked as a RESTORE so it never replaces what was typed since.
           ...(msg.restoreDraft
             ? {
                 forkDraft: {
                   sessionId: msg.restoreDraft.sessionId,
                   text: msg.restoreDraft.text,
                   token: Date.now(),
+                  restore: true,
                 },
               }
             : {}),

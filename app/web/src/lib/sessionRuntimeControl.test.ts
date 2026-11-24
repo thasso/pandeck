@@ -9,6 +9,7 @@ import { failed, loading, ready, refreshing } from "./loadState.ts";
 import {
   OTHER_ACCOUNT_KIND_REASON,
   OTHER_HARNESS_REASON,
+  accountTargetsRefreshKey,
   runtimeAccountChoices,
   runtimeCommandContext,
   runtimeModelRefusal,
@@ -119,33 +120,119 @@ describe("sessionRuntimeControl", () => {
 });
 
 describe("runtimeAccountChoices", () => {
-  it("names the bound account and the accounts the server judged for the next turn", () => {
+  it("names the bound account only when the server judged it can run the next turn, then the accounts it may move to", () => {
     // An enabled personal account of the same kind that the server left out
     // (enterprise requirement, or its listing lacks the pending model) is
     // never offered: only the server's list counts.
-    const judged = ready([
+    const targets = ready([
       { id: "cp-b", name: "Work", enterprise: true },
       { id: "cp-a", name: "Personal", enterprise: false },
     ]);
-    expect(runtimeAccountChoices(personal, judged)).toEqual([
+    expect(
+      runtimeAccountChoices(personal, { targets, boundEligible: true }),
+    ).toEqual([
       { id: "cp-a", name: "Personal" },
       { id: "cp-b", name: "Work" },
     ]);
     // The server found nothing to move to: only the bound account, so
     // `/account` (offered for more than one) stays hidden.
-    expect(runtimeAccountChoices(personal, ready([]))).toEqual([
-      { id: "cp-a", name: "Personal" },
+    expect(
+      runtimeAccountChoices(personal, {
+        targets: ready([]),
+        boundEligible: true,
+      }),
+    ).toEqual([{ id: "cp-a", name: "Personal" }]);
+  });
+
+  it("never counts a bound account the server judged unable to run the next turn", () => {
+    // Bound and disabled (or lacking the pending model, or failing the
+    // enterprise requirement), with one eligible account: one choice, so
+    // `/account` is not offered for a choice that is no choice.
+    const targets = ready([{ id: "cp-b", name: "Work", enterprise: true }]);
+    expect(
+      runtimeAccountChoices(personal, { targets, boundEligible: false }),
+    ).toEqual([{ id: "cp-b", name: "Work" }]);
+    // An answer without the verdict counts it out too.
+    expect(runtimeAccountChoices(personal, { targets })).toEqual([
+      { id: "cp-b", name: "Work" },
     ]);
   });
 
   it("offers nothing until the server answered, keeps its last answer while refreshing, and nothing for an account that cannot move", () => {
     const list = [{ id: "cp-b", name: "Work", enterprise: false }];
-    expect(runtimeAccountChoices(personal, undefined)).toEqual([]);
-    expect(runtimeAccountChoices(personal, loading())).toEqual([]);
-    expect(runtimeAccountChoices(personal, failed("lost"))).toEqual([]);
-    expect(runtimeAccountChoices(personal, refreshing(list))).toHaveLength(2);
-    expect(runtimeAccountChoices(team, ready(list))).toEqual([]);
-    expect(runtimeAccountChoices(undefined, ready(list))).toEqual([]);
+    const answer = (targets: Parameters<typeof runtimeAccountChoices>[1]) =>
+      runtimeAccountChoices(personal, targets);
+    expect(answer(undefined)).toEqual([]);
+    expect(answer({ targets: loading() })).toEqual([]);
+    expect(answer({ targets: failed("lost") })).toEqual([]);
+    expect(
+      answer({ targets: refreshing(list), boundEligible: true }),
+    ).toHaveLength(2);
+    expect(
+      runtimeAccountChoices(team, {
+        targets: ready(list),
+        boundEligible: true,
+      }),
+    ).toEqual([]);
+    expect(
+      runtimeAccountChoices(undefined, {
+        targets: ready(list),
+        boundEligible: true,
+      }),
+    ).toEqual([]);
+  });
+});
+
+describe("accountTargetsRefreshKey", () => {
+  const base = {
+    sessionId: "s1",
+    boundAccountId: "cp-a",
+    model: { provider: "openai-codex", id: "gpt-5.5" },
+    thinkingLevel: "off",
+    requiresEnterprise: false,
+    profiles: [
+      {
+        id: "cp-a",
+        provider: "openai-codex" as const,
+        enabled: true,
+        enterprise: false,
+        health: { state: "limited" as const, since: 1, benchRevision: 3 },
+      },
+    ],
+  };
+  const key = accountTargetsRefreshKey(base);
+
+  it("changes with a new bench scope even when the health state stays the same", () => {
+    expect(
+      accountTargetsRefreshKey({
+        ...base,
+        profiles: [
+          {
+            ...base.profiles[0]!,
+            health: { state: "limited", since: 1, benchRevision: 4 },
+          },
+        ],
+      }),
+    ).not.toBe(key);
+  });
+
+  it("changes with everything else the server's judgement reads, and only then", () => {
+    expect(accountTargetsRefreshKey({ ...base })).toBe(key);
+    for (const change of [
+      { sessionId: "s2" },
+      { boundAccountId: "cp-b" },
+      { model: { provider: "openai-codex", id: "gpt-other" } },
+      { thinkingLevel: "high" },
+      { requiresEnterprise: true },
+      { profiles: [{ ...base.profiles[0]!, enabled: false }] },
+      { profiles: [{ ...base.profiles[0]!, enterprise: true }] },
+      {
+        profiles: [
+          { ...base.profiles[0]!, health: { state: "ok" as const, since: 2 } },
+        ],
+      },
+    ])
+      expect(accountTargetsRefreshKey({ ...base, ...change })).not.toBe(key);
   });
 });
 

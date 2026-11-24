@@ -152,7 +152,7 @@ import {
 } from "./db/backgroundWorkStore.ts";
 import { isStateTopicInvariant } from "./stateTopicKernel.ts";
 import { publishSessionRowsNow, stateTopicFor } from "./stateTopics.ts";
-import { accountMoveTargets } from "./sessionAccountMove.ts";
+import { accountMoveChoices } from "./sessionAccountMove.ts";
 import {
   clearSessionPendingRuntime,
   PendingRuntimeHeldError,
@@ -939,7 +939,7 @@ export class Connection implements Viewer {
             message: held
               ? `${held.message} Your message is waiting in your queue.`
               : pendingHeld && skillInvocation
-                ? `${pendingHeld.message} /${skillInvocation.name} did not run; it is back in your message box to send again once the change applies or is reset.`
+                ? `${pendingHeld.message} /${skillInvocation.name} did not run; your message box offers it back to send again once the change applies or is reset.`
                 : withdrawn
                   ? withdrawn.uncertain
                     ? `The response stopped, and Claude may already have read your message. It is held in your queue: ${STEER_MAY_HAVE_BEEN_READ.toLowerCase()}`
@@ -4936,12 +4936,13 @@ export class Connection implements Viewer {
     requestId: string,
   ): Promise<void> {
     try {
-      const accounts = await accountMoveTargets(sessionId);
+      const { accounts, boundEligible } = await accountMoveChoices(sessionId);
       this.send({
         type: "sessionAccountMoveTargets",
         requestId,
         sessionId,
         accounts,
+        boundEligible,
       });
     } catch (err) {
       this.send({

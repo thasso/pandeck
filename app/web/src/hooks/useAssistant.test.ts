@@ -2448,7 +2448,7 @@ describe("a failed prompt and its optimistic echo", () => {
       {
         type: "error",
         message:
-          "Couldn't switch … /review-pr did not run; it is back in your message box …",
+          "Couldn't switch … /review-pr did not run; your message box offers it back …",
         target: { type: "session", id: "s1" },
         failedPromptClientRequestId: "c1",
         restoreDraft: { sessionId: "s1", text: typed },
@@ -2456,7 +2456,12 @@ describe("a failed prompt and its optimistic echo", () => {
       optimisticPrompt(false),
     );
     expect(state.optimistic).toEqual([]);
-    expect(state.forkDraft).toMatchObject({ sessionId: "s1", text: typed });
+    // Marked a restore: the composer never lets it replace newer text.
+    expect(state.forkDraft).toMatchObject({
+      sessionId: "s1",
+      text: typed,
+      restore: true,
+    });
     // Ordinary failures stage nothing.
     expect(failed(optimisticPrompt(false)).forkDraft).toBeNull();
   });

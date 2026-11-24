@@ -75,7 +75,12 @@ The turn is **held**, never failed and never run on the old engine
 - A user prompt is refused before anything is appended. It goes to the user's
   queue, and the error adds "Your message is waiting in your queue." A skill
   invocation cannot be queued (Task-1023): the error carries `restoreDraft`, and
-  the client puts the exact typed command back in that session's composer.
+  the client hands the exact typed command back to that session's composer as a
+  RESTORE draft. It lands only in an empty field (or one still holding exactly
+  it). Over text typed since, the composer keeps that text and offers the
+  command back with Put back (the command first, on its own line, above the
+  newer text) or Discard; until one is chosen the draft stays unconsumed, so a
+  remount offers it again.
 - Queued prompts, peer prompts and background wakes stay where they were, with
   no attempt spent.
 - Held work is offered again (a delivery wake) when the selection is changed or
@@ -91,9 +96,16 @@ started session) has Model, Effort and Account rows for the next turn. Models of
 another harness or account kind are listed disabled with their reason
 (`lib/sessionRuntimeControl.ts`). The Account row offers Automatic and the
 accounts the server lists for the pending model
-(`listSessionAccountMoveTargets`), asked again whenever the session, its
-next-turn model or effort, or the accounts change; a refresh keeps the last list
-shown. An account that cannot move shows as text. While a change is pending, a
+(`listSessionAccountMoveTargets`), asked again whenever anything that list
+judges changes: the session and its bound account, its next-turn model or
+effort, its enterprise requirement, and any account's kind, enabled, enterprise
+or health projection (including `benchRevision`, so a new bench scope refreshes
+it even when the health state stays the same; `accountTargetsRefreshKey`). A
+model-listing refresh alone has no client signal. A refresh keeps the last list
+shown. The answer also says whether the bound account itself can run the next
+turn (`boundEligible`: enabled, enterprise requirement, offers the model at that
+effort, login, bench), judged by the rules a selection naming it is applied
+with. An account that cannot move shows as text. While a change is pending, a
 "Next turn" row states the target and what runs now, names a coordinator's
 choice, and offers Reset.
 
@@ -105,9 +117,11 @@ object dock on a phone.
 (`lib/runtimeSlashCommand.ts`). Without an argument they open the Runtime
 section. With one they set the pending selection at once, even mid-turn, and are
 never queued. Their argument completes from the session's models, the target
-model's levels, or Automatic, the bound account and the accounts in that same
-server list; `/account` is offered only when the list names another account, and
-not before it has answered. They are offered only for a started session.
+model's levels, or Automatic and that same server answer: the bound account only
+when `boundEligible`, then the listed accounts. `/account` is offered only when
+that gives more than one account, and not before the list has answered; the
+client never judges an account itself. They are offered only for a started
+session.
 
 A started session refuses `setModel` and `setThinkingLevel` with "This session
 has started: change its model or effort in the Runtime section, from its next

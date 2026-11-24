@@ -8856,8 +8856,18 @@ export type ServerMessage =
       requestId: string;
       sessionId: string;
     } & (
-      | { accounts: SessionAccountMoveTarget[]; error?: undefined }
-      | { error: string; accounts?: undefined }
+      | {
+          /** The OTHER accounts the session may move to for its next turn. */
+          accounts: SessionAccountMoveTarget[];
+          /**
+           * Whether the bound account itself can run that next turn (enabled,
+           * enterprise requirement, offers the model at that effort, login,
+           * bench), judged as a selection naming it is applied.
+           */
+          boundEligible: boolean;
+          error?: undefined;
+        }
+      | { error: string; accounts?: undefined; boundEligible?: undefined }
     ))
   /**
    * The answer to `setPendingRuntime` / `clearPendingRuntime`: no `error`

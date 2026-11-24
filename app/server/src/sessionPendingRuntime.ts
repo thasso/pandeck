@@ -41,6 +41,7 @@ import {
   accountOffersSelection,
   accountRulesRefusal,
   assertStillEligible,
+  boundAccountRulesRefusal,
   modelRefusal,
   sessionSelection,
 } from "./sessionAccountMove.ts";
@@ -373,9 +374,7 @@ function targetRulesRefusal(
   const rules = !source
     ? undefined
     : target.id === source.id
-      ? target.enabled
-        ? undefined
-        : `${target.name} is disabled.`
+      ? boundAccountRulesRefusal(row, target)
       : accountRulesRefusal(row, source, target);
   if (rules) return rules;
   if (row.requiresEnterprise && !target.enterprise)

@@ -66,6 +66,7 @@ import {
 } from "../lib/chatCommentPrompt.ts";
 import {
   clearBrowserDraft,
+  readBrowserDraft,
   useBrowserDraft,
 } from "../hooks/useBrowserDraft.ts";
 import {
@@ -121,6 +122,7 @@ import {
 } from "./common/composerShell.ts";
 import { ProviderIcon } from "./common/ProviderIcon.tsx";
 import { EmptyBox, ErrorNote } from "./common/load.tsx";
+import { Alert, AlertAction, AlertDescription } from "./ui/alert.tsx";
 import { ChatDockPanel } from "./ChatDockPanel.tsx";
 import { ComposerLedge } from "./ComposerLedge.tsx";
 import { localStore } from "../lib/localStore.ts";
@@ -1137,9 +1139,30 @@ export const Composer = memo(function Composer({
   const onDraftConsumedRef = useRef(onDraftConsumed);
   onDraftConsumedRef.current = onDraftConsumed;
   const draftToken = draft?.token ?? null;
+  const textRef = useRef(text);
+  textRef.current = text;
+  const draftKeyRef = useRef(draftStorageKey);
+  draftKeyRef.current = draftStorageKey;
+  // A RESTORE handed back over newer text: kept off the field and offered back
+  // until the user puts it back or discards it. Unconsumed meanwhile, so a
+  // remount offers it again instead of losing it.
+  const [heldReturn, setHeldReturn] = useState<ForkDraft | null>(null);
   useEffect(() => {
     const staged = draftRef.current;
+    setHeldReturn(null);
     if (!staged) return;
+    if (staged.restore) {
+      // The field as stored for THIS key: the text state can still be another
+      // session's when the key and the draft arrive in the same commit.
+      const current =
+        textRef.current.trim() !== ""
+          ? textRef.current
+          : readBrowserDraft(draftKeyRef.current);
+      if (current.trim() !== "" && current !== staged.text) {
+        setHeldReturn(staged);
+        return;
+      }
+    }
     setText(staged.text);
     setAttachmentError(null);
     if (draftAutoFocus)
@@ -1149,6 +1172,19 @@ export const Composer = memo(function Composer({
     // the user last left in the field rather than the handoff.
     onDraftConsumedRef.current?.(staged.token);
   }, [draftToken, draftAutoFocus, setText]);
+  const settleHeldReturn = (putBack: boolean) => {
+    const held = heldReturn;
+    if (!held) return;
+    setHeldReturn(null);
+    if (putBack) {
+      // Both stay: the returned input goes first, on its own line, because a
+      // slash command only runs from the start, and nothing typed is removed.
+      const current = textRef.current;
+      setText(current.trim() ? `${held.text}\n\n${current}` : held.text);
+      requestAnimationFrame(() => ref.current?.focus({ preventScroll: true }));
+    }
+    onDraftConsumedRef.current?.(held.token);
+  };
 
   const activeComposerDraft = commentMode ? commentBody : text;
   useLayoutEffect(() => {
@@ -2039,6 +2075,32 @@ export const Composer = memo(function Composer({
       {/* Fixed-height hint slot above the composer card: reserved whenever a
           send-blocking hint CAN appear (staged-context surfaces), so toggling
           the hint never shifts the layout. */}
+      {heldReturn ? (
+        <Alert className="mb-2" data-testid="composer-held-return">
+          <AlertDescription>
+            <span>
+              <code className="break-all">{heldReturn.text}</code> did not run.
+              It was not put in your message box, so what you typed since stays.
+            </span>
+          </AlertDescription>
+          <AlertAction className="flex gap-1">
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() => settleHeldReturn(true)}
+            >
+              Put back
+            </Button>
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={() => settleHeldReturn(false)}
+            >
+              Discard
+            </Button>
+          </AlertAction>
+        </Alert>
+      ) : null}
       {reserveHintSlot || sendBlockedReason ? (
         <div
           className="mb-1 flex h-5 items-center justify-center px-2"

@@ -237,28 +237,68 @@ export async function sessionSelection(
 }
 
 /**
+ * The rules for the session's OWN account running its next turn: enabled and
+ * the enterprise requirement (kind is its own). `sessionPendingRuntime.ts`
+ * judges a selection naming the bound account by these too.
+ */
+export function boundAccountRulesRefusal(
+  row: Pick<SessionMeta, "requiresEnterprise">,
+  account: CredentialProfile,
+): string | undefined {
+  if (!account.enabled) return `${account.name} is disabled.`;
+  if (row.requiresEnterprise && !account.enterprise)
+    return `This session requires an enterprise account, and ${account.name} is not one.`;
+  return undefined;
+}
+
+/**
  * The accounts the session could move to right now, for the inspector's
  * picker and the coordinator tool's error text, judged against the model and
  * effort its next turn starts on (the pending selection's, else the current
- * one). Throws when the session itself cannot move.
+ * one), and whether its bound account can run that turn itself by the same
+ * rules a selection naming it is applied with. Throws when the session itself
+ * cannot move.
  */
+export async function accountMoveChoices(sessionId: string): Promise<{
+  accounts: SessionAccountMoveTarget[];
+  boundEligible: boolean;
+}> {
+  const { row, source, selection } = await nextTurnSelection(sessionId);
+  const profiles = listCredentialProfiles();
+  const [boundRefusal, ...refusals] = await Promise.all([
+    boundAccountRefusal(row, source, selection),
+    ...profiles.map((target) =>
+      accountMoveRefusal(row, source, target, selection),
+    ),
+  ]);
+  return {
+    accounts: profiles
+      .filter((_, index) => !refusals[index])
+      .map((target) => ({
+        id: target.id,
+        name: target.name,
+        enterprise: target.enterprise === true,
+      })),
+    boundEligible: !boundRefusal,
+  };
+}
+
+/** `accountMoveChoices`' accounts alone. */
 export async function accountMoveTargets(
   sessionId: string,
 ): Promise<SessionAccountMoveTarget[]> {
-  const { row, source, selection } = await nextTurnSelection(sessionId);
-  const profiles = listCredentialProfiles();
-  const refusals = await Promise.all(
-    profiles.map((target) =>
-      accountMoveRefusal(row, source, target, selection),
-    ),
-  );
-  return profiles
-    .filter((_, index) => !refusals[index])
-    .map((target) => ({
-      id: target.id,
-      name: target.name,
-      enterprise: target.enterprise === true,
-    }));
+  return (await accountMoveChoices(sessionId)).accounts;
+}
+
+/** Why the bound account cannot run the next turn's selection itself. */
+async function boundAccountRefusal(
+  row: SessionMeta,
+  source: CredentialProfile,
+  selection: MoveSelection | undefined,
+): Promise<string | undefined> {
+  const rules = boundAccountRulesRefusal(row, source);
+  if (rules || !selection?.model) return rules;
+  return modelRefusal(source, { ...selection, model: selection.model });
 }
 
 /**
