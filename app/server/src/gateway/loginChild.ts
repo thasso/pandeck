@@ -21,7 +21,8 @@
  * - A line or output over its bound, or anything malformed, cancels the
  *   login. Every rejection is a fixed text, never the child's.
  *
- * Linux only: the group is observed through `/proc`.
+ * The group is observed with signal 0 to it, and on Linux also through `/proc`
+ * so that zombie members do not hold it ({@link groupAlive}).
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
@@ -94,10 +95,22 @@ function childEnv(): NodeJS.ProcessEnv {
 }
 
 /**
- * Whether a process of group `pgid` still runs. A zombie does not: it runs no
- * code, whoever reaps it. An unreadable `/proc` counts as alive.
+ * Whether a process of group `pgid` still runs. Signal 0 to the group is the
+ * portable proof of an empty group: `ESRCH` means no member is left, zombie or
+ * not. Any other answer means members remain, except that on Linux a `/proc`
+ * scan may show they are all zombies: a zombie runs no code, whoever reaps it
+ * (in a container whose init never reaps, nobody might). Elsewhere a zombie
+ * counts as alive; an orphan is reaped by `launchd` at once, so only a member
+ * whose parent left the group could keep it, and that fails closed. An
+ * unreadable `/proc` counts as alive.
  */
 function groupAlive(pgid: number): boolean {
+  try {
+    process.kill(-pgid, 0);
+  } catch (err) {
+    if ((err as { code?: unknown } | null)?.code === "ESRCH") return false;
+  }
+  if (process.platform !== "linux") return true;
   let names: string[];
   try {
     names = readdirSync("/proc");

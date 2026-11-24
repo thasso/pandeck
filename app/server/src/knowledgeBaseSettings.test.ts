@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, test } from "vitest";
 import { userHomeDir } from "./userHome.ts";
 
-const tmp = mkdtempSync(join(tmpdir(), "kb-settings-test-"));
+// Real spelling: the checkout row is git's `--show-toplevel`, always real,
+// and macOS spells the temp dir through the `/var` link.
+const tmp = mkdtempSync(join(realpathSync(tmpdir()), "kb-settings-test-"));
 process.env.ASSISTANT_CWD = tmp;
 
 const { DATA_DIR } = await import("./config.ts");

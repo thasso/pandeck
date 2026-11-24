@@ -13,6 +13,7 @@ import {
   encodeControlRequest,
 } from "./controlMethods.ts";
 import { processStartTime } from "./processIdentity.ts";
+import { leaveStaleUnixSocket } from "../test/staleSocket.ts";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -62,7 +63,7 @@ test("the process serves control on its socket, refuses a second gateway on it a
 test("overlapping stale-socket starts leave exactly one model and control listener reachable", async () => {
   const dir = tempDir();
   const socketPath = join(dir, "c.sock");
-  writeFileSync(socketPath, "");
+  await leaveStaleUnixSocket(socketPath);
   const reservation = net.createServer();
   await new Promise<void>((resolve) =>
     reservation.listen(0, "127.0.0.1", resolve),

@@ -22,7 +22,9 @@ import { afterEach, beforeEach, describe, test, vi } from "vitest";
 import { parseServerFrame } from "./test/serverFrames.ts";
 import { seedLegacyDefaultAccounts } from "./test/legacyDefaultAccounts.ts";
 
-const tmp = mkdtempSync(join(tmpdir(), "presence-consumers-"));
+// Real spelling: git and the native watch name checkouts by their real
+// paths, and macOS spells the temp dir through the `/var` link.
+const tmp = mkdtempSync(join(realpathSync(tmpdir()), "presence-consumers-"));
 process.env.ASSISTANT_CWD = tmp;
 process.env.DATA_DIR = join(tmp, "data");
 process.env.ASSISTANT_BACKGROUND_FETCH = "0";

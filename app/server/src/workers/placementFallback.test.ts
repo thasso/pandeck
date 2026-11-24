@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -29,7 +30,11 @@ import {
 
 const { git } = checkoutGitOn(DEFAULT_WORKER_SIDE);
 
-const scratch = mkdtempSync(join(tmpdir(), "placement-fallback-"));
+// Real spelling: placement never resolves a requested path, so a
+// fixture under an aliased temp dir (macOS `/var`) must name it canonically.
+const scratch = mkdtempSync(
+  join(realpathSync(tmpdir()), "placement-fallback-"),
+);
 const defaultRoot = knowledgeBaseSettingsProjection(undefined).effectivePath;
 mkdirSync(dirname(APP_SETTINGS_PATH), { recursive: true });
 const savedMode = process.env.ASSISTANT_SPAWN_BROKER;

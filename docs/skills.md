@@ -91,9 +91,35 @@ name and description as a library skill. Nothing is read through a pathname, so
 that swap is refused (a symlink diagnostic) or harmless (the handle still names
 the file that was checked), never followed. Opens are non-blocking, so a named
 pipe left where `SKILL.md` belongs is reported as unreadable rather than
-stalling the scan. The anchor uses `/proc/self/fd`, which makes library reads
-Linux-only by construction; there is deliberately no pathname fallback, since a
-fallback would restore the very re-resolution this removes.
+stalling the scan. Linux anchors through `/proc/self/fd/<fd>`; macOS uses
+`/.vol/<device>/<inode>` (volfs), with the open descriptor keeping that inode
+pinned so its number cannot be reused. Both remain bound to the opened inode
+when its original name is moved or replaced. macOS `/dev/fd` does not support
+child traversal and is not an equivalent anchor. There is deliberately no
+original-pathname fallback; a platform or filesystem without inode-anchored
+access fails closed rather than restoring the re-resolution this removes. A
+macOS library root is probed before scanning; an unavailable or mismatched volfs
+anchor reports an unsupported-filesystem error, not missing manifests.
+
+Authoring and rollback use the same platform anchor. Linux pins inodes with
+`O_PATH`; macOS uses `O_EVTONLY | O_SYMLINK` to pin without data I/O and to hold
+symlinks themselves rather than their targets. Ordinary source reads and updates
+still use `O_NOFOLLOW` on both platforms. Darwin's native `link(2)` follows
+source symlinks, so regular files are linked by their pinned volfs identity. On
+macOS, supporting symlinks are instead recreated with native `symlink(2)` from
+the byte-exact target read through their pinned volfs inode. There is no shell
+command or staging directory. The native create refuses any occupied name,
+including a directory or a symlink to one, without entering it. Both identities
+stay pinned during placement: hard links share one pin, while a recreated
+symlink needs two. Source cleanup uses the source inode and rollback uses the
+destination inode. Linux retains native hard links.
+
+A recreated symlink has a new inode, so its mode, timestamps, xattrs, flags and
+hard-link relationships are not preserved; Git tracks only its target bytes. The
+create-then-pin gap mirrors directory reservations: a replacement with a
+different target is refused and left untouched. A byte-identical replacement is
+indistinguishable and may be adopted for undo, which preserves content but not
+the replacement's inode or metadata.
 
 A folder that cannot produce an injectable skill remains visible through one or
 more deterministic diagnostics. The scanner distinguishes:
@@ -457,9 +483,10 @@ mutation neither repairs them nor inherits them.
 
 Writes use the same anchored no-follow seam as reads (`library/entrySource.ts`):
 a path is resolved once below a held descriptor, so a component swapped for a
-symlink is refused rather than followed. Nothing authors a symlink; a manually
-authored supporting symlink remains browseable under the Phase 1 contract, but
-no tool writes through it or deletes it.
+symlink is refused rather than followed. Tools never author an arbitrary new
+symlink or write through one. A manually authored supporting symlink remains
+browseable, and whole-entry rename/restore may carry its target bytes (with a
+new inode on macOS); supporting-file tools do not directly rewrite or delete it.
 
 Anchoring alone is not enough for a repository the user also edits by hand: the
 lock serializes the app against itself, not against a person. So every mutation
@@ -487,15 +514,15 @@ window; `renameat2(RENAME_NOREPLACE)` is not reachable from this runtime. So a
 rename is not what moves a skill.
 
 Instead the new name is ASSEMBLED out of calls that already refuse: `mkdir` for
-the folder and each subfolder, `link` for every supporting file and symlink, and
-`O_CREAT|O_EXCL` for the rewritten `SKILL.md`. Each of those is create-or-fail
-in one syscall, so no step can take a name something else already holds — there
-is no window to guard, because there is no replacement to prevent. `link` also
-makes the move free and provable: the new name is the SAME inode, so nothing is
-copied, and "did this mutation create that name?" is later answered by comparing
-inodes instead of by trusting a path. The old folder is then emptied of exactly
-those inodes and removed with `rmdir`, which refuses a directory that anything
-was put back into.
+the folder and each subfolder, `link` for supporting regular files (and Linux
+symlinks), native `symlink` for macOS symlink copies, and `O_CREAT|O_EXCL` for
+the rewritten `SKILL.md`. Each create is create-or-fail in one syscall, so no
+step can take a name something else already holds. Both sides of every carried
+entry remain pinned. Hard links share an inode; a macOS symlink copy instead
+shares the immutable target bytes. Source removal compares source identities;
+undo compares destination identities, never the inode on the other side. The old
+folder is emptied of exactly the proved entries and removed with `rmdir`, which
+refuses a directory that anything was put back into.
 
 A create writes its manifest through the descriptor of the folder it reserved,
 never through the name a second time, and then proves the name still resolves to
@@ -509,38 +536,43 @@ a private `.pa-removing-<uuid>` first and only then identified, checked against
 what the mutation put there, and emptied; a single file is moved aside the same
 way before it is examined and unlinked. Putting a rejected tree BACK is
 assembly, not a rename: `mkdir` claims the public name or fails, and the files
-are hard-linked across, so a directory a hand edit created at that name in the
-meantime is never replaced by the restore. A delete, a rename's cleanup of the
-old folder, and a rename's undo of the new one all go through that one
-primitive, so a file a hand edit wrote into the tree stops the removal instead
-of disappearing with it, and a folder that turns out not to be the recorded one
-is renamed back untouched.
+are carried across with the same hard-link/symlink-copy policy, so a directory a
+hand edit created at that name in the meantime is never replaced by the restore.
+The aside cleanup records SOURCE identities, including when a symlink copy has a
+different destination inode. Restore holds no per-file handles across the pass:
+public hard links keep regular-file inodes alive, and copied symlinks also
+require equal target bytes before their aside is removed. Linux restoration
+opens no file pins; macOS uses at most one transient source pin per carried
+entry. A delete, a rename's cleanup of the old folder, and a rename's undo of
+the new one all go through that one primitive, so a file a hand edit wrote into
+the tree stops the removal instead of disappearing with it, and a folder that
+turns out not to be the recorded one is renamed back untouched.
 
 Identity comparisons only mean something while the inode is PINNED, because an
 inode number is reused the instant its file is deleted — measured, for files and
 directories alike, and pinned by a test. So a mutation PINS everything it
 creates, with a descriptor that refers to the inode without opening it for I/O
-(`O_PATH`, which is also the only open a symlink accepts), and the store holds
-those descriptors until the commit attempt has settled. That is the lifetime
-that matters: an undo runs after the commit was refused, long after the
-mutation's own scope closed, and a number it merely recorded would by then fit
-the folder or file a hand author put at the same name exactly as well as its
-own. While the descriptor is held the inode cannot be freed, so no replacement
-can ever be given its number, and "the name still resolves to this identity"
-means "this is still the entry we made".
+(`O_PATH` on Linux, `O_EVTONLY | O_SYMLINK` on macOS), and the store holds those
+descriptors until the commit attempt has settled. That is the lifetime that
+matters: an undo runs after the commit was refused, long after the mutation's
+own scope closed, and a number it merely recorded would by then fit the folder
+or file a hand author put at the same name exactly as well as its own. While the
+descriptor is held the inode cannot be freed, so no replacement can ever be
+given its number, and "the name still resolves to this identity" means "this is
+still the entry we made".
 
-Every recorded identity comes from a pin taken at the moment of creation: a
-created file from the descriptor it was written through, a created directory
-from the re-opened name it must find EMPTY, a hard-linked child from a pin
-checked against the source link that still holds the same inode. Because each
-pin costs a descriptor, a rename places at most 512 entries and refuses a larger
-folder outright, rather than placing what it could not take back again — and it
-reads the folder LAZILY, so that ceiling bounds the read as well and no
-hand-authored million siblings are listed into memory before the refusal. Taking
-a pin can itself fail, under descriptor pressure most plausibly; a primitive
-that cannot pin what it just created takes the creation back on the spot,
-because a created name whose ownership nothing can prove is one no undo would
-ever dare remove.
+Every recorded placement identity comes from a pin taken at creation: a created
+file from the descriptor it was written through, a created directory from the
+re-opened name it must find EMPTY, a carried child from source and destination
+identities (with equal target bytes checked for copied symlinks). A hard-linked
+entry costs one descriptor and a recreated symlink two; a rename places at most
+512 entries and refuses a larger folder outright, rather than placing what it
+could not take back again — and it reads the folder LAZILY, so that ceiling
+bounds the read as well and no hand-authored million siblings are listed into
+memory before the refusal. Taking a pin can itself fail, under descriptor
+pressure most plausibly; a primitive that cannot pin what it just created takes
+the creation back on the spot, because a created name whose ownership nothing
+can prove is one no undo would ever dare remove.
 
 Rollback draws the same distinction between staging and restoring. Registering a
 path puts it in the commit; only a path the mutation reports having CHANGED is

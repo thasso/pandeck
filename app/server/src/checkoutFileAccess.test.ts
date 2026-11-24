@@ -102,7 +102,9 @@ let onWorker: string;
 let onServer: string;
 
 beforeAll(() => {
-  scratch = mkdtempSync(join(tmpdir(), "checkout-file-access-"));
+  // Real spelling: a root whose realpath fails falls back to its own name,
+  // which must then match its files' real paths (macOS links `/var`).
+  scratch = mkdtempSync(join(realpathSync(tmpdir()), "checkout-file-access-"));
   onWorker = join(scratch, "checkout");
   onServer = join(scratch, "kb");
   mkdirSync(onWorker);

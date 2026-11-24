@@ -22,7 +22,11 @@
  * {@link RELEASE_RETRY_MAX_MS} until it succeeds. `released` resolves once
  * the connection has ended and the owner holds nothing.
  */
-import watcher, { type AsyncSubscription } from "../parcelWatcher.ts";
+import watcher, {
+  nativeWatchRoot,
+  spelledAsAsked,
+  type AsyncSubscription,
+} from "../parcelWatcher.ts";
 import {
   INVALID_PARAMS,
   WRONG_WORKER,
@@ -233,14 +237,19 @@ export function watchHandlers(
   /** The owner's native subscribe of `watch`; rejects with parcel's failure. */
   const subscribeNative = (watch: Watch): Promise<void> => {
     const subscribed = (async () => {
+      const real = await nativeWatchRoot(watch.path);
       watch.subscription = await nativeSubscribe(
-        watch.path,
+        real,
         (err, events) =>
           receive(
             watch,
             err
               ? { error: err.message }
-              : { paths: events.map((event) => event.path) },
+              : {
+                  paths: events.map((event) =>
+                    spelledAsAsked(watch.path, real, event.path),
+                  ),
+                },
           ),
         watch.ignore,
       );

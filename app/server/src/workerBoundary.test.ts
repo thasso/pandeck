@@ -1472,8 +1472,37 @@ function moduleTarget(file: string, source: unknown): string {
 const nameOf = (node: unknown): string =>
   isNode(node) ? String(node.name ?? node.value) : "";
 
+/**
+ * {@link scanSymbolImports}, remembered per module path AND exact source text.
+ * Several guards scan the whole tree, and a full-tree parse is ~0.9 s on an
+ * idle machine; re-parsing it per guard and per synthetic sample is what timed
+ * the default-Worker guard out under a loaded full gate. The key is the path
+ * (it decides how relative specifiers resolve) plus the text, so a changed
+ * source — a synthetic sample at a real module's path included — is always
+ * scanned afresh. Only the small frozen result lists are kept, never ASTs.
+ */
+const symbolImportCache = new Map<
+  string,
+  Map<string, readonly Readonly<SymbolImport>[]>
+>();
+
 /** Every value binding `source` (the module at `file`) imports or re-exports. */
-function symbolImports(file: string, source: string): SymbolImport[] {
+function symbolImports(
+  file: string,
+  source: string,
+): readonly Readonly<SymbolImport>[] {
+  let byText = symbolImportCache.get(file);
+  if (!byText) symbolImportCache.set(file, (byText = new Map()));
+  const known = byText.get(source);
+  if (known) return known;
+  const found = Object.freeze(
+    scanSymbolImports(file, source).map((ref) => Object.freeze(ref)),
+  );
+  byText.set(source, found);
+  return found;
+}
+
+function scanSymbolImports(file: string, source: string): SymbolImport[] {
   const program = parseModule(file, source);
   const found: SymbolImport[] = [];
   const isLoad = commonJsLoader(program);
@@ -1745,30 +1774,11 @@ const CHECKOUT_FILE_ACCESS_EXPORTS = [
   "throwInCheckoutReadForTests",
 ];
 
-/**
- * `symbolImports`, memoized for the default-Worker guard. Each call there
- * rescans every production module, so a module whose exact text was analysed
- * once is not parsed again. The entry is keyed by filename and reused only when
- * the source text is identical, so an edited or synthetic source (a new text
- * under the same name) is always analysed afresh.
- */
-const importsByFile = new Map<
-  string,
-  { source: string; imports: SymbolImport[] }
->();
-function cachedSymbolImports(file: string, source: string): SymbolImport[] {
-  const known = importsByFile.get(file);
-  if (known?.source === source) return known.imports;
-  const imports = symbolImports(file, source);
-  importsByFile.set(file, { source, imports });
-  return imports;
-}
-
 /** Modules binding the default Worker's id or side, or all of `placement.ts`. */
 function defaultWorkerNamers(sources: Map<string, string>): string[] {
   return [...sources]
     .filter(([file, source]) =>
-      cachedSymbolImports(file, source).some(
+      symbolImports(file, source).some(
         (ref) =>
           ref.module === "workers/placement.ts" &&
           ["DEFAULT_WORKER_ID", "DEFAULT_WORKER_SIDE", "*"].includes(
@@ -1822,6 +1832,48 @@ test("the default Worker is named only where a side is derived", () => {
       [...DEFAULT_WORKER_NAMERS, "commitWorkflow.ts"].sort(),
       source,
     );
+});
+
+test("remembered import scans follow the exact source text and its path", () => {
+  // The same text at another path resolves its relative specifier there.
+  const text = 'import { DEFAULT_WORKER_SIDE } from "./placement.ts";';
+  assert.deepEqual(
+    symbolImports("workers/sample.ts", text).map((ref) => ref.module),
+    ["workers/placement.ts"],
+  );
+  assert.deepEqual(
+    symbolImports("worktrees/sample.ts", text).map((ref) => ref.module),
+    ["worktrees/placement.ts"],
+  );
+  // A real namer, changed at its own path after its scan was remembered, is
+  // judged by the changed text: dropping the binding drops the module, and a
+  // binding added back in another form brings it back.
+  const namer = "workers/checkoutClient.ts";
+  const original = moduleSources.get(namer)!;
+  assert.deepEqual(defaultWorkerNamers(moduleSources), DEFAULT_WORKER_NAMERS);
+  const stripped = original.replace(
+    /^import \{[^}]*\} from "\.\/placement\.ts";$/m,
+    "",
+  );
+  assert.notEqual(stripped, original);
+  const without = defaultWorkerNamers(
+    new Map([...moduleSources, [namer, stripped]]),
+  );
+  assert.deepEqual(
+    without,
+    DEFAULT_WORKER_NAMERS.filter((file) => file !== namer),
+  );
+  assert.deepEqual(
+    defaultWorkerNamers(
+      new Map([
+        ...moduleSources,
+        [namer, `${stripped}\nimport * as placement from "./placement.ts";`],
+      ]),
+    ),
+    DEFAULT_WORKER_NAMERS,
+  );
+  // And the remembered lists cannot be altered by a caller.
+  assert.ok(Object.isFrozen(symbolImports(namer, original)));
 });
 
 test("checkout git and reads are reached only by a side", () => {

@@ -9,7 +9,14 @@
  * turn a removal into a crash.
  */
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, test } from "vitest";
@@ -54,7 +61,9 @@ function exec(run: (req: ContainerExecRequest) => ContainerExecResult): void {
 }
 
 function scratch(): string {
-  const root = mkdtempSync(join(tmpdir(), "pa-reclaim-"));
+  // Real spelling: the reclaim mounts and inspects the resolved path, and
+  // macOS spells the temp dir through the `/var` link.
+  const root = mkdtempSync(join(realpathSync(tmpdir()), "pa-reclaim-"));
   roots.push(root);
   return root;
 }

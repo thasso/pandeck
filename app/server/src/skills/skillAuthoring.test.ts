@@ -40,9 +40,11 @@ import {
   LibraryStore,
 } from "../library/libraryStore.ts";
 import { setLibraryBroadcaster } from "../library/libraryPublish.ts";
+import { setRecreateEntrySymlinksForTests } from "../library/entrySource.ts";
 import { DEFAULT_WORKER_SIDE } from "../workers/placement.ts";
 
 const { git, gitOptional } = checkoutGitOn(DEFAULT_WORKER_SIDE);
+const symlinkPolicies = process.platform === "linux" ? [false, true] : [true];
 
 let root: string;
 let outsideRoot: string;
@@ -69,6 +71,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  setRecreateEntrySymlinksForTests(null);
   setLibraryBroadcaster({ broadcast: () => undefined });
   rmSync(root, { recursive: true, force: true });
   rmSync(outsideRoot, { recursive: true, force: true });
@@ -1938,36 +1941,42 @@ describe("skill authoring: a rejected commit leaves the tree as it was", () => {
     assert.ok(existsSync(join(root, "release-notes", "SKILL.md")));
   });
 
-  test("a rename carries a supporting symlink across and can take it back", async () => {
-    await seedSkill();
-    // A symlink cannot be opened for reading, so pinning it is the one case
-    // that needs a descriptor which refers to an inode without opening it. If
-    // that broke, the rename below would fail outright.
-    await symlink("SKILL.md", join(root, "release-notes", "self.md"));
-    await git(["add", "-A"], root);
-    await git(["commit", "-m", "link"], root);
-    await rejectCommitsAfterWriting(join(root, "changelog-notes", "user.txt"));
+  test.each(symlinkPolicies)(
+    "a rename carries a supporting symlink across and can take it back (recreate=%s)",
+    async (recreate) => {
+      setRecreateEntrySymlinksForTests(recreate);
+      await seedSkill();
+      // A symlink cannot be opened for reading, so pinning it is the one case
+      // that needs a descriptor which refers to an inode without opening it. If
+      // that broke, the rename below would fail outright.
+      await symlink("SKILL.md", join(root, "release-notes", "self.md"));
+      await git(["add", "-A"], root);
+      await git(["commit", "-m", "link"], root);
+      await rejectCommitsAfterWriting(
+        join(root, "changelog-notes", "user.txt"),
+      );
 
-    await assert.rejects(
-      renameEntry(
-        { name: "release-notes", newName: "changelog-notes" },
-        meta,
-        library,
-      ),
-    );
+      await assert.rejects(
+        renameEntry(
+          { name: "release-notes", newName: "changelog-notes" },
+          meta,
+          library,
+        ),
+      );
 
-    // The user's file stops its own parent from going, and the symlink this
-    // rename placed is taken back with the rest of the placement.
-    assert.equal(
-      await readFile(join(root, "changelog-notes", "user.txt"), "utf8"),
-      "user data\n",
-    );
-    assert.ok(!existsSync(join(root, "changelog-notes", "self.md")));
-    assert.equal(
-      await readlink(join(root, "release-notes", "self.md")),
-      "SKILL.md",
-    );
-  });
+      // The user's file stops its own parent from going, and the symlink this
+      // rename placed is taken back with the rest of the placement.
+      assert.equal(
+        await readFile(join(root, "changelog-notes", "user.txt"), "utf8"),
+        "user data\n",
+      );
+      assert.ok(!existsSync(join(root, "changelog-notes", "self.md")));
+      assert.equal(
+        await readlink(join(root, "release-notes", "self.md")),
+        "SKILL.md",
+      );
+    },
+  );
 
   test("a rejected commit does not revert an edit made after the mutation wrote", async () => {
     await seedSkill();
@@ -2116,7 +2125,12 @@ describe("skill authoring: a rejected commit leaves the tree as it was", () => {
     await seedSkill();
     // Every pin a mutation takes is held until the commit attempt settles and
     // closed afterwards, on the failing path as well as the succeeding one.
-    const open = async () => (await readdir("/proc/self/fd")).length;
+    const open = async () =>
+      (
+        await readdir(
+          process.platform === "darwin" ? "/dev/fd" : "/proc/self/fd",
+        )
+      ).length;
     const before = await open();
     for (let round = 0; round < 5; round += 1) {
       await createSkill(

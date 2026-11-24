@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -123,7 +124,10 @@ function installSeam() {
           const path = join(
             root,
             "projects",
-            tmp.replace(/\//g, "-"),
+            // The real CLI/SDK derives project keys from canonical cwd. On
+            // macOS /var/folders aliases /private/var/folders; a fake provider
+            // must write the same store key the actual SDK will later read.
+            realpathSync(tmp).replace(/\//g, "-"),
             `${id}.jsonl`,
           );
           mkdirSync(dirname(path), { recursive: true });
@@ -325,7 +329,7 @@ test("Claude acquisition, configure, prompt, native fork and failed fork compens
       join(
         claudeProfileSessionStore(parent.credentialProfileId).root,
         "projects",
-        tmp.replace(/\//g, "-"),
+        realpathSync(tmp).replace(/\//g, "-"),
         `${deleted.mock.calls[0]![0]}.jsonl`,
       ),
     ),

@@ -482,7 +482,12 @@ it.
     connection, and registers it as pending before sending, so `watch.events`
     that precede the answer reach the callback as a live subscription's do. A
     native failure is an answer carrying only its message (parcel's rejections
-    carry no `code`), which the watcher classifies as a filesystem failure.
+    carry no `code`), which the watcher classifies as a filesystem failure. The
+    Worker, like the server side for the KB row, subscribes natively to the
+    root's real path and spells every event under it back under the root as
+    asked: macOS FSEvents reports real paths whatever was subscribed (`/var` is
+    `/private/var`), and through an alias also spurious directory events. A root
+    it cannot resolve is subscribed as asked, so parcel answers its own failure.
   - The outcome of `{}`, an answered failure or `unknown_method` is definite.
     Any other Worker failure on a connection still open leaves it uncertain: the
     server keeps the slot and id and sends `watch.unsubscribe` until absence is
@@ -530,11 +535,24 @@ it.
     is `scanTreeResidue` with the default budget and the Worker's own uid;
     `lifecycle.removeTree` runs `removeManagedTree` without options at stage
     `initial` and `removeAfterReclaim` at `afterReclaim`;
-    `lifecycle.discardTree` is a failed create's `rmSync` (10 retries 200 ms
-    apart, owner access restored on a throw), whose failure is an answer
-    (`{failed}`), not a failed request; `lifecycle.removeAll` is a forced
-    recursive `rm`; `lifecycle.stopProcesses` is below. A filesystem failure is
-    answered with its code and message, as `files.*` answers one.
+    `lifecycle.discardTree` starts with one plain `rmSync` for a failed create.
+    On a permission or not-empty failure (macOS Node can report a read-only
+    subdirectory as `ENOTEMPTY`), it restores owner access before retrying with
+    `maxRetries: 10, retryDelay: 200` (Node's linear backoff), then repairs
+    again on final failure. That failure is an answer (`{failed}`), not a failed
+    request. `lifecycle.removeAll` is a forced recursive `rm`;
+    `lifecycle.stopProcesses` is below. A filesystem failure is answered with
+    its code and message, as `files.*` answers one.
+  - Owner-access repair (`restoreOwnerAccess`, shared with managed removal and
+    agent temp-tree cleanup) changes directory modes only through no-follow
+    descriptors: Linux `O_PATH`, read handles elsewhere. Unprivileged macOS
+    cannot automatically reclaim trees containing directories without owner read
+    permission (not just mode `000`); it fails closed and reports them left
+    intact. Temp-tree cleanup warns and returns false; managed removal answers
+    not-removed without claiming unseen residue. The owner must restore read
+    permission explicitly and retry. No path-based or unpinned-inode chmod,
+    native helper, or dependency is used. Linux and root reclamation are
+    unchanged.
   - Path domain. A location names a Worker id, refused (`wrong_worker`) before
     any effect, and a non-empty path used as given: a relative path resolves
     against the Worker process's cwd, as `files.*` and base `node:fs` did. The
@@ -1088,15 +1106,19 @@ it.
   task born during enumeration from being missed. Unreadable, missing or
   malformed task data fails closed until a later scan or probe. Any other
   uncertain answer, an unreadable `/proc` included, counts as members remaining.
-  The guarantee stays the immediate git child's exit; waiting for the group is
-  only how a dead broker's child is observed. A group member in uninterruptible
-  sleep, including a sibling request's child or a git hook, may therefore hold
-  that call, its repo lock and the Worker's quiescence indefinitely. This fails
-  closed, like a child in uninterruptible sleep on any cancel, and logs one
-  warning at 10 s naming the group and its survivors' process or thread states.
-  Synchronous scans start after a 20 ms grace and run at most once per second;
-  the warning uses the latest scan under that same limit. There is no release
-  deadline. Requests without the receipt fail at once, as before.
+  Where there is no `/proc` (macOS) only the signal-0 probe decides: a zombie
+  member keeps the group until it is reaped, which `launchd` does at once for
+  the dead broker's orphans, and macOS has no Linux-style zombie leader with
+  live threads. The guarantee stays the immediate git child's exit; waiting for
+  the group is only how a dead broker's child is observed. A group member in
+  uninterruptible sleep, including a sibling request's child or a git hook, may
+  therefore hold that call, its repo lock and the Worker's quiescence
+  indefinitely. This fails closed, like a child in uninterruptible sleep on any
+  cancel, and logs one warning at 10 s naming the group and its survivors'
+  process or thread states. Synchronous scans start after a 20 ms grace and run
+  at most once per second; the warning uses the latest scan under that same
+  limit. There is no release deadline. Requests without the receipt fail at
+  once, as before.
 - **Decisions kept for phase 1.** Engine transcripts and records keep their
   current write path; streaming them over the protocol comes in phase 2 (D1).
   The Worker id is derived, with no worktree-row column (D2).
@@ -1367,18 +1389,52 @@ Linux it holds an abstract Unix-socket ownership claim through shutdown,
 serializing overlapping starts before probing or removing a stale path. The
 claim derives from the canonical socket path, so previews and production do not
 collide and symlink path aliases contend. A crash releases the claim in the
-kernel; a failed start releases it after closing its control listener. Known
-limit: non-Linux socket mode is development-only and retains probe/unlink
-without interprocess startup serialization. SIGTERM or SIGINT closes control and
-stops accepting model requests, lets active streams finish for up to two
-minutes, then destroys remaining sockets. The NixOS module runs it as
-`personal-assistant-gateway` and each preview's as `pa-pr-gateway@<n>`; only the
-operator restarts them, never a deploy or the server. Switch-off rollback
-(`gateway.enable = false`, which sets `ASSISTANT_GATEWAY=0` and removes the
-gateway units) and the CLI-compatible credential locks stay until slice 5's
-encrypted store migration. Turning only the server's switch off is no rollback:
-the still-installed gateway renews the tokens its persisted server leases cover
-on its own ([deployment.md](deployment.md) "Credential gateway unit").
+kernel; a failed start releases it after closing its control listener. macOS
+uses socket-specific atomic generation files in a per-socket claim directory,
+never the server's DATA_DIR lock. The directory must be real, owned by the
+current effective user, and not writable by others. Its canonical ancestry must
+be owned by root or that user and must not be shared-writable unless sticky, so
+another user cannot rename a checked directory. This conservatively refuses
+root-owned group-writable non-sticky install paths such as `/Applications`; keep
+state under a private user directory instead. Each complete generation names an
+ephemeral TCP port already reserved before publication. Both owner and probe
+bind the identical literal `127.0.0.1`, never localhost or a wildcard, and never
+enable `reusePort`. The recorded port must be an integer in 1024–65535.
+Exclusive bind, never a connect or PID probe, tests the reservation: a paused
+owner or a full accept queue cannot make its port look free. All errors except
+`EADDRINUSE` mean unknown and fail closed. These loopback listeners carry no
+credentials or protocol and immediately drop connections. Their close-on-exec
+handles are never sent to children through stdio or IPC. No filesystem indicator
+sockets or shared indicator root are used. Port reuse by an unrelated listener
+can cause a conservative refusal; the error names both port and claim to
+inspect. A future sandboxed shell would need the network-server entitlement; the
+current unsandboxed shell does not.
+
+The canonical socket identity scopes the claim, so aliases contend and different
+sockets stay independent. A dead owner's generation is superseded exclusively.
+Release closes only the kernel reservation and retains its generation as a stale
+tombstone; only a successor removes older generations. Every candidate re-lists
+AFTER its exclusive publication and refuses any higher generation before pruning
+metadata or touching the control path. This rejects delayed readers publishing a
+recycled lower name. Numbering never resets through an empty directory while old
+readers remain in flight. Claim directories and their latest tombstone persist
+between runs.
+
+On both platforms stale cleanup requires an actual socket and a missing or
+refused probe; a foreign unclaimed listener is re-probed after refused connects
+across a one-second window. Timeouts and other probe errors fail closed. Regular
+files, directories and final-component symlinks at the control path are refused
+unchanged, even if the OS reports `ECONNREFUSED` or `ENOTSOCK`. SIGTERM or
+SIGINT closes control and stops accepting model requests, lets active streams
+finish for up to two minutes, then destroys remaining sockets. The NixOS module
+runs it as `personal-assistant-gateway` and each preview's as
+`pa-pr-gateway@<n>`; only the operator restarts them, never a deploy or the
+server. Switch-off rollback (`gateway.enable = false`, which sets
+`ASSISTANT_GATEWAY=0` and removes the gateway units) and the CLI-compatible
+credential locks stay until slice 5's encrypted store migration. Turning only
+the server's switch off is no rollback: the still-installed gateway renews the
+tokens its persisted server leases cover on its own
+([deployment.md](deployment.md) "Credential gateway unit").
 
 - Before it is ready the link says hello as this server boot (16 random bytes,
   the pid and the process start time), syncs every credential profile with its
@@ -3748,7 +3804,9 @@ server's local gateway does.
   `claude-login` or `codex-login` (`gateway/childEntries.ts`; ADR-0005 "The
   login children"). A login child leads its own process group and writes only
   into the login's directory; the vault ends the whole group before it reads the
-  credential or removes the directory.
+  credential or removes the directory. The group is empty when signal 0 to it
+  fails with `ESRCH`; on Linux a `/proc` scan also accepts a group of only
+  zombies. Elsewhere (macOS) a zombie member counts as alive, failing closed.
 - **Login bound.** Every vault login run reports done within
   `VAULT_LOGIN_SETTLE_BOUND_MS` (10 min 35 s) of its start
   (`gateway/vaultMethods.ts`). The bound covers when a run reports done and the
@@ -3796,6 +3854,16 @@ never falls back to plaintext on disk.
 - **Plaintext in RAM.** Token files keep their paths under `accounts/`, which is
   a private tmpfs of the vault's unit (`TemporaryFileSystem=`); the vault
   refuses to start otherwise. Logins' temporary directories move into it too.
+- **Linux only.** The check is `statfs` reporting a tmpfs (`0x01021994`). macOS
+  has no tmpfs, and a RAM disk is host setup that `statfs` cannot tell from a
+  disk, so a sealing vault refuses to start there and says it needs Linux;
+  nothing is ever written in plaintext to APFS, and there is no override. On
+  macOS the supported roles are the desktop/direct gateway, the edge, and an
+  unsealed vault (no recipients), whose default control socket is
+  `<state-dir>/control.sock` (unused unless sealed). The stop path's
+  `vaultMain.ts` test runs on a real tmpfs (`/dev/shm`) on Linux only; a variant
+  on every platform has a test-only preload report its plain `accounts/` as a
+  tmpfs. That covers the stop and seal logic, not sealing without a tmpfs.
 - **Locked.** Every start is locked: a credential read answers `locked`, which
   the edge refuses with the marked "vault locked" text (503), never needs-login.
   Renewal and the sweep skip, `credential.upstream401` is dropped, logins are
@@ -3803,11 +3871,13 @@ never falls back to plaintext on disk.
   `integrations.get` answers locked, and `vault.hello` says `locked`.
 - **Unlock.** `gateway:admin unlock` reads the PIN from the terminal with echo
   off and sends it over the vault's control socket
-  (`/run/pandeck-vault/control.sock`, 0600, `gateway/vaultControl.ts`). The
-  vault verifies it once through the YubiKey helper (ADR-0005), opens every
-  record and writes the plaintext under `accounts/`. A wrong PIN answers the
-  tries left and stays locked. A record that does not open is logged by account
-  id and that account needs a login; the rest unlock.
+  (`/run/pandeck-vault/control.sock` on Linux and `<state-dir>/control.sock`
+  elsewhere unless `--control-socket`, 0600, `gateway/vaultControl.ts`; the
+  vault and `gateway:admin` share that default). The vault verifies it once
+  through the YubiKey helper (ADR-0005), opens every record and writes the
+  plaintext under `accounts/`. A wrong PIN answers the tries left and stays
+  locked. A record that does not open is logged by account id and that account
+  needs a login; the rest unlock.
 - **Seal after write.** Renewal (Claude's and Codex's) seals in the writer lane
   after each attempt, a login's ingest after moving the credential in, and
   `integrations.put`, a connect and an OAuth refresh right after their rename;

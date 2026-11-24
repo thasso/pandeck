@@ -371,7 +371,11 @@ describe("a non-skill library kind", () => {
     // manifest, and are held to its bound too.
     await mkdir(join(root, "gear", "nested"));
     linkSync(path, join(root, "gear", "nested", "WIDGET.md"));
-    linkSync(path, join(root, "gear", "widget.md"));
+    // On a case-insensitive filesystem this spelling already addresses the
+    // manifest inode. Only create (and later unlink) an alias when distinct.
+    const lowerPath = join(root, "gear", "widget.md");
+    const needsLowerLink = !existsSync(lowerPath);
+    if (needsLowerLink) linkSync(path, lowerPath);
     for (const alias of ["nested/WIDGET.md", "widget.md"]) {
       const aliasReads: Array<() => Promise<unknown>> = [
         () => readEntryRawFile("gear", alias, growing),
@@ -386,7 +390,7 @@ describe("a non-skill library kind", () => {
       }
     }
     rmSync(join(root, "gear", "nested"), { recursive: true });
-    rmSync(join(root, "gear", "widget.md"));
+    if (needsLowerLink) rmSync(lowerPath);
 
     // A supporting file is not the manifest and is not held to its bound.
     writeFileSync(path, valid);

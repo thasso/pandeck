@@ -21,6 +21,7 @@ import {
   closeSync,
   constants,
   existsSync,
+  fstatSync,
   ftruncateSync,
   mkdirSync,
   mkdtempSync,
@@ -55,10 +56,12 @@ import {
 } from "../library/libraryAuthoring.ts";
 import { LibraryStore } from "../library/libraryStore.ts";
 import { setLibraryBroadcaster } from "../library/libraryPublish.ts";
+import { setRecreateEntrySymlinksForTests } from "../library/entrySource.ts";
 import { skillKind } from "./skillLibrary.ts";
 import { DEFAULT_WORKER_SIDE } from "../workers/placement.ts";
 
 const { git } = checkoutGitOn(DEFAULT_WORKER_SIDE);
+const symlinkPolicies = process.platform === "linux" ? [false, true] : [true];
 
 /** How many directory entries the source seam has handed out since the reset. */
 let entriesRead = 0;
@@ -161,6 +164,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  setRecreateEntrySymlinksForTests(null);
   onChildOpen = undefined;
   afterReservation = undefined;
   beforeChildLink = undefined;
@@ -827,7 +831,12 @@ describe("a hand edit racing the Git handoff", () => {
         // walk that removes has not begun.
         if (created || name !== "zzz-large.bin") return;
         created = true;
-        writeFileSync(`/proc/self/fd/${folder}/mine.txt`, "user data\n");
+        const { dev, ino } = fstatSync(folder);
+        const anchor =
+          process.platform === "darwin"
+            ? `/.vol/${dev}/${ino}`
+            : `/proc/self/fd/${folder}`;
+        writeFileSync(`${anchor}/mine.txt`, "user data\n");
       };
 
       const error = await expectFailure(() =>
@@ -1023,60 +1032,68 @@ describe("a hand edit racing a delete", () => {
     );
   });
 
-  test("a committed symlink repointed just before the detach is not deleted", async () => {
-    // An object id is not an ENTRY. A symlink's content is the path it points
-    // at, and repointing one is `unlink` plus `symlink` — a new inode, a new
-    // target, and nothing an expectation that kept only "there is a blob here"
-    // could tell apart from the link the repository committed.
-    await committedByHand(() => {
-      writeFileSync(join(root, "release-notes", "tone.md"), "Be brief.\n");
-      writeFileSync(join(root, "release-notes", "notes.md"), "Theirs.\n");
-      symlinkSync("tone.md", join(root, "release-notes", "style.md"));
-    });
-    const head = await headCommit();
-    beforeTreeRemoval = () => {
-      unlinkSync(join(root, "release-notes", "style.md"));
-      symlinkSync("notes.md", join(root, "release-notes", "style.md"));
-    };
+  test.each(symlinkPolicies)(
+    "a committed symlink repointed just before the detach is not deleted (recreate=%s)",
+    async (recreate) => {
+      setRecreateEntrySymlinksForTests(recreate);
+      // An object id is not an ENTRY. A symlink's content is the path it points
+      // at, and repointing one is `unlink` plus `symlink` — a new inode, a new
+      // target, and nothing an expectation that kept only "there is a blob here"
+      // could tell apart from the link the repository committed.
+      await committedByHand(() => {
+        writeFileSync(join(root, "release-notes", "tone.md"), "Be brief.\n");
+        writeFileSync(join(root, "release-notes", "notes.md"), "Theirs.\n");
+        symlinkSync("tone.md", join(root, "release-notes", "style.md"));
+      });
+      const head = await headCommit();
+      beforeTreeRemoval = () => {
+        unlinkSync(join(root, "release-notes", "style.md"));
+        symlinkSync("notes.md", join(root, "release-notes", "style.md"));
+      };
 
-    const error = await expectFailure(() =>
-      deleteEntry({ name: "release-notes" }, meta, library),
-    );
+      const error = await expectFailure(() =>
+        deleteEntry({ name: "release-notes" }, meta, library),
+      );
 
-    assert.match(error.message, /being deleted|undone/);
-    assert.equal(
-      readlinkSync(join(root, "release-notes", "style.md")),
-      "notes.md",
-      "the link they repointed is not this delete's to remove",
-    );
-    assert.ok(existsSync(join(root, "release-notes", "SKILL.md")));
-    assert.equal(await headCommit(), head, "nothing may be committed");
-  });
+      assert.match(error.message, /being deleted|undone/);
+      assert.equal(
+        readlinkSync(join(root, "release-notes", "style.md")),
+        "notes.md",
+        "the link they repointed is not this delete's to remove",
+      );
+      assert.ok(existsSync(join(root, "release-notes", "SKILL.md")));
+      assert.equal(await headCommit(), head, "nothing may be committed");
+    },
+  );
 
-  test("a committed file replaced by a symlink just before the detach is not deleted", async () => {
-    // The same gap from the other side: the repository committed a FILE here,
-    // and what stands at the name now is a link out of the folder entirely.
-    await committedByHand(() => {
-      writeFileSync(join(root, "release-notes", "tone.md"), "Be brief.\n");
-    });
-    const head = await headCommit();
-    beforeTreeRemoval = () => {
-      unlinkSync(join(root, "release-notes", "tone.md"));
-      symlinkSync("../elsewhere.md", join(root, "release-notes", "tone.md"));
-    };
+  test.each(symlinkPolicies)(
+    "a committed file replaced by a symlink just before the detach is not deleted (recreate=%s)",
+    async (recreate) => {
+      setRecreateEntrySymlinksForTests(recreate);
+      // The same gap from the other side: the repository committed a FILE here,
+      // and what stands at the name now is a link out of the folder entirely.
+      await committedByHand(() => {
+        writeFileSync(join(root, "release-notes", "tone.md"), "Be brief.\n");
+      });
+      const head = await headCommit();
+      beforeTreeRemoval = () => {
+        unlinkSync(join(root, "release-notes", "tone.md"));
+        symlinkSync("../elsewhere.md", join(root, "release-notes", "tone.md"));
+      };
 
-    const error = await expectFailure(() =>
-      deleteEntry({ name: "release-notes" }, meta, library),
-    );
+      const error = await expectFailure(() =>
+        deleteEntry({ name: "release-notes" }, meta, library),
+      );
 
-    assert.match(error.message, /being deleted|undone/);
-    assert.equal(
-      readlinkSync(join(root, "release-notes", "tone.md")),
-      "../elsewhere.md",
-    );
-    assert.ok(existsSync(join(root, "release-notes", "SKILL.md")));
-    assert.equal(await headCommit(), head);
-  });
+      assert.match(error.message, /being deleted|undone/);
+      assert.equal(
+        readlinkSync(join(root, "release-notes", "tone.md")),
+        "../elsewhere.md",
+      );
+      assert.ok(existsSync(join(root, "release-notes", "SKILL.md")));
+      assert.equal(await headCommit(), head);
+    },
+  );
 
   test("a committed file made executable just before the detach is not deleted", async () => {
     // A mode is half of a Git entry, and a `chmod +x` is a change Git records
@@ -1128,31 +1145,35 @@ describe("a hand edit racing a delete", () => {
     );
   });
 
-  test("a skill whose committed files include a symlink and an executable is still deleted", async () => {
-    // The proof got stricter, so this is the half that says it did not get
-    // wrong: an untouched folder holding exactly what the repository committed
-    // still goes, symlink, executable bit and all.
-    await committedByHand(() => {
-      writeFileSync(join(root, "release-notes", "tone.md"), "Be brief.\n");
-      chmodSync(join(root, "release-notes", "tone.md"), 0o644);
-      writeFileSync(join(root, "release-notes", "build.sh"), "#!/bin/sh\n");
-      chmodSync(join(root, "release-notes", "build.sh"), 0o755);
-      mkdirSync(join(root, "release-notes", "references"));
-      symlinkSync(
-        "../tone.md",
-        join(root, "release-notes", "references", "style.md"),
+  test.each(symlinkPolicies)(
+    "a skill whose committed files include a symlink and an executable is still deleted (recreate=%s)",
+    async (recreate) => {
+      setRecreateEntrySymlinksForTests(recreate);
+      // The proof got stricter, so this is the half that says it did not get
+      // wrong: an untouched folder holding exactly what the repository committed
+      // still goes, symlink, executable bit and all.
+      await committedByHand(() => {
+        writeFileSync(join(root, "release-notes", "tone.md"), "Be brief.\n");
+        chmodSync(join(root, "release-notes", "tone.md"), 0o644);
+        writeFileSync(join(root, "release-notes", "build.sh"), "#!/bin/sh\n");
+        chmodSync(join(root, "release-notes", "build.sh"), 0o755);
+        mkdirSync(join(root, "release-notes", "references"));
+        symlinkSync(
+          "../tone.md",
+          join(root, "release-notes", "references", "style.md"),
+        );
+      });
+
+      await deleteEntry({ name: "release-notes" }, meta, library);
+
+      assert.ok(!existsSync(join(root, "release-notes")));
+      assert.deepEqual(untracked(), []);
+      assert.equal(
+        (await git(["status", "--porcelain"], root)).stdout.trim(),
+        "",
       );
-    });
-
-    await deleteEntry({ name: "release-notes" }, meta, library);
-
-    assert.ok(!existsSync(join(root, "release-notes")));
-    assert.deepEqual(untracked(), []);
-    assert.equal(
-      (await git(["status", "--porcelain"], root)).stdout.trim(),
-      "",
-    );
-  });
+    },
+  );
 
   test("an undisturbed delete removes the folder and leaves no aside name", async () => {
     await manageEntryFiles(

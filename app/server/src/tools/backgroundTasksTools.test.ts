@@ -1,7 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, onTestFinished, test, vi } from "vitest";
 import type {
   BackgroundWorkBackendPort,
   BackgroundWorkLaunchRequest,
@@ -107,6 +107,14 @@ function details(
 
 describe("background_tasks", () => {
   test("lists deterministically with bounded cursor pagination and reads both harness owners", async () => {
+    // A strictly advancing clock: each reservation gets its own creation time,
+    // so the oldest is piTasks[0] (not an id tie-break), and markRunning's
+    // updated-at is newer than every row on page one.
+    const base = Date.now();
+    let tick = 0;
+    const clock = vi.spyOn(Date, "now");
+    clock.mockImplementation(() => base + tick++);
+    onTestFinished(() => clock.mockRestore());
     const piOwner = makeSession("pi");
     const claudeOwner = makeSession("claude-sdk");
     const piTasks = [reserve(piOwner), reserve(piOwner), reserve(piOwner)];

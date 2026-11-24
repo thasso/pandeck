@@ -2168,11 +2168,12 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   beside the `sudo` fallback, never an exception.
 - `managedTreeRemoval.ts` owns deleting a tree the app owns when something else
   wrote into it: a bounded, shallow-first scan that separates OWNER-LOCKED
-  directories (ours, mode-locked — repaired with the fd-based
-  `restoreOwnerAccess` that `agentTempTree.ts` also uses) from FOREIGN-OWNED
-  ones (another uid — only the runtime or `sudo` helps), and a removal ladder of
-  rm, owner repair, reclaim, rm. Running as uid 0 reports nothing, since root
-  deletes either way.
+  directories (ours, mode-locked — repaired with the no-follow
+  `restoreOwnerAccess` that `agentTempTree.ts` also uses: an `O_PATH` handle on
+  Linux, a read handle elsewhere, so macOS fails closed on a directory its owner
+  cannot read) from FOREIGN-OWNED ones (another uid — only the runtime or `sudo`
+  helps), and a removal ladder of rm, owner repair, reclaim, rm. Running as uid
+  0 reports nothing, since root deletes either way.
 - `pendingApprovals.ts` owns the unified, harness-neutral approval subsystem
   (Task 108) behind every agent-proposed mutation: GitHub PR writes (kind
   `githubPullRequest`), Jira issue edits (`jiraIssue`), and Tempo worklog writes

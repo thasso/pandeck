@@ -1,6 +1,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { X509Certificate } from "node:crypto";
+import { getCACertificates } from "node:tls";
 import forge from "node-forge";
 import { describe, expect, test } from "vitest";
 import {
@@ -72,6 +73,13 @@ describe("package proxy certificate authority", () => {
     // A bundle holding only our CA would break every host we do NOT intercept.
     const certificates = bundle.match(/-----BEGIN CERTIFICATE-----/g) ?? [];
     expect(certificates.length).toBeGreaterThan(1);
+    if (process.platform === "darwin") {
+      // macOS trust lives in Keychains. Retain every exported trusted root,
+      // not just a Linux-style fallback file or the intercepting proxy CA.
+      for (const root of getCACertificates("system")) {
+        expect(bundle).toContain(root.trimEnd());
+      }
+    }
   });
 
   // Last: it replaces the stored CA, and the reissue leaves a usable one.

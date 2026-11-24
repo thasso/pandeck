@@ -13,7 +13,29 @@
  */
 import { chmodSync, lstatSync, rmSync } from "node:fs";
 import net from "node:net";
+import { join, resolve } from "node:path";
 import type { SealedStore, UnlockAnswer } from "./sealedStore.ts";
+
+/** The Linux service's control socket, in its runtime directory. */
+const LINUX_CONTROL_SOCKET = "/run/pandeck-vault/control.sock";
+
+/**
+ * The control socket the vault listens on and `gateway-admin` asks, one
+ * default for both: `given` (`--control-socket`) when set, else
+ * {@link LINUX_CONTROL_SOCKET} on Linux and `<stateDir>/control.sock`
+ * elsewhere, where there is no `/run/pandeck-vault` and only unsealed vaults
+ * run (`sealedStore.ts` refuses an `accounts/` that is not a tmpfs).
+ */
+export function vaultControlSocketPath(
+  stateDir: string,
+  given: string | undefined,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (given !== undefined) return given;
+  return platform === "linux"
+    ? LINUX_CONTROL_SOCKET
+    : join(resolve(stateDir), "control.sock");
+}
 
 const MAX_REQUEST_BYTES = 4096;
 const REQUEST_TIMEOUT_MS = 120_000;

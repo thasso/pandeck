@@ -14,6 +14,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statfsSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -40,7 +41,11 @@ import {
   type Recipient,
   type SealedStore,
 } from "./sealedStore.ts";
-import { askVaultControl, startVaultControl } from "./vaultControl.ts";
+import {
+  askVaultControl,
+  startVaultControl,
+  vaultControlSocketPath,
+} from "./vaultControl.ts";
 import { createVaultIntegrations } from "./vaultIntegrations.ts";
 import { createVaultLogins } from "./vaultLogins.ts";
 import {
@@ -1062,3 +1067,82 @@ test("gateway-admin vault-seal-existing exits 1 and names the unreadable account
     chmodSync(locked, 0o700);
   }
 }, 60_000);
+
+// --- the tmpfs requirement --------------------------------------------------
+
+/** `statfs` type of a tmpfs (`sealedStore.ts`). */
+const TMPFS_MAGIC = 0x01021994;
+
+/**
+ * A directory on a real filesystem that is not a tmpfs: the temp directory
+ * (APFS on macOS), or, where that is a tmpfs, one under this package.
+ */
+function diskDirectory(): string {
+  for (const parent of [root, resolve("node_modules/.cache")]) {
+    mkdirSync(parent, { recursive: true });
+    if (statfsSync(parent).type !== TMPFS_MAGIC)
+      return mkdtempSync(join(parent, "sealed-disk-"));
+  }
+  return assert.fail("no directory here is off tmpfs to refuse");
+}
+
+test("a sealing vault refuses accounts/ on a real disk, with no mock, and leaves no plaintext", async () => {
+  const dir = diskDirectory();
+  try {
+    writeRecipients(dir, [softwareRecipient(dir, "soft")]);
+    writeToken(dir, "claude-a", TOKEN);
+    assert.deepEqual(await sealExisting(dir), { sealed: 1 });
+    const accountsDir = join(resolve(dir), "accounts");
+    assert.throws(
+      () =>
+        createSealedStore({ stateDir: dir, log: () => {}, requireTmpfs: true }),
+      (err: Error) => {
+        assert.ok(
+          err.message.startsWith(
+            `${accountsDir} is not a tmpfs: plaintext tokens would reach the disk`,
+          ),
+          err.message,
+        );
+        // Off Linux the refusal says sealing needs Linux, not a mount to make.
+        assert.equal(
+          err.message.includes("a sealed vault needs Linux"),
+          process.platform !== "linux",
+          err.message,
+        );
+        return true;
+      },
+    );
+    // Nothing opened: the record stays, its plaintext does not come back.
+    assert.equal(existsSync(tokenPath(dir, "claude-a")), false);
+    assert.ok(existsSync(recordPath(dir, "claude-a")));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the vault and gateway-admin share one control socket default: /run on Linux, the state directory elsewhere, a given path always", () => {
+  const dir = join(root, "socket-state");
+  assert.equal(
+    vaultControlSocketPath(dir, undefined, "linux"),
+    "/run/pandeck-vault/control.sock",
+  );
+  for (const platform of ["darwin", "win32", "freebsd"] as const)
+    assert.equal(
+      vaultControlSocketPath(dir, undefined, platform),
+      join(resolve(dir), "control.sock"),
+    );
+  // A relative state directory resolves as `vaultMain.ts` resolves it.
+  assert.equal(
+    vaultControlSocketPath("rel-state", undefined, "darwin"),
+    join(resolve("rel-state"), "control.sock"),
+  );
+  for (const platform of ["linux", "darwin"] as const)
+    assert.equal(
+      vaultControlSocketPath(dir, "/tmp/given.sock", platform),
+      "/tmp/given.sock",
+    );
+  assert.equal(
+    vaultControlSocketPath(dir, undefined),
+    vaultControlSocketPath(dir, undefined, process.platform),
+  );
+});

@@ -91,14 +91,18 @@ SDK option construction, stream/message mapping, persistence, and tests.
   `CLAUDE_CODE_TMPDIR` are set because the latter takes precedence in the CLI.
   Task notifications capture `output_file` only beneath that root. The
   descriptor is opened with no-follow checks, validated as owned regular UTF-8
-  text, sanitized, and capped at 64 KiB. Linux `/proc/self/fd` identity checks
-  are required by this deployment, so other platforms refuse identity
-  verification. The 64 MiB scan ceiling bounds the synchronous stall but does
-  not make a full scan cheap, especially on cold or network-backed storage. The
-  item stores artifact identity and size/refusal metadata, never the vendor path
-  or captured text in its projection, and the content is never injected into a
-  prompt. A timer failure for a provider turn also leaves a bounded assistant
-  error entry in the durable timeline.
+  text, sanitized, and capped at 64 KiB. A path is accepted when it lies
+  lexically under the canonical root or under the trusted root as the caller
+  spelled it (macOS `/var` for `/private/var`), the latter rebased onto the
+  canonical root; reported paths are never realpath'd. Linux verifies the opened
+  descriptor's `/proc/self/fd` name; macOS 11+ opens with `O_NOFOLLOW_ANY`,
+  refusing a symlink in any component; older macOS and other platforms refuse
+  identity verification. The 64 MiB scan ceiling bounds the synchronous stall
+  but does not make a full scan cheap, especially on cold or network-backed
+  storage. The item stores artifact identity and size/refusal metadata, never
+  the vendor path or captured text in its projection, and the content is never
+  injected into a prompt. A timer failure for a provider turn also leaves a
+  bounded assistant error entry in the durable timeline.
 - `messageMapper.ts` and `streamMapper.ts` own SDK-to-display/runtime block
   mapping.
 - `modelSettings.ts` owns the persona-free half: the harness-wide settings

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -11,7 +12,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, afterEach, describe, test, vi } from "vitest";
 
-const scratch = mkdtempSync(join(tmpdir(), "placement-direct-reader-"));
+// Real spelling: placement never resolves a requested path, so a
+// fixture under an aliased temp dir (macOS `/var`) must name it canonically.
+const scratch = mkdtempSync(
+  join(realpathSync(tmpdir()), "placement-direct-reader-"),
+);
 const savedMode = process.env.ASSISTANT_SPAWN_BROKER;
 afterEach(() => {
   vi.restoreAllMocks();

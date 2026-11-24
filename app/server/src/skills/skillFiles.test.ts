@@ -175,21 +175,34 @@ describe("skill file tree", () => {
     assert.equal(depthBound.limits.includes("depth"), true);
 
     await rm(join(root, "source", "d0"), { recursive: true });
+    // Every listed entry is charged its name AND its tree-relative path, so the
+    // budget is reached with wide branches of long names rather than deep
+    // chains: each absolute fixture path stays far below macOS's 1024-byte
+    // PATH_MAX, while the charged metadata still outgrows the bound well
+    // before the entry bound does.
     const branchCount = 20;
+    const filesPerBranch = 30;
+    const folderName = `nested-${"y".repeat(193)}`;
     for (let branch = 0; branch < branchCount; branch += 1) {
-      current = join(root, "source", `branch-${branch}`);
-      await mkdir(current);
-      for (let depth = 0; depth < MAX_ENTRY_TREE_DEPTH; depth += 1) {
-        current = join(
-          current,
-          `${String(depth).padStart(2, "0")}-${"x".repeat(170)}`,
+      current = join(root, "source", `branch-${branch}`, folderName);
+      await mkdir(current, { recursive: true });
+      for (let file = 0; file < filesPerBranch; file += 1)
+        await writeFile(
+          join(
+            current,
+            `${String(file).padStart(2, "0")}-${"x".repeat(193)}.md`,
+          ),
+          "x",
         );
-        await mkdir(current);
-      }
     }
     const byteBound = (await detail()).files;
     assert.equal(byteBound.limits.includes("metadata-bytes"), true);
+    assert.equal(byteBound.limits.includes("entries"), false);
     assert.equal(byteBound.entryCount < MAX_ENTRY_TREE_ENTRIES, true);
+    assert.equal(
+      byteBound.metadataBytes <= MAX_ENTRY_TREE_METADATA_BYTES,
+      true,
+    );
     const listedBranches = byteBound.entries
       .filter((entry) => entry.name.startsWith("branch-"))
       .map((entry) => entry.name);

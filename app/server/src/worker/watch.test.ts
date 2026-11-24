@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, test, vi } from "vitest";
@@ -30,6 +36,7 @@ import {
   writeAsInProcessWorkerForTests,
 } from "../workers/inProcessWorker.ts";
 import { DEFAULT_WORKER_ID } from "../workers/placement.ts";
+import { subscribeOnWorker } from "../workers/watchClient.ts";
 import {
   holdWatchDeliveriesForTests,
   recordWatchDeliveriesForTests,
@@ -56,7 +63,12 @@ beforeAll(() => {
   writeFileSync(file, "x\n");
 });
 
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const aliasDirs: string[] = [];
+
+afterAll(() => {
+  for (const path of [dir, ...aliasDirs])
+    rmSync(path, { recursive: true, force: true });
+});
 
 const INVALID_FRAME = new Uint8Array(8);
 
@@ -86,6 +98,15 @@ async function until(what: string, check: () => boolean): Promise<void> {
   for (let i = 0; i < 2_000; i += 1) {
     if (check()) return;
     await new Promise<void>((done) => setTimeout(done, 5));
+  }
+  assert.fail(`timed out waiting for ${what}`);
+}
+
+/** Wait for `check` by event-loop turns, never by a timer. */
+async function turnsUntil(what: string, check: () => boolean): Promise<void> {
+  for (let i = 0; i < 10_000; i += 1) {
+    if (check()) return;
+    await new Promise<void>((done) => setImmediate(done));
   }
   assert.fail(`timed out waiting for ${what}`);
 }
@@ -214,6 +235,63 @@ test("a real native subscription delivers its events and is released", async () 
   assert.deepEqual(inProcessWorkerWatchesForTests().subscriptions, []);
 });
 
+/** A link to `dir`, and the event paths a client subscribed through it gets. */
+async function subscribeThroughLink(): Promise<{
+  alias: string;
+  real: string;
+  seen: string[];
+  handle: Promise<{ unsubscribe(): Promise<void> }>;
+}> {
+  const real = realpathSync(dir);
+  const aliasDir = mkdtempSync(join(tmpdir(), "worker-watch-alias-"));
+  aliasDirs.push(aliasDir);
+  const alias = join(aliasDir, "a");
+  symlinkSync(real, alias);
+  const seen: string[] = [];
+  const handle = subscribeOnWorker(
+    { workerId: DEFAULT_WORKER_ID, path: alias },
+    [],
+    (err, events) => {
+      if (!err) seen.push(...events.map((event) => event.path));
+    },
+    { onOverflow: () => undefined, onLost: () => undefined },
+  );
+  return { alias, real, seen, handle };
+}
+
+test("a root named through a link is watched natively at its real path, its events spelled as asked", async () => {
+  const capture = captureNextNativeWatchForTests();
+  const { alias, real, seen, handle } = await subscribeThroughLink();
+  assert.equal((await capture.subscribed).path, real);
+  const live = await handle;
+  capture.emit([real, join(real, "a", "b.txt"), `${real}-sibling/x`, "/else"]);
+  await until("the delivery", () => seen.length === 4);
+  // Only paths under the real root are respelled; a prefix is not a parent.
+  assert.deepEqual(seen, [
+    alias,
+    join(alias, "a", "b.txt"),
+    `${real}-sibling/x`,
+    "/else",
+  ]);
+  await live.unsubscribe();
+});
+
+test("a real native subscription through a link reports paths under the link", async () => {
+  // macOS FSEvents names real paths whatever was subscribed (`/var` is
+  // `/private/var`); a consumer relates events to the root it asked for.
+  const { alias, seen, handle } = await subscribeThroughLink();
+  const live = await handle;
+  writeFileSync(join(alias, "through-link.txt"), "x\n");
+  await until("the file's event", () =>
+    seen.includes(join(alias, "through-link.txt")),
+  );
+  assert.ok(
+    seen.every((path) => path === alias || path.startsWith(`${alias}/`)),
+    seen.join("\n"),
+  );
+  await live.unsubscribe();
+});
+
 test("a failed native unsubscribe before any end answers failure and keeps delivering", async () => {
   const capture = captureNextNativeWatchForTests({
     rejectUnsubscribeOnce: true,
@@ -237,11 +315,28 @@ test("after end, a failed native release retries and `released` waits for it", a
     });
     await subscribe(++rawId);
     const { released } = inProcessWorkerWatchesForTests();
-    writeAsInProcessWorkerForTests(INVALID_FRAME);
-    await until("the first release", () => capture.unsubscribes === 1);
-    assert.equal(await isSettled(released), false, "retry still owed");
-    await released;
-    assert.equal(capture.unsubscribes, 2);
+    // The retry's clock is the test's: under load real 10 ms pass while the
+    // checks below run. Only timers are faked; immediates and microtasks,
+    // which carry the release itself, stay real.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      writeAsInProcessWorkerForTests(INVALID_FRAME);
+      await turnsUntil(
+        "the first release and its armed retry",
+        () => capture.unsubscribes === 1 && vi.getTimerCount() === 1,
+      );
+      assert.equal(await isSettled(released), false, "retry still owed");
+      vi.advanceTimersByTime(9);
+      assert.equal(await isSettled(released), false, "not before its delay");
+      assert.equal(capture.unsubscribes, 1);
+      vi.advanceTimersByTime(1);
+      await released;
+      assert.equal(capture.unsubscribes, 2);
+    } finally {
+      // A failure above still lets the owed retry run, so teardown can end.
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
   } finally {
     setWatchReleaseRetryMsForTests(previous);
   }

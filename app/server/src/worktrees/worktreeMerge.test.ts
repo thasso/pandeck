@@ -10,6 +10,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -19,7 +20,9 @@ import { afterEach, test, vi } from "vitest";
 import type { ServerMessage } from "@assistant/shared";
 import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
 
-const tmp = mkdtempSync(join(tmpdir(), "worktree-merge-test-"));
+// Real spelling: git names checkouts by their real paths, and macOS spells
+// the temp dir through the `/var` link.
+const tmp = mkdtempSync(join(realpathSync(tmpdir()), "worktree-merge-test-"));
 process.env.ASSISTANT_CWD = tmp;
 
 const { createWorktree, hasUnmergedCommits } = await import("./worktrees.ts");
@@ -348,6 +351,7 @@ const {
 } = await import("../test/workerAnswers.ts");
 const { FILE_METHODS } = await import("../workerProtocol/fileMethods.ts");
 const { WorkerMethodError } = await import("../workerProtocol/connection.ts");
+const { captureNextNativeWatchForTests } = await import("../worker/watch.ts");
 const { isWorkerFailure } = await import("../workers/fileClient.ts");
 const { checkoutFilesOn } = await import("../checkoutFileAccess.ts");
 const { pathExists: checkoutPathExists } = checkoutFilesOn(DEFAULT_WORKER_SIDE);
@@ -359,8 +363,8 @@ const INVALID_FRAME = new Uint8Array(8);
 const mainMergeHead = join(repoPath, ".git", "MERGE_HEAD");
 
 /** A worktree with one commit of its own on a new file. */
-async function committedWorktree(name: string) {
-  const record = await createWorktree({ projectId: "mg-proj", name });
+async function committedWorktree(name: string, projectId = "mg-proj") {
+  const record = await createWorktree({ projectId, name });
   writeFileSync(join(record.path, `${name}.txt`), `${name}\n`);
   sh(record.path, "add", "-A");
   sh(record.path, "commit", "-m", `${name} work`);
@@ -418,7 +422,34 @@ const stateOf = (id: string) =>
   } | null;
 
 test("a merge serves the worktree's presence twice, before and under the lock", async () => {
-  const record = await committedWorktree("presence-served");
+  // Its own repository, whose git-dir watch is a substitute that reports
+  // nothing. On the shared repository the watcher's status refresh, on its
+  // debounce after the merge moves refs, also reads the checkout's presence,
+  // and under load lands inside the recording: counts here are the merge's.
+  const presenceRepo = join(tmp, "presencerepo");
+  mkdirSync(presenceRepo);
+  sh(presenceRepo, "init", "-b", "main");
+  writeFileSync(join(presenceRepo, "readme.md"), "hello\n");
+  sh(presenceRepo, "add", "-A");
+  sh(presenceRepo, "commit", "-m", "init");
+  projectStore.put({
+    id: "mg-presence",
+    name: "Merge Presence Project",
+    key: "MGP",
+    description: "",
+    status: "active",
+    localPaths: [{ path: presenceRepo, kind: "repo", match: "prefix" }],
+    worktreeRoot: join(tmp, "wt-presence-root"),
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+  const silentGitDir = captureNextNativeWatchForTests();
+  const record = await committedWorktree("presence-served", "mg-presence");
+  assert.equal(
+    (await silentGitDir.subscribed).path,
+    join(presenceRepo, ".git"),
+    "the repository's only watch is the silent substitute",
+  );
   const recorder = recordServedForTests([FILE_METHODS.exists]);
   try {
     await mergeWorktree(record.id, "squash");

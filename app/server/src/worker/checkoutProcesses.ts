@@ -18,12 +18,21 @@
  * are never signalled, and a user's own shell or editor in the same folder is
  * never our descendant.
  *
- * Linux-only by nature (`/proc`); elsewhere it finds nothing. The scan is a
- * `readlink` per process — about 10 ms for a few hundred — and a removal only
- * waits when something was actually running.
+ * Processes are observed through `processTable.ts`: `/proc` on Linux, the
+ * stock `ps` and `lsof` on macOS, whose coarse start times make every signal
+ * re-prove ownership (`stopCheckoutProcesses`). One snapshot finds our descendants;
+ * only those have their working directory read, so the scan costs one table
+ * read plus one directory read per descendant, and a removal only waits when
+ * something was actually running. A platform without a table finds nothing.
  */
-import { readdir, readFile, readlink, realpath } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { sep } from "node:path";
+import {
+  procTable,
+  systemProcessTable,
+  type ProcessRecord,
+  type ProcessTable,
+} from "./processTable.ts";
 
 const TERM_GRACE_MS = 2_000;
 const POLL_MS = 100;
@@ -36,51 +45,37 @@ export interface CheckoutProcessStop {
 }
 
 export interface CheckoutProcessOptions {
+  /** A fake `/proc` to read instead of the system's table (tests). */
   procRoot?: string;
+  /** A process table to read instead of the system's (tests). */
+  table?: ProcessTable;
   selfPid?: number;
   graceMs?: number;
   signal?: (pid: number, signal: NodeJS.Signals | 0) => void;
 }
 
-/** `ppid` and `starttime` from `/proc/<pid>/stat`, or undefined once gone. */
-async function statOf(
-  procRoot: string,
-  pid: number,
-): Promise<{ ppid: number; start: string } | undefined> {
-  try {
-    const stat = await readFile(`${procRoot}/${pid}/stat`, "utf8");
-    // `pid (comm) state ppid …` — comm may hold spaces or parentheses, so the
-    // fields count from the LAST `)`: state is field 3, starttime field 22.
-    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-    const ppid = Number(fields[1]);
-    if (!Number.isInteger(ppid)) return undefined;
-    return { ppid, start: fields[19] ?? "" };
-  } catch {
-    return undefined;
-  }
+function tableOf(options: CheckoutProcessOptions): ProcessTable | undefined {
+  if (options.table) return options.table;
+  if (options.procRoot !== undefined) return procTable(options.procRoot);
+  return systemProcessTable();
 }
 
-async function parentOf(
-  procRoot: string,
-  pid: number,
-): Promise<number | undefined> {
-  return (await statOf(procRoot, pid))?.ppid;
-}
-
-async function ancestry(procRoot: string, pid: number): Promise<number[]> {
+/** `pid`, its parent, its parent's parent… as far as the table knows. */
+function ancestry(table: Map<number, ProcessRecord>, pid: number): number[] {
   const chain: number[] = [];
   for (let at: number | undefined = pid; at && at > 1;) {
     if (chain.includes(at) || chain.length > 256) break;
     chain.push(at);
-    at = await parentOf(procRoot, at);
+    at = table.get(at)?.ppid;
   }
   return chain;
 }
 
-/** A process as found: its pid and start time, so a reused pid is not it. */
+/** A process as found: its pid, start time and parent when found. */
 interface ProcessIdentity {
   pid: number;
   start: string;
+  ppid: number;
 }
 
 /** Our processes whose cwd is `root` or below it. */
@@ -88,60 +83,58 @@ export async function checkoutProcesses(
   root: string,
   options: CheckoutProcessOptions = {},
 ): Promise<number[]> {
-  return (await ownedInside(root, options)).map((found) => found.pid);
+  const table = tableOf(options);
+  if (!table) return [];
+  return (await ownedInside(root, table, options)).map((found) => found.pid);
 }
 
 async function ownedInside(
   root: string,
+  table: ProcessTable,
   options: CheckoutProcessOptions,
 ): Promise<ProcessIdentity[]> {
-  const procRoot = options.procRoot ?? "/proc";
   const self = options.selfPid ?? process.pid;
-  // `/proc/<pid>/cwd` is always the resolved path.
-  const real = await realpath(root).catch(() => root);
-  let names: string[];
-  try {
-    names = await readdir(procRoot);
-  } catch {
-    return [];
-  }
-  const inside = (
-    await Promise.all(
-      names
-        .filter((name) => /^\d+$/.test(name))
-        .map(async (name) => {
-          try {
-            const cwd = await readlink(`${procRoot}/${name}/cwd`);
-            return cwd === real || cwd.startsWith(real + sep)
-              ? Number(name)
-              : undefined;
-          } catch {
-            return undefined;
-          }
-        }),
-    )
-  ).filter((pid): pid is number => pid !== undefined);
-  if (inside.length === 0) return [];
-
-  const protectedPids = new Set(await ancestry(procRoot, self));
-  const ours: ProcessIdentity[] = [];
-  for (const pid of inside) {
+  const snapshot = await table.snapshot();
+  if (!snapshot) return [];
+  const protectedPids = new Set(ancestry(snapshot, self));
+  const descendants: number[] = [];
+  for (const pid of snapshot.keys()) {
     if (protectedPids.has(pid)) continue;
-    const chain = await ancestry(procRoot, pid);
+    const chain = ancestry(snapshot, pid);
     // Two levels down at least: chain[1] is the parent.
     if (chain[1] === self || !chain.includes(self)) continue;
-    const start = (await statOf(procRoot, pid))?.start;
-    if (start) ours.push({ pid, start });
+    descendants.push(pid);
+  }
+  if (descendants.length === 0) return [];
+  // Table cwds are always resolved paths.
+  const real = await realpath(root).catch(() => root);
+  const cwds = await table.cwds(descendants);
+  const ours: ProcessIdentity[] = [];
+  for (const pid of descendants) {
+    const cwd = cwds.get(pid);
+    if (cwd === undefined || (cwd !== real && !cwd.startsWith(real + sep)))
+      continue;
+    const { start, ppid } = snapshot.get(pid)!;
+    ours.push({ pid, start, ppid });
   }
   return ours;
 }
 
-/** Still the process we found — not gone, and not a new one reusing its pid. */
-async function sameProcess(
-  procRoot: string,
-  found: ProcessIdentity,
-): Promise<boolean> {
-  return (await statOf(procRoot, found.pid))?.start === found.start;
+/**
+ * Which of `found` are still the processes found — not gone, and not a new
+ * one reusing the pid — and which cannot be told (the table read failed).
+ */
+async function stillRunning(
+  table: ProcessTable,
+  found: readonly ProcessIdentity[],
+): Promise<{ same: ProcessIdentity[]; unknown: ProcessIdentity[] }> {
+  if (found.length === 0) return { same: [], unknown: [] };
+  const now = await table.records(found.map((one) => one.pid));
+  if (!now) return { same: [], unknown: [...found] };
+  return {
+    same: found.filter((one) => now.get(one.pid)?.start === one.start),
+    unknown: [],
+  };
 }
 
 /** SIGTERM our processes inside `root`, SIGKILL whatever outlives the grace. */
@@ -149,40 +142,70 @@ export async function stopCheckoutProcesses(
   root: string,
   options: CheckoutProcessOptions = {},
 ): Promise<CheckoutProcessStop> {
-  const procRoot = options.procRoot ?? "/proc";
+  const table = tableOf(options);
+  if (!table) return { terminated: [], killed: [] };
   const signal =
     options.signal ?? ((pid: number, sig) => process.kill(pid, sig));
-  // Every signal is preceded by an identity check: over a two-second grace a
-  // pid can be recycled, and the new owner must never receive our SIGKILL. The
-  // window left between check and signal is microseconds, not seconds.
-  const send = async (
-    found: ProcessIdentity,
-    sig: NodeJS.Signals,
-  ): Promise<boolean> => {
-    if (!(await sameProcess(procRoot, found))) return false;
-    try {
-      signal(found.pid, sig);
-      return true;
-    } catch {
-      // Gone, or not ours to signal after all.
-      return false;
-    }
+  // Every signal is preceded by a check that the pid is still the process
+  // found: over a two-second grace a pid can be recycled, and the new owner
+  // must never receive our signal. Where the table's start time tells a reused
+  // pid apart (Linux, start ticks), that identity is the check. Where it is
+  // coarse (macOS, to the second), a same-second reuse would pass it, so the
+  // whole ownership test is redone from fresh reads: still at least two levels
+  // below us, outside our ancestry, its working directory still inside the
+  // checkout, and then, as the LAST read, the same start and parent as when
+  // found. Anything not re-read is never signalled. Neither platform has an
+  // atomic pid handle: the gap between the last read and the signal remains,
+  // microseconds for an in-process `/proc` read, tens of milliseconds for a
+  // brokered `ps`.
+  const recheck = async (
+    found: readonly ProcessIdentity[],
+  ): Promise<ProcessIdentity[]> => {
+    if (found.length === 0) return [];
+    if (!table.coarseStart) return (await stillRunning(table, found)).same;
+    const owned = new Map(
+      (await ownedInside(root, table, options)).map((one) => [one.pid, one]),
+    );
+    const same = (a: ProcessIdentity, b: ProcessRecord | undefined) =>
+      b?.start === a.start && b.ppid === a.ppid;
+    const stillOwned = found.filter((one) => same(one, owned.get(one.pid)));
+    if (stillOwned.length === 0) return [];
+    // The working directory came from a read AFTER the ownership snapshot, so
+    // a pid reused in between could pair the old identity with the new
+    // process's directory. Identity and parent are therefore read once more,
+    // last, right before the signal.
+    const last = await table.records(stillOwned.map((one) => one.pid));
+    if (!last) return [];
+    return stillOwned.filter((one) => same(one, last.get(one.pid)));
   };
-  const terminated: ProcessIdentity[] = [];
-  for (const found of await ownedInside(root, options))
-    if (await send(found, "SIGTERM")) terminated.push(found);
+  const send = async (
+    found: readonly ProcessIdentity[],
+    sig: NodeJS.Signals,
+  ): Promise<ProcessIdentity[]> => {
+    const sent: ProcessIdentity[] = [];
+    for (const one of await recheck(found)) {
+      try {
+        signal(one.pid, sig);
+        sent.push(one);
+      } catch {
+        // Gone, or not ours to signal after all.
+      }
+    }
+    return sent;
+  };
+  const terminated = await send(
+    await ownedInside(root, table, options),
+    "SIGTERM",
+  );
   if (terminated.length === 0) return { terminated: [], killed: [] };
   const deadline = Date.now() + (options.graceMs ?? TERM_GRACE_MS);
   let running = terminated;
   while (running.length > 0 && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, POLL_MS));
-    const still: ProcessIdentity[] = [];
-    for (const found of running)
-      if (await sameProcess(procRoot, found)) still.push(found);
-    running = still;
+    const { same, unknown } = await stillRunning(table, running);
+    // An unreadable round proves no exit: keep waiting for those.
+    running = [...same, ...unknown];
   }
-  const killed: number[] = [];
-  for (const found of running)
-    if (await send(found, "SIGKILL")) killed.push(found.pid);
+  const killed = (await send(running, "SIGKILL")).map((found) => found.pid);
   return { terminated: terminated.map((found) => found.pid), killed };
 }

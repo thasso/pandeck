@@ -5,7 +5,7 @@
  * computed by `worktreeStatus.ts`; this module owns the durable rows and the
  * git mutations, which run under {@link withRepoLock}.
  */
-import { basename, isAbsolute, join, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   boundMergeMessage,
@@ -1290,21 +1290,36 @@ async function isRegisteredWorktree(
   return false;
 }
 
-/** A path that cannot be resolved is not the same; a Worker failure rejects. */
+/**
+ * Whether two spellings name one path, by their real paths. A path that no
+ * longer exists, a locked worktree's deleted folder, is compared by its
+ * deepest resolvable ancestor and the names below it: Git lists a worktree by
+ * its real path (`/private/var` for macOS's `/var`), the row by the path it
+ * was created at. A Worker failure rejects.
+ */
 async function sameRealPath(
   side: CheckoutSide,
   a: string,
   b: string,
 ): Promise<boolean> {
+  return (
+    (await resolvedSpelling(side, a)) === (await resolvedSpelling(side, b))
+  );
+}
+
+/** `path`'s real path, or its deepest resolvable ancestor's and the rest. */
+async function resolvedSpelling(
+  side: CheckoutSide,
+  path: string,
+): Promise<string> {
   try {
-    return (
-      (await checkoutFilesOn(side).realpath(a, a)) ===
-      (await checkoutFilesOn(side).realpath(b, b))
-    );
+    return await checkoutFilesOn(side).realpath(path, path);
   } catch (err) {
     if (checkoutFailureOf(err) !== "filesystem") throw err;
-    return false;
   }
+  const parent = dirname(path);
+  if (parent === path) return path;
+  return join(await resolvedSpelling(side, parent), basename(path));
 }
 
 /**

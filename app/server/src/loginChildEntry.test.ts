@@ -20,6 +20,7 @@ import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, beforeAll, test } from "vitest";
 import { loginChildDriver } from "./gateway/loginChild.ts";
+import { processRuns } from "./test/processState.ts";
 
 let dir: string;
 let before: string | undefined;
@@ -67,16 +68,6 @@ const entry = (name: string) => ({
   file: process.execPath,
   args: ["--import", "tsx", resolve("src", name)],
 });
-
-function running(pid: number): boolean {
-  try {
-    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-    const state = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0];
-    return state !== "Z" && state !== "X";
-  } catch {
-    return false;
-  }
-}
 
 /** Runs an entry directly; `feed` writes its stdin. Resolves with its exit. */
 function direct(
@@ -167,7 +158,7 @@ test("the end of stdin cancels a running Claude login, and the CLI is gone", asy
   assert.ok(lines.some((line) => line.includes('"type":"url"')));
   assert.equal(lines.at(-1), JSON.stringify({ type: "done", ok: false }));
   assert.equal(
-    running(Number(readFileSync(join(dir, "cli-wait.pid"), "utf8"))),
+    processRuns(Number(readFileSync(join(dir, "cli-wait.pid"), "utf8"))),
     false,
   );
 }, 60_000);

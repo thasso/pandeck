@@ -13,6 +13,7 @@ import {
   realpathSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -2479,6 +2480,45 @@ test("a locked worktree whose folder is gone refuses instead of finalizing", asy
   assert.equal(sh(repoPath, "branch", "--list", record.branch).trim(), "");
 });
 
+test("a locked worktree whose folder is gone refuses under a linked worktree root too", async () => {
+  // Git lists the worktree by its real path, the row by the linked one it was
+  // created at; with the folder gone neither resolves in full.
+  const realRoot = join(tmp, "linked-wt-real");
+  mkdirSync(realRoot);
+  const linkedRoot = join(tmp, "linked-wt-root");
+  symlinkSync(realRoot, linkedRoot);
+  projectStore.put({
+    id: "linked-root-proj",
+    name: "Linked Root Project",
+    key: "LK",
+    description: "",
+    status: "active",
+    localPaths: [{ path: repoPath, kind: "repo", match: "prefix" }],
+    worktreeRoot: linkedRoot,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+  const record = await createWorktree({
+    projectId: "linked-root-proj",
+    name: "linked-locked",
+  });
+  assert.ok(record.path.startsWith(`${linkedRoot}/`), record.path);
+  sh(repoPath, "worktree", "lock", record.path);
+  rmSync(record.path, { recursive: true, force: true });
+
+  await assert.rejects(
+    () => removeWorktree(record.id, { deleteBranch: true }),
+    (err: Error) =>
+      err.name === "WorktreeRemovalBlockedError" && /locked/.test(err.message),
+  );
+  assert.equal(getWorktree(record.id)?.status, "active");
+
+  sh(repoPath, "worktree", "unlock", record.path);
+  await removeWorktree(record.id, { deleteBranch: true });
+  assert.equal(getWorktree(record.id)?.status, "removed");
+  assert.equal(sh(repoPath, "branch", "--list", record.branch).trim(), "");
+});
+
 /* ---------------- checkout reads (`docs/workers.md`, W3b) ----------------- */
 
 const { remoteDeliveryHeads } = await import("./worktreeFetch.ts");
@@ -2545,7 +2585,8 @@ test("delivery heads read a local remote's presence on the checkout's side", asy
   );
   for (const [remote, path] of [
     ["by-url", fileRemote],
-    ["by-path", plainRemote],
+    // Relative, it is resolved against the main checkout's real root.
+    ["by-path", realpathSync(plainRemote)],
     ["gone", missing],
   ] as const) {
     const probe = served.indexOf(`exists ${path}`);

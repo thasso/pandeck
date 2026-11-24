@@ -360,7 +360,8 @@ export async function createEntry(
                       {
                         kind: "file",
                         name: kind.manifestFile,
-                        identity: manifest.identity,
+                        sourceIdentity: manifest.identity,
+                        destinationIdentity: manifest.identity,
                         // Written here, so the bytes written here are what must
                         // still be there for the undo to take it back.
                         content: { kind: "bytes", bytes: encode(source) },
@@ -727,7 +728,28 @@ export async function renameEntry(
             // commit settles: the undo runs after this scope is gone, and the
             // folder's inode NUMBER alone would by then say nothing about
             // whether the folder still is this one.
-            const destination = await pin(ctx, pinEntryHandle(reserved.handle));
+            const destination = await pin(
+              ctx,
+              pinEntryHandle(reserved.handle),
+            ).catch(async (error: unknown) => {
+              // macOS volfs cannot reopen an unlinked directory, even while its
+              // original descriptor is held. Report a taken-over reservation,
+              // not that platform-specific ENOENT, and never touch its replacement.
+              if (
+                !(await entryChildStillIs(
+                  rootHandle,
+                  newName,
+                  reserved.identity,
+                ))
+              ) {
+                throw changedSinceScan(
+                  kind,
+                  newName,
+                  `was taken over by another entry while the ${kind.noun} was being renamed`,
+                );
+              }
+              throw error;
+            });
             const keep = pinKeeper(kind, ctx, target.folder);
             // What the undo must find at the new name: the placement plus the
             // fresh manifest. Filled AS each entry is placed, never afterwards,
@@ -777,9 +799,9 @@ export async function renameEntry(
                     true,
                   );
 
-                  // Everything except the manifest is hard-linked across: the
-                  // new name is the same inode, so nothing is copied and the
-                  // link itself proves later which names this call made.
+                  // Regular files are hard-linked; macOS symlinks are copied
+                  // from their pinned target bytes. Each side's own inode is
+                  // retained for source cleanup and destination undo.
                   await placeEntryChildren(
                     kind,
                     folder,
@@ -804,7 +826,8 @@ export async function renameEntry(
                   undoable.push({
                     kind: "file",
                     name: kind.manifestFile,
-                    identity: manifestPlaced.identity,
+                    sourceIdentity: manifestPlaced.identity,
+                    destinationIdentity: manifestPlaced.identity,
                     // Written here, not moved: these bytes are the expectation.
                     content: { kind: "bytes", bytes: encode(rewritten) },
                   });
@@ -847,7 +870,8 @@ export async function renameEntry(
                     {
                       kind: "file",
                       name: kind.manifestFile,
-                      identity: pinned.manifest,
+                      sourceIdentity: pinned.manifest,
+                      destinationIdentity: pinned.manifest,
                       content:
                         sourceManifest === undefined
                           ? { kind: "unproven" }
@@ -1485,9 +1509,9 @@ function applyExactReplacements(
 /**
  * One entry a rename placed at the new name, and how to recognise it again.
  *
- * A file (or symlink) is recorded by INODE, which a hard link makes exact: the
- * name at the destination and the name at the source are the same object, so
- * "is this still mine?" is answered by comparison rather than by trust. A
+ * Source and destination inodes are pinned separately. Hard links share an
+ * inode, but macOS symlinks are recreated with the same immutable target bytes.
+ * "Is this still mine?" compares the identity on the side being removed. A
  * directory is recorded by its children, because an empty directory can only be
  * removed with `rmdir`, which refuses to take anything with content in it.
  */
@@ -1495,7 +1519,8 @@ type PlacedEntry =
   | {
       kind: "file";
       name: string;
-      identity: { dev: number; ino: number };
+      sourceIdentity: { dev: number; ino: number };
+      destinationIdentity: { dev: number; ino: number };
       /** What must still be there for an undo to take this entry back. */
       content: PlacedContent;
     }
@@ -1518,21 +1543,23 @@ type PlacedEntry =
  * settled; nothing here closes one early, and nothing records an identity it
  * has not pinned.
  */
-async function pin(
+async function pin<T extends EntryPin>(
   ctx: LibraryMutationContext,
-  pending: Promise<EntryPin>,
-): Promise<EntryPin> {
+  pending: Promise<T>,
+): Promise<T> {
   const taken = await pending;
   ctx.hold(taken.handle);
+  if (taken.source) ctx.hold(taken.source.handle);
   return taken;
 }
 
-type PinKeeper = (create: () => Promise<EntryPin>) => Promise<EntryPin>;
+type PinKeeper = <T extends EntryPin>(create: () => Promise<T>) => Promise<T>;
 
 /**
  * How many entries one rename may place.
  *
- * Each placed entry costs one held descriptor until the commit settles, and a
+ * A hard-linked entry costs one descriptor; only recreated symlinks need two.
+ * All stay held until the commit settles, and a
  * mutation that could exhaust the process's descriptors to move a folder would
  * be a worse failure than the refusal. The alternative — placing entries this
  * mutation cannot pin — is not on the table: an unpinned identity is exactly
@@ -1553,7 +1580,7 @@ function pinKeeper(
   folder: string,
 ): PinKeeper {
   let held = 0;
-  return async (create) => {
+  return async <T extends EntryPin>(create: () => Promise<T>): Promise<T> => {
     if (held >= maxPlacedEntries) {
       // Refused BEFORE the create-or-fail call runs, so nothing is placed that
       // this mutation could not take back again.
@@ -1568,7 +1595,7 @@ function pinKeeper(
 
 /**
  * Copy one entry folder's children to another open directory using only
- * create-or-fail calls: `mkdir` for a directory, `link` for everything else.
+ * create-or-fail calls: `mkdir`, `link`, and native macOS symlink recreation.
  * The manifest is deliberately skipped — a rename rewrites it.
  */
 async function placeEntryChildren(
@@ -1627,18 +1654,17 @@ async function placeEntryChildren(
         `disappeared while the ${kind.noun} was copied`,
       );
     }
-    // The link makes the new name the same inode, and the pin keeps that inode
-    // from ever being handed to anything else — which is what an undo, running
-    // long after the source link is gone, has to be able to rely on. The
-    // recorded identity is the PIN's, so everything downstream compares against
-    // an inode this call holds rather than one it once looked at.
+    // Both sides stay pinned until cleanup settles. A macOS symlink copy has a
+    // new inode with the same target, so source removal and destination undo
+    // must compare against their own side, never against the other's inode.
     const linked = await keep(() => linkEntryChild(source, name, destination));
     // A symlink's target cannot change without the inode changing with it, so
     // only a regular file needs its content state remembered.
     placed.push({
       kind: "file",
       name,
-      identity: linked.identity,
+      sourceIdentity: linked.sourceIdentity,
+      destinationIdentity: linked.identity,
       // What HEAD has at the old path is what this link holds: the tree was
       // clean when the mutation started, which is what makes those the same
       // bytes, and it is fixed before anything could rewrite them.
@@ -1654,8 +1680,8 @@ async function placeEntryChildren(
 /**
  * Whether an open tree holds EXACTLY the entries recorded, and nothing else.
  *
- * The file comparison is by inode, which is conclusive here because every one
- * of them is pinned by its hard link at the other name. An extra entry — a file
+ * The source comparison is by its OWN pinned inode, including a symlink that
+ * was recreated with a different destination inode. An extra entry — a file
  * a hand edit added while the rename ran — makes this false, which is what
  * turns "remove the old folder" into a refusal rather than a loss.
  */
@@ -1684,8 +1710,8 @@ async function treeHoldsExactly(
       const identity = await entryChildIdentity(tree, child.name);
       if (
         !identity ||
-        identity.dev !== entry.identity.dev ||
-        identity.ino !== entry.identity.ino
+        identity.dev !== entry.sourceIdentity.dev ||
+        identity.ino !== entry.sourceIdentity.ino
       ) {
         return { holds: false };
       }
@@ -1714,13 +1740,7 @@ async function treeHoldsExactly(
         identity.dev !== entry.sourceIdentity.dev ||
         identity.ino !== entry.sourceIdentity.ino
       ) {
-        // The destination copy is the other side of the same record.
-        if (
-          identity.dev !== entry.destinationIdentity.dev ||
-          identity.ino !== entry.destinationIdentity.ino
-        ) {
-          return false;
-        }
+        return false;
       }
       const nested = await treeHoldsExactly(
         handle.handle,
@@ -2040,7 +2060,7 @@ async function removeAssembledEntries(
         await unlinkEntryChildIfSame(
           directory,
           entry.name,
-          entry.identity,
+          entry.destinationIdentity,
           holds,
         ).catch(() => false);
       }

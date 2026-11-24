@@ -64,7 +64,9 @@ test("a child answering one line and exiting 0 gives its result, with one reques
   const port = codexChildPort(
     child(
       "ok",
-      `const env = Object.keys(process.env).filter((name) => !["PATH", "HOME", "TMPDIR", "NODE_ENV"].includes(name));
+      `// CoreFoundation adds this non-secret metadata even when launched with env -i.
+const osMetadata = process.platform === "darwin" ? ["__CF_USER_TEXT_ENCODING"] : [];
+const env = Object.keys(process.env).filter((name) => !["PATH", "HOME", "TMPDIR", "NODE_ENV", ...osMetadata].includes(name));
 const good = request.authFile === "/x/auth.json" && request.minValidityMs === 42 && env.length === 0 && process.argv.length === 2;
 process.stdout.write(JSON.stringify(good ? { ok: true } : { ok: false, kind: "failed", code: "bad_input" }) + "\\n");
 process.exit(0);`,

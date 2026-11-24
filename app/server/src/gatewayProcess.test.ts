@@ -33,6 +33,7 @@ import { WorkerConnection } from "./workerProtocol/connection.ts";
 import { listenUnixSocket } from "./workerProtocol/unixSocketTransport.ts";
 import type { ByteEndpoint } from "./workerProtocol/inProcessTransport.ts";
 import { startGateway } from "./gateway/gateway.ts";
+import { leaveStaleUnixSocket } from "./test/staleSocket.ts";
 
 const FAKE_ACCESS = "fake-process-codex-access";
 const FAKE_REFRESH = "fake-process-codex-refresh";
@@ -355,7 +356,7 @@ test("overlapping real process starts and crash recovery preserve control and mo
   const dir = directory();
   const port = await freePort();
   const socketPath = join(dir, "c.sock");
-  writeFileSync(socketPath, "");
+  await leaveStaleUnixSocket(socketPath);
   const options = {
     stateDir: join(dir, "state"),
     socketPath,

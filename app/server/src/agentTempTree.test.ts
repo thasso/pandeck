@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   readdirSync,
   rmSync,
   statSync,
@@ -12,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, test } from "vitest";
 import { removeAgentTempTree } from "./agentTempTree.ts";
 
@@ -29,6 +30,12 @@ import { removeAgentTempTree } from "./agentTempTree.ts";
  * failure to actually happen are gated.
  */
 const permissionsEnforced = process.getuid?.() !== 0;
+
+/**
+ * What the plain `rmSync` reports for a tree it cannot empty: Linux surfaces the
+ * refused unlink, Node on macOS the parent it then could not remove.
+ */
+const unremovableCode = process.platform === "darwin" ? "ENOTEMPTY" : "EACCES";
 
 const created: string[] = [];
 
@@ -79,49 +86,59 @@ test("reclaims a tree whose directories an agent left read-only", () => {
 
   if (permissionsEnforced)
     assert.throws(() => rmSync(root, { recursive: true, force: true }), {
-      code: "EACCES",
+      code: unremovableCode,
     });
   assert.equal(removeAgentTempTree(root), true);
   assert.equal(existsSync(root), false);
 });
 
 // A directory with NO permission bits at all: its owner may still chmod it, but
-// nothing may open it for reading, so repairing it needs a handle that does not
-// imply read access (Linux `O_PATH`). Elsewhere the helper documents that it
-// cannot reclaim this, and the deployment target is Linux.
-test.skipIf(process.platform !== "linux")(
-  "reclaims a tree containing a directory with no permissions at all",
-  () => {
-    const root = tree();
-    const blind = join(root, "blind");
-    mkdirSync(blind);
-    writeFileSync(join(blind, "leaf.txt"), "x");
-    chmodSync(blind, 0o000);
+// nothing may open it for reading, so repairing it needs a change that does not
+// imply read access. Linux has one (`O_PATH`). macOS has no stock no-follow
+// chmod that works without read access, so there the repair FAILS CLOSED: the
+// tree is reported as left behind, with nothing thrown, rather than chmod'd
+// through a path or an unpinned inode name (`managedTreeRemoval.ts`).
+const reclaimsUnreadable = !permissionsEnforced || process.platform === "linux";
 
-    if (permissionsEnforced)
-      assert.throws(() => rmSync(root, { recursive: true, force: true }), {
-        code: "EACCES",
-      });
-    assert.equal(removeAgentTempTree(root), true);
-    assert.equal(existsSync(root), false);
-  },
-);
+function assertUnreadableOutcome(root: string, leaf: string): void {
+  let removed: boolean | undefined;
+  assert.doesNotThrow(() => {
+    removed = removeAgentTempTree(root);
+  });
+  assert.equal(removed, reclaimsUnreadable);
+  assert.equal(existsSync(root), !reclaimsUnreadable);
+  if (!reclaimsUnreadable) {
+    // Nothing inside the unreadable directory was touched.
+    chmodSync(dirname(leaf), 0o700);
+    assert.equal(readFileSync(leaf, "utf8"), "x");
+  }
+}
 
-test.skipIf(process.platform !== "linux")(
-  "a mode-000 directory nested under a read-only one is still reclaimed",
-  () => {
-    const root = tree();
-    const outer = join(root, "outer");
-    const blind = join(outer, "blind");
-    mkdirSync(blind, { recursive: true });
-    writeFileSync(join(blind, "leaf.txt"), "x");
-    chmodSync(blind, 0o000);
-    chmodSync(outer, 0o555);
+test("a tree containing a directory with no permissions at all is reclaimed where the host can do so without following links", () => {
+  const root = tree();
+  const blind = join(root, "blind");
+  mkdirSync(blind);
+  writeFileSync(join(blind, "leaf.txt"), "x");
+  chmodSync(blind, 0o000);
 
-    assert.equal(removeAgentTempTree(root), true);
-    assert.equal(existsSync(root), false);
-  },
-);
+  if (permissionsEnforced)
+    assert.throws(() => rmSync(root, { recursive: true, force: true }), {
+      code: unremovableCode,
+    });
+  assertUnreadableOutcome(root, join(blind, "leaf.txt"));
+});
+
+test("a mode-000 directory nested under a read-only one is reclaimed where the host can do so without following links", () => {
+  const root = tree();
+  const outer = join(root, "outer");
+  const blind = join(outer, "blind");
+  mkdirSync(blind, { recursive: true });
+  writeFileSync(join(blind, "leaf.txt"), "x");
+  chmodSync(blind, 0o000);
+  chmodSync(outer, 0o555);
+
+  assertUnreadableOutcome(root, join(blind, "leaf.txt"));
+});
 
 test("a read-only directory nested under several read-only ones is still reclaimed", () => {
   const root = tree();

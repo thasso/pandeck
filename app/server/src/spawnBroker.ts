@@ -866,6 +866,11 @@ export function startSpawnBroker(): void {
   broker = startBroker();
 }
 
+/** Test seam: the script every broker process runs (`node -e`). */
+export function brokerScriptForTests(): string {
+  return BROKER_SCRIPT;
+}
+
 /** Test seam: the broker's pid, starting it if needed; undefined when local. */
 export async function spawnBrokerPidForTests(): Promise<number | undefined> {
   await brokerExecFile({
