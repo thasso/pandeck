@@ -59,6 +59,13 @@ const owners: Record<string, Owner> = {
       ),
       group(
         "projected",
+        "releaseForSwitch openForBinding",
+        "A harness switch removes live membership from the engine it leaves and registers it on the one it joins, both through track/sessionRowsChanged.",
+        pi + "PiStore.releaseForSwitch",
+        pi + "PiStore.openForBinding",
+      ),
+      group(
+        "projected",
         "onEngineLost",
         "A Worker connection end ends the live session like an eviction, keeping its record; map removal reports it before runtime/native teardown.",
         "piSdk/remotePiEngine.test.ts::PiStore.onEngineLost connection end",
@@ -73,7 +80,7 @@ const owners: Record<string, Owner> = {
       ),
       group(
         "nonprojected",
-        "setHost setHeldElsewhere getForDrive",
+        "setHost setRegistrationCheck getForDrive",
         "Install host callbacks/an ownership predicate or rearm an idle timer, not session data.",
       ),
       group(
@@ -212,7 +219,7 @@ const owners: Record<string, Owner> = {
     groups: [
       group(
         "projected",
-        "acquire",
+        "acquire open",
         "Register/reopen the live SDK overlay and synchronize indexed classification.",
         claude + "ClaudeStore.acquire",
         old + "claudeSdkStore.acquire",
@@ -239,9 +246,21 @@ const owners: Record<string, Owner> = {
         old + "claudeSdkStore.remove",
       ),
       group(
+        "projected",
+        "releaseForSwitch openForBinding",
+        "A harness switch removes the live overlay from the engine it leaves and registers it on the one it joins; the runtime session stays.",
+        claude + "ClaudeStore.releaseForSwitch",
+        claude + "ClaudeStore.openForBinding",
+      ),
+      group(
         "nonprojected",
-        "setOnChange setHeldElsewhere setStateBuilder setSeam getForDrive",
+        "setOnChange setRegistrationCheck setStateBuilder setSeam getForDrive",
         "Install callbacks/predicates/provider seams or rearm idle residency, not session projection data.",
+      ),
+      group(
+        "nonprojected",
+        "wakeIfSettled",
+        "Wakes delivery for a switch held on the session's own settling work; it writes no row.",
       ),
       group(
         "nonprojected",
@@ -378,7 +397,7 @@ const owners: Record<string, Owner> = {
       ),
       group(
         "nonprojected",
-        "markProviderResultForDiscard consumeForeignProviderResult resetProviderResultTracking closeProcess handleInBandCompactMessage refreshToolLoadState",
+        "markProviderResultForDiscard consumeForeignProviderResult resetProviderResultTracking closeProcess endProcessFor closeForEngineSwitch handleInBandCompactMessage refreshToolLoadState",
         "Epoch/process/compaction/tool-loading bookkeeping; a resulting actual turn boundary goes through finishTurn.",
       ),
       group(
@@ -434,8 +453,8 @@ const owners: Record<string, Owner> = {
       ),
       group(
         "nonprojected",
-        "createSession openForView retainView scheduleViewRelease cancelViewRelease attachAdapter",
-        "Create/bind idle or detached runtime residency; only active run events affect the list. Detached view expiry removes no public conversation.",
+        "createSession openForView retainView scheduleViewRelease cancelViewRelease attachAdapter detachHarness",
+        "Create/bind idle or detached runtime residency; only active run events affect the list. Detached view expiry removes no public conversation. A harness switch detaches between runs only.",
         pi + "runtime.openForView",
         pi + "runtime.scheduleViewRelease timer",
         pi + "runtime.attachAdapter",
@@ -447,7 +466,7 @@ const owners: Record<string, Owner> = {
       ),
       group(
         "read",
-        "get interruptedRunAt isRunning runProgress isBusy loadTimelineBlock loadTimelineRange locateAnchor readLog getConfig forkAnchors forkLog forkCutEntryId canForkLogAt turnEndEntryId entryText require",
+        "get interruptedRunAt isRunning runProgress isBusy loadTimelineBlock loadTimelineRange locateAnchor logCursor readLog getConfig forkAnchors forkLog forkCutEntryId canForkLogAt turnEndEntryId entryText require",
         "Read active ownership/logs/config/fork cuts; no listed mutation.",
       ),
     ],

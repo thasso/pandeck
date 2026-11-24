@@ -7,6 +7,7 @@
  */
 import type { AgentType, Harness } from "@assistant/shared";
 import { claudeSdkStore } from "../claudeSdk/claudeSdkStore.ts";
+import { sessionStore } from "../db/sessionStore.ts";
 import {
   linkSessionToWorktree,
   worktreeIdForSession,
@@ -42,6 +43,10 @@ export function prepareFork(
   harness: Harness,
   request: ForkRequest,
 ): PreparedFork {
+  // A fork cuts the engine that owns the chosen entry, which after a harness
+  // switch may not be the active one; until that cut exists, refuse.
+  if (sessionStore.bindings(request.id).length > 1)
+    return { refusal: SWITCHED_ENGINES };
   const prepared = engines[harness](request);
   if ("refusal" in prepared) return prepared;
   return {
@@ -59,6 +64,9 @@ export function prepareFork(
     },
   };
 }
+
+const SWITCHED_ENGINES =
+  "Forking a session that switched engines is not available yet.";
 
 const NO_ANCHOR =
   "Failed to fork session: this message has no provider anchor to branch from.";

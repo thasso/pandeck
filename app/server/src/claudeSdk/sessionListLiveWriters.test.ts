@@ -556,3 +556,39 @@ test("a resting live Claude row is a digest member, already at rest", async () =
   assert.equal(row.awaitingInput, false);
   assert.deepEqual(sessionListItemAtRest(row), row);
 });
+
+test("Claude engine-switch release and open on a binding report the live overlay", async () => {
+  installSeam();
+  const profile = account();
+  const live = await freshClaude(profile);
+  ensureRuntimeSessionWithRuntime(sessionRuntime, live);
+  await sessionRuntime.prompt(live.id, "before the switch");
+  await oracle(
+    "ClaudeStore.releaseForSwitch",
+    () => claudeSdkStore.releaseForSwitch(live.id, () => {}),
+    { changed: [live.id] },
+  );
+  assert.equal(claudeSdkStore.get(live.id), undefined);
+  assert.equal(sessionRuntime.get(live.id)?.isDetached, true);
+  const row = sessionStore.get(live.id)!;
+  const reopened = await oracle(
+    "ClaudeStore.openForBinding",
+    () =>
+      claudeSdkStore.openForBinding(live.id, {
+        model: "claude-opus-4-6",
+        thinkingLevel: "high",
+        credentialProfileId: profile,
+        providerSessionId: row.providerSessionId,
+        agentType: "assistant",
+        mode: "build",
+        title: row.title,
+        createdAt: row.createdAt,
+      }),
+    { changed: [live.id] },
+  );
+  assert.equal(claudeSdkStore.get(live.id), reopened);
+  assert.equal(
+    reopened.timelineEntries().length,
+    live.timelineEntries().length,
+  );
+});

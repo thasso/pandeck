@@ -78,8 +78,12 @@ import { createPiBackgroundTools } from "./backgroundWorkExecutor.ts";
 
 /** Which transcript an engine runs on. */
 type PiEngineTranscript =
-  /** A fresh session, minted in `kind`'s session directory. */
-  | { type: "new"; cwd: string }
+  /**
+   * A fresh session, minted in `kind`'s session directory. `id` is the app id
+   * a harness switch gives a session's first pi binding (pi's native id is
+   * always the app id); without one pi mints it.
+   */
+  | { type: "new"; cwd: string; id?: string }
   /**
    * An existing transcript, already migrated to where it opens. `cwd` is the
    * checked worktree edge, which wins over the file header's.
@@ -335,7 +339,11 @@ async function openTranscript(
   const { kind, transcript } = spec;
   if (transcript.type === "new")
     return {
-      sm: SessionManager.create(transcript.cwd, sessionDirFor(kind)),
+      sm: SessionManager.create(
+        transcript.cwd,
+        sessionDirFor(kind),
+        transcript.id !== undefined ? { id: transcript.id } : undefined,
+      ),
       cwd: transcript.cwd,
     };
   if (transcript.type === "open") {

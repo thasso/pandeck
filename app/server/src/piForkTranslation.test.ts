@@ -735,14 +735,17 @@ test("a refused fork never claims the view, on either engine", async () => {
     const { fork, sent } = makeConnection();
 
     await fork("unbound-for-claims", ids[1]!, "at");
-    // The same session as Claude's: before its first prompt there is nothing
-    // to cut at, which only the Claude engine says this way.
+    // The same log on a Claude session: before its first prompt there is
+    // nothing to cut at, which only the Claude engine says this way. Claude
+    // from its first write, since an upsert naming another harness never moves
+    // a session's binding.
     sessionStore.upsert({
-      id: "unbound-for-claims",
+      id: "unbound-for-claims-claude",
       harness: "claude-sdk",
       agentType: "developer",
     });
-    await fork("unbound-for-claims", ids[0]!, "before");
+    const claudeIds = await seedPiSession("unbound-for-claims-claude", false);
+    await fork("unbound-for-claims-claude", claudeIds[0]!, "before");
 
     assert.equal(claims.mock.calls.length, 0);
     assert.deepEqual(

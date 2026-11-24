@@ -1712,6 +1712,14 @@ export interface AppSettings {
      */
     openAiResetAutoRedeemHours: number;
   };
+  /** Moving a started session to another harness (`docs/session-runtime-switching.md`). */
+  sessionSwitching: {
+    /**
+     * Most tokens of earlier conversation handed to the new engine, verbatim
+     * (1,000–64,000); the target model's free window may lower it further.
+     */
+    handoffTokenCap: number;
+  };
 }
 
 /** Slash commands offered by the server. */
@@ -2768,13 +2776,16 @@ export interface TaskExternalLink {
  */
 export type TaskSessionOrigin = "task-start" | "reference";
 
+/**
+ * A session linked to a Task. It names the session by id only: which engine
+ * runs it is the session's active binding, which a harness switch changes, so
+ * a ref never stores an engine or a native file
+ * (`docs/session-runtime-switching.md`).
+ */
 export interface TaskSessionRef {
-  /** Which engine runs this session (pi / claude-sdk). */
-  harness?: Harness;
   /** Which persona/toolset this session emulates, independent of harness. */
   agentType?: AgentType;
   sessionId: string;
-  sessionFile?: string;
   /** Defaults to `reference` when absent. */
   origin?: TaskSessionOrigin;
   /** When the Task context was attached to this session (for `task-start`). */

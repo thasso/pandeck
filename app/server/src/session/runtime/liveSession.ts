@@ -643,6 +643,31 @@ export class LiveRuntimeSession {
       throw new Error(
         `Session ${this.sessionId} already has an open harness adapter.`,
       );
+    this.swapAdapter(adapter);
+  }
+
+  /**
+   * Hand the session back to rendering only, because its harness is leaving
+   * it for another engine (a harness switch,
+   * `docs/session-runtime-switching.md`). The runtime session, its log and
+   * its viewers stay; the next engine binds through {@link rebindAdapter}.
+   * Legal only between runs: a running turn belongs to the harness that
+   * started it. Answers the released adapter's disposal.
+   */
+  detachAdapter(detached: PromptableAdapter): void | Promise<void> {
+    if (!isDetachedAdapter(detached))
+      throw new Error("Only a detached adapter can replace an open harness.");
+    if (this.isDetached) return;
+    if (this.isRunning)
+      throw new Error(
+        `Session ${this.sessionId} is running; its harness cannot leave it.`,
+      );
+    const released = this.adapter;
+    this.swapAdapter(detached);
+    return released.dispose();
+  }
+
+  private swapAdapter(adapter: PromptableAdapter): void {
     this.unsubscribeAdapter();
     this.adapter = adapter;
     // A new adapter numbers its runs afresh.

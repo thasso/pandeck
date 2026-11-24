@@ -612,6 +612,66 @@ function recordsForRow(row: JsonRow, lineIndex: number): SessionRecord[] {
   return out;
 }
 
+/**
+ * Every inspection record of a session log in log order, each with the `seq`
+ * of the log row it came from, skipping rows at or before `afterSeq`. The
+ * records and their entry ids are exactly what `session_read` reads, so an id
+ * taken from here is a valid `at` anchor. A harness switch builds its handoff
+ * from this (`sessionHandoff.ts`).
+ */
+export function forEachSessionRecord(
+  logPath: string,
+  afterSeq: number,
+  onRecord: (record: SessionRecord, seq: number) => void,
+): void {
+  let lineIndex = 0;
+  forEachJsonlLine(logPath, 0, (line) => {
+    lineIndex++;
+    const row = parseLine(line);
+    if (!row) return "continue";
+    const seq = typeof row.seq === "number" ? row.seq : undefined;
+    if (seq === undefined || seq <= afterSeq) return "continue";
+    for (const record of recordsForRow(row, lineIndex)) onRecord(record, seq);
+    return "continue";
+  });
+}
+
+/**
+ * The context size the LAST assistant row with `fromSeq <= seq < beforeSeq`
+ * reported (its usage's `contextTokens`, else its input-side token sum, as the
+ * session stats read it); undefined when no row in the range reported usage.
+ * A harness switch's handoff budget reads what a resumed native session last
+ * held from this (`sessionSwitchHandoff.ts`).
+ */
+export function lastReportedContextTokens(
+  logPath: string,
+  fromSeq: number,
+  beforeSeq: number,
+): number | undefined {
+  let last: number | undefined;
+  forEachJsonlLine(logPath, 0, (line) => {
+    const row = parseLine(line);
+    if (!row || row.type !== "message" || row.role !== "assistant")
+      return "continue";
+    const seq = typeof row.seq === "number" ? row.seq : undefined;
+    if (seq === undefined || seq < fromSeq || seq >= beforeSeq)
+      return "continue";
+    const usage = isRecord(row.usage) ? row.usage : undefined;
+    if (!usage) return "continue";
+    const count = (value: unknown) =>
+      typeof value === "number" && Number.isFinite(value) ? value : 0;
+    const size =
+      typeof usage.contextTokens === "number"
+        ? count(usage.contextTokens)
+        : count(usage.inputTokens) +
+          count(usage.cacheReadTokens) +
+          count(usage.cacheCreationTokens);
+    if (size > 0) last = size;
+    return "continue";
+  });
+  return last;
+}
+
 /* ---------------------------- windowed reads ------------------------------ */
 
 export interface WindowResult {

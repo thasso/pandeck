@@ -277,6 +277,15 @@ export class SessionRuntime {
   }
 
   /**
+   * The seq the session's log gives its next entry (0 without a log): where a
+   * new engine binding starts (`docs/session-runtime-switching.md`).
+   */
+  logCursor(sessionId: string): number {
+    if (!this.logStore.has(sessionId)) return 0;
+    return this.readLog(sessionId, (log) => log.seqCursor);
+  }
+
+  /**
    * Read a session's log, live or not, without leaving it resident: a log
    * opened from disk for the read is dropped again afterwards, on every exit —
    * but never while a {@link LiveRuntimeSession} owns it, which would otherwise
@@ -501,6 +510,22 @@ export class SessionRuntime {
     if (!session || session.isDetached) return Promise.resolve();
     console.info(`[sessions] released ${sessionId}: its harness went idle`);
     return this.disposeSession(sessionId);
+  }
+
+  /**
+   * The harness behind this session is leaving it for another engine (a
+   * harness switch). Unlike {@link releaseHarness} the runtime session stays,
+   * DETACHED, so its viewers keep their transcript stream and the next
+   * engine's driver rebinds it (`ensureRuntimeSessionWithRuntime`). Refused
+   * while a run is open. A session nobody views is released after the grace
+   * like any detached one, unless an engine has bound it again by then.
+   */
+  detachHarness(sessionId: string): Promise<void> {
+    const session = this.live.get(sessionId);
+    if (!session || session.isDetached) return Promise.resolve();
+    const released = session.detachAdapter(detachedAdapter(sessionId));
+    if (!this.viewCounts.has(session)) this.scheduleViewRelease(session);
+    return Promise.resolve(released);
   }
 
   /**

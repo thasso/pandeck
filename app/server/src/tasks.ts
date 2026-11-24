@@ -12,7 +12,6 @@
  */
 import type {
   AgentType,
-  Harness,
   ServerMessage,
   StateDigestEntry,
   TaskBackRef,
@@ -950,16 +949,12 @@ export function linkSessionToTask(
     ref.origin === "task-start" || prev?.origin === "task-start"
       ? "task-start"
       : (ref.origin ?? prev?.origin);
-  const harness = ref.harness ?? prev?.harness;
   const agentType = ref.agentType ?? prev?.agentType;
-  const sessionFile = ref.sessionFile ?? prev?.sessionFile;
   const attachedAt = ref.attachedAt ?? prev?.attachedAt;
   writeTasks((touch) => {
     addLink(node(nid), "context", sessionNode(ref.sessionId), {
       metadata: {
-        ...(harness !== undefined ? { harness } : {}),
         ...(agentType !== undefined ? { agentType } : {}),
-        ...(sessionFile !== undefined ? { sessionFile } : {}),
         ...(origin !== undefined ? { origin } : {}),
         ...(attachedAt !== undefined ? { attachedAt } : {}),
       } satisfies SessionEdgeMeta,
@@ -1124,10 +1119,14 @@ function movedMembershipSubtrees(
 
 /* ------------------------------- assembly -------------------------------- */
 
+/**
+ * A `context` edge's metadata. It never names the session's engine or native
+ * file: a harness switch changes those, so they are read from the session's
+ * active binding. Older edges still carry `harness`/`sessionFile`; nothing
+ * reads them.
+ */
 interface SessionEdgeMeta {
-  harness?: Harness;
   agentType?: AgentType;
-  sessionFile?: string;
   origin?: TaskSessionOrigin;
   attachedAt?: number;
 }
@@ -1224,10 +1223,8 @@ const toSummary = taskSummaryOf;
 function sessionRefFromEdge(edge: Link): TaskSessionRef {
   const m = (edge.metadata ?? {}) as SessionEdgeMeta;
   return {
-    ...(m.harness ? { harness: m.harness } : {}),
     ...(m.agentType ? { agentType: m.agentType } : {}),
     sessionId: edge.toId,
-    ...(m.sessionFile ? { sessionFile: m.sessionFile } : {}),
     ...(m.origin ? { origin: m.origin } : {}),
     ...(m.attachedAt !== undefined ? { attachedAt: m.attachedAt } : {}),
   };
@@ -1320,11 +1317,7 @@ function applyRelations(
     for (const ref of rel.sessionRefs) {
       addLink(node(taskId), "context", sessionNode(ref.sessionId), {
         metadata: {
-          ...(ref.harness !== undefined ? { harness: ref.harness } : {}),
           ...(ref.agentType !== undefined ? { agentType: ref.agentType } : {}),
-          ...(ref.sessionFile !== undefined
-            ? { sessionFile: ref.sessionFile }
-            : {}),
           ...(ref.origin !== undefined ? { origin: ref.origin } : {}),
           ...(ref.attachedAt !== undefined
             ? { attachedAt: ref.attachedAt }
@@ -1761,10 +1754,8 @@ function normalizeSessionRefs(refs: unknown): TaskSessionRef[] {
     const r = ref as TaskSessionRef;
     const originRaw = (ref as { origin?: unknown }).origin;
     out.push({
-      ...(r.harness ? { harness: r.harness } : {}),
       ...(r.agentType ? { agentType: r.agentType } : {}),
       sessionId,
-      ...(r.sessionFile ? { sessionFile: r.sessionFile } : {}),
       ...(originRaw === "task-start" || originRaw === "reference"
         ? { origin: originRaw }
         : {}),

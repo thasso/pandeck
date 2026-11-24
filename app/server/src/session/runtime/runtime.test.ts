@@ -1152,6 +1152,52 @@ test("disposeSession: frees the session + allows a fresh re-create", async () =>
   await runtime.disposeSession("s1");
 });
 
+test("detachHarness keeps the runtime session and its subscribers for the next engine", async () => {
+  const runtime = new SessionRuntime(new SessionLogStore(true), 5);
+  const first = new ScriptedAdapter();
+  const live = runtime.createSession("s1", first);
+  const seen: string[] = [];
+  live.subscribe((event) => seen.push(event.type));
+
+  // A running turn belongs to the engine that started it.
+  const running = runtime.prompt("s1", "go");
+  await tick();
+  assert.throws(() => runtime.detachHarness("s1"), /is running/);
+  first.finishRun({ stopReason: "end" });
+  await running;
+
+  await runtime.detachHarness("s1");
+  assert.equal(
+    first.disposed,
+    true,
+    "the leaving engine's adapter is disposed",
+  );
+  assert.equal(runtime.get("s1"), live, "the same runtime session stays");
+  assert.equal(live.isDetached, true);
+  await runtime.detachHarness("s1"); // already detached: nothing to do
+
+  // The next engine binds the same instance; a subscriber from before the
+  // switch sees its run, and nothing reaches the old adapter.
+  const next = new ScriptedAdapter();
+  live.rebindAdapter(next);
+  seen.length = 0;
+  const again = runtime.prompt("s1", "again");
+  await tick();
+  assert.equal(next.promptCount, 1);
+  assert.equal(first.promptCount, 1);
+  next.finishRun({ stopReason: "end" });
+  await again;
+  assert.ok(seen.length > 0, "the earlier subscriber still hears the session");
+  // Bound again before the view-release grace ran out: it is kept.
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(runtime.get("s1"), live);
+
+  // Detached and never bound again, an unviewed session goes after the grace.
+  await runtime.detachHarness("s1");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(runtime.get("s1"), undefined);
+});
+
 /* -------------- semantic completion hook excludes generic idle ---------- */
 test("semantic completion hook excludes generic idle", async () => {
   const { runtime, adapter } = makeRuntime();

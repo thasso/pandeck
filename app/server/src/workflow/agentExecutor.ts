@@ -441,10 +441,8 @@ async function dispatchWorkflowAgentStep(
     // trigger's whole context. A replacement session is a first assignment too;
     // a reused role session already has this context.
     const started = await applySessionContext(startContext, {
-      harness: driver.harness,
       agentType: role === "coordinator" ? "workflow-coordinator" : "developer",
       sessionId,
-      ...(driver.sessionFile ? { sessionFile: driver.sessionFile } : {}),
     });
     attachments = started.attachments;
   }

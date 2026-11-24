@@ -7,11 +7,14 @@
  * persist writes only the entries the log does not hold yet. Deleted ids are
  * tombstoned so a late event can't resurrect a removed session.
  */
+import { getSettings } from "../settings.ts";
+import { permanentAssistantProfileInstructions } from "../permanentAssistantProfile.ts";
 import { randomUUID } from "node:crypto";
 import {
   type AgentType,
   DEFAULT_SESSION_SCOPE,
   type SessionForkOrigin,
+  type SessionMode,
   type SessionScope,
 } from "@assistant/shared";
 import { CWD } from "../config.ts";
@@ -30,7 +33,9 @@ import {
   claudeProfileSessionStore,
   removeClaudeSessionFromAllProfiles,
 } from "./profileSessionStore.ts";
-import { SessionHeldElsewhereError, type HarnessHost } from "../harness.ts";
+import { SessionSettlingError, type HarnessHost } from "../harness.ts";
+import { wakeSessionDelivery } from "../deliveryWake.ts";
+import { hasToolGroupSession } from "../mcp/toolGroups/registry.ts";
 import {
   credentialProfileById,
   legacyDefaultProfileId,
@@ -53,11 +58,87 @@ import {
 
 const STORE_DIR = CLAUDE_SDK_STORE_DIR;
 
+/** What a caller acquiring a Claude session may ask for; a record beats it. */
+interface ClaudeAcquireOptions {
+  createdAt?: number;
+  modelId?: string;
+  thinkingLevel?: string;
+  mode?: string;
+  agentType?: AgentType;
+  cwd?: string;
+  additionalSystemPrompt?: string;
+  credentialProfileId?: string;
+  requiresEnterprise?: boolean;
+  /**
+   * Whose session this is, declared by the CREATING caller: it is persisted
+   * before the session enters the live map, because the session list treats
+   * a live session with no row as the user's.
+   */
+  scope?: SessionScope;
+}
+
+/**
+ * The engine binding a harness switch opens a session on
+ * (`docs/session-runtime-switching.md`). Every field is the SESSION's or the
+ * binding's own, so nothing an earlier Claude binding left in the record
+ * decides it.
+ */
+export interface ClaudeSwitchBinding {
+  model: string;
+  thinkingLevel: string;
+  credentialProfileId: string;
+  /** The native session a return resumes; undefined starts a fresh one. */
+  providerSessionId: string | undefined;
+  agentType: AgentType;
+  mode: SessionMode;
+  title: string;
+  createdAt: number;
+  /** Where a fresh session runs when the session has no worktree edge. */
+  cwd?: string;
+}
+
+/**
+ * What the session's active binding says Claude runs it on, when that binding
+ * is Claude's: on reopen it beats the record, which may still hold an earlier
+ * Claude binding's values. `switched` is a binding a harness switch started,
+ * whose native session is the binding's own (none until its first query);
+ * a first binding keeps the record's native id, learned before the row's.
+ */
+function boundClaudeFields(id: string):
+  | {
+      model: string | undefined;
+      thinkingLevel: string | undefined;
+      providerSessionId: string | undefined;
+      switched: boolean;
+    }
+  | undefined {
+  const active = sessionStore.activeBinding(id);
+  if (active?.harness !== "claude-sdk") return undefined;
+  return {
+    model: active.model,
+    thinkingLevel: active.thinkingLevel,
+    providerSessionId: active.nativeSessionId,
+    switched: active.seq > 1,
+  };
+}
+
 class ClaudeSdkSessionStore {
   private sessions = new Map<string, ClaudeSdkSession>();
   private deleted = new Set<string>();
-  /** Whether another engine holds an id resident; registration refuses it. */
-  private heldElsewhere: (id: string) => boolean = () => false;
+  /**
+   * Why an id may not register here now (`harnessRegistry`): another engine
+   * holds it, a switch is moving it, it is deleted. `forSwitch` is the
+   * switch's own open, which the fence admits.
+   */
+  private registrationRefusal: (
+    id: string,
+    forSwitch: boolean,
+  ) => Error | undefined = () => undefined;
+  /**
+   * Sessions a switch could not release only because work of their own was
+   * still finishing (the naming agent); delivery is woken once they settle.
+   */
+  private wakeWhenSettled = new Set<string>();
   /** Where each live session's next persist continues its timeline log. */
   private logs = new Map<string, ClaudeSdkLogCursor>();
   /** Lazily-built real seam, shared by every live session. */
@@ -70,8 +151,10 @@ class ClaudeSdkSessionStore {
   }
 
   /** How to tell an id another engine holds resident (`harnessRegistry`). */
-  setHeldElsewhere(check: (id: string) => boolean): void {
-    this.heldElsewhere = check;
+  setRegistrationCheck(
+    check: (id: string, forSwitch: boolean) => Error | undefined,
+  ): void {
+    this.registrationRefusal = check;
   }
 
   setStateBuilder(cb: HarnessHost["buildSessionState"]): void {
@@ -153,23 +236,7 @@ class ClaudeSdkSessionStore {
    */
   acquire(
     id: string,
-    opts: {
-      createdAt?: number;
-      modelId?: string;
-      thinkingLevel?: string;
-      mode?: string;
-      agentType?: AgentType;
-      cwd?: string;
-      additionalSystemPrompt?: string;
-      credentialProfileId?: string;
-      requiresEnterprise?: boolean;
-      /**
-       * Whose session this is, declared by the CREATING caller: it is persisted
-       * before the session enters the live map, because the session list treats
-       * a live session with no row as the user's.
-       */
-      scope?: SessionScope;
-    } = {},
+    opts: ClaudeAcquireOptions = {},
     /**
      * The construction's own check of the session's worktree, taken right
      * before this call in the caller's continuation; the cwd comes from it.
@@ -179,41 +246,109 @@ class ClaudeSdkSessionStore {
   ): ClaudeSdkSession {
     const existing = this.getForDrive(id);
     if (existing) return existing;
-    // An id belongs to one engine: one pi holds resident is never taken here,
-    // whichever caller asks.
-    if (this.heldElsewhere(id)) throw new SessionHeldElsewhereError(id);
-    const loaded = this.deleted.has(id)
-      ? undefined
-      : readClaudeSdkRecord(STORE_DIR, id);
+    return this.open(id, opts, checkout, undefined);
+  }
+
+  /**
+   * Open `id` on the binding a harness switch chose, after the engine it
+   * leaves has released it. A return finds the record an earlier Claude
+   * binding left; its timeline stays, but the binding's model, effort,
+   * account and native session and the session's own mode, title and
+   * creation time win over what that record says. Never reuses a resident
+   * session: a switch to Claude starts from a session Claude does not hold.
+   */
+  openForBinding(
+    id: string,
+    binding: ClaudeSwitchBinding,
+    checkout?: CheckedCheckout,
+  ): ClaudeSdkSession {
+    if (this.sessions.has(id))
+      throw new Error(`Session ${id} is already open on Claude.`);
+    // The session's stored scope, so the claim confirms it rather than
+    // contradicting an agent- or workflow-scoped session.
+    const scope = sessionStore.get(id)?.scope;
+    // The permanent assistant's profile suffix comes from settings at every
+    // open, as pi reads it, so both engines render the same one.
+    const additionalSystemPrompt =
+      binding.agentType === "personal-assistant"
+        ? permanentAssistantProfileInstructions(
+            getSettings().permanentAssistant,
+          )
+        : undefined;
+    return this.open(
+      id,
+      {
+        agentType: binding.agentType,
+        ...(additionalSystemPrompt !== undefined
+          ? { additionalSystemPrompt }
+          : {}),
+        ...(scope ? { scope } : {}),
+        ...(binding.cwd !== undefined ? { cwd: binding.cwd } : {}),
+      },
+      checkout,
+      binding,
+    );
+  }
+
+  private open(
+    id: string,
+    opts: ClaudeAcquireOptions,
+    checkout: CheckedCheckout | undefined,
+    binding: ClaudeSwitchBinding | undefined,
+  ): ClaudeSdkSession {
+    // An id belongs to one engine: one pi holds resident, one a switch is
+    // moving, one whose binding names pi, or one whose row is tombstoned is
+    // never taken here, whichever caller asks.
+    const refused = this.registrationRefusal(id, binding !== undefined);
+    if (refused) throw refused;
+    const loaded = readClaudeSdkRecord(STORE_DIR, id);
     const record = loaded?.record;
-    const modelIdValue = record?.modelId ?? opts.modelId;
-    const thinkingLevelValue = record?.thinkingLevel ?? opts.thinkingLevel;
-    const modeValue = record?.mode ?? opts.mode;
-    const agentTypeValue = record?.agentType ?? opts.agentType;
-    const additionalSystemPromptValue =
-      record?.additionalSystemPrompt ?? opts.additionalSystemPrompt;
+    // The current row binding beats record metadata: a record an earlier
+    // Claude binding, or a crash right after a switch committed, left behind
+    // must not bring back that binding's model, effort or native session.
+    const bound = binding ? undefined : boundClaudeFields(id);
+    const modelIdValue =
+      binding?.model ?? bound?.model ?? record?.modelId ?? opts.modelId;
+    const thinkingLevelValue =
+      binding?.thinkingLevel ??
+      bound?.thinkingLevel ??
+      record?.thinkingLevel ??
+      opts.thinkingLevel;
+    const modeValue = binding?.mode ?? record?.mode ?? opts.mode;
+    const agentTypeValue =
+      binding?.agentType ?? record?.agentType ?? opts.agentType;
+    const additionalSystemPromptValue = binding
+      ? opts.additionalSystemPrompt
+      : (record?.additionalSystemPrompt ?? opts.additionalSystemPrompt);
     const cwdValue =
       worktreeCwdForSession(id, checkout) ?? record?.cwd ?? opts.cwd;
     // An unbound session runs as the protected default where the install has
-    // one; without it the session has no account and its turns refuse.
+    // one; without it the session has no account and its turns refuse. A
+    // switch names its account: the row still projects the engine it leaves.
     const credentialProfileId =
+      binding?.credentialProfileId ??
       sessionStore.get(id)?.credentialProfileId ??
       record?.credentialProfileId ??
       opts.credentialProfileId ??
       legacyDefaultProfileId("claude");
+    const providerSessionId = binding
+      ? binding.providerSessionId
+      : bound?.switched
+        ? bound.providerSessionId
+        : record?.providerSessionId;
+    const title = binding?.title ?? record?.title;
     const session = new ClaudeSdkSession(id, {
       buildSessionState: this.requireStateBuilder(),
       seam: () => this.seam(),
-      createdAt: record?.createdAt ?? opts.createdAt ?? Date.now(),
+      createdAt:
+        binding?.createdAt ?? record?.createdAt ?? opts.createdAt ?? Date.now(),
       // Restore last activity too: without it every restart back-dates the
       // session to its creation time until the next mutation.
       ...(record?.updatedAt !== undefined
         ? { updatedAt: record?.updatedAt }
         : {}),
-      ...(record?.title !== undefined ? { title: record?.title } : {}),
-      ...(record?.providerSessionId !== undefined
-        ? { providerSessionId: record?.providerSessionId }
-        : {}),
+      ...(title !== undefined ? { title } : {}),
+      ...(providerSessionId !== undefined ? { providerSessionId } : {}),
       ...(record?.entries !== undefined ? { entries: record?.entries } : {}),
       ...(record?.forkOrigin !== undefined
         ? { forkOrigin: record?.forkOrigin }
@@ -239,7 +374,10 @@ class ClaudeSdkSessionStore {
       ...(credentialProfileId !== undefined ? { credentialProfileId } : {}),
       ...(record?.usage !== undefined ? { usage: record?.usage } : {}),
     });
-    session.onChange = () => this.onChange(id);
+    session.onChange = () => {
+      this.onChange(id);
+      this.wakeIfSettled(session);
+    };
     session.onPersist = () => this.persist(session);
     session.holdBy(() => this.evictIdle(session));
     if (loaded) this.logs.set(id, loaded.cursor);
@@ -417,7 +555,10 @@ class ClaudeSdkSessionStore {
         cwd,
         ...(credentialProfileId !== undefined ? { credentialProfileId } : {}),
       });
-      session.onChange = () => this.onChange(id);
+      session.onChange = () => {
+        this.onChange(id);
+        this.wakeIfSettled(session);
+      };
       session.onPersist = () => this.persist(session);
       session.holdBy(() => this.evictIdle(session));
       // A fork INHERITS its parent's scope, and claims it before the live map
@@ -519,6 +660,58 @@ class ClaudeSdkSessionStore {
   }
 
   /**
+   * Release a session a harness switch moves to another engine
+   * (`docs/session-runtime-switching.md`). Its process ends first; background
+   * work on a retained one refuses with `AccountSwitchBlockedError`, which
+   * the switching turn turns into a hold. Then, as for an idle release, it
+   * goes only once its record holds everything it does, but the runtime
+   * session stays for the next engine (`SessionRuntime.detachHarness`).
+   * `admit` is the switching turn's admission, whose reservation is the one
+   * thing allowed to keep the session busy. Nothing resident: nothing to do.
+   */
+  async releaseForSwitch(id: string, admit: () => void): Promise<void> {
+    const session = this.sessions.get(id);
+    if (!session) return;
+    await session.closeForEngineSwitch(admit);
+    admit();
+    if (this.sessions.get(id) !== session)
+      throw new Error("The Claude session was released while it switched.");
+    // A browser the agent keeps between turns does not end by itself.
+    if (hasToolGroupSession(id))
+      throw new Error(
+        "The Claude session keeps a browser open; it was not switched.",
+      );
+    if (!session.isQuiescent) {
+      // Work of the session's own that ends by itself (the naming agent): the
+      // switching turn holds, and its end offers the held work again.
+      this.wakeWhenSettled.add(id);
+      throw new SessionSettlingError(id);
+    }
+    if (!this.persist(session))
+      throw new Error(
+        "The Claude session could not be saved; it was not switched.",
+      );
+    // The adapter lets go of the session before the session itself goes; a
+    // run opened in the meantime refuses here, before anything is dropped.
+    const detached = sessionRuntime.detachHarness(id);
+    this.sessions.delete(id);
+    this.logs.delete(id);
+    session.dispose();
+    this.onChange(id);
+    await detached;
+  }
+
+  /**
+   * Offer a session's held delivery again once the work that stopped a switch
+   * from releasing it has ended (`releaseForSwitch`).
+   */
+  private wakeIfSettled(session: ClaudeSdkSession): void {
+    if (!this.wakeWhenSettled.has(session.id) || !session.isQuiescent) return;
+    this.wakeWhenSettled.delete(session.id);
+    wakeSessionDelivery(session.id);
+  }
+
+  /**
    * Write/refresh the session-metadata row for a Claude-SDK session. Our id is
    * the handle; the provider session id (for SDK resume) is learned on the first
    * turn end. Best-effort — never break persistence on a metadata-store hiccup.
@@ -575,13 +768,12 @@ class ClaudeSdkSessionStore {
           updatedAt: record.updatedAt,
           messageCount,
           provider: "claude",
-          ...(record.providerSessionId !== undefined
-            ? { providerSessionId: record.providerSessionId }
-            : {}),
-          ...(record.modelId !== undefined ? { model: record.modelId } : {}),
-          ...(record.thinkingLevel !== undefined
-            ? { thinkingLevel: record.thinkingLevel }
-            : {}),
+          // The binding mirrors what the session holds, an absent value
+          // included: a cleared native session must not survive in the
+          // binding, which a switched binding's reopen reads over the record.
+          providerSessionId: record.providerSessionId ?? null,
+          model: record.modelId ?? null,
+          thinkingLevel: record.thinkingLevel ?? null,
           ...(record.credentialProfileId !== undefined
             ? { credentialProfileId: record.credentialProfileId }
             : {}),
@@ -622,6 +814,7 @@ class ClaudeSdkSessionStore {
   /** Remove a session for good (tombstone + delete its record). */
   remove(id: string): void {
     this.deleted.add(id);
+    this.wakeWhenSettled.delete(id);
     sessionStore.remove(id); // tombstone the SDK session's metadata row
     const session = this.sessions.get(id);
     const record = session?.toRecordMeta() ?? this.metaForRemoval(id);

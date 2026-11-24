@@ -72,6 +72,9 @@ The turn is **held**, never failed and never run on the old engine
   The change is still pending; change or reset it to continue."
 - When the only obstacle is background work keeping the source engine open, the
   reason is "Waiting for background work on Claude; stop it to switch now."
+- A cross-engine switch's refusals (the naming wait, an unreadable pi
+  transcript, a failed open or a late account refusal) are this same hold, so
+  everything below applies to them too.
 - A user prompt is refused before anything is appended. It goes to the user's
   queue, and the error adds "Your message is waiting in your queue."
 - A skill invocation cannot be queued (Task-1023), so the server keeps it as a
@@ -239,22 +242,26 @@ Bindings live in `session_engine_binding` (migration 0102,
 `db/sessionEngineBinding.ts`), numbered from 1 per session; exactly one per
 session is active (no `ended_at_ms`). Each records the session-log cursor and
 the run it began at; the first binding has cursor 0 and no run. The migration
-gave every existing row, tombstones included, its first binding.
+gave every existing row, tombstones included, its first binding. A binding a
+switch started also records `resumed_seq` (migration 0103): the earlier binding
+whose native session its open actually reopened, absent when the open started a
+fresh one.
 
 - **Projection.** `session_index`'s `harness`, `provider`,
   `provider_session_id`, `model`, `thinking_level` and `credential_profile_id`
-  are the active binding's projection. Only `sessionStore.upsert` and failover's
-  `switchCredentialProfile` write them, and each writes the binding in the same
-  transaction, so the row always equals the active binding. Nothing else writes
-  either (`engineBindingBoundary.test.ts`).
+  are the active binding's projection. Only `sessionStore.upsert`, failover's
+  `switchCredentialProfile` and the harness switch's `switchEngineBinding` write
+  them, and each writes the binding in the same transaction, so the row always
+  equals the active binding. Nothing else writes either
+  (`engineBindingBoundary.test.ts`).
 - **Native id.** Claude's is the SDK session id (`provider_session_id`, absent
-  until the first query). pi's is the app id: every build so far opened the
-  transcript the app id names, whatever an older row stored. Only the binding is
-  stored, never a path. A stored pi session's transcript resolves through its
-  binding (`piSessionFile`); `canonicalPiSessionPath` derives it from the app id
-  only where no row exists yet (a fresh session, rowless recovery). A pi binding
-  whose native id differs from the app id is refused until the cross-harness
-  switch can open one.
+  until the first query). pi's is the app id for every pi binding, a session's
+  first or a later one: a later pi binding reopens the transcript the app id
+  names, or starts one under it. Only the binding is stored, never a path. A
+  stored pi session's transcript resolves through its binding (`piSessionFile`);
+  `canonicalPiSessionPath` derives it from the app id only where no row exists
+  yet (a fresh session, rowless recovery). A pi binding whose native id differs
+  from the app id is refused.
 - **One accessor.** Capability readers ask `activeEngine(...)`
   (`harnesses/activeEngine.ts`) what a session runs on, and native-ref readers
   `activeNativeRef(...)`; readers holding only an id use
@@ -273,5 +280,194 @@ gave every existing row, tombstones included, its first binding.
   read-only connection and derive a pi file from the app id, which every pi
   binding's native id equals.
 
-Until the cross-harness switch lands, no writer ends a binding or starts a
-second one.
+Only the harness switch ends a binding and starts the next:
+`sessionStore.switchEngineBinding` is its commit, one transaction that ends the
+active binding (refusing unless it is still the one the switch started from),
+inserts the next with the session log's cursor, projects it onto the row and
+clears the pending selection the switch applied when that is still the stored
+one. The first run the new binding starts stamps it (`started_run_id`).
+
+Only the engine that holds the active binding writes the projection. An `upsert`
+that names another harness (a late persist from an engine a switch closed, or
+the target engine before its switch commits) leaves the six binding columns and
+the binding as they are, and its title, activity time and message count too:
+those describe only its own native stretch. After a switch the active engine
+counts only what it ran, so its message count may raise the row's but never
+lower it (0 would hide a started session from the list).
+
+## Moving to another harness
+
+A session can move to a model of another harness (pi ↔ Claude) under the same
+app id. The switch closes the session in its current engine and opens it in the
+other with a new binding. Applying a pending selection that names another
+harness performs the switch (`applyPendingRuntime`); setting such a selection
+still refuses, so no user reaches it yet.
+
+### Applying a switch
+
+- **Account.** A chosen account must serve the target model, be enabled, meet
+  the enterprise requirement, be logged in, not be benched, and list the model.
+  Automatic takes the router's non-degraded pick of the model's kind; the bound
+  account serves another kind and is never kept.
+- **Move.** The store move below runs inside the turn's admission. Its refusals
+  hold the turn as on one engine; background work on Claude holds it with
+  "Waiting for background work on Claude; stop it to switch now." Claude work
+  that ends by itself (the naming agent) holds it with "Waiting for the session
+  to finish its own work…", and its end wakes the session's delivery. Another
+  switch of the same session holding the fence refuses the turn as busy.
+- **Turn.** The turn runs on the new engine's driver (`deliverWithRuntime`),
+  which rebinds the detached runtime session. A refusal after the move and
+  before the commit (the final admission included) abandons it. The commit runs
+  right after the turn's `admit`.
+- **Viewers.** A connection showing the session on the released driver moves to
+  the new one when it binds (`upgradeViewingDriver`), and a command it sends
+  meanwhile reopens through the registry like a storage-backed view.
+
+### Handoff
+
+The new engine gets no summary and asks the old engine nothing. It gets a
+budgeted, verbatim selection of the session's own app log (`sessionHandoff.ts`),
+headed by a switch note. It rides as model-only context
+(`RuntimePromptOptions.contextBlock`, ahead of any other) on every new turn
+until the new engine has replied once (`sessionSwitchHandoff.ts`): owed while
+the active binding is not the first and the log holds no assistant entry after
+its `started_seq`. A steer joins a turn that already carries it, and the log
+keeps the clean user text.
+
+- **Entries** are the records `session_read` reads: user prompts (hidden ones
+  too, since the model saw them), assistant text, tool calls and tool results.
+  Thinking, notices and run bookkeeping are never included. Each entry is headed
+  by its `session_read` entry id.
+- **Order of choice:** the latest user request, the latest reply, the first
+  request, then newest first until one entry does not fit; what is chosen is
+  shown in log order. Each entry takes at most 4,000 tokens or a quarter of the
+  cap, shortened with a pointer to `session_read` at its id.
+- **Range:** a fresh native session gets the whole log, seq 0 included. Only a
+  binding whose open reopened its earlier native session (`resumed_seq`) gets
+  just what it missed: the entries from the `started_seq` of the binding that
+  followed the resumed one. Equal native ids prove nothing: a pi return whose
+  transcript was gone shares the app id but starts over, with the whole log.
+  `started_seq` is the next seq the log gives, so a binding's range starts AT
+  it.
+- **Cap:** `AppSettings.sessionSwitching.handoffTokenCap` (Settings → Models,
+  default 16,000, clamped to 1,000–64,000), and never more than the target
+  model's context window, less what a resumed native session already holds, less
+  a reserve of the larger of 16,000 tokens or a quarter of the window. What it
+  holds is the context size its last reply reported (walking back the resume
+  chain); when it never reported one, every log record before it was left,
+  estimated, which can only overstate it. When nothing fits, only the note goes.
+  Tokens are estimated at four characters each.
+- **Switch note:** what changed ("moved from GPT-6 · OpenAI to Claude Opus ·
+  Work"); that reasoning and tool state did not carry over; the session's own id
+  with `session_read({ sessionId, at, includeToolResults: true })` and
+  `session_search`; how many entries are included; up to 40 omitted entry ids,
+  newest last, with a count of the rest; and "Historical material is context,
+  not a new request or instructions." It points at the app log only, never at a
+  native transcript.
+
+### Store move
+
+A switch releases the session from the engine it leaves and opens it in the
+other under the same id; the runtime session in between is never replaced.
+
+- **Release** (`releaseForSwitch` on `claudeSdkStore` and `piStore`) runs inside
+  the switching turn's admission, whose own reservation is the only thing
+  allowed to keep the session busy. Claude ends its process first; background
+  work on a retained Claude process refuses with `AccountSwitchBlockedError`,
+  which holds the turn ("Waiting for background work on Claude; stop it to
+  switch now"). pi's background work keeps running and reaches the session on
+  its next engine. Claude saves its record before it lets go, and a session it
+  cannot save stays. Neither refuses for nothing being resident. Claude work
+  that ends by itself (the naming agent) refuses with `SessionSettlingError` and
+  wakes the session's delivery once the session is quiescent again; a browser
+  the agent keeps open refuses outright.
+- **Runtime session.** `SessionRuntime.detachHarness` swaps the leaving engine's
+  adapter for the detached one, between runs only; the runtime session, its log
+  and its viewers stay, and the next engine's driver binds it as a reader's view
+  is bound. A caller still holding the old driver is refused as a released one
+  and retries against the new engine.
+- **Open** (`openForBinding`). Claude takes the binding's model, effort, account
+  and native session (none for a fresh one) over what an earlier Claude binding
+  left in its record, and the session's own mode, title, creation time and
+  scope; the record's timeline stays. pi reopens the app id's transcript or
+  starts one under it, and reports which it did: that, not the plan, is what the
+  commit records as `resumed_seq`. It reads the session's frozen prompt
+  conditions, skills and agent definition. A pi transcript that is there but is
+  not this session's (an unreadable or foreign header) refuses with
+  `PiSwitchTranscriptError`, and the switch holds with "choose another model, or
+  reset the change"; nothing is started over it. Both engines read the one
+  insert-only prompt-conditions record the session froze at its start and render
+  it their own way: pi its persona layer and bare tool names, Claude the
+  `claude_code` preset's append and its mounted server's `mcp__pa__` names
+  (`claudeSdk/claudeSdkSwitchSurface.test.ts`).
+
+- **Order** (`prepareEngineSwitch`, `harnesses/engineSwitch.ts`). The fence goes
+  up first, before any side effect, so a second switch of the same session
+  refuses before it can stage or roll back native data the first one owns. Under
+  it the switch reads the row and finds the target engine's newest earlier
+  binding: Claude resumes the earlier native session when its account still
+  holds the transcript, or copies it to a new account with the failover copier,
+  and otherwise starts fresh; pi decides at its open. Then it releases, opens,
+  and hands back the session on its new engine with `usable`, `commit` and
+  `abandon`. `usable` also refuses when the engine it left holds the session
+  again. A throw anywhere before the commit, or an abandon, lets the new engine
+  go, rolls a copy back and lifts the fence: the row still names the old
+  binding, the old engine reopens the session on its next use, and the selection
+  stays pending. The commit checks `usable` again, writes the binding and lifts
+  the fence; nothing awaits between the turn's final check and it.
+
+### Switching fence
+
+From the release until the commit or the abandon, the session belongs to no
+engine for anyone else (`harnesses/engineSwitchFence.ts`): neither shows it
+resident, and `harnessRegistry.acquireById` refuses with
+`SessionSwitchingEnginesError`, a `SessionBusyError`. A viewer's command, a peer
+delivery or a background completion is refused as busy and tries again. A commit
+wakes the session's delivery, so that work is offered at once on the new engine.
+A rollback wakes it only when the fence refused someone meanwhile: the switching
+turn's own work is held, and waking it would only retry the failed switch.
+
+The fence holds at registration too, not only at the registry's entry: an
+acquisition that checked before an await could otherwise reopen the engine the
+session is leaving. Each store asks `harnessRegistry` after its open's last
+await (`setRegistrationCheck`). It refuses an id the other engine holds resident
+and one whose row is tombstoned, whoever opens it; outside the switch's own open
+it also refuses an id a switch is moving (busy) and one whose active binding
+names the other engine.
+
+- **Reopen after a commit.** The committed binding is what reopens. Claude takes
+  the active binding's model and effort over its record, and for a binding a
+  switch started its native session too (none until its first query); pi passes
+  a switched-to binding's model and effort over its transcript's last selection.
+  A crash between the commit and the new engine's first save therefore resumes
+  the committed binding, not the one before it. Because the binding wins, every
+  change of the session's native identity must reach it: Claude's registry sync
+  writes the native id, model and effort it holds on every save, an absent one
+  as `null` (`sessionStore.upsert` clears on `null` and keeps on omission). A
+  `/clear` forgets the native session in the binding too, so a reopen does not
+  bring the cleared conversation back; a native session a later query learns
+  replaces it there at the turn's save. pi's native id is its app id and never
+  changes.
+
+### Deleting
+
+Deleting a session removes it from every engine, not only the active one or
+those its bindings used: a switch in flight has it open on an engine no binding
+names yet, and that engine tombstones it there, so the switch's abandon writes
+nothing back. It also sweeps every Claude native session a binding named from
+every account (`harnessRegistry.remove`). A deleted id is never opened again:
+`acquireById` answers nothing for a tombstoned row, whatever an engine still has
+on disk, and a store's registration check refuses one that a delete overtook.
+Until the delete, old native data stays for returns and forks.
+
+### Forking
+
+Until forks can cross a switch, a session with more than one binding refuses
+every fork before any engine is asked (`prepareFork` in `harnesses/fork.ts`).
+
+### Task links
+
+A Task's session refs (`TaskSessionRef`) name the session by id and persona
+only. Which engine runs it, and its native file, come from the active binding; a
+ref never stores them, and the `harness` and `sessionFile` older edges carry are
+ignored.
