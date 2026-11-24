@@ -187,188 +187,272 @@ test("approving a gateway card routes it to the gateway's apply, never the local
   assert.deepEqual(applied, ["jira_mutate_issue"]);
 });
 
-test("before prepare: no link, a product toggle off, or a listing without the two-phase write refuse with nothing written (AC3)", async () => {
-  const tool = remote("jira");
-  markDisconnected();
-  await fails(
-    tool.execute({ items: [] }, ctx()),
-    "The credential gateway is unreachable. Nothing was written.",
-  );
-  applyListing(acceptRemoteTools([JIRA_WRITE, CONFLUENCE_WRITE]));
-  await updateJiraSettings({ enabled: false });
-  await fails(
-    tool.execute({ items: [] }, ctx()),
-    "Jira tools are disabled. Enable them in Settings → Jira. Nothing was written.",
-  );
-  await updateJiraSettings({ enabled: true });
-  applyListing(
-    acceptRemoteTools([
-      { ...JIRA_WRITE, twoPhase: undefined },
-      CONFLUENCE_WRITE,
-    ]),
-  );
-  await fails(
-    tool.execute({ items: [] }, ctx()),
-    "The gateway no longer offers this change. Nothing was written.",
-  );
-  updateConfluenceSettings({ enabled: false });
-  await fails(
-    remote("confluence").execute({ items: [] }, ctx()),
-    "Confluence tools are disabled. Enable them in Settings → Confluence. Nothing was written.",
-  );
-  assert.deepEqual(prepared, []);
-});
+const CONFLUENCE_COMMENT_ITEM = {
+  clientId: "cfl_0",
+  operation: "comment",
+  pageId: "123",
+  pageUrl: "https://acme.atlassian.net/wiki/spaces/ENG/pages/123",
+  title: "Page 123",
+  spaceKey: "ENG",
+  spaceName: "Engineering",
+  baseVersion: 7,
+  body: "Note",
+};
 
-test("the link's refusals: unreachable, no tools, an undecodable answer (AC3)", async () => {
-  const tool = remote("jira");
-  for (const [code, message] of [
-    [
-      "gateway_unavailable",
-      "The credential gateway is unreachable. Nothing was written.",
-    ],
-    [
-      "tools_unavailable",
-      "The credential gateway runs no tools. Nothing was written.",
-    ],
-    [
-      "undecodable",
-      "The gateway answered something this server can't show as a proposal; nothing was prepared.",
-    ],
-  ] as const) {
-    answer = () => Promise.reject(new RemoteToolRefusal(code));
-    await fails(tool.execute({ items: [] }, ctx()), message);
-  }
-});
-
-test("each prepare failure code, in text that says nothing was written (AC3, L-a, D6)", async () => {
-  const tool = remote("jira");
-  const cases: [RemotePrepareAnswer, string][] = [
-    [
-      { ok: false, code: "tool_error", message: "No such issue OPS-9." },
-      "No such issue OPS-9. Nothing was written.",
-    ],
-    [
-      { ok: false, code: "invalid_params", message: "items: required" },
-      "items: required Nothing was written.",
-    ],
-    // The edge's own claim is not doubled.
-    [
-      {
-        ok: false,
-        code: "tool_error",
-        message: "The site changed. Nothing was written.",
-      },
-      "The site changed. Nothing was written.",
-    ],
-    [
-      { ok: false, code: "tool_error", message: "" },
-      "jira_mutate_issue failed on the gateway. Nothing was written.",
-    ],
-    [
-      { ok: false, code: "unknown_tool", message: "x" },
-      "The gateway no longer offers this change. Nothing was written.",
-    ],
-    [
-      { ok: false, code: "result_too_large", message: "x" },
-      "The gateway's proposal is too large. Nothing was written.",
-    ],
-    [
-      { ok: false, code: "timeout", message: "" },
-      "The gateway did not prepare the change in time. Nothing was written.",
-    ],
-    [
-      { ok: false, code: "cancelled", message: "" },
-      "The call was cancelled. Nothing was written.",
-    ],
-    [
-      { ok: false, code: "failed", message: "boom" },
-      "jira_mutate_issue failed on the gateway. Nothing was written.",
-    ],
-  ];
-  for (const [failure, message] of cases) {
-    answer = () => Promise.resolve(failure);
-    await fails(tool.execute({ items: [] }, ctx()), message);
-  }
-});
-
-test("an edge refusal the link cut at 500 characters shows the cut and the client's claim (L-a)", async () => {
-  // As the decoder hands on a 1,200-character refusal: its first 500.
-  const cut = `${"The proposal was refused because ".repeat(40)}`.slice(0, 500);
-  answer = () =>
-    Promise.resolve({ ok: false, code: "tool_error", message: cut });
-  await fails(
-    remote("jira").execute({ items: [] }, ctx()),
-    `${cut}… Nothing was written.`,
-  );
-  // Even when the cut text happens to end with the claim's words.
-  const ending = `${"x".repeat(479)} nothing was written.`;
-  assert.equal(ending.length, 500);
-  answer = () =>
-    Promise.resolve({ ok: false, code: "tool_error", message: ending });
-  await fails(
-    remote("jira").execute({ items: [] }, ctx()),
-    `${ending}… Nothing was written.`,
-  );
-});
-
-test("a proposal that fails the closed validator raises no card (AC3, P6-F2)", async () => {
-  const tool = remote("jira");
-  const UNEXPECTED =
-    "The gateway answered something this server can't show as a proposal; nothing was prepared.";
-  for (const items of [
-    [],
-    Array.from({ length: 11 }, () => COMMENT_ITEM),
-    // A result path in a prepare answer.
-    [{ ...COMMENT_ITEM, error: "done before approval" }],
-    // A key the item type lacks.
-    [{ ...COMMENT_ITEM, extra: 1 }],
+/** What each product's negative cases differ in. */
+const PRODUCTS = [
+  {
+    product: "jira",
+    name: "jira_mutate_issue",
+    item: COMMENT_ITEM,
+    other: CONFLUENCE_COMMENT_ITEM,
+    host: (body: unknown) => (body as { jiraHost?: string }).jiraHost,
     // A create whose key is not the empty one.
-    [{ ...COMMENT_ITEM, operation: "create", createProjectKey: "OPS" }],
-    // A Confluence item is not a Jira item.
-    [{ clientId: "cfl_0", operation: "comment", pageId: "1" }],
-  ]) {
-    answer = () =>
-      Promise.resolve({
-        ok: true,
-        site: "acme.atlassian.net",
-        items,
-        warnings: [],
-      });
-    await fails(tool.execute({ items: [] }, ctx()), UNEXPECTED);
-  }
-});
+    invalid: [
+      { ...COMMENT_ITEM, operation: "create", createProjectKey: "OPS" },
+    ],
+    disabled:
+      "Jira tools are disabled. Enable them in Settings → Jira. Nothing was written.",
+    enable: (enabled: boolean) => updateJiraSettings({ enabled }),
+  },
+  {
+    product: "confluence",
+    name: "confluence_mutate_page",
+    item: CONFLUENCE_COMMENT_ITEM,
+    other: COMMENT_ITEM,
+    host: (body: unknown) =>
+      (body as { confluenceHost?: string }).confluenceHost,
+    // An operation the item type lacks.
+    invalid: [{ ...CONFLUENCE_COMMENT_ITEM, operation: "archive" }],
+    disabled:
+      "Confluence tools are disabled. Enable them in Settings → Confluence. Nothing was written.",
+    enable: (enabled: boolean) => {
+      updateConfluenceSettings({ enabled });
+      return Promise.resolve();
+    },
+  },
+] as const;
 
-test("only an Atlassian site the edge's pattern admits becomes the card host (AC3, D3)", async () => {
-  const tool = remote("jira");
-  const UNEXPECTED =
-    "The gateway answered something this server can't show as a proposal; nothing was prepared.";
-  for (const site of [
-    "https://acme.atlassian.net",
-    "acme.atlassian.net.evil",
-    "acme.atlassian.net/",
-    "ACME.atlassian.net",
-    `${"a".repeat(64)}.atlassian.net`,
-    "-acme.atlassian.net",
-    "atlassian.net",
-    "",
-  ]) {
-    answer = () =>
-      Promise.resolve({
-        ok: true,
-        site,
-        items: [COMMENT_ITEM],
-        warnings: [],
-      });
-    await fails(tool.execute({ items: [] }, ctx()), UNEXPECTED);
-  }
-  for (const site of ["a.atlassian.net", `${"a".repeat(63)}.atlassian.net`]) {
-    answer = () =>
-      Promise.resolve({ ok: true, site, items: [COMMENT_ITEM], warnings: [] });
-    await tool.execute({ items: [] }, ctx());
-    assert.equal(
-      (approvalsForSession(sessionId).at(-1)!.body as { jiraHost?: string })
-        .jiraHost,
+const byProduct = PRODUCTS.map((entry) => [entry.product, entry] as const);
+
+/** A prepare answer with these items and site. */
+const proposal =
+  (items: readonly unknown[], site = "acme.atlassian.net") =>
+  () =>
+    Promise.resolve<RemotePrepareAnswer>({
+      ok: true,
       site,
+      items: [...items],
+      warnings: [],
+    });
+
+const UNEXPECTED =
+  "The gateway answered something this server can't show as a proposal; nothing was prepared.";
+
+test.each(byProduct)(
+  "%s before prepare: no link, its toggle off, or a listing without the two-phase write refuse with nothing written (AC3)",
+  async (product, entry) => {
+    const tool = remote(product);
+    markDisconnected();
+    await fails(
+      tool.execute({ items: [] }, ctx()),
+      "The credential gateway is unreachable. Nothing was written.",
+    );
+    applyListing(acceptRemoteTools([JIRA_WRITE, CONFLUENCE_WRITE]));
+    await entry.enable(false);
+    await fails(tool.execute({ items: [] }, ctx()), entry.disabled);
+    await entry.enable(true);
+    applyListing(
+      acceptRemoteTools(
+        [JIRA_WRITE, CONFLUENCE_WRITE].map((write) =>
+          write.name === entry.name ? { ...write, twoPhase: undefined } : write,
+        ),
+      ),
+    );
+    await fails(
+      tool.execute({ items: [] }, ctx()),
+      "The gateway no longer offers this change. Nothing was written.",
+    );
+    assert.deepEqual(prepared, []);
+  },
+);
+
+test.each(byProduct)(
+  "%s: the link's refusals: unreachable, no tools, an undecodable answer (AC3)",
+  async (product) => {
+    const tool = remote(product);
+    for (const [code, message] of [
+      [
+        "gateway_unavailable",
+        "The credential gateway is unreachable. Nothing was written.",
+      ],
+      [
+        "tools_unavailable",
+        "The credential gateway runs no tools. Nothing was written.",
+      ],
+      ["undecodable", UNEXPECTED],
+    ] as const) {
+      answer = () => Promise.reject(new RemoteToolRefusal(code));
+      await fails(tool.execute({ items: [] }, ctx()), message);
+    }
+  },
+);
+
+test.each(byProduct)(
+  "%s: each prepare failure code, in text that says nothing was written (AC3, L-a, D6)",
+  async (product, entry) => {
+    const tool = remote(product);
+    const cases: [RemotePrepareAnswer, string][] = [
+      [
+        { ok: false, code: "tool_error", message: "No such issue OPS-9." },
+        "No such issue OPS-9. Nothing was written.",
+      ],
+      [
+        { ok: false, code: "invalid_params", message: "items: required" },
+        "items: required Nothing was written.",
+      ],
+      // The edge's own claim is not doubled.
+      [
+        {
+          ok: false,
+          code: "tool_error",
+          message: "The site changed. Nothing was written.",
+        },
+        "The site changed. Nothing was written.",
+      ],
+      [
+        { ok: false, code: "tool_error", message: "" },
+        `${entry.name} failed on the gateway. Nothing was written.`,
+      ],
+      [
+        { ok: false, code: "unknown_tool", message: "x" },
+        "The gateway no longer offers this change. Nothing was written.",
+      ],
+      [
+        { ok: false, code: "result_too_large", message: "x" },
+        "The gateway's proposal is too large. Nothing was written.",
+      ],
+      [
+        { ok: false, code: "timeout", message: "" },
+        "The gateway did not prepare the change in time. Nothing was written.",
+      ],
+      [
+        { ok: false, code: "cancelled", message: "" },
+        "The call was cancelled. Nothing was written.",
+      ],
+      [
+        { ok: false, code: "failed", message: "boom" },
+        `${entry.name} failed on the gateway. Nothing was written.`,
+      ],
+    ];
+    for (const [failure, message] of cases) {
+      answer = () => Promise.resolve(failure);
+      await fails(tool.execute({ items: [] }, ctx()), message);
+    }
+  },
+);
+
+test.each(byProduct)(
+  "%s: an edge refusal the link cut at 500 characters shows the cut and the client's claim (L-a)",
+  async (product) => {
+    // As the decoder hands on a 1,200-character refusal: its first 500.
+    const cut = `${"The proposal was refused because ".repeat(40)}`.slice(
+      0,
+      500,
+    );
+    answer = () =>
+      Promise.resolve({ ok: false, code: "tool_error", message: cut });
+    await fails(
+      remote(product).execute({ items: [] }, ctx()),
+      `${cut}… Nothing was written.`,
+    );
+    // Even when the cut text happens to end with the claim's words.
+    const ending = `${"x".repeat(479)} nothing was written.`;
+    assert.equal(ending.length, 500);
+    answer = () =>
+      Promise.resolve({ ok: false, code: "tool_error", message: ending });
+    await fails(
+      remote(product).execute({ items: [] }, ctx()),
+      `${ending}… Nothing was written.`,
+    );
+  },
+);
+
+test.each(byProduct)(
+  "%s: a proposal that fails the closed validator raises no card (AC3, P6-F2)",
+  async (product, entry) => {
+    const tool = remote(product);
+    // The valid proposal passes, so each refusal below is its own defect.
+    answer = proposal([entry.item]);
+    await tool.execute({ items: [] }, ctx());
+    assert.equal(approvalsForSession(sessionId).length, 1);
+    sessionId = `${sessionId}-refused`;
+    for (const items of [
+      [],
+      Array.from({ length: 11 }, () => entry.item),
+      // A result path in a prepare answer.
+      [{ ...entry.item, error: "done before approval" }],
+      // A key the item type lacks.
+      [{ ...entry.item, extra: 1 }],
+      entry.invalid,
+      // The other product's item.
+      [entry.other],
+    ]) {
+      answer = proposal(items);
+      await fails(tool.execute({ items: [] }, ctx()), UNEXPECTED);
+    }
+  },
+);
+
+test.each(byProduct)(
+  "%s: only an Atlassian site the edge's pattern admits becomes the card host (AC3, D3)",
+  async (product, entry) => {
+    const tool = remote(product);
+    for (const site of [
+      "https://acme.atlassian.net",
+      "acme.atlassian.net.evil",
+      "acme.atlassian.net/",
+      "ACME.atlassian.net",
+      `${"a".repeat(64)}.atlassian.net`,
+      "-acme.atlassian.net",
+      "atlassian.net",
+      "",
+    ]) {
+      answer = proposal([entry.item], site);
+      await fails(tool.execute({ items: [] }, ctx()), UNEXPECTED);
+    }
+    for (const site of ["a.atlassian.net", `${"a".repeat(63)}.atlassian.net`]) {
+      answer = proposal([entry.item], site);
+      await tool.execute({ items: [] }, ctx());
+      assert.equal(
+        entry.host(approvalsForSession(sessionId).at(-1)!.body),
+        site,
+      );
+    }
+  },
+);
+
+test("an oversized edge listing composes into the session's tools with the local description and schema, byte for byte (O1)", async () => {
+  const { agentToolsFor } = await import("../catalog.ts");
+  const oversized = (write: typeof JIRA_WRITE) => ({
+    ...write,
+    description: "d".repeat(5_000),
+    inputSchema: {
+      type: "object",
+      properties: { pad: { type: "string", description: "p".repeat(10_000) } },
+    },
+  });
+  applyListing(
+    acceptRemoteTools([oversized(JIRA_WRITE), oversized(CONFLUENCE_WRITE)]),
+  );
+  const tools = agentToolsFor("assistant");
+  for (const local of [jiraMutateIssueTool, confluenceMutatePageTool]) {
+    const composed = tools.filter((tool) => tool.name === local.name);
+    assert.equal(composed.length, 1, local.name);
+    assert.equal(composed[0]!.description, local.description);
+    assert.equal(
+      JSON.stringify(composed[0]!.parameters),
+      JSON.stringify(local.parameters),
     );
   }
 });
