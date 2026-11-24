@@ -65,6 +65,7 @@ test("voice settings are claimed by their dedicated UI", () => {
   ).map((d) => d.path);
   expect(unclaimed).toEqual([
     "accountRouting.openAiResetAutoRedeemHours",
+    "sessionSwitching.handoffTokenCap",
     "tempo.authorAccountId",
   ]);
 });

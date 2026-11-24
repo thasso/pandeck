@@ -31,6 +31,7 @@ import {
   SPEECH_TO_TEXT_LIMITS,
   SPEECH_CONVERSATION_LIMITS,
 } from "./protocol.ts";
+import { SESSION_HANDOFF_TOKEN_CAP_LIMITS } from "./sessionRuntime.ts";
 import { THINKING_LEVELS } from "./thinkingLevels.ts";
 import {
   KOKORO_ENGLISH_VOICES,
@@ -368,6 +369,19 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
     { kind: "number", min: 0, max: 168 },
     {
       hint: "An unspent reset credit is redeemed this many hours before it expires. 0 turns auto-redeem off.",
+    },
+  ),
+  setting(
+    "sessionSwitching.handoffTokenCap",
+    "models",
+    "Handoff size when a session changes harness",
+    {
+      kind: "integer",
+      min: SESSION_HANDOFF_TOKEN_CAP_LIMITS.min,
+      max: SESSION_HANDOFF_TOKEN_CAP_LIMITS.max,
+    },
+    {
+      hint: "Most tokens of the earlier conversation the new model gets verbatim. Less when its context window is small.",
     },
   ),
   setting("claudeSdk.enabled", "claude-sdk", "Claude SDK harness", BOOLEAN),

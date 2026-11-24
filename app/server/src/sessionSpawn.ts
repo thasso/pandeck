@@ -1198,7 +1198,6 @@ async function spawnOne(
   await applySessionContext(
     context,
     {
-      harness,
       agentType: item.agentType,
       sessionId,
     },

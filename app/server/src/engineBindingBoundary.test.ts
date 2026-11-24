@@ -3,7 +3,7 @@
  * bindings"). A session's engine is its ACTIVE BINDING; these pins keep new
  * code from growing around it before the cross-harness switch lands:
  *
- * - only the two `sessionStore` binding writers write `session_index`'s six
+ * - only the three `sessionStore` binding writers write `session_index`'s six
  *   projection columns, and only `db/sessionEngineBinding.ts` writes the
  *   binding table, so the row always equals the active binding;
  * - the pi transcript is derived from the app id (`canonicalPiSessionPath`)
@@ -26,13 +26,18 @@ const SRC_ROOT = dirname(fileURLToPath(import.meta.url));
 
 /**
  * SQL strings writing a projection column of `session_index`: the upsert's
- * INSERT and the failover CAS's two account updates.
+ * INSERT, the failover CAS's two account updates and the harness switch's
+ * projection of its new binding.
  */
-const PROJECTION_WRITERS: Record<string, number> = { "db/sessionStore.ts": 3 };
+const PROJECTION_WRITERS: Record<string, number> = { "db/sessionStore.ts": 4 };
 
-/** SQL strings writing `session_engine_binding`: its own module only. */
+/**
+ * SQL strings writing `session_engine_binding`, its own module only: the
+ * write-through's update and insert, the failover account update, and the
+ * harness switch's end, insert and first-run stamp.
+ */
 const BINDING_WRITERS: Record<string, number> = {
-  "db/sessionEngineBinding.ts": 3,
+  "db/sessionEngineBinding.ts": 6,
 };
 
 /**
@@ -65,7 +70,7 @@ const HARNESS_READ_EXEMPT =
 const HARNESS_READS: Record<string, number> = {
   "backgroundWork/policy.ts": 3,
   "checkPromptBudgets.ts": 1,
-  "connection.ts": 13,
+  "connection.ts": 12,
   "measurePrompts.ts": 3,
   "measureSession.ts": 1,
   "measureTaskOverhead.ts": 1,
@@ -77,15 +82,12 @@ const HARNESS_READS: Record<string, number> = {
   "sessionState.ts": 2,
   "sessions.ts": 2,
   "taskOverhead.ts": 2,
-  "tasks.ts": 8,
   "tools/backgroundTasksTools.ts": 2,
   "tools/knowledge/knowledgeBaseTools.ts": 1,
   "tools/library/libraryTools.ts": 1,
   "tools/sessions/sessionAuditTool.ts": 1,
-  "tools/tasks/taskTools.ts": 2,
   "validateClientMessage.ts": 4,
   "viewSession.ts": 3,
-  "workflow/agentExecutor.ts": 1,
 };
 
 const PROJECTION_COLUMNS =
@@ -222,11 +224,11 @@ function measure(
   return actual;
 }
 
-test("only the two sessionStore binding writers write session_index's projection columns", () => {
+test("only the three sessionStore binding writers write session_index's projection columns", () => {
   assert.deepEqual(
     measure((counts) => counts.projectionWrites),
     PROJECTION_WRITERS,
-    "harness, provider, provider_session_id, model, thinking_level and credential_profile_id are the active binding's projection: write them through sessionStore.upsert or switchCredentialProfile, which write the binding in the same transaction",
+    "harness, provider, provider_session_id, model, thinking_level and credential_profile_id are the active binding's projection: write them through sessionStore.upsert, switchCredentialProfile or switchEngineBinding, which write the binding in the same transaction",
   );
 });
 

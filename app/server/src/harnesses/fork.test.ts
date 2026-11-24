@@ -18,6 +18,7 @@ const { claudeSdkStore } = await import("../claudeSdk/claudeSdkStore.ts");
 const { piStore } = await import("../piSdk/piStore.ts");
 const worktreeStore = await import("../db/worktreeStore.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
+const { getDb } = await import("../db/index.ts");
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 afterEach(() => vi.restoreAllMocks());
@@ -218,4 +219,50 @@ test("a fork copies none of the parent's held inputs, and the parent keeps them"
     promptQueueStore.listHeld("held-parent").map((input) => input.text),
     ["/review-pr 7"],
   );
+});
+
+test("a session that switched engines refuses every fork before an engine is asked", () => {
+  const id = "parent-switched";
+  assert.ok(
+    sessionStore.upsert({
+      id,
+      harness: "pi",
+      agentType: "developer",
+      provider: "openai-codex",
+      model: "gpt-5.6-sol",
+      credentialProfileId: "cp_pi",
+    }),
+  );
+  // Seed a second binding: no production writer starts one yet.
+  getDb()
+    .prepare(
+      "UPDATE session_engine_binding SET ended_at_ms = 1 WHERE session_id = ? AND ended_at_ms IS NULL",
+    )
+    .run(id);
+  getDb()
+    .prepare(
+      `INSERT INTO session_engine_binding (
+         session_id, seq, harness, credential_profile_id, provider, model,
+         thinking_level, native_session_id, started_seq, started_run_id,
+         created_at_ms, ended_at_ms
+       ) VALUES (?, 2, 'claude-sdk', 'cp_claude', 'claude', 'claude-opus-5-5', NULL, NULL, 10, NULL, 2, NULL)`,
+    )
+    .run(id);
+  const claudeFork = vi.spyOn(claudeSdkStore, "forkSession");
+  const piFork = vi.spyOn(piStore, "forkSession");
+  for (const harness of ["claude-sdk", "pi"] as const)
+    assert.deepEqual(
+      prepareFork(harness, {
+        ...request,
+        id,
+        position: "at",
+        anchors: { entryFound: true, own: "native-2" },
+      }),
+      {
+        refusal:
+          "Forking a session that switched engines is not available yet.",
+      },
+    );
+  assert.equal(claudeFork.mock.calls.length, 0);
+  assert.equal(piFork.mock.calls.length, 0);
 });

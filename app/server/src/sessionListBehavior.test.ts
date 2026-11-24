@@ -80,11 +80,11 @@ import { registerSessionHooks } from "./workers/sessionHookHost.ts";
 import { seedLegacyDefaultAccounts } from "./test/legacyDefaultAccounts.ts";
 
 let serial = 0;
-function seed(messageCount = 2): string {
+function seed(messageCount = 2, harness: "pi" | "claude-sdk" = "pi"): string {
   const id = `behavior-${++serial}`;
   sessions.upsert({
     id,
-    harness: "pi",
+    harness,
     agentType: "developer",
     messageCount,
     title: id,
@@ -1086,8 +1086,8 @@ test("runtime run-state and provider-retry events report the full public row syn
 });
 
 test("Claude live-map acquisition, live title mutation, persistence and removal report rows", async () => {
-  const a = seed();
-  sessions.upsert({ id: a, harness: "claude-sdk", agentType: "developer" });
+  // Seeded on Claude: a row's engine moves only through a harness switch.
+  const a = seed(2, "claude-sdk");
   let live: ReturnType<typeof claudeSdkStore.acquire>;
   await check(
     "claudeSdkStore.acquire",

@@ -124,6 +124,7 @@ import {
 } from "./harnesses/gatewayPorts.ts";
 import { claudeLoginDriver } from "./claudeLoginDriver.ts";
 import { harnessRegistry } from "./harnesses/registry.ts";
+import { stampSwitchedBindingRuns } from "./harnesses/engineSwitch.ts";
 import {
   createGoogleOAuthStartUrl,
   handleGoogleOAuthCallback,
@@ -2154,6 +2155,7 @@ server.listen(PORT, HOST, () => {
       console.warn("[package-proxy] start failed:", errorText(err)),
     );
   startMemoryMaintenance();
+  stampSwitchedBindingRuns();
   trackSessionRunHealth({
     session: (sessionId) => sessionStore.get(sessionId),
     subscribeStarted: subscribeSessionRunStarted,

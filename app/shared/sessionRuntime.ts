@@ -113,3 +113,13 @@ export function samePendingRuntime(
     sameRuntimeAccount(a.account, b.account)
   );
 }
+
+/**
+ * Bounds and default of `AppSettings.sessionSwitching.handoffTokenCap`: the
+ * most tokens of earlier conversation a harness switch hands over verbatim.
+ */
+export const SESSION_HANDOFF_TOKEN_CAP_LIMITS = {
+  min: 1_000,
+  max: 64_000,
+  default: 16_000,
+} as const;

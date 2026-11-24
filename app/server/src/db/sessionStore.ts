@@ -21,6 +21,7 @@ import {
   DEFAULT_SESSION_SCOPE,
   isSessionPeerTurnCap,
   parsePendingRuntime,
+  samePendingRuntime,
   sessionModeOrDefault,
   sessionScopeOrFailClosed,
   type Harness,
@@ -40,6 +41,8 @@ import { getDb, inDbTransaction } from "./index.ts";
 import {
   activeBinding,
   bindings,
+  stampBindingRun,
+  startNextBinding,
   syncActiveBinding,
   syncActiveBindingAccount,
   type ActiveBindingFields,
@@ -187,7 +190,10 @@ export interface SessionMeta {
  * (`id`, `harness`, `agentType`) is required; every other field is MERGED —
  * omitting one preserves the stored value rather than nulling it. This is the
  * key contract that lets, say, a title refresh not wipe the model, and a learned
- * provider binding not wipe the title.
+ * provider binding not wipe the title. The active binding's native id, model and
+ * effort also take `null`, which CLEARS the stored value: an engine whose
+ * session no longer has one (a Claude `/clear` forgets its native session) says
+ * so, or the binding would hand the old one back on reopen.
  */
 interface SessionUpsert {
   id: string;
@@ -206,9 +212,9 @@ interface SessionUpsert {
   updatedAt?: number;
   messageCount?: number;
   provider?: string;
-  providerSessionId?: string;
-  model?: string;
-  thinkingLevel?: string;
+  providerSessionId?: string | null;
+  model?: string | null;
+  thinkingLevel?: string | null;
   credentialProfileId?: string;
   requiresEnterprise?: boolean;
   peerTurnCap?: number;
@@ -465,29 +471,57 @@ function upsert(input: SessionUpsert): boolean {
       input.forkOrigin !== undefined
         ? JSON.stringify(input.forkOrigin)
         : (prev?.fork_origin_json ?? null);
+    // An engine that no longer holds the session's active binding (a late
+    // persist from the engine a harness switch closed, or the target before
+    // the switch commits) keeps its other fields but never rewrites the
+    // projection: only the switch itself moves a session between engines
+    // (`docs/session-runtime-switching.md` "Engine bindings").
+    const foreign = prev !== undefined && prev.harness !== input.harness;
     // The active engine binding's projection, merged once and written to both
     // the row and the binding in one transaction (`sessionEngineBinding.ts`).
-    const binding: ActiveBindingFields = {
-      harness: input.harness,
-      provider:
-        input.provider !== undefined
-          ? input.provider
-          : (prev?.provider ?? null),
-      providerSessionId:
-        input.providerSessionId !== undefined
-          ? input.providerSessionId
-          : (prev?.provider_session_id ?? null),
-      model: input.model !== undefined ? input.model : (prev?.model ?? null),
-      thinkingLevel:
-        input.thinkingLevel !== undefined
-          ? input.thinkingLevel
-          : (prev?.thinking_level ?? null),
-      // Ordinary metadata refreshes cannot change the current account.
-      // Live failover uses switchCredentialProfile's compare-and-set.
-      credentialProfileId:
-        prev?.credential_profile_id ?? input.credentialProfileId ?? null,
-    };
+    const binding: ActiveBindingFields = foreign
+      ? {
+          harness: prev.harness,
+          provider: prev.provider,
+          providerSessionId: prev.provider_session_id,
+          model: prev.model,
+          thinkingLevel: prev.thinking_level,
+          credentialProfileId: prev.credential_profile_id,
+        }
+      : {
+          harness: input.harness,
+          provider:
+            input.provider !== undefined
+              ? input.provider
+              : (prev?.provider ?? null),
+          providerSessionId:
+            input.providerSessionId !== undefined
+              ? input.providerSessionId
+              : (prev?.provider_session_id ?? null),
+          model:
+            input.model !== undefined ? input.model : (prev?.model ?? null),
+          thinkingLevel:
+            input.thinkingLevel !== undefined
+              ? input.thinkingLevel
+              : (prev?.thinking_level ?? null),
+          // Ordinary metadata refreshes cannot change the current account.
+          // Live failover uses switchCredentialProfile's compare-and-set.
+          credentialProfileId:
+            prev?.credential_profile_id ?? input.credentialProfileId ?? null,
+        };
     const createdAt = prev?.created_at_ms ?? input.createdAt ?? now;
+    // A foreign engine's figures describe only its own native stretch, so its
+    // title, activity and message count stay as they are. The active engine
+    // after a switch counts only what it ran, so it may raise the count but
+    // never lower it: 0 would hide a started session from the list.
+    const messageCount = foreign
+      ? prev.message_count
+      : input.messageCount !== undefined &&
+          prev !== undefined &&
+          input.messageCount < prev.message_count &&
+          (activeBinding(input.id)?.seq ?? 1) > 1
+        ? prev.message_count
+        : input.messageCount;
     inDbTransaction(() => {
       getDb()
         .prepare(upsertSql)
@@ -502,14 +536,14 @@ function upsert(input: SessionUpsert): boolean {
             ? sessionScopeOrFailClosed(prev.scope)
             : (input.scope ?? DEFAULT_SESSION_SCOPE),
           pick(input.purpose, prev?.purpose, "chat"),
-          input.harness,
+          binding.harness,
           input.agentType,
-          pick(input.title, prev?.title, "New chat"),
+          pick(foreign ? undefined : input.title, prev?.title, "New chat"),
           // createdAt is insert-only: the first stored value always wins so an update
           // can never move a session's creation time.
           createdAt,
-          pick(input.updatedAt, prev?.updated_at_ms, now),
-          pick(input.messageCount, prev?.message_count, 0),
+          pick(foreign ? undefined : input.updatedAt, prev?.updated_at_ms, now),
+          pick(messageCount, prev?.message_count, 0),
           binding.provider,
           binding.providerSessionId,
           binding.model,
@@ -524,7 +558,7 @@ function upsert(input: SessionUpsert): boolean {
             : 0,
           input.peerTurnCap ?? prev?.peer_turn_cap ?? null,
         );
-      syncActiveBinding(input.id, binding, createdAt);
+      if (!foreign) syncActiveBinding(input.id, binding, createdAt);
     });
     if (!prev) noteLiveness([input.id]);
     else touchSessionRows([input.id]);
@@ -591,6 +625,70 @@ function switchCredentialProfile(
         "The session's account changed or the session was deleted during the switch.",
       );
     syncActiveBindingAccount(id, next);
+  });
+  touchSessionRows([id]);
+}
+
+/** What {@link switchEngineBinding} commits. */
+interface EngineBindingSwitch {
+  /** The active binding the switch started from. */
+  expectSeq: number;
+  /** The new binding, projected onto the row. */
+  fields: ActiveBindingFields;
+  /** The engine's own id for it: pi's app id, Claude's resumed id or none. */
+  nativeSessionId: string | null;
+  /** The session log's seq cursor at the switch. */
+  startedSeq: number;
+  /** The earlier binding whose native session the open reopened; none when fresh. */
+  resumedSeq?: number;
+  /** The pending selection the switch applied, cleared when still stored. */
+  pending: SessionPendingRuntime;
+}
+
+/**
+ * The cross-harness switch's commit (`docs/session-runtime-switching.md`):
+ * end the active binding, start the next one, project it onto the row and
+ * compare-and-clear the pending selection the switch applied, in ONE
+ * transaction. Throws, changing nothing, when the session was deleted or its
+ * active binding is no longer `expectSeq`.
+ */
+function switchEngineBinding(id: string, change: EngineBindingSwitch): void {
+  const { fields } = change;
+  inDbTransaction(() => {
+    const row = getDb()
+      .prepare(
+        "SELECT pending_runtime FROM session_index WHERE id = ? AND deleted_at_ms IS NULL",
+      )
+      .get(id) as { pending_runtime: string | null } | undefined;
+    if (!row) throw new Error("The session was not found or has been deleted.");
+    startNextBinding(
+      id,
+      change.expectSeq,
+      fields,
+      change.nativeSessionId,
+      change.startedSeq,
+      change.resumedSeq ?? null,
+      Date.now(),
+    );
+    const stored = pendingRuntimeFields(row.pending_runtime).pendingRuntime;
+    getDb()
+      .prepare(
+        `UPDATE session_index
+            SET harness = ?, credential_profile_id = ?, provider = ?, model = ?,
+                thinking_level = ?, provider_session_id = ?,
+                pending_runtime = CASE WHEN ? THEN NULL ELSE pending_runtime END
+          WHERE id = ?`,
+      )
+      .run(
+        fields.harness,
+        fields.credentialProfileId,
+        fields.provider,
+        fields.model,
+        fields.thinkingLevel,
+        fields.providerSessionId,
+        samePendingRuntime(stored, change.pending) ? 1 : 0,
+        id,
+      );
   });
   touchSessionRows([id]);
 }
@@ -2238,6 +2336,8 @@ export const sessionStore = {
   upsert,
   setPeerTurnCap,
   switchCredentialProfile,
+  switchEngineBinding,
+  stampBindingRun,
   activeBinding,
   bindings,
   requireEnterprise,

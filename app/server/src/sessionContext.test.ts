@@ -21,7 +21,6 @@ import { createTask, deleteTask, readTask, updateTask } from "./tasks.ts";
 
 const ref = (sessionId: string): TaskSessionRef => ({
   sessionId,
-  harness: "pi",
   agentType: "developer",
 });
 

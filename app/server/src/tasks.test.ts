@@ -155,10 +155,8 @@ test("the Task list projection is allowlisted, lean, and server-path free", () =
       {
         sessionId: "session-1",
         origin: "task-start",
-        harness: "pi",
         agentType: "developer",
         attachedAt: 123,
-        sessionFile: "/tmp/example/private/native.jsonl",
       },
     ],
     source: { createdBy: "user" },
@@ -1331,5 +1329,49 @@ test("a session's Tasks are resolved from its own links, not by listing every Ta
   } finally {
     for (const t of [started, referenced, archived, unrelated])
       deleteTask(t.id);
+  }
+});
+
+test("a session ref names the session only, whatever an old edge or client stored", async () => {
+  const { addLink } = await import("./db/links.ts");
+  const created = createTask({
+    title: "Engine-free refs",
+    status: "todo",
+    source: { createdBy: "user" },
+  });
+  try {
+    // A client still sending the old fields: they are dropped on the way in.
+    linkSessionToTask(created.id, {
+      sessionId: "s-client",
+      agentType: "developer",
+      harness: "pi",
+      sessionFile: "/tmp/old/native.jsonl",
+    } as never);
+    // An edge written by an older build keeps its metadata; reads ignore it.
+    addLink(
+      { type: "task", id: created.id },
+      "context",
+      { type: "session", id: "s-legacy" },
+      {
+        metadata: {
+          harness: "claude-sdk",
+          agentType: "workshop",
+          sessionFile: "s-legacy",
+          origin: "reference",
+        },
+      },
+    );
+    const refs = readTask(created.id)?.sessionRefs ?? [];
+    assert.deepEqual(
+      refs
+        .map((ref) => ({ ...ref }))
+        .sort((a, b) => a.sessionId.localeCompare(b.sessionId)),
+      [
+        { sessionId: "s-client", agentType: "developer" },
+        { sessionId: "s-legacy", agentType: "workshop", origin: "reference" },
+      ],
+    );
+  } finally {
+    deleteTask(created.id);
   }
 });

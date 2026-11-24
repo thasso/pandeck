@@ -271,6 +271,58 @@ function makeHarness(
   };
 }
 
+/**
+ * Run a turn that launches background work and then fails, so the session is
+ * left idle on a retained host whose background job is still running.
+ */
+async function idleOnRetainedBackgroundWork(
+  session: InstanceType<typeof ClaudeSdkSession>,
+  queries: ReturnType<typeof makeHarness>["queries"],
+) {
+  const turn = session
+    .createRuntimeAdapter()
+    .prompt("launch background work then fail");
+  await until(() => queries.length === 1);
+  const query = queries[0]!;
+  await preToolHook(query)(
+    {
+      hook_event_name: "PreToolUse",
+      session_id: "provider-background",
+      transcript_path: "/tmp/transcript",
+      cwd: dataDir,
+      tool_name: "Bash",
+      tool_input: { command: "held-background-job", run_in_background: true },
+      tool_use_id: "switch-bg-tool",
+    },
+    "switch-bg-tool",
+    { signal: new AbortController().signal },
+  );
+  query.output.emit({
+    type: "system",
+    subtype: "task_started",
+    task_id: "switch-bg-task",
+    tool_use_id: "switch-bg-tool",
+    description: "held job",
+    task_type: "shell",
+    uuid: "switch-bg-start",
+    session_id: "provider-background",
+  } as unknown as ClaudeSdkMessage);
+  await until(
+    () =>
+      backgroundWorkStore.listItems({ ownerSessionId: session.id })[0]
+        ?.state === "running",
+  );
+  query.output.emit({
+    ...result("switch-failure"),
+    subtype: "error_during_execution",
+    is_error: true,
+    errors: ["Usage limit reached"],
+    api_error_status: 429,
+  } as unknown as ClaudeSdkMessage);
+  await turn;
+  return query;
+}
+
 test("account switching refuses a retained host with active background work without killing it", async () => {
   const profiles = await import("../credentialProfiles.ts");
   const a = profiles.createCredentialProfile({
@@ -283,47 +335,7 @@ test("account switching refuses a retained host with active background work with
   }).id;
   const { session, queries } = makeHarness(30, { credentialProfileId: a });
   try {
-    const turn = session
-      .createRuntimeAdapter()
-      .prompt("launch background work then fail");
-    await until(() => queries.length === 1);
-    const query = queries[0]!;
-    await preToolHook(query)(
-      {
-        hook_event_name: "PreToolUse",
-        session_id: "provider-background",
-        transcript_path: "/tmp/transcript",
-        cwd: dataDir,
-        tool_name: "Bash",
-        tool_input: { command: "held-background-job", run_in_background: true },
-        tool_use_id: "switch-bg-tool",
-      },
-      "switch-bg-tool",
-      { signal: new AbortController().signal },
-    );
-    query.output.emit({
-      type: "system",
-      subtype: "task_started",
-      task_id: "switch-bg-task",
-      tool_use_id: "switch-bg-tool",
-      description: "held job",
-      task_type: "shell",
-      uuid: "switch-bg-start",
-      session_id: "provider-background",
-    } as unknown as ClaudeSdkMessage);
-    await until(
-      () =>
-        backgroundWorkStore.listItems({ ownerSessionId: session.id })[0]
-          ?.state === "running",
-    );
-    query.output.emit({
-      ...result("switch-failure"),
-      subtype: "error_during_execution",
-      is_error: true,
-      errors: ["Usage limit reached"],
-      api_error_status: 429,
-    } as unknown as ClaudeSdkMessage);
-    await turn;
+    const query = await idleOnRetainedBackgroundWork(session, queries);
     await assert.rejects(
       session.switchAccount(b, () => {}),
       /Background work still holds/,
@@ -341,6 +353,33 @@ test("account switching refuses a retained host with active background work with
     session.dispose();
     profiles.setCredentialProfileEnabled(a, false);
     profiles.setCredentialProfileEnabled(b, false);
+  }
+});
+
+test("an engine switch refuses a retained host with active background work without killing it", async () => {
+  const { AccountSwitchBlockedError } =
+    await import("../session/runtime/accountRecoveryAdmission.ts");
+  const { session, queries } = makeHarness(30);
+  try {
+    const query = await idleOnRetainedBackgroundWork(session, queries);
+    const refused = await session
+      .closeForEngineSwitch(() => {})
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    // The switching turn holds on this error ("Waiting for background work").
+    assert.ok(refused instanceof AccountSwitchBlockedError);
+    assert.match(refused.message, /Stop it before switching engines/);
+    assert.equal(query.closeCalls, 0);
+    assert.equal(query.abortObserved, false);
+    assert.equal(backgroundWorkStore.hostForOwner(session.id)?.state, "live");
+    assert.equal(
+      backgroundWorkStore.listItems({ ownerSessionId: session.id })[0]?.state,
+      "running",
+    );
+  } finally {
+    session.dispose();
   }
 });
 

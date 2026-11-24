@@ -204,6 +204,7 @@ export const settingsFixture: AppSettings = {
     weeklyUsedThreshold: 95,
     openAiResetAutoRedeemHours: 6,
   },
+  sessionSwitching: { handoffTokenCap: 16_000 },
 };
 export const settingsPrefs: Prefs = {
   theme: "light",

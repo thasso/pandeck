@@ -1,7 +1,9 @@
 /**
  * A started session's pending runtime selection
  * (`docs/session-runtime-switching.md`): the model, effort and account its
- * NEXT turn starts on, within the session's current engine.
+ * NEXT turn starts on. Setting one refuses another engine for now; applying
+ * one that names another engine moves the session there
+ * (`harnesses/engineSwitch.ts`).
  *
  * Setting or clearing it changes only the session row: no native model
  * change, no account move. The next turn's admission (`runtimePrompt.ts`)
@@ -34,6 +36,9 @@ import {
 } from "./credentialProfiles.ts";
 import { sessionStore, type SessionMeta } from "./db/sessionStore.ts";
 import { wakeSessionDelivery } from "./deliveryWake.ts";
+import type { PreparedEngineSwitch } from "./harnesses/engineSwitch.ts";
+import { SessionSwitchingEnginesError } from "./harnesses/engineSwitchFence.ts";
+import { SessionSettlingError } from "./harness.ts";
 import { pickerModels } from "./harnesses/models.ts";
 import { AccountSwitchBlockedError } from "./session/runtime/accountRecoveryAdmission.ts";
 import type { SessionRuntime } from "./session/runtime/runtime.ts";
@@ -348,6 +353,17 @@ export interface AppliedPendingRuntime {
   usable: () => void;
   /** The turn was admitted on the target: the selection is spent. */
   commit: () => void;
+  /**
+   * A switch to another engine (`harnesses/engineSwitch.ts`): the session's
+   * driver there. The turn runs on it once `commit` ran; the driver the turn
+   * was admitted with is released.
+   */
+  driver?: RuntimePromptDriver;
+  /**
+   * Undo a switch to another engine the turn refused before `commit`: the
+   * session stays on its old binding with the selection pending.
+   */
+  abandon?: () => Promise<void>;
 }
 
 /**
@@ -487,13 +503,21 @@ export async function applyPendingRuntime(
         "The next turn's model or account changed while it was being applied.",
       );
   };
-  const engineRefusal = modelEngineRefusal(row, source, pending.model);
   const option = modelOption(pending.model);
   const couldNot = (reason: string, account?: CredentialProfile) =>
     hold(
       id,
       `Couldn't switch to ${targetText(pending, account)}: ${reason.replace(/\.$/, "")}. The change is still pending; change or reset it to continue.`,
     );
+  if (
+    harnessForModelProvider(pending.model.provider) !==
+    activeEngine(row).harness
+  )
+    return applyEngineSwitch(row, source, pending, couldNot, () => {
+      admit();
+      unchanged();
+    });
+  const engineRefusal = modelEngineRefusal(row, source, pending.model);
   if (engineRefusal) throw couldNot(engineRefusal);
   const running = driver.modelSelection?.().model ?? {
     provider: row.provider ?? "",
@@ -597,6 +621,178 @@ export async function applyPendingRuntime(
       if (!samePendingRuntime(sessionStore.get(id)?.pendingRuntime, pending))
         return;
       sessionStore.setPendingRuntime(id, null);
+      void host()
+        .publishRows()
+        .catch(() => {});
+      void host()
+        .stateChanged(id)
+        .catch(() => {});
+    },
+  };
+}
+
+/**
+ * The account rules for running a model of another engine on `target`: it
+ * serves the model, is enabled, meets the enterprise requirement, is logged
+ * in and not benched for the model.
+ */
+function engineTargetRulesRefusal(
+  row: Pick<SessionMeta, "requiresEnterprise">,
+  target: CredentialProfile,
+  pending: SessionPendingRuntime,
+): string | undefined {
+  if (!accountServesModel(target, pending.model.provider))
+    return `${target.name} does not run ${modelName(pending.model)}.`;
+  if (!target.enabled) return `${target.name} is disabled.`;
+  if (row.requiresEnterprise && !target.enterprise)
+    return `This session requires an enterprise account, and ${target.name} is not one.`;
+  try {
+    assertStillEligible(target, pending.model.id);
+  } catch (error) {
+    return errorText(error);
+  }
+  return undefined;
+}
+
+async function engineTargetRefusal(
+  row: Pick<SessionMeta, "requiresEnterprise">,
+  target: CredentialProfile,
+  pending: SessionPendingRuntime,
+): Promise<string | undefined> {
+  return (
+    engineTargetRulesRefusal(row, target, pending) ??
+    (await modelRefusal(target, {
+      model: pending.model,
+      thinkingLevel: pending.thinkingLevel,
+    }))
+  );
+}
+
+/**
+ * Which account runs a model of another engine: the chosen one when it passes
+ * every rule now, or for Automatic the router's non-degraded pick of the
+ * model's kind within the session's enterprise requirement. The session's
+ * bound account serves another kind, so it is never kept.
+ */
+async function resolveEngineAccount(
+  row: SessionMeta,
+  pending: SessionPendingRuntime,
+): Promise<{
+  target?: CredentialProfile;
+  refusal?: string;
+  named?: CredentialProfile;
+}> {
+  if (pending.account.kind === "account") {
+    const target = credentialProfileById(pending.account.id);
+    if (!target) return { refusal: "The chosen account no longer exists." };
+    const refusal = await engineTargetRefusal(row, target, pending);
+    return refusal ? { refusal, named: target } : { target };
+  }
+  const pick = await pickAccount({
+    model: { provider: pending.model.provider, modelId: pending.model.id },
+    thinkingLevel: pending.thinkingLevel,
+    requiresEnterprise: row.requiresEnterprise === true,
+  });
+  const picked =
+    pick.profileId && !pick.degraded
+      ? credentialProfileById(pick.profileId)
+      : undefined;
+  if (!picked) return { refusal: "no eligible account can run it" };
+  const refusal = await engineTargetRefusal(row, picked, pending);
+  return refusal ? { refusal } : { target: picked };
+}
+
+/**
+ * Apply a selection whose model runs on another engine: resolve its account,
+ * then move the session there (`prepareEngineSwitch`) up to the commit, which
+ * the turn runs once it is admitted on the new driver. Every refusal holds
+ * the turn as on one engine; a refusal after the move undoes it.
+ */
+async function applyEngineSwitch(
+  row: SessionMeta,
+  source: CredentialProfile | undefined,
+  pending: SessionPendingRuntime,
+  couldNot: (reason: string, account?: CredentialProfile) => Error,
+  recheck: () => void,
+): Promise<AppliedPendingRuntime> {
+  const id = row.id;
+  if (!modelOption(pending.model))
+    throw couldNot(`${pending.model.id} is no longer available`);
+  const { target, refusal, named } = await resolveEngineAccount(row, pending);
+  if (!target)
+    throw couldNot(refusal ?? "no eligible account can run it", named);
+  recheck();
+
+  let prepared: PreparedEngineSwitch;
+  try {
+    // Loaded on use: the engine stores it drives sit above this module.
+    const { prepareEngineSwitch } = await import("./harnesses/engineSwitch.ts");
+    prepared = await prepareEngineSwitch(
+      id,
+      {
+        harness: harnessForModelProvider(pending.model.provider),
+        model: pending.model,
+        thinkingLevel: pending.thinkingLevel,
+        credentialProfileId: target.id,
+      },
+      pending,
+      recheck,
+    );
+  } catch (error) {
+    if (error instanceof AutomaticTurnsHeldError) throw error;
+    // Another switch of this session holds its fence: busy, offered again
+    // when that one lifts it.
+    if (error instanceof SessionSwitchingEnginesError) throw error;
+    if (error instanceof SessionSettlingError)
+      throw hold(
+        id,
+        "Waiting for the session to finish its own work (naming itself) before switching.",
+      );
+    if (error instanceof AccountSwitchBlockedError)
+      throw hold(
+        id,
+        `Waiting for background work on ${source ? ACCOUNT_KINDS[source.provider].label : "the session's engine"}; stop it to switch now.`,
+      );
+    throw couldNot(errorText(error), target);
+  }
+  // The move awaited: the account may have lost its login, been disabled or
+  // benched, or stopped listing the model meanwhile.
+  try {
+    const late = await engineTargetRefusal(
+      sessionStore.get(id) ?? row,
+      credentialProfileById(target.id) ?? target,
+      pending,
+    );
+    if (late) throw couldNot(late, target);
+    recheck();
+  } catch (error) {
+    await prepared.abandon();
+    throw error;
+  }
+  return {
+    driver: prepared.driver,
+    abandon: prepared.abandon,
+    usable: () => {
+      recheck();
+      try {
+        prepared.usable();
+      } catch (error) {
+        throw couldNot(errorText(error), target);
+      }
+      const profile = credentialProfileById(target.id);
+      if (!profile)
+        throw couldNot("The chosen account no longer exists", target);
+      const late = engineTargetRulesRefusal(
+        sessionStore.get(id) ?? row,
+        profile,
+        pending,
+      );
+      if (late) throw couldNot(late, profile);
+    },
+    commit: () => {
+      // One transaction: the new binding, its projection and the selection's
+      // compare-and-clear.
+      prepared.commit();
       void host()
         .publishRows()
         .catch(() => {});

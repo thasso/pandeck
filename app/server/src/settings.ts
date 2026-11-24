@@ -56,6 +56,7 @@ import {
   clampNumber,
   isSafeEntryName,
   normalizeBackgroundWorkSettings,
+  SESSION_HANDOFF_TOKEN_CAP_LIMITS,
 } from "@assistant/shared";
 import { OPENAI_RESET_AUTO_REDEEM_LEAD_HOURS } from "@assistant/shared/usage";
 import {
@@ -102,6 +103,19 @@ function normalizeAccountRoutingSettings(
       0,
       168,
       OPENAI_RESET_AUTO_REDEEM_LEAD_HOURS,
+    ),
+  };
+}
+function normalizeSessionSwitchingSettings(
+  value: Partial<AppSettings["sessionSwitching"]> | undefined,
+): AppSettings["sessionSwitching"] {
+  const { min, max } = SESSION_HANDOFF_TOKEN_CAP_LIMITS;
+  return {
+    handoffTokenCap: clampInt(
+      value?.handoffTokenCap,
+      min,
+      max,
+      SESSION_HANDOFF_TOKEN_CAP_LIMITS.default,
     ),
   };
 }
@@ -610,6 +624,9 @@ export function getSettings(publicBaseUrl?: string): AppSettings {
   return {
     models: { ...DEFAULT_MODEL_SETTINGS, ...(stored.models ?? {}) },
     accountRouting: normalizeAccountRoutingSettings(stored.accountRouting),
+    sessionSwitching: normalizeSessionSwitchingSettings(
+      stored.sessionSwitching,
+    ),
     permanentAssistant: {
       ...DEFAULT_PERMANENT_ASSISTANT_SETTINGS,
       ...(stored.permanentAssistant ?? {}),
@@ -713,6 +730,13 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
     ...(patch.accountRouting
       ? {
           accountRouting: normalizeAccountRoutingSettings(patch.accountRouting),
+        }
+      : {}),
+    ...(patch.sessionSwitching
+      ? {
+          sessionSwitching: normalizeSessionSwitchingSettings(
+            patch.sessionSwitching,
+          ),
         }
       : {}),
     ...(patch.permanentAssistant
