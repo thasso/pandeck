@@ -7,7 +7,7 @@
  * `mcp__pa__`-prefixed names of its mounted server.
  */
 import assert from "node:assert/strict";
-import { afterAll, beforeAll, test } from "vitest";
+import { afterAll, beforeAll, beforeEach, test } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { AGENT_TYPES } from "../agentTypes.ts";
@@ -30,6 +30,9 @@ import { eagerToolNamesFor } from "../tools/catalog.ts";
 import type { ClaudeQueryParams } from "./sdkSeam.ts";
 import { claudeSdkStore } from "./claudeSdkStore.ts";
 import { createClaudeSessionToolServer } from "./toolServer.ts";
+import { enableClaudeSdkForTests } from "../test/claudeSdkEnabled.ts";
+
+beforeEach(enableClaudeSdkForTests);
 
 installClaudeStateBuilder(claudeSdkStore);
 await seedLegacyDefaultAccounts();

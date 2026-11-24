@@ -461,16 +461,10 @@ test.each([
       model: { provider: "claude-sdk", id: "fable" },
       thinkingLevel: "high",
     });
-    driver.switchAccount = async (next, admit) => {
-      admit();
-      sessionStore.switchCredentialProfile(id, from, next);
+    driver.switchAccount = async () => {
+      throw new Error("setting a pending account never switches");
     };
-    setAccountMoveHostForTests({
-      runtime: sessionRuntime,
-      resident: async () => driver,
-      acquire: async () => driver,
-      publishRows: async () => {},
-    });
+    setAccountMoveHostForTests({ resident: async () => driver });
     const { sent, connection } = connect();
     try {
       await connection.handle({
@@ -547,16 +541,10 @@ test("an opus session pinned to claude-opus-5 lists and can choose an account of
     model: { provider: "claude-sdk", id: "opus" },
     thinkingLevel: "high",
   });
-  driver.switchAccount = async (next, admit) => {
-    admit();
-    sessionStore.switchCredentialProfile(id, from, next);
+  driver.switchAccount = async () => {
+    throw new Error("setting a pending account never switches");
   };
-  setAccountMoveHostForTests({
-    runtime: sessionRuntime,
-    resident: async () => driver,
-    acquire: async () => driver,
-    publishRows: async () => {},
-  });
+  setAccountMoveHostForTests({ resident: async () => driver });
   const { sent, connection } = connect();
   try {
     await connection.handle({

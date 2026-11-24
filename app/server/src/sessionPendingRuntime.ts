@@ -39,6 +39,7 @@ import {
 } from "./credentialProfiles.ts";
 import { sessionStore, type SessionMeta } from "./db/sessionStore.ts";
 import { wakeSessionDelivery } from "./deliveryWake.ts";
+import { engineDisabledRefusal } from "./harnesses/claudeModelResolution.ts";
 import { sessionClaudePin } from "./harnesses/curatedModels.ts";
 import type { PreparedEngineSwitch } from "./harnesses/engineSwitch.ts";
 import { SessionSwitchingEnginesError } from "./harnesses/engineSwitchFence.ts";
@@ -162,7 +163,7 @@ export function crossesEngines(
  * Login and benches change by themselves and are judged when it applies.
  */
 async function crossTargetRefusal(
-  row: Pick<SessionMeta, "requiresEnterprise">,
+  row: Pick<SessionMeta, "id" | "requiresEnterprise">,
   model: { provider: string; id: string },
   thinkingLevel: SessionPendingRuntime["thinkingLevel"],
 ): Promise<string | undefined> {
@@ -176,7 +177,10 @@ async function crossTargetRefusal(
     const profile = credentialProfileById(candidate.id);
     if (
       profile &&
-      (await accountOffersSelection(profile, { model, thinkingLevel }))
+      !(await selectionListingRefusal(row.id, profile, {
+        model,
+        thinkingLevel,
+      }))
     )
       return undefined;
   }
@@ -307,6 +311,10 @@ async function pendingTarget(
   };
 
   const model = change.model ?? base.model;
+  const disabled = crossesEngines(row, source, model)
+    ? engineDisabledRefusal(model.provider)
+    : undefined;
+  if (disabled) throw new Error(disabled);
   // The model the session runs now stays choosable even when the picker's
   // catalog does not list it; its own adapter clamps the effort.
   const option = modelOption(model);
@@ -341,8 +349,11 @@ async function pendingTarget(
       throw new Error(
         `This session requires an enterprise account, and ${target.name} is not one.`,
       );
-    if (!(await accountOffersSelection(target, { model, thinkingLevel })))
-      throw new Error(`${target.name} does not offer ${name}.`);
+    const listing = await selectionListingRefusal(row.id, target, {
+      model,
+      thinkingLevel,
+    });
+    if (listing) throw new Error(listing);
   } else if (account.kind === "account") {
     const target = credentialProfileById(account.id);
     if (!target) throw new Error("The chosen account no longer exists.");
@@ -736,13 +747,13 @@ function engineTargetRulesRefusal(
 }
 
 async function engineTargetRefusal(
-  row: Pick<SessionMeta, "requiresEnterprise">,
+  row: Pick<SessionMeta, "id" | "requiresEnterprise">,
   target: CredentialProfile,
   pending: SessionPendingRuntime,
 ): Promise<string | undefined> {
   return (
     engineTargetRulesRefusal(row, target, pending) ??
-    (await modelRefusal(target, {
+    (await modelRefusal(row.id, target, {
       model: pending.model,
       thinkingLevel: pending.thinkingLevel,
     }))
@@ -769,10 +780,12 @@ async function resolveEngineAccount(
     const refusal = await engineTargetRefusal(row, target, pending);
     return refusal ? { refusal, named: target } : { target };
   }
+  // A pinned session is routed only to accounts that run its pin.
   const pick = await pickAccount({
     model: { provider: pending.model.provider, modelId: pending.model.id },
     thinkingLevel: pending.thinkingLevel,
     requiresEnterprise: row.requiresEnterprise === true,
+    ...sessionClaudePin(row.id, pending.model.provider, pending.model.id),
   });
   const picked =
     pick.profileId && !pick.degraded
@@ -798,6 +811,8 @@ async function applyEngineSwitch(
   recheck: () => void,
 ): Promise<AppliedPendingRuntime> {
   const id = row.id;
+  const disabled = engineDisabledRefusal(pending.model.provider);
+  if (disabled) throw couldNot(disabled);
   if (!modelOption(pending.model))
     throw couldNot(`${pending.model.id} is no longer available`);
   const { target, refusal, named } = await resolveEngineAccount(row, pending);

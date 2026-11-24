@@ -9,7 +9,11 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, test } from "vitest";
+import { afterEach, beforeEach, test } from "vitest";
+import {
+  disableClaudeSdkForTests,
+  enableClaudeSdkForTests,
+} from "../test/claudeSdkEnabled.ts";
 import type {
   ClaudeQuery,
   ClaudeQueryParams,
@@ -30,6 +34,8 @@ const { resetClaudeAccountModelsForTests } =
 const { freezeSessionAgent } = await import("../agents/sessionAgent.ts");
 
 await seedLegacyDefaultAccounts();
+
+beforeEach(enableClaudeSdkForTests);
 
 afterEach(() => {
   resetClaudeAccountModelsForTests();
@@ -272,15 +278,26 @@ test("effort is clamped to the model: a switch to Fable lifts off to low, and of
     assert.equal(h.session.toRecord().thinkingLevel, "low");
     await h.session.setThinkingLevel("off");
     assert.equal(h.session.toRecord().thinkingLevel, "low");
+    // An unknown account runs fable's newest candidate (`modelResolution.ts`).
     const next = await runTurn(h, "on fable");
-    assert.equal(next.params.options?.model, "claude-fable-5-1");
+    assert.equal(next.params.options?.model, "claude-fable-5-2");
   } finally {
     h.session.dispose();
   }
 });
 
 test("a pinned agent session runs another model as usual and its pinned version back on the alias", async () => {
-  const h = makeHarness();
+  // Back on the alias a model change carries no stored pin (D1-legacy is only
+  // the stored pin's at a query open), so the account lists the legacy pin.
+  const profile = profiles.createCredentialProfile({
+    name: "Legacy",
+    provider: "claude",
+  }).id;
+  resetClaudeAccountModelsForTests({
+    read: async () => ["claude-opus-4-6", "claude-sonnet-5-5"],
+    readable: () => true,
+  });
+  const h = makeHarness({ credentialProfileId: profile });
   freezeSessionAgent(h.id, {
     name: "test-reviewer",
     blob: "0".repeat(40),
@@ -303,6 +320,48 @@ test("a pinned agent session runs another model as usual and its pinned version 
     await h.session.setModel("opus");
     const third = await runTurn(h, "third");
     assert.equal(third.params.options?.model, "claude-opus-4-6");
+  } finally {
+    h.session.dispose();
+    profiles.setCredentialProfileEnabled(profile, false);
+  }
+});
+
+test("on an unknown account a pinned session's own legacy pin runs, but a change back onto its alias is refused", async () => {
+  const h = makeHarness();
+  freezeSessionAgent(h.id, {
+    name: "test-reviewer",
+    blob: "0".repeat(40),
+    persona: "developer",
+    provider: "claude-sdk",
+    model: "opus",
+    pinnedModel: "claude-opus-4-6",
+    effort: "high",
+    runtimeSource: "definition",
+    denyTools: [],
+    skills: [],
+    body: "Review.",
+  });
+  try {
+    const first = await runTurn(h, "first");
+    assert.equal(first.params.options?.model, "claude-opus-4-6");
+    await h.session.setModel("sonnet");
+    await assert.rejects(
+      h.session.setModel("opus"),
+      (error: Error) => error.name === "ModelUnavailableOnAccountError",
+    );
+    assert.equal(h.session.modelSelection().model?.id, "sonnet");
+  } finally {
+    h.session.dispose();
+  }
+});
+
+test("a model change is refused while the Claude SDK is disabled, before any change", async () => {
+  const h = makeHarness();
+  try {
+    await runTurn(h, "first");
+    await disableClaudeSdkForTests();
+    await assert.rejects(h.session.setModel("haiku"), /Claude SDK is disabled/);
+    assert.equal(h.session.modelSelection().model?.id, "opus");
   } finally {
     h.session.dispose();
   }

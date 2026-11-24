@@ -6,7 +6,11 @@
  * queued work, which stays for after it.
  */
 import assert from "node:assert/strict";
-import { afterAll, afterEach, beforeAll, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, test, vi } from "vitest";
+import {
+  disableClaudeSdkForTests,
+  enableClaudeSdkForTests,
+} from "./test/claudeSdkEnabled.ts";
 import type { ModelOption } from "@assistant/shared";
 import { randomUUID } from "node:crypto";
 
@@ -14,6 +18,10 @@ import { randomUUID } from "node:crypto";
 const gates = vi.hoisted(() => ({
   offers: undefined as undefined | (() => Promise<void>),
   pick: undefined as undefined | (() => Promise<void>),
+  /** Judge the pick's listing for real (the per-account Claude rules). */
+  real: false,
+  /** The picker's models, when a test needs others. */
+  picker: undefined as undefined | ModelOption[],
 }));
 
 vi.mock("./harnesses/models.ts", async (importOriginal) => {
@@ -21,28 +29,29 @@ vi.mock("./harnesses/models.ts", async (importOriginal) => {
     await importOriginal<typeof import("./harnesses/models.ts")>();
   return {
     ...original,
-    pickerModels: (): ModelOption[] => [
-      {
-        provider: "claude-sdk",
-        id: "sonnet",
-        name: "Claude Sonnet",
-        contextWindow: 200_000,
-      } as ModelOption,
-      {
-        provider: "openai-codex",
-        id: "gpt-5.6-sol",
-        name: "GPT-5.6 Sol",
-        contextWindow: 272_000,
-        reasoning: true,
-      } as ModelOption,
-      {
-        provider: "openai-codex",
-        id: "gpt-5.4-mini",
-        name: "GPT Mini",
-        contextWindow: 272_000,
-        reasoning: true,
-      } as ModelOption,
-    ],
+    pickerModels: (): ModelOption[] =>
+      gates.picker ?? [
+        {
+          provider: "claude-sdk",
+          id: "sonnet",
+          name: "Claude Sonnet",
+          contextWindow: 200_000,
+        } as ModelOption,
+        {
+          provider: "openai-codex",
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          contextWindow: 272_000,
+          reasoning: true,
+        } as ModelOption,
+        {
+          provider: "openai-codex",
+          id: "gpt-5.4-mini",
+          name: "GPT Mini",
+          contextWindow: 272_000,
+          reasoning: true,
+        } as ModelOption,
+      ],
   };
 });
 vi.mock("./sessionAccountMove.ts", async (importOriginal) => {
@@ -52,9 +61,12 @@ vi.mock("./sessionAccountMove.ts", async (importOriginal) => {
   return {
     ...original,
     modelRefusal: async () => undefined,
-    accountOffersSelection: async () => {
+    selectionListingRefusal: async (
+      ...args: Parameters<typeof original.selectionListingRefusal>
+    ) => {
+      if (gates.real) return original.selectionListingRefusal(...args);
       await gates.offers?.();
-      return true;
+      return undefined;
     },
     assertStillEligible: () => {},
   };
@@ -133,6 +145,8 @@ const { claudeTurnSeam } = await import("./test/claudeTurnSeam.ts");
 const { FakeRuntimeDriver } = await import("./test/fakeRuntimeDriver.ts");
 const { seedLegacyDefaultAccounts } =
   await import("./test/legacyDefaultAccounts.ts");
+const { resetClaudeAccountModelsForTests } =
+  await import("./harnesses/claudeAccountModels.ts");
 
 installClaudeStateBuilder(claudeSdkStore);
 await seedLegacyDefaultAccounts();
@@ -233,9 +247,14 @@ beforeAll(() => {
     return live;
   };
 });
+// These tests drive Claude runs; the integration is off by default.
+beforeEach(enableClaudeSdkForTests);
 afterEach(async () => {
   gates.offers = undefined;
   gates.pick = undefined;
+  gates.real = false;
+  gates.picker = undefined;
+  resetClaudeAccountModelsForTests();
   pi.live.clear();
   opened.length = 0;
   for (const id of ids.splice(0)) {
@@ -344,6 +363,43 @@ test("only a terminal quota or rate-limit failure is offered a model to continue
   }
 });
 
+test("a local-policy refusal is never offered a model to continue on", async () => {
+  const offActivity = installSessionActivityTracking();
+  const uninstall = installContinueOffers();
+  try {
+    const { id, runId } = await failedOnClaude("local-policy");
+    // The marker alone: PA refused before any provider call.
+    terminal.listener!({
+      sessionId: id,
+      runId,
+      origin: undefined,
+      errorMessage: undefined,
+      failure: { kind: "unknown", localPolicy: true },
+      at: Date.now(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(sessionStore.get(id)?.lastError?.continueOn, undefined);
+
+    // A real one: the Claude SDK turned off refuses the next turn at its
+    // query open, as local policy, and nothing is offered.
+    await disableClaudeSdkForTests();
+    const claude = claudeSdkStore.get(id)!;
+    await assert.rejects(
+      promptRuntimeSessionWithRuntime(sessionRuntime, claude, "refused ask"),
+      /Claude SDK is disabled in settings/,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.match(
+      sessionStore.get(id)?.lastError?.message ?? "",
+      /Claude SDK is disabled in settings/,
+    );
+    assert.equal(sessionStore.get(id)?.lastError?.continueOn, undefined);
+  } finally {
+    uninstall();
+    offActivity();
+  }
+});
+
 test("choices are the other engine's runnable models, the failed one's counterpart first", async () => {
   const { id } = await failedOnClaude("choices");
   // Sonnet is first among Claude's models, so GPT-5.6 Sol (first among
@@ -383,6 +439,40 @@ test("Continue moves the session, continues the failed turn past a Stop, and lea
     "the queued message waits for the continuation",
   );
   assert.equal(queue?.paused, false, "and follows it on the new engine");
+});
+
+test("a Claude model is offered only where the picked account lists it: Mythos never on an account without it", async () => {
+  const { id, claude, failureAt, runId } = await failedOnClaude("mythos");
+  sessionStore.recordContinueOffer(id, runId, [SOL]);
+  await continueOnModel(claude, {
+    failureAt,
+    model: { provider: SOL.provider, id: SOL.id },
+    resumeHold: undefined,
+  });
+  assert.equal(sessionStore.get(id)?.harness, "pi");
+  // Now on pi, so the Claude models are the other engine's. Routing stays
+  // mocked (the router's own entitlement filter is its suite's); the listing
+  // of the account it picks is judged for real.
+  gates.real = true;
+  const { curatedModelOption } = await import("./harnesses/curatedModels.ts");
+  gates.picker = ["sonnet", "mythos"].map((alias) => {
+    const option = curatedModelOption("claude-sdk", alias);
+    assert.ok(option, alias);
+    return option;
+  });
+  const listing = (ids: string[] | undefined) =>
+    resetClaudeAccountModelsForTests({
+      read: async (account) => (account === "claude-default" ? ids : undefined),
+    });
+  const offered = async () =>
+    (await continueChoices(id)).map((choice) => choice.id).sort();
+
+  listing(["claude-sonnet-5-5"]);
+  assert.deepEqual(await offered(), ["sonnet"], "not listed: no Mythos");
+  listing(undefined);
+  assert.deepEqual(await offered(), ["sonnet"], "unknown: no Mythos either");
+  listing(["claude-sonnet-5-5", "claude-mythos-5-2"]);
+  assert.deepEqual(await offered(), ["mythos", "sonnet"], "listed: offered");
 });
 
 test("a click on a failure that no longer offers the model changes nothing", async () => {

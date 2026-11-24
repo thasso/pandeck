@@ -976,7 +976,8 @@ test("F003: a failed effort control after the model switched stores model and cl
       h.session.setModel("fable"),
       /did not take the low effort \(control failed\)/,
     );
-    assert.deepEqual(h.query.modelCalls, ["claude-fable-5-1"]);
+    // No listing is known: fable runs its newest candidate (`modelResolution.ts`).
+    assert.deepEqual(h.query.modelCalls, ["claude-fable-5-2"]);
     assert.equal(h.session.toRecord().modelId, "fable");
     assert.equal(h.session.toRecord().thinkingLevel, "low");
     assert.equal(h.query.closeCalls, 0, "background work keeps its host");

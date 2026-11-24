@@ -7,7 +7,7 @@
  * rewriting the row the engine it replaces still projects.
  */
 import assert from "node:assert/strict";
-import { afterEach, beforeAll, describe, test } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, test } from "vitest";
 import type { ServerMessage, SessionState } from "@assistant/shared";
 import { attachRuntimeView } from "../session/attach.ts";
 import { sessionRuntime } from "../session/runtimeInstance.ts";
@@ -20,6 +20,9 @@ import { CLAUDE_SDK_STORE_DIR } from "../sessionStorage.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import { getDb } from "../db/index.ts";
 import { seedLegacyDefaultAccounts } from "../test/legacyDefaultAccounts.ts";
+import { enableClaudeSdkForTests } from "../test/claudeSdkEnabled.ts";
+
+beforeEach(enableClaudeSdkForTests);
 installClaudeStateBuilder(claudeSdkStore);
 
 let counter = 0;

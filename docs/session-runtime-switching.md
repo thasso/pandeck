@@ -49,6 +49,18 @@ has no expiry. A fork does not inherit it.
   enterprise requirement. A chosen account must still pass every move rule
   (below). Only a subscription login moves; any other account alone serves its
   models.
+- **Claude models** are judged per account the way `docs/agent-harnesses.md`
+  resolves them: the selection and the record keep the alias, and "offers the
+  model" means the account's listing resolves it (`mythos` only where listed,
+  never on an unknown listing). A session on its definition's alias carries its
+  pin (`sessionClaudePin`) into every check that judges an account for it: the
+  set-time check of a chosen account, the Automatic pick, the apply-time
+  recheck, the `/account` list and `set_runtime`. An account that cannot run the
+  pin is refused with "Y can't run claude-fable-5-2, the version this session is
+  pinned to." and Automatic picks only accounts that run it. With the Claude SDK
+  disabled in settings, a selection that crosses to Claude is refused at set
+  time, and one already pending holds at admission, with that setting's message;
+  no provider is called.
 
 ### Applying it
 
@@ -167,6 +179,10 @@ the user's click continues anything.
   row's failure is that run's. A late or retried report of an older run's
   failure, a newer run's failure, or one no run owns (a pending selection's
   hold) never receives it. User sessions only, never the permanent assistant.
+  The listed models are those the Automatic account's listing resolves (with the
+  session's pin, if any), so `mythos` is offered only where listed. A
+  local-policy refusal (`localPolicy`, `docs/account-routing.md`) is no quota
+  failure: it never receives an offer.
 - **Click** (`continueOnModel`). The offer must still belong to the failure the
   user saw (`failureAt`) and list the model, and the session must be idle;
   otherwise nothing changes and the answer carries the error. It sets the
@@ -274,10 +290,12 @@ harness").
   session.
 - **Which model.** Only a curated Claude model id is accepted
   (`knownClaudeSdkModelAlias`); a model from another harness is refused before
-  it reaches the session. The bound account must be able to run it: an account
-  whose known model listing lacks the model is refused with "<account> can't run
-  <model>." (`assertAccountCanRunModel`, the gate pins and the first send use).
-  An account with no listing yet offers every curated model.
+  it reaches the session. The alias is resolved for the session's CURRENT
+  account (`resolveClaudeAccountModel`, `docs/agent-harnesses.md`) while the
+  change holds its admission place, so an account switch cannot land between the
+  resolve and the store. An account that cannot run it is refused with
+  "<account> can't run <model>."; the record keeps the alias. With the Claude
+  SDK disabled in settings the change is refused before any provider call.
 - **Effort** is clamped to the model (`clampThinkingLevelForModel`): picking a
   model clamps the current effort, and picking an effort clamps it to the
   current model. Fable has no `off`, so a switch to Fable lifts `off` to `low`.
@@ -317,9 +335,11 @@ harness").
 - **Persistence.** A started session writes the selection to its record and its
   `session_index` row at once; before the first prompt it stays local, as the
   first send creates the session with it.
-- **Agent pins.** `claudeQueryModel` decides the native model on every query and
-  retained switch: a session on its definition's alias runs the pinned version,
-  any other model runs as usual (`docs/agent-definitions.md`).
+- **Agent pins.** A session on its definition's alias runs the pinned version,
+  any other model runs as usual (`docs/agent-definitions.md`). `setModel` passes
+  the definition's pin, never a stored legacy pin: a change back to a legacy
+  pinned alias on an account that cannot prove it runs that id is refused, as
+  for any new pin.
 - **Context window.** The window a previous model reported is dropped and
   learned again from the new model's results. A `result`'s `modelUsage` is the
   epoch's running total and still lists the previous model, so the window is
@@ -538,11 +558,14 @@ other under the same id; the runtime session in between is never replaced.
 - **Open** (`openForBinding`). Claude takes the binding's model, effort, account
   and native session (none for a fresh one) over what an earlier Claude binding
   left in its record, and the session's own mode, title, creation time and
-  scope; the record's timeline stays. pi reopens the app id's transcript or
-  starts one under it, and reports which it did: that, not the plan, is what the
-  commit records as `resumed_seq`. It reads the session's frozen prompt
-  conditions, skills and agent definition. A pi transcript that is there but is
-  not this session's (an unreadable or foreign header) refuses with
+  scope; the record's timeline stays. The binding stores the Claude alias, as
+  the record does; its first query resolves the concrete id on the binding's
+  account (`docs/agent-harnesses.md`). A switch to Claude while the Claude SDK
+  is disabled in settings holds before anything opens. pi reopens the app id's
+  transcript or starts one under it, and reports which it did: that, not the
+  plan, is what the commit records as `resumed_seq`. It reads the session's
+  frozen prompt conditions, skills and agent definition. A pi transcript that is
+  there but is not this session's (an unreadable or foreign header) refuses with
   `PiSwitchTranscriptError`, and the switch holds with "choose another model, or
   reset the change"; nothing is started over it. Both engines read the one
   insert-only prompt-conditions record the session froze at its start and render

@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeAll, test, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, test, vi } from "vitest";
 
 /** Naming runs, each answered by the test. */
 const titles = vi.hoisted(() => [] as Array<(title: string) => void>);
@@ -52,6 +52,9 @@ import {
 } from "./engineSwitchFence.ts";
 import { routingSpendLines } from "../workflow/runSpend.ts";
 import { harnessRegistry } from "./registry.ts";
+import { enableClaudeSdkForTests } from "../test/claudeSdkEnabled.ts";
+
+beforeEach(enableClaudeSdkForTests);
 
 installClaudeStateBuilder(claudeSdkStore);
 await seedLegacyDefaultAccounts();

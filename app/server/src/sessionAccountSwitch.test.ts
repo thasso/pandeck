@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { afterAll, afterEach, test, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, test, vi } from "vitest";
 import type { Harness, ThinkingLevel } from "@assistant/shared";
 import type { RuntimePromptDriver } from "./session/runtimePrompt.ts";
 import type {
@@ -129,6 +129,12 @@ const untrack = health.trackSessionRunHealth({
 const created: string[] = [];
 const runtimes: { runtime: InstanceType<typeof SessionRuntime>; id: string }[] =
   [];
+// Claude targets need the integration on; it is off by default.
+beforeEach(async () => {
+  const { enableClaudeSdkForTests } =
+    await import("./test/claudeSdkEnabled.ts");
+  await enableClaudeSdkForTests();
+});
 afterEach(async () => {
   vi.restoreAllMocks();
   // The pending-selection section's seams (declared with it, below).
@@ -1831,6 +1837,49 @@ test("the pin no longer applies once the user switched the session to another al
   profiles.setCredentialProfileEnabled(x, false);
   await s.send();
   assert.deepEqual(s.moves, [y]);
+});
+
+test("a pending selection on Automatic judges a 5-2-pinned session by its pin: it leaves an account without 5-2 only for one that runs it", async () => {
+  const pending = (s: ReturnType<typeof setup>) =>
+    sessionStore.setPendingRuntime(s.id, {
+      model: { provider: "claude-sdk", id: "fable" },
+      thinkingLevel: "off",
+      account: { kind: "automatic" },
+      setBy: "user",
+    });
+  const y = claudeOn("Y", "fable", true);
+  claudeOn("W", "fable", true);
+  // Unpinned, the bound account runs fable: the turn stays there.
+  const plain = setup("claude-sdk", y, [undefined]);
+  host(plain);
+  stored(plain, y);
+  pending(plain);
+  await plain.send();
+  assert.deepEqual(plain.moves, []);
+  // Pinned to 5-2, neither Y nor W runs it: the router, asked with the pin,
+  // has no account to offer, and the turn is held on Y's own refusal.
+  const held = setup("claude-sdk", y, [undefined]);
+  pinFable52(held.id);
+  host(held);
+  stored(held, y);
+  pending(held);
+  await assert.rejects(
+    held.send(),
+    /no eligible account can run it \(Y can't run claude-fable-5-2, the version this session is pinned to\.\)/,
+  );
+  assert.deepEqual(held.moves, []);
+  assert.ok(sessionStore.get(held.id)?.pendingRuntime, "still pending");
+  // Once Z runs 5-2, the router's pick is Z.
+  const z = claudeOn("Z", "fable");
+  const s = setup("claude-sdk", y, [undefined]);
+  pinFable52(s.id);
+  host(s);
+  stored(s, y);
+  pending(s);
+  await s.send();
+  assert.deepEqual(s.moves, [z]);
+  assert.equal(sessionStore.get(s.id)?.credentialProfileId, z);
+  assert.equal(sessionStore.get(s.id)?.pendingRuntime, undefined);
 });
 
 test("a local-policy failure is never switch evidence, whatever its kind", async () => {

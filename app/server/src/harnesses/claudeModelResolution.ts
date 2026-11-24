@@ -5,6 +5,7 @@
  * process's model change and one-shots resolve here, so this module must stay
  * light: it reaches no pi SDK (`architecture.test.ts`).
  */
+import { harnessForModelProvider } from "@assistant/shared";
 import { claudeSdkModelOption } from "../claudeSdk/modelSettings.ts";
 import { resolveClaudeSdkModel } from "../claudeSdk/modelResolution.ts";
 import { credentialProfileById } from "../credentialProfiles.ts";
@@ -31,6 +32,19 @@ export interface ClaudeModelPin {
  */
 export const CLAUDE_SDK_DISABLED_MESSAGE =
   'Claude SDK is disabled in settings. Turn on "Enable Claude SDK sessions" in Settings > Claude SDK to run Claude models.';
+
+/**
+ * Why no run can start on the engine serving `provider` at all: Claude while
+ * the Claude SDK is disabled in settings, with the message every Claude run
+ * gets then. A switch onto that engine is judged by it before any account is
+ * picked or anything moves (`sessionPendingRuntime.ts`).
+ */
+export function engineDisabledRefusal(provider: string): string | undefined {
+  return harnessForModelProvider(provider) === "claude-sdk" &&
+    !getSettings().claudeSdk.enabled
+    ? CLAUDE_SDK_DISABLED_MESSAGE
+    : undefined;
+}
 
 /**
  * The id `aliasOrId` runs on the account, after waiting (bounded) for the

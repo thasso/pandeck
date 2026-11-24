@@ -258,11 +258,13 @@ Four layers, each depending only on the ones below it:
      setting even on a Claude login: the fallback then degrades to the low-text
      result with that refusal as its note, with no account health, retry or
      switch. `setModel` judges the model on the account the session has when the
-     change lands: an account move that commits while the resolve waits for a
-     listing is judged again on the new account (bounded), and one that commits
-     during a retained process's control call drops the change with a typed
-     error. `accountLacksModel` is true when the account's resolution finds
-     nothing, with a pin exactly that pin: Claude normalizes every id it accepts
+     change runs: it holds its admission place (`claudeSdk/admissionQueue.ts`)
+     through the resolve and the retained process's control call, and an account
+     switch waits behind it, so the move is judged on the model the change left
+     (`docs/session-runtime-switching.md`). A change whose account still differs
+     after the resolve or the control call is dropped with a typed error.
+     `accountLacksModel` is true when the account's resolution finds nothing,
+     with a pin exactly that pin: Claude normalizes every id it accepts
      (`claudeModelAlias`, `mythos` tested first), so another spelling or an
      older concrete id is judged as its curated model and an unknown id as the
      default. For a pinned request `accountOffersModel` and routing's candidate

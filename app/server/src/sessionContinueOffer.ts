@@ -20,6 +20,7 @@ import { pickAccount } from "./accountRouter.ts";
 import type { HumanResumeToken } from "./automaticTurnHold.ts";
 import { credentialProfileById } from "./credentialProfiles.ts";
 import { sessionStore, type SessionMeta } from "./db/sessionStore.ts";
+import { sessionClaudePin } from "./harnesses/curatedModels.ts";
 import { pickerModels } from "./harnesses/models.ts";
 import { isPermanentAssistantSession } from "./permanentAssistant.ts";
 import { resumePromptQueueForHumanPrompt } from "./promptQueue.ts";
@@ -32,7 +33,7 @@ import {
   type RuntimePromptDriver,
 } from "./session/runtimePrompt.ts";
 import {
-  accountOffersSelection,
+  selectionListingRefusal,
   sessionSelection,
 } from "./sessionAccountMove.ts";
 import {
@@ -109,14 +110,18 @@ function arranged(models: ModelOption[], settings: AppSettings): ModelOption[] {
  * click would refuse is never made.
  */
 async function runnableNow(
-  row: Pick<SessionMeta, "requiresEnterprise">,
+  row: Pick<SessionMeta, "id" | "requiresEnterprise">,
   model: ModelOption,
   thinkingLevel: SessionContinueChoice["thinkingLevel"],
 ): Promise<boolean> {
+  // Entitlement is the router's hard filter (`docs/account-routing.md`): an
+  // account that cannot run the model, a pinned session's pin included, is
+  // never picked, so Mythos is offered only where an account lists it.
   const pick = await pickAccount({
     model: { provider: model.provider, modelId: model.id },
     thinkingLevel,
     requiresEnterprise: row.requiresEnterprise === true,
+    ...sessionClaudePin(row.id, model.provider, model.id),
   });
   const profile =
     pick.profileId && !pick.degraded
@@ -124,7 +129,10 @@ async function runnableNow(
       : undefined;
   return (
     profile !== undefined &&
-    (await accountOffersSelection(profile, { model, thinkingLevel }))
+    !(await selectionListingRefusal(row.id, profile, {
+      model,
+      thinkingLevel,
+    }))
   );
 }
 

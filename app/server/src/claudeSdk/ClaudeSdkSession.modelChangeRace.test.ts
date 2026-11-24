@@ -1,9 +1,10 @@
 /**
- * A model change and an account move race on one idle Claude session: nothing
- * holds the account while `setModel` waits for a listing, so a move can commit
- * in between. The model must be judged on the account the session has when the
- * change lands (`docs/agent-harnesses.md`, models port), never on the account
- * it was asked about before the move.
+ * A model change and an account move on one idle Claude session. A model
+ * change holds its admission place (`admissionQueue.ts`) while it resolves the
+ * model on the session's account, and an account switch waits behind it, so
+ * the change is judged on the account it was asked about and the move is
+ * judged on the model it left (`docs/agent-harnesses.md`, models port;
+ * `docs/session-runtime-switching.md`).
  */
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "vitest";
@@ -12,6 +13,7 @@ import {
   deleteCredentialProfile,
 } from "../credentialProfiles.ts";
 import { sessionStore } from "../db/sessionStore.ts";
+import { assertSessionModelEntitled } from "../sessionAccount.ts";
 import { resetClaudeAccountModelsForTests } from "../harnesses/claudeAccountModels.ts";
 import { COMPANY, PRIVATE } from "../test/claudeListings.ts";
 import { enableClaudeSdkForTests } from "../test/claudeSdkEnabled.ts";
@@ -84,34 +86,48 @@ function fixture() {
 /** Let the pending resolve reach its listing wait. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
 
-test("a model change pending on A while the session moves to B is judged on B, which cannot run it", async () => {
+test("a move asked for while a model change waits on A's listing waits; the change is judged on A, and turn admission judges the move's result", async () => {
   const f = fixture();
-  const changing = f.live.setModel("mythos");
-  changing.catch(() => {});
+  let accountWhenChanged: string | undefined;
+  const changing = f.live.setModel("mythos").then(() => {
+    accountWhenChanged = f.live.credentialProfileId;
+  });
   await settle();
-  // The move sees the unchanged opus selection, which B runs, and commits.
-  await f.move();
-  assert.equal(f.live.credentialProfileId, f.b);
+  const moving = f.move();
+  await settle();
+  assert.equal(f.live.credentialProfileId, f.a, "the move waits");
   f.releaseA(COMPANY);
-  await assert.rejects(
-    changing,
-    (err: Error) =>
-      err.name === "ModelUnavailableOnAccountError" &&
-      err.message === "B can't run Claude Mythos.",
+  await changing;
+  assert.equal(
+    accountWhenChanged,
+    f.a,
+    "the change landed on A, before the move",
   );
-  assert.equal(f.live.credentialProfileId, f.b);
-  assert.equal(f.live.toRecord().modelId, "opus");
-  assert.equal(f.live.modelSelection().model?.id, "opus");
-  assert.equal(sessionStore.get(f.live.id)?.credentialProfileId, f.b);
+  assert.equal(f.live.toRecord().modelId, "mythos");
+  // The switch primitive moves what it is given; the move's model rule is its
+  // caller's (`modelRefusal`), and the next turn's admission refuses B as
+  // local policy before any provider call.
+  await moving;
+  await assert.rejects(
+    assertSessionModelEntitled({
+      sessionId: f.live.id,
+      credentialProfileId: f.live.credentialProfileId,
+      model: f.live.modelSelection().model,
+    }),
+    /B can't run Claude Mythos/,
+  );
 });
 
-test("a model change pending on A while the session moves to B lands when B runs it", async () => {
+test("a move asked for while a model change waits commits after it when B runs the new model", async () => {
   const f = fixture();
   const changing = f.live.setModel("sonnet");
   await settle();
-  await f.move();
+  const moving = f.move();
+  await settle();
+  assert.equal(f.live.credentialProfileId, f.a, "the move waits");
   f.releaseA(COMPANY);
   await changing;
+  await moving;
   assert.equal(f.live.credentialProfileId, f.b);
   assert.equal(f.live.toRecord().modelId, "sonnet");
 });
@@ -126,7 +142,7 @@ test("without a move, a model change waits for its account's listing and lands",
   assert.equal(f.live.toRecord().modelId, "mythos");
 });
 
-test("a retained process's model change is dropped when the session moves during the control call", async () => {
+test("a move waits for a retained process's model control call, then closes the process on the new model", async () => {
   const f = fixture();
   f.releaseA(COMPANY);
   const controls: string[] = [];
@@ -148,25 +164,22 @@ test("a retained process's model change is dropped when the session moves during
     retainedEpochKey: "retained",
     queryEpochKey: "retained",
   });
-  const changing = f.live.setModel("mythos");
-  changing.catch(() => {});
+  const changing = f.live.setModel("sonnet");
   await settle();
-  assert.deepEqual(controls, ["claude-mythos-5-2"]);
-  // The real move closes the retained process and commits B while the
-  // control call is still out.
-  await f.move();
-  assert.equal(closed, true, "the move closed the retained process");
+  assert.deepEqual(controls, ["claude-sonnet-5-5"]);
+  const moving = f.move();
+  await settle();
+  assert.equal(closed, false, "the move waits for the control call");
+  assert.equal(f.live.credentialProfileId, f.a);
   finishControl();
-  await assert.rejects(changing, {
-    name: "AccountChangedDuringModelChangeError",
-    message:
-      "The session moved to another account while its model was changing. Pick the model again.",
-  });
+  await changing;
+  await moving;
+  assert.equal(closed, true, "the move closed the retained process");
   assert.equal(f.live.credentialProfileId, f.b);
-  assert.equal(f.live.toRecord().modelId, "opus");
+  assert.equal(f.live.toRecord().modelId, "sonnet");
 });
 
-test("a retained process's model change on an unmoved session lands", async () => {
+test("a retained process's model change on an unmoved session lands with the id its account resolves", async () => {
   const f = fixture();
   f.releaseA(COMPANY);
   const controls: string[] = [];
@@ -179,9 +192,7 @@ test("a retained process's model change on an unmoved session lands", async () =
     retainedEpochKey: "retained",
     queryEpochKey: "retained",
   });
-  const before = f.persisted();
   await f.live.setModel("mythos");
   assert.deepEqual(controls, ["claude-mythos-5-2"]);
   assert.equal(f.live.toRecord().modelId, "mythos");
-  assert.equal(f.persisted(), before + 1);
 });

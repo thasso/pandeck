@@ -371,7 +371,7 @@ async function crossKindChoices(sessionId: string): Promise<
       if (!target) return "The account no longer exists.";
       return (
         boundAccountRulesRefusal(row, target) ??
-        (await modelRefusal(target, pending))
+        (await modelRefusal(row.id, target, pending))
       );
     }),
   );

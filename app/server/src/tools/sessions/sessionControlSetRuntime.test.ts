@@ -6,7 +6,7 @@
  * moment the user takes the child over.
  */
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, it, vi } from "vitest";
 
@@ -29,12 +29,23 @@ const catalog = vi.hoisted(() => [
     reasoning: true,
   },
 ]);
-vi.mock("../../harnesses/models.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../harnesses/models.ts")>()),
-  modelsForAccount: async ({ id }: { id: string }) =>
-    offers.has(id) ? catalog : [],
-  pickerModels: () => catalog,
-}));
+vi.mock("../../harnesses/models.ts", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("../../harnesses/models.ts")>();
+  return {
+    ...original,
+    // A Claude account offers what its listing names (the real rule).
+    modelsForAccount: async (
+      profile: Parameters<typeof original.modelsForAccount>[0],
+    ) =>
+      offers.has(profile.id)
+        ? catalog
+        : profile.provider === "claude"
+          ? original.modelsForAccount(profile)
+          : [],
+    pickerModels: () => catalog,
+  };
+});
 
 const profiles = await import("../../credentialProfiles.ts");
 const { sessionStore } = await import("../../db/sessionStore.ts");
@@ -511,5 +522,95 @@ describe("session_control set_runtime: model", () => {
       /no longer owned.*cannot be switched here/,
     );
     assert.equal(pendingModel(c.id), undefined);
+  });
+});
+
+describe("session_control set_runtime: a pinned Claude child", () => {
+  /** The evidence listing without `claude-fable-5-2`. */
+  const Y_LISTING = [
+    "claude-haiku-5-5",
+    "claude-sonnet-5-5",
+    "claude-opus-5-5",
+    "claude-fable-5-1",
+  ];
+  function claudeAccount(name: string): string {
+    const p = profiles.createCredentialProfile({ name, provider: "claude" });
+    // A fake credential file: only its presence keeps the login healthy.
+    mkdirSync(profiles.claudeConfigDir(p.id), { recursive: true });
+    writeFileSync(
+      join(profiles.claudeConfigDir(p.id), ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "fake-access",
+          refreshToken: "fake-refresh",
+          expiresAt: Date.now() + 86400_000,
+        },
+      }),
+    );
+    accounts.push(p.id);
+    return p.id;
+  }
+  function claudeChild(coordinator: string, from: string, pinned: boolean) {
+    const id = seed("Claude child", from);
+    sessionStore.upsert({ id, harness: "claude-sdk", agentType: "assistant" });
+    sessionStore.linkSpawned(coordinator, id);
+    if (pinned)
+      freezeSessionAgent(id, {
+        name: "pinned-fable",
+        blob: "0".repeat(40),
+        persona: "assistant",
+        provider: "claude-sdk",
+        model: "fable",
+        pinnedModel: "claude-fable-5-2",
+        effort: "high",
+        runtimeSource: "definition",
+        denyTools: [],
+        skills: [],
+        body: "",
+      });
+    const driver = new FakeRuntimeDriver(id) as InstanceType<
+      typeof FakeRuntimeDriver
+    > & {
+      modelSelection(): {
+        model: { provider: string; id: string };
+        thinkingLevel: "high";
+      };
+    };
+    driver.modelSelection = () => ({
+      model: { provider: "claude-sdk", id: "fable" },
+      thinkingLevel: "high",
+    });
+    setAccountMoveHostForTests({ resident: async () => driver });
+    return id;
+  }
+
+  it("refuses an account without the child's pinned version; an unpinned child may take it", async () => {
+    const { enableClaudeSdkForTests } =
+      await import("../../test/claudeSdkEnabled.ts");
+    const { resetClaudeAccountModelsForTests } =
+      await import("../../harnesses/claudeAccountModels.ts");
+    await enableClaudeSdkForTests();
+    const x = claudeAccount("Claude X");
+    const y = claudeAccount("Claude Y");
+    resetClaudeAccountModelsForTests({
+      read: async (id) =>
+        id === y ? Y_LISTING : [...Y_LISTING, "claude-fable-5-2"],
+    });
+    try {
+      const caller = seed("Coordinator");
+      const pinned = claudeChild(caller, x, true);
+      await assert.rejects(
+        move(caller, pinned, "Claude Y"),
+        /Claude Y can't run claude-fable-5-2, the version this session is pinned to\./,
+      );
+      assert.equal(sessionStore.get(pinned)?.pendingRuntime, undefined);
+
+      const plain = claudeChild(caller, x, false);
+      await move(caller, plain, "Claude Y");
+      assert.equal(pendingTo(plain), y);
+      assert.equal(boundTo(plain), x);
+    } finally {
+      resetClaudeAccountModelsForTests();
+    }
   });
 });

@@ -7,7 +7,11 @@
  * selection pending.
  */
 import assert from "node:assert/strict";
-import { afterAll, afterEach, beforeAll, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, test, vi } from "vitest";
+import {
+  disableClaudeSdkForTests,
+  enableClaudeSdkForTests,
+} from "./test/claudeSdkEnabled.ts";
 import type {
   ClientMessage,
   ModelOption,
@@ -41,6 +45,12 @@ vi.mock("./harnesses/models.ts", async (importOriginal) => {
         name: "Claude Sonnet",
         contextWindow: 200_000,
       } as ModelOption,
+      {
+        provider: "claude-sdk",
+        id: "fable",
+        name: "Claude Fable",
+        contextWindow: 200_000,
+      } as ModelOption,
     ],
   };
 });
@@ -56,7 +66,7 @@ vi.mock("./sessionAccountMove.ts", async (importOriginal) => {
   return {
     ...original,
     modelRefusal: async () => undefined,
-    accountOffersSelection: async () => true,
+    selectionListingRefusal: async () => undefined,
     assertStillEligible: () => {},
   };
 });
@@ -79,6 +89,7 @@ const { estimateTokens } = await import("./session/runtime/liveBlocks.ts");
 const { claudeConfigDir, setCredentialProfileEnabled } =
   await import("./credentialProfiles.ts");
 const {
+  clearSessionPendingRuntime,
   pendingSwitchHandoffTokens,
   setPendingRuntimeHostForTests,
   setSessionPendingRuntime,
@@ -86,6 +97,8 @@ const {
 const { installClaudeStateBuilder } =
   await import("./test/claudeSdkSession.ts");
 const { claudeTurnSeam } = await import("./test/claudeTurnSeam.ts");
+const { resetClaudeAccountModelsForTests } =
+  await import("./harnesses/claudeAccountModels.ts");
 const { FakeRuntimeDriver } = await import("./test/fakeRuntimeDriver.ts");
 const { parseServerFrame } = await import("./test/serverFrames.ts");
 const { seedLegacyDefaultAccounts } =
@@ -138,7 +151,11 @@ const opened: PiStandIn[] = [];
 const ids: string[] = [];
 
 /** What each Claude query was asked: the model text and the native resume. */
-const claudeQueries: Array<{ text: string; resume: string | undefined }> = [];
+const claudeQueries: Array<{
+  text: string;
+  resume: string | undefined;
+  model: string | undefined;
+}> = [];
 
 async function firstPromptText(
   prompt: ClaudeQueryParams["prompt"],
@@ -154,6 +171,8 @@ async function firstPromptText(
     .join("");
 }
 
+/** Report the id each query ran as its answering model, as the CLI does. */
+const seamOptions = { reportQueryModel: false };
 const recordingClaudeSeam: ClaudeSdkSeam = {
   query(params) {
     const turn = claudeTurnSeam.query(params) as AsyncIterable<
@@ -166,11 +185,22 @@ const recordingClaudeSeam: ClaudeSdkSeam = {
         claudeQueries.push({
           text: await firstPromptText(params.prompt),
           resume: params.options?.resume,
+          model: params.options?.model,
         });
-        for await (const message of turn)
-          yield "session_id" in message
-            ? { ...message, session_id: native }
-            : message;
+        for await (const message of turn) {
+          const reported =
+            seamOptions.reportQueryModel &&
+            message.type === "assistant" &&
+            typeof message.message === "object"
+              ? {
+                  ...message,
+                  message: { ...message.message, model: params.options?.model },
+                }
+              : message;
+          yield "session_id" in reported
+            ? { ...reported, session_id: native }
+            : reported;
+        }
       },
     } as never;
   },
@@ -216,6 +246,8 @@ beforeAll(() => {
     return live;
   };
 });
+// These tests drive Claude runs; the integration is off by default.
+beforeEach(enableClaudeSdkForTests);
 afterEach(async () => {
   pi.live.clear();
   opened.length = 0;
@@ -623,5 +655,81 @@ test("a target that cannot run is held as the session's failure, the selection s
     assert.deepEqual(opened, [], "pi never opened");
   } finally {
     setCredentialProfileEnabled("default", true);
+  }
+});
+
+test("with the Claude SDK disabled a switch to Claude is refused when set and held when applied, and nothing reaches Claude", async () => {
+  const { id, claude } = await claudeWithPendingPi("sdk-disabled");
+  await promptRuntimeSessionWithRuntime(sessionRuntime, claude, "second ask");
+  const [onPi] = opened;
+  assert.ok(onPi, "the session opened on pi");
+  const back = {
+    model: { provider: "claude-sdk", id: "sonnet" },
+    account: { kind: "account", id: "claude-default" },
+  } as const;
+  await setSessionPendingRuntime(id, back, "user");
+  const pending = sessionStore.get(id)?.pendingRuntime;
+  assert.ok(pending);
+  const queriesBefore = claudeQueries.length;
+
+  await disableClaudeSdkForTests();
+  // Applied: held with the setting's own refusal; the session stays on pi.
+  await assert.rejects(
+    promptRuntimeSessionWithRuntime(sessionRuntime, onPi, "third ask"),
+    /Couldn't switch to Claude Sonnet: Claude SDK is disabled in settings\./,
+  );
+  assert.match(
+    sessionStore.get(id)?.lastError?.message ?? "",
+    /Claude SDK is disabled in settings.*The change is still pending/,
+  );
+  assert.equal(sessionStore.get(id)?.harness, "pi");
+  assert.deepEqual(sessionStore.get(id)?.pendingRuntime, pending);
+  assert.equal(claudeQueries.length, queriesBefore, "no Claude query opened");
+  assert.equal(onPi.released, false, "pi kept the session");
+
+  // Set: refused before any account is judged.
+  await clearSessionPendingRuntime(id);
+  await assert.rejects(setSessionPendingRuntime(id, back, "user"), {
+    message:
+      'Claude SDK is disabled in settings. Turn on "Enable Claude SDK sessions" in Settings > Claude SDK to run Claude models.',
+  });
+  assert.equal(sessionStore.get(id)?.pendingRuntime, undefined);
+});
+
+test("a switch to Claude opens on the id the target account lists for the alias, and the binding keeps the alias", async () => {
+  const { id, claude } = await claudeWithPendingPi("alias-resolution");
+  await promptRuntimeSessionWithRuntime(sessionRuntime, claude, "second ask");
+  const [onPi] = opened;
+  assert.ok(onPi, "the session opened on pi");
+  // The target account lists fable 5-1 only: that is what the switch runs.
+  seamOptions.reportQueryModel = true;
+  resetClaudeAccountModelsForTests({
+    read: async (accountId) =>
+      accountId === "claude-default"
+        ? ["claude-fable-5-1", "claude-sonnet-5-5"]
+        : undefined,
+  });
+  try {
+    await setSessionPendingRuntime(
+      id,
+      {
+        model: { provider: "claude-sdk", id: "fable" },
+        account: { kind: "account", id: "claude-default" },
+      },
+      "user",
+    );
+    await promptRuntimeSessionWithRuntime(sessionRuntime, onPi, "third ask");
+    assert.equal(sessionStore.get(id)?.harness, "claude-sdk");
+    assert.equal(claudeQueries.at(-1)?.model, "claude-fable-5-1");
+    // The record and the binding keep the alias, never the concrete id the
+    // provider reports.
+    assert.equal(sessionStore.get(id)?.model, "fable");
+    const binding = sessionStore.bindings(id).at(-1);
+    assert.equal(binding?.harness, "claude-sdk");
+    assert.equal(binding?.credentialProfileId, "claude-default");
+    assert.equal(binding?.model, "fable");
+  } finally {
+    seamOptions.reportQueryModel = false;
+    resetClaudeAccountModelsForTests();
   }
 });
