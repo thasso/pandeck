@@ -47,20 +47,20 @@ function modelFor(binding: SessionEngineBinding) {
 }
 
 /**
- * The earlier binding whose native session the active one resumed, if any.
- * Claude resumes by native id; every pi binding uses the app id, so an
- * earlier pi binding means pi reopened its own transcript.
+ * The earlier binding whose native session the active one resumed, if any:
+ * the newest earlier one with the same native id. Native ids never cross
+ * engines (every pi binding uses the app id, Claude its own session id), so an
+ * equal id is the same engine's session.
  */
 function resumedFrom(
   all: readonly SessionEngineBinding[],
   active: SessionEngineBinding,
 ): SessionEngineBinding | undefined {
+  if (active.nativeSessionId === undefined) return undefined;
   return all
     .filter(
       (binding) =>
         binding.seq < active.seq &&
-        binding.harness === active.harness &&
-        active.nativeSessionId !== undefined &&
         binding.nativeSessionId === active.nativeSessionId,
     )
     .at(-1);
