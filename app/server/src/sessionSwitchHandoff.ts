@@ -15,6 +15,7 @@ import type { SessionEngineBinding } from "./db/sessionEngineBinding.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 import { pickerModels } from "./harnesses/models.ts";
 import { logPathFor } from "./session/log/persistence.ts";
+import { estimateTokens } from "./session/runtime/liveBlocks.ts";
 import {
   handoffTokenCap,
   readHandoffRecords,
@@ -23,6 +24,7 @@ import {
   type HandoffRecord,
 } from "./sessionHandoff.ts";
 import { getSettings } from "./settings.ts";
+import { lastReportedContextTokens } from "./tools/sessions/sessionInspection.ts";
 
 /**
  * Sessions whose active binding already replied, by that binding's seq: the
@@ -30,9 +32,10 @@ import { getSettings } from "./settings.ts";
  */
 const answered = new Map<string, number>();
 
-function readRecords(sessionId: string, afterSeq: number): HandoffRecord[] {
+/** The log's handoff records from `fromSeq` on, seq 0 included. */
+function readRecords(sessionId: string, fromSeq: number): HandoffRecord[] {
   try {
-    return readHandoffRecords(logPathFor(sessionId), afterSeq);
+    return readHandoffRecords(logPathFor(sessionId), fromSeq - 1);
   } catch {
     // No log yet: nothing to carry.
     return [];
@@ -47,23 +50,41 @@ function modelFor(binding: SessionEngineBinding) {
 }
 
 /**
- * The earlier binding whose native session the active one resumed, if any:
- * the newest earlier one with the same native id. Native ids never cross
- * engines (every pi binding uses the app id, Claude its own session id), so an
- * equal id is the same engine's session.
+ * What a resumed native session already holds: the context size it last
+ * reported, from the newest binding along its resume chain that reported one.
+ * Unknown (it never replied): every record it could hold, estimated, which can
+ * only overstate it (a compacted session holds less).
  */
-function resumedFrom(
+function resumedContextTokens(
+  sessionId: string,
   all: readonly SessionEngineBinding[],
-  active: SessionEngineBinding,
-): SessionEngineBinding | undefined {
-  if (active.nativeSessionId === undefined) return undefined;
-  return all
-    .filter(
-      (binding) =>
-        binding.seq < active.seq &&
-        binding.nativeSessionId === active.nativeSessionId,
-    )
-    .at(-1);
+  resumed: SessionEngineBinding,
+  beforeSeq: number,
+): number {
+  const logPath = logPathFor(sessionId);
+  for (
+    let binding: SessionEngineBinding | undefined = resumed;
+    binding;
+    binding =
+      binding.resumedSeq !== undefined
+        ? all.find((other) => other.seq === binding?.resumedSeq)
+        : undefined
+  ) {
+    const next = all.find((other) => other.seq === binding!.seq + 1);
+    try {
+      const reported = lastReportedContextTokens(
+        logPath,
+        binding.startedSeq,
+        next?.startedSeq ?? beforeSeq,
+      );
+      if (reported !== undefined) return reported;
+    } catch {
+      break;
+    }
+  }
+  return readRecords(sessionId, 0)
+    .filter((record) => record.seq < beforeSeq)
+    .reduce((sum, record) => sum + estimateTokens(record.text), 0);
 }
 
 /**
@@ -82,19 +103,25 @@ export function owedSwitchContext(sessionId: string): string | undefined {
   }
   const all = sessionStore.bindings(sessionId);
   const previous = all.find((binding) => binding.seq === active.seq - 1);
-  const resumed = resumedFrom(all, active);
+  // Only a native session the switch's open actually reopened (the commit
+  // records it): a pi return whose transcript was gone shares the native id
+  // but starts over, and gets the whole log.
+  const resumed =
+    active.resumedSeq !== undefined
+      ? all.find((binding) => binding.seq === active.resumedSeq)
+      : undefined;
   // A return carries only what the resumed native session missed: everything
-  // after the binding that followed its last use began.
-  const afterSeq = resumed
+  // from the start of the binding that followed its last use.
+  const fromSeq = resumed
     ? (all.find((binding) => binding.seq === resumed.seq + 1)?.startedSeq ?? 0)
     : 0;
   const target = modelFor(active);
   const cap = handoffTokenCap({
     setting: getSettings().sessionSwitching.handoffTokenCap,
     contextWindow: target?.contextWindow,
-    // What a resumed native session already holds is not tracked per binding;
-    // the window reserve covers it.
-    usedTokens: 0,
+    usedTokens: resumed
+      ? resumedContextTokens(sessionId, all, resumed, fromSeq)
+      : 0,
   });
   const fromProfile = previous?.credentialProfileId
     ? credentialProfileById(previous.credentialProfileId)
@@ -113,6 +140,6 @@ export function owedSwitchContext(sessionId: string): string | undefined {
       where: toProfile?.name ?? "",
     },
     resumed: resumed !== undefined,
-    selection: selectHandoff(readRecords(sessionId, afterSeq), cap),
+    selection: selectHandoff(readRecords(sessionId, fromSeq), cap),
   });
 }

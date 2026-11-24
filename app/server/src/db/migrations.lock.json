@@ -100,5 +100,6 @@
   "0099_openai_compatible_account_bindings.sql": "53b685a217bf16c1ae61d7d9f2712bdaa539edffe32d0f6287c1d5d505d370c3",
   "0100_peer_prompt_withdraw.sql": "507074b4927624c7bc784654ddae955bf36259e019227091698dc6abd3925340",
   "0101_session_pending_runtime.sql": "bb358bafff833343b9286651c574356521560fbd7bce72b0b8610fbc7084ea76",
-  "0102_session_engine_binding.sql": "43f6786d427414dd214874ec5e1985579d966c48a8e97cc388abc18561e9c973"
+  "0102_session_engine_binding.sql": "43f6786d427414dd214874ec5e1985579d966c48a8e97cc388abc18561e9c973",
+  "0103_session_engine_binding_resumed.sql": "908e5e18765b236cbe2b23ffd24ddd49a913eed4f53d0d3b46ca3899d06ff7cd"
 }

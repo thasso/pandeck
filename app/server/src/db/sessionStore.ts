@@ -636,6 +636,8 @@ interface EngineBindingSwitch {
   nativeSessionId: string | null;
   /** The session log's seq cursor at the switch. */
   startedSeq: number;
+  /** The earlier binding whose native session the open reopened; none when fresh. */
+  resumedSeq?: number;
   /** The pending selection the switch applied, cleared when still stored. */
   pending: SessionPendingRuntime;
 }
@@ -662,6 +664,7 @@ function switchEngineBinding(id: string, change: EngineBindingSwitch): void {
       fields,
       change.nativeSessionId,
       change.startedSeq,
+      change.resumedSeq ?? null,
       Date.now(),
     );
     const stored = pendingRuntimeFields(row.pending_runtime).pendingRuntime;

@@ -37,6 +37,8 @@ import {
 import { sessionStore, type SessionMeta } from "./db/sessionStore.ts";
 import { wakeSessionDelivery } from "./deliveryWake.ts";
 import type { PreparedEngineSwitch } from "./harnesses/engineSwitch.ts";
+import { SessionSwitchingEnginesError } from "./harnesses/engineSwitchFence.ts";
+import { SessionSettlingError } from "./harness.ts";
 import { pickerModels } from "./harnesses/models.ts";
 import { AccountSwitchBlockedError } from "./session/runtime/accountRecoveryAdmission.ts";
 import type { SessionRuntime } from "./session/runtime/runtime.ts";
@@ -738,6 +740,14 @@ async function applyEngineSwitch(
     );
   } catch (error) {
     if (error instanceof AutomaticTurnsHeldError) throw error;
+    // Another switch of this session holds its fence: busy, offered again
+    // when that one lifts it.
+    if (error instanceof SessionSwitchingEnginesError) throw error;
+    if (error instanceof SessionSettlingError)
+      throw hold(
+        id,
+        "Waiting for the session to finish its own work (naming itself) before switching.",
+      );
     if (error instanceof AccountSwitchBlockedError)
       throw hold(
         id,

@@ -169,7 +169,7 @@ test("deleting a Claude → pi session removes the Claude record and native as w
   assert.equal(existsSync(native), false);
 });
 
-test("a session with one binding is removed exactly as before", async () => {
+test("a session with one binding is removed, and nothing another engine keeps under its id survives", async () => {
   const id = freshId("sweep-single");
   assert.ok(
     sessionStore.upsert({
@@ -182,9 +182,11 @@ test("a session with one binding is removed exactly as before", async () => {
     }),
   );
   const piFile = canonicalPiSessionPath(id);
-  const unrelated = join(CLAUDE_SDK_STORE_DIR, `${id}.json`);
+  // Ids are unique across engines, so a Claude record under this id is this
+  // session's: a switch's uncommitted target persists one.
+  const claudeRecord = join(CLAUDE_SDK_STORE_DIR, `${id}.json`);
   touch(piFile);
-  touch(unrelated);
+  touch(claudeRecord);
   await harnessRegistry.remove({
     harness: "pi",
     id,
@@ -192,6 +194,5 @@ test("a session with one binding is removed exactly as before", async () => {
     file: piFile,
   });
   assert.equal(existsSync(piFile), false);
-  // No Claude binding: the Claude store is not asked to remove anything.
-  assert.equal(existsSync(unrelated), true);
+  assert.equal(existsSync(claudeRecord), false);
 });

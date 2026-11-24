@@ -42,16 +42,17 @@ export function engineSwitchRefusal(
 }
 
 /**
- * Raise the fence for one switch. The answer lifts it once (later calls do
- * nothing). Lifting after a commit always wakes the session's delivery, so
+ * Raise the fence for one switch, before the switch touches anything. The
+ * answer lifts it once (later calls do nothing). Lifting after a commit always wakes the session's delivery, so
  * work that waited is offered on the new engine; lifting after a rollback
  * wakes it only when the fence refused someone meanwhile.
  */
 export function raiseEngineSwitchFence(
   sessionId: string,
 ): (committed: boolean) => void {
-  if (switching.has(sessionId))
-    throw new SessionSwitchingEnginesError(sessionId);
+  // A second switch of the same session is refused like any other driver, so
+  // the first one's lift offers its held turn again.
+  if (switching.has(sessionId)) throw engineSwitchRefusal(sessionId);
   const fence = { refused: false };
   switching.set(sessionId, fence);
   let lifted = false;

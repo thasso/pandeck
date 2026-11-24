@@ -927,14 +927,16 @@ test("Pi engine-switch release and reopen on a binding report the live overlay",
   // A return: the transcript the first binding wrote opens under the app id.
   const reopened = await oracle(
     "PiStore.openForBinding",
-    () =>
-      piStore.openForBinding(live.id, {
-        kind: "assistant",
-        model: live.modelSelection().model!,
-        thinkingLevel: "off",
-        credentialProfileId: profile,
-        mode: "build",
-      }),
+    async () =>
+      (
+        await piStore.openForBinding(live.id, {
+          kind: "assistant",
+          model: live.modelSelection().model!,
+          thinkingLevel: "off",
+          credentialProfileId: profile,
+          mode: "build",
+        })
+      ).session,
     { changed: [live.id] },
   );
   assert.equal(piStore.getLiveById(live.id), reopened);

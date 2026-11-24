@@ -9,6 +9,7 @@
  */
 import {
   AGENT_TYPE_IDS,
+  isThinkingLevel,
   sessionModeOrDefault,
   type AgentType,
   type SessionMode,
@@ -64,7 +65,7 @@ import { compatProviderFeed } from "./compatProviderFeed.ts";
 import { createPiHostedEngineFactory } from "./piEngineHosted.ts";
 import { serverPiModelPort } from "./piModelPort.ts";
 import { openRemotePiEngine } from "./remotePiEngine.ts";
-import { SessionHeldElsewhereError, type HarnessHost } from "../harness.ts";
+import type { HarnessHost } from "../harness.ts";
 import {
   credentialProfileById,
   legacyDefaultProfileId,
@@ -195,8 +196,16 @@ class PiSessionStore {
     spec,
   ) => openRemotePiEngine(spec, (engine) => this.onEngineLost(engine));
   private host: HarnessHost | undefined;
-  /** Whether another engine holds an id resident; registration refuses it. */
-  private heldElsewhere: (id: string) => boolean = () => false;
+  /**
+   * Why an id may not register here now (`harnessRegistry`): another engine
+   * holds it, a switch is moving it, it is deleted. Asked after the open's
+   * last await, so nothing that changed while it opened is missed;
+   * `forSwitch` is the switch's own open, which the fence admits.
+   */
+  private registrationRefusal: (
+    id: string,
+    forSwitch: boolean,
+  ) => Error | undefined = () => undefined;
 
   constructor() {
     // Every live engine applies the gates the server sends it; it reads none.
@@ -213,9 +222,11 @@ class PiSessionStore {
     this.host = host;
   }
 
-  /** How to tell an id another engine holds resident (`harnessRegistry`). */
-  setHeldElsewhere(check: (id: string) => boolean): void {
-    this.heldElsewhere = check;
+  /** How to tell an id this store may not register now (`harnessRegistry`). */
+  setRegistrationCheck(
+    check: (id: string, forSwitch: boolean) => Error | undefined,
+  ): void {
+    this.registrationRefusal = check;
   }
 
   /**
@@ -379,6 +390,22 @@ class PiSessionStore {
         : undefined;
       const record = candidateId ? sessionStore.get(candidateId) : undefined;
       const profileId = record?.credentialProfileId ?? unboundPiProfileId();
+      // The current row binding beats the transcript's own last selection
+      // for a binding a harness switch started: until the new binding's
+      // first reply, the transcript still names the earlier pi binding's
+      // model. A first binding reopens on what its transcript selected.
+      const switched =
+        candidateId !== undefined &&
+        (sessionStore.activeBinding(candidateId)?.seq ?? 0) > 1;
+      const bound =
+        switched && record?.provider && record.model
+          ? {
+              model: { provider: record.provider, id: record.model },
+              ...(isThinkingLevel(record.thinkingLevel)
+                ? { thinkingLevel: record.thinkingLevel }
+                : {}),
+            }
+          : {};
       // A durable server record decides the mode; an unrecorded session is Build.
       const mode = sessionModeOrDefault(record?.mode);
       // The stored start records; an id-less legacy file freezes after.
@@ -396,6 +423,7 @@ class PiSessionStore {
           ...(candidateId !== undefined ? { expectedId: candidateId } : {}),
           ...(edgeCwd !== undefined ? { cwd: edgeCwd } : {}),
         },
+        ...bound,
         ...started,
         mode,
       });
@@ -411,13 +439,6 @@ class PiSessionStore {
         await opened.engine.discard({});
         throw new PiSessionDeletedError(id);
       }
-      // An id belongs to one engine: one the Claude store took while this
-      // transcript was opening stays Claude's. Only a reopen registers an id
-      // it did not mint, so this is the one place pi has to ask.
-      if (this.heldElsewhere(id)) {
-        await opened.engine.discard({});
-        throw new SessionHeldElsewhereError(id);
-      }
       // A file whose id was unreadable before the open freezes what it
       // resolved, under the id the open found; its transcript stays.
       if (candidateId === undefined) {
@@ -427,6 +448,16 @@ class PiSessionStore {
           await opened.engine.discard({});
           throw err;
         }
+      }
+      // An id belongs to one engine: one the Claude store took, a switch
+      // began moving, or the row's binding moved to Claude while this
+      // transcript was opening is not pi's to register. Only a reopen
+      // registers an id it did not mint, so this is the one place pi has to
+      // ask, after its last await.
+      const refused = this.registrationRefusal(id, false);
+      if (refused) {
+        await opened.engine.discard({});
+        throw refused;
       }
       this.sessionModes.set(id, mode);
       // Inside the shared open, so every owner of it waits for the catch-up.
@@ -485,10 +516,11 @@ class PiSessionStore {
   async openForBinding(
     id: string,
     binding: PiSwitchBinding,
-  ): Promise<PiLiveSession> {
+  ): Promise<{ session: PiLiveSession; resumed: boolean }> {
     if (this.getLiveById(id))
       throw new Error(`Session ${id} is already open on pi.`);
-    if (this.heldElsewhere(id)) throw new SessionHeldElsewhereError(id);
+    const early = this.registrationRefusal(id, true);
+    if (early) throw early;
     const { kind, credentialProfileId, mode } = binding;
     const file = piSessionFile(id);
     const resumes = existsSync(file);
@@ -533,19 +565,33 @@ class PiSessionStore {
     }
     if (sessionStore.getIncludingDeleted(id)?.deletedAt !== undefined) {
       closeToolGroupSession(id);
-      await opened.engine.discard({});
+      await opened.engine.discard(resumes ? {} : { removeFile: {} });
       throw new PiSessionDeletedError(id);
     }
+    // Asked again after the open's awaits: Claude may have taken the id back
+    // meanwhile, or pi registered it through another path.
+    const late = this.getLiveById(id)
+      ? new Error(`Session ${id} is already open on pi.`)
+      : this.registrationRefusal(id, true);
+    if (late) {
+      await opened.engine.discard(resumes ? {} : { removeFile: {} });
+      throw late;
+    }
     this.sessionModes.set(id, mode);
-    return this.catchUpIntegrationGates(
-      this.track(
-        kind,
-        opened,
-        credentialProfileId,
-        sessionStore.get(id)?.scope,
+    return {
+      session: await this.catchUpIntegrationGates(
+        this.track(
+          kind,
+          opened,
+          credentialProfileId,
+          sessionStore.get(id)?.scope,
+        ),
+        started.integrationGates,
       ),
-      started.integrationGates,
-    );
+      // What the open did, not what the plan expected: a transcript that was
+      // gone started over, and gets the whole handoff.
+      resumed: resumes,
+    };
   }
 
   /**

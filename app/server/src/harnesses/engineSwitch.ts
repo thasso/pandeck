@@ -10,7 +10,6 @@
  * the commit or the abandon, so nothing reopens the engine the session leaves
  * or drives the one it moves to before its binding commits.
  */
-import { existsSync } from "node:fs";
 import {
   sessionModeOrDefault,
   type Harness,
@@ -25,7 +24,6 @@ import {
 import { sessionStore, type SessionMeta } from "../db/sessionStore.ts";
 import type { SessionEngineBinding } from "../db/sessionEngineBinding.ts";
 import type { LiveSession } from "../harness.ts";
-import { piSessionFile } from "../piSessionFile.ts";
 import { piStore } from "../piSdk/piStore.ts";
 import { sessionRuntime } from "../session/runtimeInstance.ts";
 import { subscribeSessionRunStarted } from "../session/runtime/liveSession.ts";
@@ -80,21 +78,26 @@ interface Transfer {
   rollback(): Promise<void>;
 }
 
-/** The newest earlier binding of `harness`, and whether its native session can resume. */
+/**
+ * The newest earlier binding of the target's engine, and for Claude whether
+ * its native session can resume (staging a copy for another account). Runs
+ * behind the fence: a copy writes the destination account's transcript, which
+ * only the switch holding the session's fence may touch. pi decides at its
+ * open (`piStore.openForBinding`), whose answer is what the commit records.
+ */
 async function planResume(
   row: SessionMeta,
   target: EngineSwitchTarget,
-): Promise<{ resumed?: SessionEngineBinding; transfer?: Transfer }> {
+): Promise<{
+  earlier?: SessionEngineBinding;
+  resumed?: SessionEngineBinding;
+  transfer?: Transfer;
+}> {
   const earlier = sessionStore
     .bindings(row.id)
     .filter((binding) => binding.harness === target.harness)
     .at(-1);
-  if (target.harness === "pi")
-    // Every pi binding uses the app id; pi reopens its transcript when there
-    // is one (`piStore.openForBinding`).
-    return existsSync(piSessionFile(row.id)) && earlier
-      ? { resumed: earlier }
-      : {};
+  if (target.harness === "pi") return earlier ? { earlier } : {};
   const native = earlier?.nativeSessionId;
   const from = earlier?.credentialProfileId;
   if (!earlier || !native || !from) return {};
@@ -128,16 +131,20 @@ function release(
     : claudeSdkStore.releaseForSwitch(sessionId, admit);
 }
 
-/** Open the session on the target engine, on the binding the switch starts. */
+/**
+ * Open the session on the target engine, on the binding the switch starts.
+ * Answers the driver and the earlier binding whose native session the open
+ * actually resumed: pi's transcript may be gone, and pi then starts over.
+ */
 async function open(
   row: SessionMeta,
   target: EngineSwitchTarget,
-  resumed: SessionEngineBinding | undefined,
+  plan: { earlier?: SessionEngineBinding; resumed?: SessionEngineBinding },
   cwd: string | undefined,
-): Promise<LiveSession> {
+): Promise<{ driver: LiveSession; resumed?: SessionEngineBinding }> {
   const mode = sessionModeOrDefault(row.mode);
-  if (target.harness === "pi")
-    return piStore.openForBinding(row.id, {
+  if (target.harness === "pi") {
+    const opened = await piStore.openForBinding(row.id, {
       kind: row.agentType,
       model: target.model,
       thinkingLevel: target.thinkingLevel,
@@ -145,7 +152,13 @@ async function open(
       mode,
       ...(cwd !== undefined ? { cwd } : {}),
     });
-  return withCheckedCheckout(row.id, undefined, (checkout) =>
+    return {
+      driver: opened.session,
+      ...(opened.resumed && plan.earlier ? { resumed: plan.earlier } : {}),
+    };
+  }
+  const { resumed } = plan;
+  const driver = await withCheckedCheckout(row.id, undefined, (checkout) =>
     claudeSdkStore.openForBinding(
       row.id,
       {
@@ -162,6 +175,17 @@ async function open(
       checkout,
     ),
   );
+  return { driver, ...(resumed ? { resumed } : {}) };
+}
+
+/** The session as the engine `harness` holds it resident, if it does. */
+function residentOn(
+  harness: Harness,
+  sessionId: string,
+): LiveSession | undefined {
+  return harness === "pi"
+    ? piStore.getLiveById(sessionId)
+    : claudeSdkStore.get(sessionId);
 }
 
 /**
@@ -177,18 +201,15 @@ export async function prepareEngineSwitch(
   pending: SessionPendingRuntime,
   admit: () => void,
 ): Promise<PreparedEngineSwitch> {
-  const row = sessionStore.get(sessionId);
-  const active = sessionStore.activeBinding(sessionId);
-  if (!row || !active)
-    throw new Error("Session does not exist or was deleted.");
-  if (active.harness === target.harness)
-    throw new Error(
-      "The session already runs on that engine; no switch is needed.",
-    );
   // Read before anything moves: a session without a worktree edge keeps the
   // directory its old engine ran in.
   const cwd = harnessRegistry.cwdForSession(sessionId);
-  const { resumed, transfer } = await planResume(row, target);
+  // The fence goes up before ANY side effect, native data included: a
+  // concurrent switch of the same session refuses here as busy, before it
+  // could stage or roll back a transcript the winning switch owns.
+  admit();
+  const lifted = raiseEngineSwitchFence(sessionId);
+  let transfer: Transfer | undefined;
   const rollback = async () => {
     await transfer?.rollback().catch(() => {
       console.warn(
@@ -196,20 +217,32 @@ export async function prepareEngineSwitch(
       );
     });
   };
-  let lift: ((committed: boolean) => void) | undefined;
+  let row: SessionMeta | undefined;
+  let active: SessionEngineBinding | undefined;
   let driver: LiveSession;
+  let resumed: SessionEngineBinding | undefined;
   try {
+    // Read under the fence, so no other switch moves the binding meanwhile.
+    row = sessionStore.get(sessionId);
+    active = sessionStore.activeBinding(sessionId);
+    if (!row || !active)
+      throw new Error("Session does not exist or was deleted.");
+    if (active.harness === target.harness)
+      throw new Error(
+        "The session already runs on that engine; no switch is needed.",
+      );
+    const plan = await planResume(row, target);
+    transfer = plan.transfer;
     admit();
-    lift = raiseEngineSwitchFence(sessionId);
     await release(active.harness, sessionId, admit);
     admit();
-    driver = await open(row, target, resumed, cwd);
+    ({ driver, resumed } = await open(row, target, plan, cwd));
   } catch (error) {
     await rollback();
-    lift?.(false);
+    lifted(false);
     throw error;
   }
-  const lifted = lift;
+  const source = active;
 
   let ended = false;
   const abandon = async () => {
@@ -232,20 +265,20 @@ export async function prepareEngineSwitch(
     throw error;
   }
 
-  const residentOnTarget = () =>
-    target.harness === "pi"
-      ? piStore.getLiveById(sessionId)
-      : claudeSdkStore.get(sessionId);
   const usable = () => {
     if (ended) throw new Error("The engine switch already ended.");
     if (!isSwitchingEngines(sessionId))
       throw new Error("The engine switch lost its fence.");
     if (!sessionStore.get(sessionId))
       throw new Error("The session was deleted while it switched.");
-    if (sessionStore.activeBinding(sessionId)?.seq !== active.seq)
+    if (sessionStore.activeBinding(sessionId)?.seq !== source.seq)
       throw new Error("The session's engine changed while it switched.");
-    if (residentOnTarget() !== driver)
+    if (residentOn(target.harness, sessionId) !== driver)
       throw new Error("The new engine let the session go while it switched.");
+    if (residentOn(source.harness, sessionId))
+      throw new Error(
+        "The old engine took the session back while it switched.",
+      );
   };
   return {
     driver,
@@ -260,7 +293,7 @@ export async function prepareEngineSwitch(
           ? (resumed?.nativeSessionId ?? null)
           : null;
       sessionStore.switchEngineBinding(sessionId, {
-        expectSeq: active.seq,
+        expectSeq: source.seq,
         fields: {
           harness: target.harness,
           credentialProfileId: target.credentialProfileId,
@@ -272,6 +305,7 @@ export async function prepareEngineSwitch(
         },
         nativeSessionId: target.harness === "pi" ? sessionId : claudeNative,
         startedSeq: sessionRuntime.logCursor(sessionId),
+        ...(resumed ? { resumedSeq: resumed.seq } : {}),
         pending,
       });
       ended = true;

@@ -80,7 +80,7 @@ const owners: Record<string, Owner> = {
       ),
       group(
         "nonprojected",
-        "setHost setHeldElsewhere getForDrive",
+        "setHost setRegistrationCheck getForDrive",
         "Install host callbacks/an ownership predicate or rearm an idle timer, not session data.",
       ),
       group(
@@ -254,8 +254,13 @@ const owners: Record<string, Owner> = {
       ),
       group(
         "nonprojected",
-        "setOnChange setHeldElsewhere setStateBuilder setSeam getForDrive",
+        "setOnChange setRegistrationCheck setStateBuilder setSeam getForDrive",
         "Install callbacks/predicates/provider seams or rearm idle residency, not session projection data.",
+      ),
+      group(
+        "nonprojected",
+        "wakeIfSettled",
+        "Wakes delivery for a switch held on the session's own settling work; it writes no row.",
       ),
       group(
         "nonprojected",

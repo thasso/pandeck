@@ -127,9 +127,13 @@ test("a first pi binding starts its transcript under the app id", async () => {
   openForReal();
   const id = "switch-to-pi-fresh";
   row(id);
-  const opened = await piStore.openForBinding(id, { ...binding, cwd: tmp });
+  const { session: opened, resumed } = await piStore.openForBinding(id, {
+    ...binding,
+    cwd: tmp,
+  });
   // openForBinding refuses any other id, and the live map finds it by ours.
   assert.equal(piStore.getLiveById(id), opened, "pi's native id is the app id");
+  assert.equal(resumed, false, "a new transcript is no resume");
   const spec = specs[0]!;
   assert.deepEqual(spec.transcript, { type: "new", cwd: tmp, id });
   assert.equal(spec.canonicalize, true);
@@ -153,8 +157,12 @@ test("a return reopens the transcript an earlier pi binding wrote", async () => 
     file,
     `${JSON.stringify({ type: "session", version: 3, id, timestamp: new Date().toISOString(), cwd: tmp })}\n`,
   );
-  const opened = await piStore.openForBinding(id, binding);
+  const { session: opened, resumed } = await piStore.openForBinding(
+    id,
+    binding,
+  );
   assert.equal(piStore.getLiveById(id), opened);
+  assert.equal(resumed, true, "the open reports what it reopened");
   assert.deepEqual(specs[0]!.transcript, {
     type: "open",
     file,
@@ -263,4 +271,62 @@ test("releasing for a switch drops the session and keeps its runtime session det
   await sessionRuntime.disposeSession(id);
   // Nothing resident: nothing to release.
   await piStore.releaseForSwitch(id, () => {});
+});
+
+test("a reopen of a switched-to pi binding runs its committed model, a first binding its transcript's", async () => {
+  const { mkdirSync, writeFileSync } = await import("node:fs");
+  const { dirname } = await import("node:path");
+  for (const switched of [true, false]) {
+    openForReal();
+    const id = `reopen-bound-${switched}`;
+    if (switched) {
+      row(id);
+      sessionStore.switchEngineBinding(id, {
+        expectSeq: 1,
+        fields: {
+          harness: "pi",
+          credentialProfileId: "cp_pi",
+          provider: "openai-codex",
+          model: "gpt-5.6-sol",
+          thinkingLevel: "high",
+          providerSessionId: null,
+        },
+        nativeSessionId: id,
+        startedSeq: 0,
+        pending: {
+          model: { provider: "openai-codex", id: "gpt-5.6-sol" },
+          thinkingLevel: "high",
+          account: { kind: "automatic" },
+          setBy: "user",
+        },
+      });
+    } else
+      assert.ok(
+        sessionStore.upsert({
+          id,
+          harness: "pi",
+          agentType: "developer",
+          provider: "openai-codex",
+          model: "gpt-5.6-sol",
+          thinkingLevel: "high",
+          credentialProfileId: "cp_pi",
+        }),
+      );
+    // The transcript an earlier pi binding wrote; its own last selection is
+    // what pi would restore (a crash before the new binding's first reply).
+    const file = canonicalPiSessionPath(id);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(
+      file,
+      `${JSON.stringify({ type: "session", version: 3, id, timestamp: new Date().toISOString(), cwd: tmp })}\n`,
+    );
+    await piStore.acquireByRecordId(id, "developer");
+    const spec = specs.at(-1)!;
+    assert.deepEqual(
+      spec.model,
+      switched ? { provider: "openai-codex", id: "gpt-5.6-sol" } : undefined,
+    );
+    assert.equal(spec.thinkingLevel, switched ? "high" : undefined);
+    internals.live.clear();
+  }
 });

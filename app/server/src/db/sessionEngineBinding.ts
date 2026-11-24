@@ -35,6 +35,14 @@ export interface SessionEngineBinding {
   startedSeq: number;
   /** The run that began this binding; absent for the first. */
   startedRunId?: string;
+  /**
+   * The earlier binding whose native session this one continues (a return
+   * that reopened it); absent for a fresh native session and every first
+   * binding. Recorded from what the switch's open did, never inferred from
+   * equal native ids: a pi return whose transcript was gone shares the id but
+   * starts over.
+   */
+  resumedSeq?: number;
   createdAt: number;
   /** Absent while the binding is active. */
   endedAt?: number;
@@ -62,6 +70,7 @@ interface DbBindingRow {
   native_session_id: string | null;
   started_seq: number;
   started_run_id: string | null;
+  resumed_seq: number | null;
   created_at_ms: number;
   ended_at_ms: number | null;
 }
@@ -82,6 +91,7 @@ function fromRow(row: DbBindingRow): SessionEngineBinding {
       : {}),
     startedSeq: row.started_seq,
     ...(row.started_run_id ? { startedRunId: row.started_run_id } : {}),
+    ...(row.resumed_seq !== null ? { resumedSeq: row.resumed_seq } : {}),
     createdAt: row.created_at_ms,
     ...(row.ended_at_ms !== null ? { endedAt: row.ended_at_ms } : {}),
   };
@@ -196,7 +206,8 @@ export function bindings(sessionId: string): SessionEngineBinding[] {
 
 /**
  * End the active binding `expectSeq` and start the session's next one on
- * `fields`, its native id `nativeSessionId` (none for a fresh Claude binding).
+ * `fields`, its native id `nativeSessionId` (none for a fresh Claude binding)
+ * and `resumedSeq`, the earlier binding whose native session it reopened.
  * Call ONLY from `sessionStore.switchEngineBinding`, inside its transaction.
  * Throws when `expectSeq` is not the active binding.
  */
@@ -206,6 +217,7 @@ export function startNextBinding(
   fields: ActiveBindingFields,
   nativeSessionId: string | null,
   startedSeq: number,
+  resumedSeq: number | null,
   at: number,
 ): void {
   const db = getDb();
@@ -221,9 +233,9 @@ export function startNextBinding(
     `INSERT INTO session_engine_binding (
        session_id, seq, harness, credential_profile_id, provider, model,
        thinking_level, native_session_id, started_seq, started_run_id,
-       created_at_ms, ended_at_ms
+       resumed_seq, created_at_ms, ended_at_ms
      )
-     SELECT ?, MAX(seq) + 1, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL
+     SELECT ?, MAX(seq) + 1, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL
        FROM session_engine_binding WHERE session_id = ?`,
   ).run(
     sessionId,
@@ -234,6 +246,7 @@ export function startNextBinding(
     fields.thinkingLevel,
     nativeSessionId,
     startedSeq,
+    resumedSeq,
     at,
     sessionId,
   );

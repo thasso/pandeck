@@ -239,7 +239,10 @@ Bindings live in `session_engine_binding` (migration 0102,
 `db/sessionEngineBinding.ts`), numbered from 1 per session; exactly one per
 session is active (no `ended_at_ms`). Each records the session-log cursor and
 the run it began at; the first binding has cursor 0 and no run. The migration
-gave every existing row, tombstones included, its first binding.
+gave every existing row, tombstones included, its first binding. A binding a
+switch started also records `resumed_seq` (migration 0103): the earlier binding
+whose native session its open actually reopened, absent when the open started a
+fresh one.
 
 - **Projection.** `session_index`'s `harness`, `provider`,
   `provider_session_id`, `model`, `thinking_level` and `credential_profile_id`
@@ -305,7 +308,10 @@ still refuses, so no user reaches it yet.
   account serves another kind and is never kept.
 - **Move.** The store move below runs inside the turn's admission. Its refusals
   hold the turn as on one engine; background work on Claude holds it with
-  "Waiting for background work on Claude; stop it to switch now."
+  "Waiting for background work on Claude; stop it to switch now." Claude work
+  that ends by itself (the naming agent) holds it with "Waiting for the session
+  to finish its own work…", and its end wakes the session's delivery. Another
+  switch of the same session holding the fence refuses the turn as busy.
 - **Turn.** The turn runs on the new engine's driver (`deliverWithRuntime`),
   which rebinds the detached runtime session. A refusal after the move and
   before the commit (the final admission included) abandons it. The commit runs
@@ -333,14 +339,21 @@ keeps the clean user text.
   request, then newest first until one entry does not fit; what is chosen is
   shown in log order. Each entry takes at most 4,000 tokens or a quarter of the
   cap, shortened with a pointer to `session_read` at its id.
-- **Range:** a fresh native session gets the whole log. An engine that ran the
-  session before and resumes its own native session gets only the entries after
-  it last ran: those after the `started_seq` of the binding that followed it.
+- **Range:** a fresh native session gets the whole log, seq 0 included. Only a
+  binding whose open reopened its earlier native session (`resumed_seq`) gets
+  just what it missed: the entries from the `started_seq` of the binding that
+  followed the resumed one. Equal native ids prove nothing: a pi return whose
+  transcript was gone shares the app id but starts over, with the whole log.
+  `started_seq` is the next seq the log gives, so a binding's range starts AT
+  it.
 - **Cap:** `AppSettings.sessionSwitching.handoffTokenCap` (Settings → Models,
   default 16,000, clamped to 1,000–64,000), and never more than the target
-  model's context window, less a reserve of the larger of 16,000 tokens or a
-  quarter of the window. When nothing fits, only the note goes. Tokens are
-  estimated at four characters each.
+  model's context window, less what a resumed native session already holds, less
+  a reserve of the larger of 16,000 tokens or a quarter of the window. What it
+  holds is the context size its last reply reported (walking back the resume
+  chain); when it never reported one, every log record before it was left,
+  estimated, which can only overstate it. When nothing fits, only the note goes.
+  Tokens are estimated at four characters each.
 - **Switch note:** what changed ("moved from GPT-6 · OpenAI to Claude Opus ·
   Work"); that reasoning and tool state did not carry over; the session's own id
   with `session_read({ sessionId, at, includeToolResults: true })` and
@@ -361,7 +374,10 @@ other under the same id; the runtime session in between is never replaced.
   which holds the turn ("Waiting for background work on Claude; stop it to
   switch now"). pi's background work keeps running and reaches the session on
   its next engine. Claude saves its record before it lets go, and a session it
-  cannot save stays. Neither refuses for nothing being resident.
+  cannot save stays. Neither refuses for nothing being resident. Claude work
+  that ends by itself (the naming agent) refuses with `SessionSettlingError` and
+  wakes the session's delivery once the session is quiescent again; a browser
+  the agent keeps open refuses outright.
 - **Runtime session.** `SessionRuntime.detachHarness` swaps the leaving engine's
   adapter for the detached one, between runs only; the runtime session, its log
   and its viewers stay, and the next engine's driver binds it as a reader's view
@@ -371,28 +387,31 @@ other under the same id; the runtime session in between is never replaced.
   and native session (none for a fresh one) over what an earlier Claude binding
   left in its record, and the session's own mode, title, creation time and
   scope; the record's timeline stays. pi reopens the app id's transcript or
-  starts one under it, reading the session's frozen prompt conditions, skills
-  and agent definition. A pi transcript that is there but is not this session's
-  (an unreadable or foreign header) refuses with `PiSwitchTranscriptError`, and
-  the switch holds with "choose another model, or reset the change"; nothing is
-  started over it. Both engines read the one insert-only prompt-conditions
-  record the session froze at its start and render it their own way: pi its
-  persona layer and bare tool names, Claude the `claude_code` preset's append
-  and its mounted server's `mcp__pa__` names
+  starts one under it, and reports which it did: that, not the plan, is what the
+  commit records as `resumed_seq`. It reads the session's frozen prompt
+  conditions, skills and agent definition. A pi transcript that is there but is
+  not this session's (an unreadable or foreign header) refuses with
+  `PiSwitchTranscriptError`, and the switch holds with "choose another model, or
+  reset the change"; nothing is started over it. Both engines read the one
+  insert-only prompt-conditions record the session froze at its start and render
+  it their own way: pi its persona layer and bare tool names, Claude the
+  `claude_code` preset's append and its mounted server's `mcp__pa__` names
   (`claudeSdk/claudeSdkSwitchSurface.test.ts`).
 
-- **Order** (`prepareEngineSwitch`, `harnesses/engineSwitch.ts`). Before
-  anything moves, the switch finds the target engine's newest earlier binding:
-  pi resumes when the app id's transcript exists; Claude resumes the earlier
-  native session when its account still holds the transcript, or copies it to a
-  new account with the failover copier, and otherwise starts fresh. Then it
-  raises the fence, releases, opens, and hands back the session on its new
-  engine with `usable`, `commit` and `abandon`. A throw anywhere before the
-  commit, or an abandon, lets the new engine go, rolls a copy back and lifts the
-  fence: the row still names the old binding, the old engine reopens the session
-  on its next use, and the selection stays pending. The commit checks `usable`
-  again, writes the binding and lifts the fence; nothing awaits between the
-  turn's final check and it.
+- **Order** (`prepareEngineSwitch`, `harnesses/engineSwitch.ts`). The fence goes
+  up first, before any side effect, so a second switch of the same session
+  refuses before it can stage or roll back native data the first one owns. Under
+  it the switch reads the row and finds the target engine's newest earlier
+  binding: Claude resumes the earlier native session when its account still
+  holds the transcript, or copies it to a new account with the failover copier,
+  and otherwise starts fresh; pi decides at its open. Then it releases, opens,
+  and hands back the session on its new engine with `usable`, `commit` and
+  `abandon`. `usable` also refuses when the engine it left holds the session
+  again. A throw anywhere before the commit, or an abandon, lets the new engine
+  go, rolls a copy back and lifts the fence: the row still names the old
+  binding, the old engine reopens the session on its next use, and the selection
+  stays pending. The commit checks `usable` again, writes the binding and lifts
+  the fence; nothing awaits between the turn's final check and it.
 
 ### Switching fence
 
@@ -405,12 +424,31 @@ wakes the session's delivery, so that work is offered at once on the new engine.
 A rollback wakes it only when the fence refused someone meanwhile: the switching
 turn's own work is held, and waking it would only retry the failed switch.
 
+The fence holds at registration too, not only at the registry's entry: an
+acquisition that checked before an await could otherwise reopen the engine the
+session is leaving. Each store asks `harnessRegistry` after its open's last
+await (`setRegistrationCheck`). It refuses an id the other engine holds resident
+and one whose row is tombstoned, whoever opens it; outside the switch's own open
+it also refuses an id a switch is moving (busy) and one whose active binding
+names the other engine.
+
+- **Reopen after a commit.** The committed binding is what reopens. Claude takes
+  the active binding's model and effort over its record, and for a binding a
+  switch started its native session too (none until its first query); pi passes
+  a switched-to binding's model and effort over its transcript's last selection.
+  A crash between the commit and the new engine's first save therefore resumes
+  the committed binding, not the one before it.
+
 ### Deleting
 
-Deleting a session removes it from every engine any of its bindings used, not
-only the active one, and sweeps every Claude native session a binding named from
-every account (`harnessRegistry.remove`). Until then old native data stays for
-returns and forks.
+Deleting a session removes it from every engine, not only the active one or
+those its bindings used: a switch in flight has it open on an engine no binding
+names yet, and that engine tombstones it there, so the switch's abandon writes
+nothing back. It also sweeps every Claude native session a binding named from
+every account (`harnessRegistry.remove`). A deleted id is never opened again:
+`acquireById` answers nothing for a tombstoned row, whatever an engine still has
+on disk, and a store's registration check refuses one that a delete overtook.
+Until the delete, old native data stays for returns and forks.
 
 ### Forking
 

@@ -15,7 +15,11 @@ import {
   engineSwitchRefusal,
   isSwitchingEngines,
 } from "./engineSwitchFence.ts";
-import type { HarnessHost, LiveSession } from "../harness.ts";
+import {
+  SessionHeldElsewhereError,
+  type HarnessHost,
+  type LiveSession,
+} from "../harness.ts";
 import { PiSessionDeletedError, piStore } from "../piSdk/piStore.ts";
 import {
   canonicalPiSessionPath,
@@ -62,8 +66,13 @@ interface HarnessSessions {
    * file): what decides that the id is the engine's.
    */
   holdsOnDisk(id: string): boolean;
-  /** Make the engine refuse to register an id `check` says another holds. */
-  setHeldElsewhere(check: (id: string) => boolean): void;
+  /**
+   * Make the engine ask `check` before it registers an id, after its open's
+   * last await, and refuse with the error it answers.
+   */
+  setRegistrationCheck(
+    check: (id: string, forSwitch: boolean) => Error | undefined,
+  ): void;
   /** Open the session from disk as the persona its row names. */
   open(id: string, agentType: AgentType): Promise<LiveSession | undefined>;
   /** Stored execution directory, without acquiring an engine. */
@@ -100,7 +109,7 @@ const sessions: Record<Harness, HarnessSessions> = {
     // Recovery for pi transcripts that predate a valid metadata row.
     storedWithoutRow: (id) => existsSync(canonicalPiSessionPath(id)),
     holdsOnDisk: (id) => piStore.hasTranscript(id),
-    setHeldElsewhere: (check) => piStore.setHeldElsewhere(check),
+    setRegistrationCheck: (check) => piStore.setRegistrationCheck(check),
     // The pi session reopens from its canonical native path, derived from the
     // id, which also guards the open. A reopen the delete beat to registration
     // is a session that no longer exists, not a failure.
@@ -127,7 +136,7 @@ const sessions: Record<Harness, HarnessSessions> = {
     getForDrive: (id) => claudeSdkStore.getForDrive(id),
     storedWithoutRow: (id) => claudeSdkStore.exists(id),
     holdsOnDisk: (id) => claudeSdkStore.exists(id),
-    setHeldElsewhere: (check) => claudeSdkStore.setHeldElsewhere(check),
+    setRegistrationCheck: (check) => claudeSdkStore.setRegistrationCheck(check),
     // Rehydrated on the account its record names, else the protected default
     // where the install has one, in the cwd of its own worktree check,
     // acquired in the continuation that compared it.
@@ -197,7 +206,31 @@ function residentElsewhere(id: string, harness: Harness): Harness | undefined {
   );
 }
 
-/** The resident session for our id, from memory only. */
+/**
+ * Why `harness` may not register `id` now; undefined when it may. An id
+ * belongs to one engine, so a store never registers one the other holds
+ * resident, nor a deleted one. Outside a switch's own open it also never
+ * registers one a switch is moving (busy: the caller retries once the fence
+ * lifts) or one whose active binding names the other engine: an acquisition
+ * that chose its engine before a switch must not reopen the engine the
+ * session left. Stores ask after their open's last await.
+ */
+function registrationRefusal(
+  id: string,
+  harness: Harness,
+  forSwitch: boolean,
+): Error | undefined {
+  if (residentElsewhere(id, harness)) return new SessionHeldElsewhereError(id);
+  if (sessionStore.getIncludingDeleted(id)?.deletedAt !== undefined)
+    return new Error(`Session ${id} was deleted; it cannot be opened.`);
+  if (forSwitch) return undefined;
+  if (isSwitchingEngines(id)) return engineSwitchRefusal(id);
+  const bound = boundEngine(id);
+  return bound !== undefined && bound !== harness
+    ? new SessionHeldElsewhereError(id)
+    : undefined;
+}
+
 /**
  * The harness of a stored session's active engine binding, from its metadata
  * row (whose binding columns are that binding's projection); undefined without
@@ -238,10 +271,10 @@ export const harnessRegistry = {
   setHost(host: HarnessHost): void {
     piStore.setHost(host);
     // Registration is the last word on ownership: neither store takes an id
-    // the other holds resident, whichever path asks.
+    // the other holds or a switch is moving, whichever path asks.
     for (const harness of HARNESS_ORDER)
-      sessions[harness].setHeldElsewhere(
-        (id) => residentElsewhere(id, harness) !== undefined,
+      sessions[harness].setRegistrationCheck((id, forSwitch) =>
+        registrationRefusal(id, harness, forSwitch),
       );
     // A Claude session created, updated or removed changes the list, and may
     // unblock a queued dev reload (its turn just finished).
@@ -345,6 +378,10 @@ export const harnessRegistry = {
       const resident = sessions[harness].getForDrive(id);
       if (resident) return resident;
     }
+    // A deleted session stays deleted: whatever an engine still has on disk
+    // for it is not a rowless session to recover.
+    if (sessionStore.getIncludingDeleted(id)?.deletedAt !== undefined)
+      return undefined;
     const record = sessionStore.get(id);
     if (record)
       return sessions[activeEngine(record).harness].open(id, record.agentType);
@@ -372,7 +409,8 @@ export const harnessRegistry = {
   /**
    * Take a deleted session out of whichever engine holds it: dispose it and
    * delete what it stored (Claude's native transcript in the background).
-   * Every engine an earlier binding ran it on deletes its data too, and every
+   * Every other engine tombstones it and deletes its data too (an earlier
+   * binding's, or a switch's still uncommitted target), and every
    * Claude native session any binding named is swept from every profile
    * (`docs/session-runtime-switching.md`: old native data stays until the
    * session is deleted). Everything harness-neutral about a delete is the
@@ -383,11 +421,12 @@ export const harnessRegistry = {
     // but nothing here should depend on that ordering.
     const bound = sessionStore.bindings(ref.id);
     await sessions[ref.harness].remove(ref);
-    const earlier = [
-      ...new Set(bound.map((binding) => binding.harness)),
-    ].filter((harness) => harness !== ref.harness);
+    // EVERY other engine, not only those a committed binding names: a switch
+    // in flight has the session open on an engine no binding names yet, and
+    // its abandon must find it tombstoned there, not persist it back.
+    const others = HARNESS_ORDER.filter((harness) => harness !== ref.harness);
     await Promise.all(
-      earlier.map((harness) =>
+      others.map((harness) =>
         sessions[harness].remove({
           id: ref.id,
           agentType: ref.agentType,
