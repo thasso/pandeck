@@ -1,14 +1,14 @@
 /**
- * Moving an idle session to an account the user (session inspector) or its
- * owning coordinator (`session_control` `move_account`) picked, right away.
+ * Which accounts a session may move to, and the rules a move must pass.
  *
- * One predicate decides which accounts qualify: the picker's list, the move
- * and the tool's error text all use it. The move loads a session whose harness
- * is not resident, excludes every turn while it runs (run lease, account
- * recovery reservation, harness admission), rechecks the caller's authority up
- * to the binding commit, and goes through the engines' existing
- * `switchAccount` (history copy on Claude, staged reopen on pi, binding CAS).
- * It never sets or clears the enterprise requirement (`docs/account-routing.md`).
+ * A move the user (session inspector) or its owning coordinator
+ * (`session_control` `move_account`) picks is a PENDING account
+ * (`sessionPendingRuntime.ts`); the move itself happens when the next turn is
+ * admitted, through the engines' existing `switchAccount` (history copy on
+ * Claude, staged reopen on pi, binding CAS). One predicate decides which
+ * accounts qualify: the picker's list, the tool's error text and that apply
+ * step all use it. It never sets or clears the enterprise requirement
+ * (`docs/account-routing.md`).
  */
 import {
   accountServesModel,
@@ -27,45 +27,23 @@ import {
   type CredentialProfile,
 } from "./credentialProfiles.ts";
 import { sessionStore, type SessionMeta } from "./db/sessionStore.ts";
-import { wakeSessionDelivery } from "./deliveryWake.ts";
 import { formatLocalDateTime } from "./googleTime.ts";
 import { sessionClaudePin } from "./harnesses/curatedModels.ts";
 import { storedSessionModelOption } from "./harnesses/models.ts";
-import {
-  assertAccountRecoveryAdmission,
-  ownsAccountRecovery,
-  releaseAccountRecovery,
-  reserveAccountRecovery,
-} from "./session/runtime/accountRecoveryAdmission.ts";
-import type { SessionRuntime } from "./session/runtime/runtime.ts";
-import { sessionRuntime } from "./session/runtimeInstance.ts";
-import {
-  ensureRuntimeSessionWithRuntime,
-  type RuntimePromptDriver,
-} from "./session/runtimePrompt.ts";
-import { beginPromptRun } from "./session/sessionRunLease.ts";
-import {
-  selectionSignature,
-  switchIdleSessionAccount,
-} from "./sessionAccountSwitch.ts";
+import type { RuntimePromptDriver } from "./session/runtimePrompt.ts";
 
-interface MoveSelection {
+export interface MoveSelection {
   model?: { provider: string; id: string } | undefined;
   thinkingLevel?: ThinkingLevel | undefined;
 }
 
 /**
- * The runtime and the session lookups the move needs; a narrow seam so tests
- * substitute a fake hub and runtime instead of module-mocking singletons.
+ * The resident-session lookup the list needs; a narrow seam so tests
+ * substitute a fake hub instead of module-mocking singletons.
  */
 interface AccountMoveHost {
-  runtime: SessionRuntime;
   /** The resident driver, without opening a harness (the list's read). */
   resident(sessionId: string): Promise<RuntimePromptDriver | undefined>;
-  /** The resident driver, or the harness opened for the move. */
-  acquire(sessionId: string): Promise<RuntimePromptDriver | undefined>;
-  /** Publish the rebound row ahead of the move's answer. */
-  publishRows(): Promise<void>;
 }
 
 let hostOverride: AccountMoveHost | undefined;
@@ -87,20 +65,9 @@ function asDriver(candidate: unknown): RuntimePromptDriver | undefined {
 }
 
 const defaultHost: AccountMoveHost = {
-  runtime: sessionRuntime,
   async resident(sessionId) {
     const { hub } = await import("./hub.ts");
     return asDriver(hub.getLiveById(sessionId));
-  },
-  async acquire(sessionId) {
-    const { hub } = await import("./hub.ts");
-    return asDriver(
-      hub.getLiveById(sessionId) ?? (await hub.acquireById(sessionId)),
-    );
-  },
-  async publishRows() {
-    const { publishSessionRowsNow } = await import("./stateTopics.ts");
-    publishSessionRowsNow();
   },
 };
 
@@ -138,6 +105,18 @@ function targetRefusal(
   if (!target) return "The chosen account no longer exists.";
   if (target.id === source.id)
     return `This session already runs on ${source.name}.`;
+  return accountRulesRefusal(row, source, target);
+}
+
+/**
+ * Kind, enabled and enterprise, for any account the session may run on next,
+ * its current one included.
+ */
+export function accountRulesRefusal(
+  row: Pick<SessionMeta, "requiresEnterprise">,
+  source: CredentialProfile,
+  target: CredentialProfile,
+): string | undefined {
   if (target.provider !== source.provider)
     return `${target.name} is not the same kind of account as ${source.name}.`;
   if (!target.enabled) return `${target.name} is disabled.`;
@@ -167,7 +146,7 @@ function benchText(name: string, modelId: string, until: number): string {
  * session's model (with its pinned version), serves and offers it at its
  * thinking level, needs no login, and has no bench on that model.
  */
-async function modelRefusal(
+export async function modelRefusal(
   sessionId: string,
   target: CredentialProfile,
   selection: MoveSelection & { model: { provider: string; id: string } },
@@ -175,26 +154,9 @@ async function modelRefusal(
   const model = selection.model;
   if (!accountServesModel(target, model.provider))
     return `${target.name} cannot run this session's model.`;
-  const profile = listCredentialProfiles().find(({ id }) => id === target.id);
-  if (!profile) return "The chosen account no longer exists.";
-  const pin = sessionClaudePin(sessionId, model.provider, model.id);
-  const candidate = await gatherAccountCandidate(profile, {
-    model: { provider: model.provider, modelId: model.id },
-    ...(selection.thinkingLevel
-      ? { thinkingLevel: selection.thinkingLevel }
-      : {}),
-    ...pin,
-  });
-  if (candidate.lacksModel)
-    return pin.pinnedModelId !== undefined
-      ? `${target.name} can't run ${pin.pinnedModelId}, the version this session is pinned to.`
-      : `${target.name} can't run ${
-          storedSessionModelOption(
-            harnessForModelProvider(model.provider),
-            model.provider,
-            model.id,
-          )?.name ?? model.id
-        }.`;
+  const candidate = await moveCandidate(sessionId, target, selection);
+  if (!candidate) return "The chosen account no longer exists.";
+  if (candidate.lacksModel) return lacksModelText(sessionId, target, model);
   if (!candidate.offersModel)
     return `${target.name} does not offer ${model.id} at this session's effort.`;
   if (candidate.profile.health.state === "needs-login")
@@ -204,8 +166,79 @@ async function modelRefusal(
   return undefined;
 }
 
+/**
+ * The account as Automatic judges it for this model and effort, with the
+ * session's pinned version when the model is its pinned agent's alias
+ * (`sessionClaudePin`): a pinned session is offered only where its pin runs.
+ */
+async function moveCandidate(
+  sessionId: string,
+  target: CredentialProfile,
+  selection: MoveSelection & { model: { provider: string; id: string } },
+) {
+  const profile = listCredentialProfiles().find(({ id }) => id === target.id);
+  if (!profile) return undefined;
+  return gatherAccountCandidate(profile, {
+    model: { provider: selection.model.provider, modelId: selection.model.id },
+    ...(selection.thinkingLevel
+      ? { thinkingLevel: selection.thinkingLevel }
+      : {}),
+    ...sessionClaudePin(
+      sessionId,
+      selection.model.provider,
+      selection.model.id,
+    ),
+  });
+}
+
+/** The entitlement refusal: the account cannot run the model, or the session's pin. */
+function lacksModelText(
+  sessionId: string,
+  target: CredentialProfile,
+  model: { provider: string; id: string },
+): string {
+  const pin = sessionClaudePin(sessionId, model.provider, model.id);
+  if (pin.pinnedModelId !== undefined)
+    return `${target.name} can't run ${pin.pinnedModelId}, the version this session is pinned to.`;
+  return `${target.name} can't run ${modelName(model)}.`;
+}
+
+function modelName(model: { provider: string; id: string }): string {
+  return (
+    storedSessionModelOption(
+      harnessForModelProvider(model.provider),
+      model.provider,
+      model.id,
+    )?.name ?? model.id
+  );
+}
+
+/**
+ * Why the account does not offer the model at that effort at all, or
+ * undefined when it does: the static half of `modelRefusal` (entitlement with
+ * the session's pin, then the listing at that effort), without health or
+ * benches, which change by themselves and are judged again when the selection
+ * applies.
+ */
+export async function selectionListingRefusal(
+  sessionId: string,
+  target: CredentialProfile,
+  selection: MoveSelection & { model: { provider: string; id: string } },
+): Promise<string | undefined> {
+  const candidate = await moveCandidate(sessionId, target, selection);
+  if (!candidate) return "The chosen account no longer exists.";
+  if (candidate.lacksModel)
+    return lacksModelText(sessionId, target, selection.model);
+  if (!candidate.offersModel)
+    return `${target.name} does not offer ${modelName(selection.model)}.`;
+  return undefined;
+}
+
 /** Health and bench again, synchronously, at every engine step. */
-function assertStillEligible(target: CredentialProfile, modelId: string): void {
+export function assertStillEligible(
+  target: CredentialProfile,
+  modelId: string,
+): void {
   if (
     readAccountHealth(target.id, credentialProfileHasCredential(target.id))
       .state === "needs-login"
@@ -229,10 +262,10 @@ async function accountMoveRefusal(
 }
 
 /**
- * The selection a session would move with: its resident harness's, else its
+ * The selection a session runs with now: its resident harness's, else its
  * stored model, normalized as a view reads it. Never opens a harness.
  */
-async function sessionSelection(
+export async function sessionSelection(
   row: SessionMeta,
 ): Promise<MoveSelection | undefined> {
   const driver = await host().resident(row.id);
@@ -249,154 +282,101 @@ async function sessionSelection(
 }
 
 /**
- * The accounts the session could move to right now, for the inspector's
- * picker and the coordinator tool's error text. Throws when the session
- * itself cannot move.
+ * The rules for the session's OWN account running its next turn: enabled and
+ * the enterprise requirement (kind is its own). `sessionPendingRuntime.ts`
+ * judges a selection naming the bound account by these too.
  */
+export function boundAccountRulesRefusal(
+  row: Pick<SessionMeta, "requiresEnterprise">,
+  account: CredentialProfile,
+): string | undefined {
+  if (!account.enabled) return `${account.name} is disabled.`;
+  if (row.requiresEnterprise && !account.enterprise)
+    return `This session requires an enterprise account, and ${account.name} is not one.`;
+  return undefined;
+}
+
+/**
+ * The accounts the session could move to right now, for the inspector's
+ * picker and the coordinator tool's error text, judged against the model and
+ * effort its next turn starts on (the pending selection's, else the current
+ * one), and whether its bound account can run that turn itself by the same
+ * rules a selection naming it is applied with. Throws when the session itself
+ * cannot move.
+ */
+export async function accountMoveChoices(sessionId: string): Promise<{
+  accounts: SessionAccountMoveTarget[];
+  boundEligible: boolean;
+}> {
+  const { row, source, selection } = await nextTurnSelection(sessionId);
+  const profiles = listCredentialProfiles();
+  const [boundRefusal, ...refusals] = await Promise.all([
+    boundAccountRefusal(row, source, selection),
+    ...profiles.map((target) =>
+      accountMoveRefusal(row, source, target, selection),
+    ),
+  ]);
+  return {
+    accounts: profiles
+      .filter((_, index) => !refusals[index])
+      .map((target) => ({
+        id: target.id,
+        name: target.name,
+        enterprise: target.enterprise === true,
+      })),
+    boundEligible: !boundRefusal,
+  };
+}
+
+/** `accountMoveChoices`' accounts alone. */
 export async function accountMoveTargets(
   sessionId: string,
 ): Promise<SessionAccountMoveTarget[]> {
+  return (await accountMoveChoices(sessionId)).accounts;
+}
+
+/** Why the bound account cannot run the next turn's selection itself. */
+async function boundAccountRefusal(
+  row: SessionMeta,
+  source: CredentialProfile,
+  selection: MoveSelection | undefined,
+): Promise<string | undefined> {
+  const rules = boundAccountRulesRefusal(row, source);
+  if (rules || !selection?.model) return rules;
+  return modelRefusal(row.id, source, { ...selection, model: selection.model });
+}
+
+/**
+ * Why one account is not among `accountMoveTargets` right now, or undefined
+ * when it is: the coordinator tool's specific refusal.
+ */
+export async function accountMoveTargetRefusal(
+  sessionId: string,
+  targetId: string,
+): Promise<string | undefined> {
+  const { row, source, selection } = await nextTurnSelection(sessionId);
+  return accountMoveRefusal(
+    row,
+    source,
+    credentialProfileById(targetId),
+    selection,
+  );
+}
+
+/** The model and effort the session's next turn starts on, and its account. */
+async function nextTurnSelection(sessionId: string): Promise<{
+  row: SessionMeta;
+  source: CredentialProfile;
+  selection: MoveSelection | undefined;
+}> {
   const { row, source } = moveSource(sessionId);
-  const selection = await sessionSelection(row);
+  const selection: MoveSelection | undefined = row.pendingRuntime
+    ? {
+        model: row.pendingRuntime.model,
+        thinkingLevel: row.pendingRuntime.thinkingLevel,
+      }
+    : await sessionSelection(row);
   const refusal = selectionRefusal(source, selection);
   if (refusal) throw new Error(refusal);
-  const profiles = listCredentialProfiles();
-  const refusals = await Promise.all(
-    profiles.map((target) =>
-      accountMoveRefusal(row, source, target, selection),
-    ),
-  );
-  return profiles
-    .filter((_, index) => !refusals[index])
-    .map((target) => ({
-      id: target.id,
-      name: target.name,
-      enterprise: target.enterprise === true,
-    }));
-}
-
-export interface AccountMoveRequest {
-  sessionId: string;
-  targetProfileId: string;
-  /** Who chose the account, for the timeline marker. */
-  by: "user" | "coordinator";
-  /**
-   * The caller's authority to move this session: run at preflight and in
-   * every engine check up to the binding commit, so losing it refuses.
-   */
-  authorize: () => void;
-}
-
-const RUNNING = "This session is running; move it once its turn ends.";
-/** Admitted but not running: a prompt on its way in, or another move. */
-const BUSY =
-  "This session is starting a turn or already moving; try again once it is idle.";
-
-/**
- * Every exit after the move took its holds re-offers delivery once: queued
- * rows and peer deliveries refused as busy during the move wait for exactly
- * this edge. A live bound runtime offers it as its idle edge. With none bound
- * (the load failed) or one torn down under the move (Worker loss), the
- * scheduler is woken by id, unless the session is gone or a run that owns its
- * own idle edge is live.
- */
-function reofferDelivery(
-  runtime: SessionRuntime,
-  id: string,
-  live: ReturnType<SessionRuntime["createSession"]> | undefined,
-): void {
-  if (live?.notifyIdle()) return;
-  if (runtime.isRunning(id) || !sessionStore.get(id)) return;
-  wakeSessionDelivery(id, true);
-}
-
-/**
- * Move an idle session to `targetProfileId` now. Answers both account names;
- * throws a host-owned reason, with the binding unchanged, when the session or
- * target does not qualify or anything changes before the commit.
- */
-export async function moveSessionAccount(
-  request: AccountMoveRequest,
-): Promise<{ from: string; to: string }> {
-  const { sessionId: id, authorize } = request;
-  const { runtime, acquire, publishRows } = host();
-  // Synchronous preflight: no await before every hold is taken, so no prompt
-  // can be admitted in between.
-  authorize();
-  const { row, source } = moveSource(id);
-  const target = credentialProfileById(request.targetProfileId);
-  const refused = targetRefusal(row, source, target);
-  if (refused || !target) throw new Error(refused);
-  if (runtime.isBusy(id))
-    throw new Error(runtime.isRunning(id) ? RUNNING : BUSY);
-  assertAccountRecoveryAdmission(id);
-  // Throws on a worktree hold, before anything is held.
-  const releaseRun = beginPromptRun(id);
-  let ticket: symbol | undefined;
-  let releaseAdmission: (() => void) | undefined;
-  let live: ReturnType<SessionRuntime["createSession"]> | undefined;
-  try {
-    ticket = reserveAccountRecovery(id);
-    const owned = ticket;
-    releaseAdmission = runtime.admitPrompt(id);
-    let driver: RuntimePromptDriver | undefined;
-    try {
-      driver = await acquire(id);
-    } catch {
-      driver = undefined;
-    }
-    if (!driver || driver.released)
-      throw new Error("This session could not be loaded for the move.");
-    if (driver.isRunning) throw new Error(RUNNING);
-    if (!driver.switchAccount || !driver.modelSelection)
-      throw new Error("This session cannot switch accounts.");
-    const engine = driver;
-    live = ensureRuntimeSessionWithRuntime(runtime, engine);
-    const session = live;
-    const selected = engine.modelSelection!();
-    const refusal = await accountMoveRefusal(row, source, target, selected);
-    if (refusal || !selected.model) throw new Error(refusal);
-    const modelId = selected.model.id;
-    const signature = selectionSignature(selected);
-    const admit = () => {
-      authorize();
-      if (!ownsAccountRecovery(id, owned))
-        throw new Error("Another account switch took over this session.");
-      if (engine.released)
-        throw new Error("This session was unloaded during the move.");
-      if (engine.isRunning || session.isRunning) throw new Error(RUNNING);
-      if (!sessionStore.get(id))
-        throw new Error("Session does not exist or was deleted.");
-      if (selectionSignature(engine.modelSelection?.()) !== signature)
-        throw new Error(
-          "This session's model or effort changed during the move.",
-        );
-    };
-    admit();
-    await switchIdleSessionAccount(engine, {
-      source,
-      targetId: target.id,
-      requiresEnterprise: sessionStore.get(id)?.requiresEnterprise === true,
-      admit,
-      eligible: () => assertStillEligible(target, modelId),
-    });
-    // The marker is display only: after the commit, its failure changes
-    // nothing about the move.
-    try {
-      session.appendNotice(
-        `Switched from ${source.name} to ${target.name} — chosen by ${request.by === "user" ? "you" : "its coordinating session"}.`,
-      );
-    } catch {
-      console.warn("[account-move] Could not append the move marker.");
-    }
-    // The rebound row also reaches clients on the regular publish; this
-    // only orders it ahead of the answer.
-    await publishRows().catch(() => {});
-    return { from: source.name, to: target.name };
-  } finally {
-    releaseAdmission?.();
-    releaseRun();
-    if (ticket) releaseAccountRecovery(id, ticket);
-    reofferDelivery(runtime, id, live);
-  }
+  return { row, source, selection };
 }

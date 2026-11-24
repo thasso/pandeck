@@ -468,12 +468,12 @@ it("gives a panel connection no claim on the main pane's session", () => {
   ).toBe(false);
 });
 
-// Task-1415: the inspector's account move answers once. Its refusal is the
-// session's failure, in place when that session is on screen and otherwise a
-// single toast naming it; a successful move says nothing.
-it("puts a refused account move on its session and keeps a successful one silent", () => {
+// Task-1485: a runtime change for the next turn answers once. Its refusal is
+// the session's failure, in place when that session is on screen and
+// otherwise a single toast naming it; a change that landed says nothing.
+it("puts a refused runtime change on its session and keeps a landed one silent", () => {
   const answer = (error?: string) => ({
-    type: "sessionAccountMoveAnswer" as const,
+    type: "pendingRuntimeAnswer" as const,
     requestId: "r1",
     sessionId: "s1",
     ...(error ? { error } : {}),

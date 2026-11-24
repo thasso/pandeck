@@ -77,8 +77,8 @@ export function arrivalMessage(
       };
     case "permanentAssistantQueue":
       return permanentAssistantQueueFailure(msg);
-    case "sessionAccountMoveAnswer":
-      return accountMoveFailure(msg);
+    case "pendingRuntimeAnswer":
+      return runtimeChangeFailure(msg);
     case "draftSession":
       return msg.notice ? { severity: "info", message: msg.notice } : null;
     case "timelineAnchor":
@@ -123,12 +123,13 @@ function permanentAssistantQueueFailure(
 }
 
 /**
- * A refused account move is that session's failure: in place above its
- * composer when it is on screen, otherwise announced naming it. A move that
- * succeeded says nothing; the Account row shows the new account.
+ * A refused runtime change (model, effort or account for the next turn) is
+ * that session's failure: in place above its composer when it is on screen,
+ * otherwise announced naming it. A change that landed says nothing; the
+ * Runtime section and the composer chip show it.
  */
-function accountMoveFailure(
-  msg: Extract<ServerMessage, { type: "sessionAccountMoveAnswer" }>,
+function runtimeChangeFailure(
+  msg: Extract<ServerMessage, { type: "pendingRuntimeAnswer" }>,
 ): ArrivalMessage | null {
   if (msg.error === undefined) return null;
   return {
@@ -207,8 +208,8 @@ function failureOnObject(
         ? { severity: msg.severity, message: msg.message, target: msg.target }
         : msg.type === "permanentAssistantQueue"
           ? permanentAssistantQueueFailure(msg)
-          : msg.type === "sessionAccountMoveAnswer"
-            ? accountMoveFailure(msg)
+          : msg.type === "pendingRuntimeAnswer"
+            ? runtimeChangeFailure(msg)
             : null;
   if (!arrival || arrival.severity !== "error") return null;
   const target = arrival.target;

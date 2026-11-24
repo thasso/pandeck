@@ -107,7 +107,15 @@ CLI's cannot be edited or reliably withdrawn, and pi's dies with its process.
   once it ran; meeting a turn that started first (`SessionBusyError`) keeps it
   for the next idle edge, and a real failure holds the queue on it. A command
   the web app runs itself (`/review`) cannot be queued; one that only touches
-  session metadata (`/rename`) runs at once instead, even mid-turn.
+  session metadata (`/rename`) or the next turn's pending selection (`/model`,
+  `/effort`, `/account`) runs at once instead, even mid-turn.
+- **A pending selection that cannot apply holds the turn**
+  (`docs/session-runtime-switching.md`). A user prompt it holds is appended
+  nowhere and goes to this queue (unpaused). Queued and peer prompts stay where
+  they were with no attempt spent. Changing or resetting the selection wakes
+  delivery so they are offered again. A skill command it holds cannot be queued:
+  it is kept beside the queue as a held input (`kind = 'held'`), which is never
+  sent and waits for the user's Put back or Discard.
 - **Attachments** are saved to the session attachment store when queued. The row
   keeps only their metadata, and the send reads the bytes back.
 - **Skill commands are neither steered nor queued.** A user's `/<skill>` starts
@@ -224,7 +232,9 @@ re-offers it as before. Public re-offer, new notices, and boot also retain that
 behavior. Retirement failures remain visible without provider-controlled error
 text. The at-least-once retirement window remains. Background keeps the outbox
 phases, deferred facts and rendering cap; leftover capped facts wake the
-scheduler again. It never drains peers itself. Direct inline handoffs and
+scheduler again, and so does a newly deferred fact (its work ended, so work held
+on it, such as a pending account switch, is offered again; the deferred fact
+itself starts no turn). It never drains peers itself. Direct inline handoffs and
 explicit send-now keep their own authority. Explicit peer sends serialize only
 other explicit sends, while their waiters fence automatic claims. An adapter
 reports that refusal as `deferred`; the scheduler retains any existing real-idle

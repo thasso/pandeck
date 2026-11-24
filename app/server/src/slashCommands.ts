@@ -70,6 +70,37 @@ export const slashCommands: SlashCommandInfo[] = [
     execution: "client",
     runsWhileStreaming: true,
   },
+  // The runtime commands set the session's pending selection, applied when its
+  // next turn starts (`docs/session-runtime-switching.md`). They change no
+  // model context, so they run at once, even mid-turn, and are never queued.
+  // Without an argument they open the inspector's Runtime section.
+  {
+    name: "model",
+    description: "Choose the model this session's next turn starts on",
+    usage: "/model [model]",
+    agentTypes: ["assistant", "workshop", "developer", "personal-assistant"],
+    execution: "client",
+    runsWhileStreaming: true,
+    argument: "model",
+  },
+  {
+    name: "effort",
+    description: "Choose the effort this session's next turn starts with",
+    usage: "/effort [level]",
+    agentTypes: ["assistant", "workshop", "developer", "personal-assistant"],
+    execution: "client",
+    runsWhileStreaming: true,
+    argument: "effort",
+  },
+  {
+    name: "account",
+    description: "Choose the account this session's next turn starts on",
+    usage: "/account [account or automatic]",
+    agentTypes: ["assistant", "workshop", "developer", "personal-assistant"],
+    execution: "client",
+    runsWhileStreaming: true,
+    argument: "account",
+  },
 ];
 
 export function findSlashCommand(name: string): SlashCommandInfo | undefined {

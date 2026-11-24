@@ -355,6 +355,44 @@ test("a deferred completion offers no turn and rides the next prompt", async () 
   );
 });
 
+test("a deferred completion still wakes the scheduler: the work held on it is offered again", async () => {
+  const { setDeliveryWake } = await import("../deliveryWake.ts");
+  const { BackgroundCompletionDelivery: Unscheduled } =
+    await import("./completionDelivery.ts");
+  const wakes: string[] = [];
+  let offers = 0;
+  const delivery = new Unscheduled({
+    offer: () => {
+      offers += 1;
+      return Promise.resolve("delivered");
+    },
+    disposition: () => "defer",
+  });
+  setDeliveryWake((id) => {
+    wakes.push(id);
+  });
+  try {
+    // A Stop from the background UI: the requester knows, so it defers.
+    delivery.enqueue("owner-stopped", {
+      ...notice("stopped-1"),
+      state: "stopped" as const,
+      stopRequested: true,
+      stopOrigin: "requester" as const,
+    });
+    assert.deepEqual(wakes, ["owner-stopped"]);
+    await flush();
+    assert.equal(offers, 0, "the deferred fact itself starts no turn");
+    assert.ok(delivery.claimDeferredContext("owner-stopped"));
+
+    // A restored fact was decided before the restart: nothing is offered.
+    delivery.restore("owner-restored", notice("restored-1"), "defer");
+    assert.deepEqual(wakes, ["owner-stopped"]);
+  } finally {
+    delivery.stop();
+    setDeliveryWake(undefined);
+  }
+});
+
 test("a claim refused before its append gives the fact back; an appended one keeps it from every other prompt", async () => {
   const delivery = new BackgroundCompletionDelivery({
     offer: () => Promise.resolve("delivered"),

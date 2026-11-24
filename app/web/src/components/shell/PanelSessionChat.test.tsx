@@ -1,8 +1,12 @@
 // @vitest-environment jsdom
 import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { AssistantActions, UIState } from "../../hooks/useAssistant.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  AssistantActions,
+  HeldInputRemoval,
+  UIState,
+} from "../../hooks/useAssistant.ts";
 import type { SessionChatHost } from "../../hooks/useSessionChat.tsx";
 import type { Composer } from "../Composer.tsx";
 import type { MessageList } from "../MessageList.tsx";
@@ -335,4 +339,260 @@ it("subscribes the skills its composer describes, on its own connection", async 
   } as unknown as UIState);
   expect(actions.setTopics).toHaveBeenLastCalledWith(["skills"]);
   expect(seen.composer?.skillSummaries).toEqual(entries);
+});
+
+describe("held inputs on the composer's queue strip", () => {
+  // A `/skill` a pending runtime selection refused is kept by the SERVER as a
+  // held input of the session (`PromptQueueState.held`). The strip offers it
+  // back on every device and after every reload, Resend or fork, until the
+  // user puts it back or discards it.
+  const HELD = "/review-pr 412 --focus security";
+  const KEY = "test.panel-draft";
+  const queueActions = {
+    ...actions,
+    promptQueue: vi.fn(),
+    removeHeldInput: vi.fn(),
+    retireSessionDraft: vi.fn(),
+  } as unknown as AssistantActions;
+  const withHeld = (
+    held = [{ id: "h1", text: HELD, createdAt: 1 }],
+    extra: Partial<UIState> = {},
+  ) =>
+    ({
+      ...fixtureState(),
+      session: {
+        ...SESSION,
+        agentType: "developer",
+        promptQueue: { items: [], paused: false, held },
+      },
+      ...extra,
+    }) as unknown as UIState;
+  const show = (state: UIState) =>
+    act(async () => {
+      root.render(
+        <PanelSessionChat
+          state={state}
+          actions={queueActions}
+          session={state.session!}
+          host={host}
+          visible
+          pinned={false}
+          draftStorageKey={KEY}
+          title="Title"
+          onOpenInMain={() => {}}
+        />,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  const rows = () =>
+    [...container.querySelectorAll<HTMLElement>("[data-held-input]")].map(
+      (row) => row.textContent,
+    );
+  const field = () => container.querySelector("textarea")!;
+  const click = async (id: string, label: string) => {
+    const button = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        `[data-held-input="${id}"] button`,
+      ),
+    ].find((candidate) => candidate.textContent === label);
+    if (!button) throw new Error(`no ${label} on ${id}`);
+    await act(async () => button.click());
+  };
+  const removals = () =>
+    vi
+      .mocked(queueActions.removeHeldInput)
+      .mock.calls.map(([sessionId, id]) => ({ sessionId, id }));
+
+  beforeEach(() => {
+    seen.realComposer = true;
+    Element.prototype.scrollIntoView = vi.fn();
+    window.localStorage.clear();
+  });
+
+  it("lists every held input in order, with Put back and Discard", async () => {
+    await show(
+      withHeld([
+        { id: "h1", text: "/first one", createdAt: 1 },
+        { id: "h2", text: "/second one", createdAt: 2 },
+      ]),
+    );
+    expect(rows()).toEqual([
+      expect.stringContaining("/first one"),
+      expect.stringContaining("/second one"),
+    ]);
+    expect(container.textContent).toContain("2 to put back");
+  });
+
+  it("Put back fills an empty field as is, and only then asks the server to drop it", async () => {
+    let storedWhenRemoved: string | null = "unset";
+    vi.mocked(queueActions.removeHeldInput).mockImplementation(() => {
+      storedWhenRemoved = window.localStorage.getItem(KEY);
+    });
+    await show(withHeld());
+    await click("h1", "Put back");
+    expect(field().value).toBe(HELD);
+    expect(removals()).toEqual([{ sessionId: "s1", id: "h1" }]);
+    expect(storedWhenRemoved).toBe(HELD);
+  });
+
+  it("Put back over newer text goes above it on its own line, never replacing it", async () => {
+    window.localStorage.setItem(KEY, "typed since");
+    await show(withHeld());
+    await click("h1", "Put back");
+    expect(field().value).toBe(`${HELD}\ntyped since`);
+  });
+
+  it("Discard asks the server to drop it and leaves the field alone", async () => {
+    window.localStorage.setItem(KEY, "typed since");
+    await show(withHeld());
+    await click("h1", "Discard");
+    expect(removals()).toEqual([{ sessionId: "s1", id: "h1" }]);
+    expect(field().value).toBe("typed since");
+  });
+
+  it("survives a Resend, a fork elsewhere and a reload: the server keeps offering it", async () => {
+    // R2-A2-res2 paths 1-3: each replaced or lost the one browser-only slot
+    // the command used to live in.
+    await show(withHeld());
+    // Resend (or any fork handoff) stages its own draft into this composer.
+    await show(
+      withHeld(undefined, {
+        forkDraft: { sessionId: "s1", text: "resent prompt", token: 9 },
+      }),
+    );
+    expect(field().value).toBe("resent prompt");
+    expect(rows()).toEqual([expect.stringContaining(HELD)]);
+    // A fork to another session moves the same slot elsewhere.
+    await show(
+      withHeld(undefined, {
+        forkDraft: { sessionId: "other", text: "fork text", token: 10 },
+      }),
+    );
+    expect(rows()).toEqual([expect.stringContaining(HELD)]);
+    // Reload: a fresh mount from the server's session state.
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await show(withHeld());
+    expect(rows()).toEqual([expect.stringContaining(HELD)]);
+    expect(removals()).toEqual([]);
+    await click("h1", "Put back");
+    expect(field().value).toBe(`${HELD}\nresent prompt`);
+  });
+
+  const heldButton = (label: string) =>
+    [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        '[data-held-input="h1"] button',
+      ),
+    ].find((candidate) => candidate.textContent === label)!;
+
+  it("Discard is retryable after a reconnect that keeps the held id", async () => {
+    await show(withHeld(undefined, { connected: true }));
+    await click("h1", "Discard");
+    expect(heldButton("Discard").getAttribute("aria-busy")).toBe("true");
+    // The socket drops with the request unanswered; the reconnect snapshot
+    // still lists the id, so the outcome is unknown and the row is free.
+    await show(withHeld(undefined, { connected: false }));
+    await show(withHeld(undefined, { connected: true }));
+    expect(heldButton("Discard").getAttribute("aria-busy")).toBeNull();
+    expect(heldButton("Discard").disabled).toBe(false);
+    await click("h1", "Discard");
+    expect(removals()).toHaveLength(2);
+  });
+
+  it("Put back is retryable after a reconnect that keeps the held id", async () => {
+    await show(withHeld(undefined, { connected: true }));
+    await click("h1", "Put back");
+    await show(withHeld(undefined, { connected: false }));
+    await show(withHeld(undefined, { connected: true }));
+    expect(heldButton("Put back").getAttribute("aria-busy")).toBeNull();
+    expect(heldButton("Put back").disabled).toBe(false);
+    await click("h1", "Put back");
+    expect(removals()).toHaveLength(2);
+  });
+
+  // F029: a row settles only from ITS request's answer (`heldInputAnswer`,
+  // reduced into `UIState.heldInputRemovals`), never from session failures.
+  const removal = (entry: HeldInputRemoval) => ({
+    heldInputRemovals: { s1: { h1: entry } },
+  });
+  const busy = (label: string) =>
+    heldButton(label).getAttribute("aria-busy") === "true";
+  const alertsWith = (message: string) =>
+    [...container.querySelectorAll('[role="alert"]')].filter((node) =>
+      node.textContent?.includes(message),
+    );
+
+  it("a refused Discard shows its refusal once, on the row, and can be given again", async () => {
+    const refusal = "Unknown session.";
+    await show(withHeld());
+    await click("h1", "Discard");
+    await show(withHeld(undefined, removal({ requestId: "r1" })));
+    expect(busy("Discard")).toBe(true);
+    await show(
+      withHeld(
+        undefined,
+        removal({ requestId: "r1", answered: true, error: refusal }),
+      ),
+    );
+    expect(rows()).toEqual([expect.stringContaining(refusal)]);
+    const homes = alertsWith(refusal);
+    expect(homes).toHaveLength(1);
+    expect(homes[0]!.closest('[data-held-input="h1"]')).not.toBeNull();
+    expect(busy("Discard")).toBe(false);
+    expect(heldButton("Discard").disabled).toBe(false);
+    expect(heldButton("Put back").disabled).toBe(false);
+    // Given again: busy, and the old refusal is not what settles it.
+    await click("h1", "Discard");
+    expect(busy("Discard")).toBe(true);
+    expect(rows()[0]).not.toContain(refusal);
+    expect(removals()).toHaveLength(2);
+    await show(
+      withHeld(
+        undefined,
+        removal({ requestId: "r1", answered: true, error: refusal }),
+      ),
+    );
+    expect(busy("Discard")).toBe(true);
+  });
+
+  it("an unrelated failure of the same session during a Discard neither settles nor marks the row", async () => {
+    const unrelated = "The selected runtime model is unavailable";
+    await show(withHeld());
+    await click("h1", "Discard");
+    await show(
+      withHeld(undefined, {
+        ...removal({ requestId: "r1" }),
+        sessionFailures: { s1: unrelated },
+      }),
+    );
+    expect(busy("Discard")).toBe(true);
+    expect(rows()[0]).not.toContain(unrelated);
+  });
+
+  it("a failure from before the click is never attributed to it, not even when another session's failure arrives", async () => {
+    const older = "An older failure before Discard was clicked";
+    await show(withHeld(undefined, { sessionFailures: { s1: older } }));
+    await click("h1", "Discard");
+    await show(
+      withHeld(undefined, {
+        ...removal({ requestId: "r1" }),
+        sessionFailures: { s1: older, s2: "A different session failed" },
+      }),
+    );
+    expect(busy("Discard")).toBe(true);
+    expect(rows()[0]).not.toContain(older);
+  });
+
+  it("its own success settles the row, and the queue update takes it away", async () => {
+    await show(withHeld());
+    await click("h1", "Discard");
+    await show(
+      withHeld(undefined, removal({ requestId: "r1", answered: true })),
+    );
+    expect(busy("Discard")).toBe(false);
+    expect(rows()[0]).toContain("did not run");
+    await show(withHeld([], removal({ requestId: "r1", answered: true })));
+    expect(rows()).toEqual([]);
+  });
 });

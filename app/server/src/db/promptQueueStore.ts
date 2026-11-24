@@ -2,8 +2,14 @@
  * SQL facade for the per-session prompt queue: messages the user queued behind
  * a running turn. Rows stay editable until sent, so order is an explicit
  * `position`, renumbered densely on every move. `promptQueue.ts` owns delivery.
+ *
+ * The same table keeps the session's HELD inputs (`kind = 'held'`): sends a
+ * pending runtime selection refused that cannot be queued. They are never
+ * dispatched, so every queue query below reads `kind = 'queued'` only, and
+ * held rows have their own accessors.
  */
 import type {
+  HeldInput,
   PromptQueueState,
   QueuedPrompt,
   QueuedPromptAttachment,
@@ -20,6 +26,9 @@ interface Row {
   error: string | null;
   created_at_ms: number;
 }
+
+/** Narrows a statement to ordinary queued rows; held rows never dispatch. */
+const QUEUED = "kind='queued'";
 
 /** A stored value this process cannot read is dropped, never a throw. */
 function parseJson<T>(json: string | null, valid: (v: unknown) => v is T) {
@@ -74,7 +83,7 @@ export const promptQueueStore = {
     return (
       getDb()
         .prepare(
-          "SELECT * FROM session_prompt_queue WHERE session_id=? ORDER BY position, created_at_ms",
+          `SELECT * FROM session_prompt_queue WHERE session_id=? AND ${QUEUED} ORDER BY position, created_at_ms`,
         )
         .all(sessionId) as unknown as Row[]
     ).map(map);
@@ -82,25 +91,34 @@ export const promptQueueStore = {
 
   get(sessionId: string, id: string): QueuedPrompt | undefined {
     const row = getDb()
-      .prepare("SELECT * FROM session_prompt_queue WHERE session_id=? AND id=?")
+      .prepare(
+        `SELECT * FROM session_prompt_queue WHERE session_id=? AND id=? AND ${QUEUED}`,
+      )
       .get(sessionId, id) as unknown as Row | undefined;
     return row ? map(row) : undefined;
   },
 
   state(sessionId: string): PromptQueueState {
-    return { items: this.list(sessionId), paused: this.isPaused(sessionId) };
+    const held = this.listHeld(sessionId);
+    return {
+      items: this.list(sessionId),
+      paused: this.isPaused(sessionId),
+      ...(held.length ? { held } : {}),
+    };
   },
 
   /** Sessions with anything queued, for the boot drain. */
   sessionIds(): string[] {
     return (
       getDb()
-        .prepare("SELECT DISTINCT session_id FROM session_prompt_queue")
+        .prepare(
+          `SELECT DISTINCT session_id FROM session_prompt_queue WHERE ${QUEUED}`,
+        )
         .all() as unknown as { session_id: string }[]
     ).map((r) => r.session_id);
   },
 
-  append(input: QueuedPromptInsert): void {
+  append(input: QueuedPromptInsert, kind: "queued" | "held" = "queued"): void {
     const db = getDb();
     const now = Date.now();
     withDbTransaction(() => {
@@ -110,7 +128,7 @@ export const promptQueueStore = {
         )
         .get(input.sessionId) as unknown as { p: number | null };
       db.prepare(
-        "INSERT INTO session_prompt_queue(id,session_id,position,text,attachments_json,command_json,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?,?)",
+        "INSERT INTO session_prompt_queue(id,session_id,position,text,attachments_json,command_json,created_at_ms,updated_at_ms,kind) VALUES(?,?,?,?,?,?,?,?,?)",
       ).run(
         input.id,
         input.sessionId,
@@ -120,6 +138,7 @@ export const promptQueueStore = {
         input.command ? JSON.stringify(input.command) : null,
         now,
         now,
+        kind,
       );
     });
   },
@@ -132,7 +151,7 @@ export const promptQueueStore = {
     return (
       getDb()
         .prepare(
-          "UPDATE session_prompt_queue SET text=?, command_json=NULL, updated_at_ms=? WHERE session_id=? AND id=?",
+          `UPDATE session_prompt_queue SET text=?, command_json=NULL, updated_at_ms=? WHERE session_id=? AND id=? AND ${QUEUED}`,
         )
         .run(text, Date.now(), sessionId, id).changes > 0
     );
@@ -141,7 +160,7 @@ export const promptQueueStore = {
   setError(sessionId: string, id: string, error: string): void {
     getDb()
       .prepare(
-        "UPDATE session_prompt_queue SET error=?, updated_at_ms=? WHERE session_id=? AND id=?",
+        `UPDATE session_prompt_queue SET error=?, updated_at_ms=? WHERE session_id=? AND id=? AND ${QUEUED}`,
       )
       .run(error.slice(0, 500), Date.now(), sessionId, id);
   },
@@ -149,7 +168,7 @@ export const promptQueueStore = {
   clearError(sessionId: string, id: string): void {
     getDb()
       .prepare(
-        "UPDATE session_prompt_queue SET error=NULL WHERE session_id=? AND id=?",
+        `UPDATE session_prompt_queue SET error=NULL WHERE session_id=? AND id=? AND ${QUEUED}`,
       )
       .run(sessionId, id);
   },
@@ -157,7 +176,9 @@ export const promptQueueStore = {
   remove(sessionId: string, id: string): boolean {
     return (
       getDb()
-        .prepare("DELETE FROM session_prompt_queue WHERE session_id=? AND id=?")
+        .prepare(
+          `DELETE FROM session_prompt_queue WHERE session_id=? AND id=? AND ${QUEUED}`,
+        )
         .run(sessionId, id).changes > 0
     );
   },
@@ -169,7 +190,7 @@ export const promptQueueStore = {
       const ids = (
         db
           .prepare(
-            "SELECT id FROM session_prompt_queue WHERE session_id=? ORDER BY position, created_at_ms",
+            `SELECT id FROM session_prompt_queue WHERE session_id=? AND ${QUEUED} ORDER BY position, created_at_ms`,
           )
           .all(sessionId) as unknown as { id: string }[]
       ).map((r) => r.id);
@@ -179,7 +200,7 @@ export const promptQueueStore = {
       const to = Math.max(0, Math.min(ids.length, Math.trunc(toIndex)));
       ids.splice(to, 0, id);
       const update = db.prepare(
-        "UPDATE session_prompt_queue SET position=? WHERE session_id=? AND id=?",
+        `UPDATE session_prompt_queue SET position=? WHERE session_id=? AND id=? AND ${QUEUED}`,
       );
       ids.forEach((rowId, index) => update.run(index, sessionId, rowId));
       return true;
@@ -187,14 +208,15 @@ export const promptQueueStore = {
   },
 
   /**
-   * Drop every row but `keep`, and the pause with them once nothing is left:
-   * an empty queue has nothing to hold.
+   * Drop every queued row but `keep`, and the pause with them once nothing is
+   * left: an empty queue has nothing to hold. Held inputs stay: only the
+   * user's Put back or Discard, or deleting the session, removes one.
    */
   clear(sessionId: string, keep: ReadonlySet<string> = new Set()): void {
     const db = getDb();
     withDbTransaction(() => {
       const remove = db.prepare(
-        "DELETE FROM session_prompt_queue WHERE session_id=? AND id=?",
+        `DELETE FROM session_prompt_queue WHERE session_id=? AND id=? AND ${QUEUED}`,
       );
       for (const row of this.list(sessionId))
         if (!keep.has(row.id)) remove.run(sessionId, row.id);
@@ -203,6 +225,51 @@ export const promptQueueStore = {
           "DELETE FROM session_prompt_queue_pause WHERE session_id=?",
         ).run(sessionId);
     });
+  },
+
+  /** Everything the session kept here, held inputs included: it is deleted. */
+  deleteSession(sessionId: string): void {
+    const db = getDb();
+    withDbTransaction(() => {
+      db.prepare("DELETE FROM session_prompt_queue WHERE session_id=?").run(
+        sessionId,
+      );
+      db.prepare(
+        "DELETE FROM session_prompt_queue_pause WHERE session_id=?",
+      ).run(sessionId);
+    });
+  },
+
+  /** The session's held inputs, oldest first. */
+  listHeld(sessionId: string): HeldInput[] {
+    return (
+      getDb()
+        .prepare(
+          "SELECT id, text, created_at_ms FROM session_prompt_queue WHERE session_id=? AND kind='held' ORDER BY position, created_at_ms",
+        )
+        .all(sessionId) as unknown as Pick<
+        Row,
+        "id" | "text" | "created_at_ms"
+      >[]
+    ).map((row) => ({
+      id: row.id,
+      text: row.text,
+      createdAt: row.created_at_ms,
+    }));
+  },
+
+  appendHeld(input: { id: string; sessionId: string; text: string }): void {
+    this.append(input, "held");
+  },
+
+  removeHeld(sessionId: string, id: string): boolean {
+    return (
+      getDb()
+        .prepare(
+          "DELETE FROM session_prompt_queue WHERE session_id=? AND id=? AND kind='held'",
+        )
+        .run(sessionId, id).changes > 0
+    );
   },
 
   isPaused(sessionId: string): boolean {

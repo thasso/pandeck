@@ -6,12 +6,15 @@ import {
   CornerDownRight,
   ListOrdered,
   Trash2,
+  Undo2,
 } from "lucide-react";
 import type {
+  HeldInput,
   PromptQueueState,
   QueuedPeerPrompt,
   QueuedPrompt,
 } from "@assistant/shared";
+import type { HeldInputRemoval } from "../hooks/useAssistant.ts";
 import { sessionPath } from "../lib/sessionRoutes.ts";
 import { IconButton } from "./common/IconButton.tsx";
 import { Spinner } from "./common/load.tsx";
@@ -54,6 +57,25 @@ export interface PromptQueueLedgeProps {
   /** Withdraw a peer prompt before it is delivered. */
   onWithdrawPeer?: ((id: string) => void) | undefined;
   onOpenSession?: ((id: string) => void) | undefined;
+  /**
+   * Put a held input ({@link PromptQueueState.held}) back into the composer;
+   * the host removes it on the server once the field has it.
+   */
+  onPutBackHeld?: ((input: HeldInput) => void) | undefined;
+  /** Discard a held input. */
+  onDiscardHeld?: ((id: string) => void) | undefined;
+  /**
+   * The connection the held answers were sent on. A change either way ends an
+   * answer whose outcome is unknown: its busy release, and the next snapshot
+   * says what landed.
+   */
+  connected?: boolean;
+  /**
+   * Held input id → the last removal this browser sent for it
+   * (`UIState.heldInputRemovals`). A row settles only from its own request's
+   * answer, and a refusal shows on that row alone.
+   */
+  heldRemovals?: Readonly<Record<string, HeldInputRemoval>> | undefined;
 }
 
 /**
@@ -75,7 +97,11 @@ export interface PromptQueueLedgeProps {
  * with nothing of the user's queued. Peer prompts other sessions
  * sent wait after the user's rows, marked with their sender: the user can steer
  * one in or withdraw it, never edit what another agent wrote. Same object as
- * the session and background-work strips.
+ * the session and background-work strips. Held inputs come first: sends a
+ * pending runtime selection refused that cannot wait in the queue (a skill
+ * command). They never send on their own, so each offers Put back (into the
+ * composer, above what is typed) and Discard, and stays on every device until
+ * the user picks one.
  * @related ComposerLedge, Composer, BackgroundWorkLedge, PendingCommentsLedge
  */
 /** What a Stop is holding, as the strip's closing sentence. */
@@ -109,24 +135,63 @@ export function PromptQueueLedge({
   onSendPeerNow,
   onWithdrawPeer,
   onOpenSession,
+  onPutBackHeld,
+  onDiscardHeld,
+  connected = true,
+  heldRemovals = NO_REMOVALS,
 }: PromptQueueLedgeProps) {
   const [open, setOpen] = useState(true);
-  // A message just queued is what the user is looking for: reopen for it.
+  const heldInputs = queue.held ?? EMPTY_HELD;
+  // A message just queued, or one just held, is what the user is looking
+  // for: reopen for it.
   const knownIds = useRef(
     new Set([
       ...queue.items.map((item) => item.id),
       ...peers.map((peer) => `peer:${peer.id}`),
+      ...heldInputs.map((input) => `held:${input.id}`),
     ]),
   );
   useEffect(() => {
     const ids = [
       ...queue.items.map((item) => item.id),
       ...peers.map((peer) => `peer:${peer.id}`),
+      ...heldInputs.map((input) => `held:${input.id}`),
     ];
     const fresh = ids.some((id) => !knownIds.current.has(id));
     knownIds.current = new Set(ids);
     if (fresh) setOpen(true);
-  }, [queue.items, peers]);
+  }, [queue.items, peers, heldInputs]);
+  // Held inputs the user already answered, by the answer, busy on its button
+  // until the request sent for it is answered or the server's queue drops it.
+  // A refusal then shows on its row, and both buttons are free again.
+  const [settling, setSettling] = useState<ReadonlyMap<string, HeldSettling>>(
+    () => new Map(),
+  );
+  useEffect(() => {
+    setSettling((current) => {
+      const ids = new Set(heldInputs.map((input) => input.id));
+      const next = new Map([...current].filter(([id]) => ids.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [heldInputs]);
+  // Unknown outcome: an answer in flight on a connection that dropped, or
+  // that a reconnect replaced, is released. Its snapshot decides.
+  useEffect(() => {
+    setSettling((current) => (current.size === 0 ? current : new Map()));
+  }, [connected]);
+  // Settled by its OWN answer: the request sent since the click (not the one
+  // the row held before it) was answered. Nothing else ends it.
+  useEffect(() => {
+    setSettling((current) => {
+      const next = new Map(
+        [...current].filter(([id, s]) => {
+          const removal = heldRemovals[id];
+          return !(removal?.answered && removal.requestId !== s.before);
+        }),
+      );
+      return next.size === current.size ? current : next;
+    });
+  }, [heldRemovals]);
   // Sends this browser asked for, shown as under way before the server's
   // `sending` arrives; a row leaves the set when it leaves the queue.
   const [asked, setAsked] = useState<ReadonlySet<string>>(() => new Set());
@@ -150,7 +215,21 @@ export function PromptQueueLedge({
   // when the user has nothing queued: the strip stays for its Resume.
   const held = queue.paused || Boolean(queue.automaticTurnsHeld);
   const unhandled = unhandledBackgroundUpdates;
-  if (count === 0 && !held && unhandled === 0) return null;
+  const toPutBack = heldInputs.length;
+  if (count === 0 && !held && unhandled === 0 && toPutBack === 0) return null;
+  const settle = (
+    id: string,
+    answer: "putBack" | "discard",
+    act: () => void,
+  ) => {
+    setSettling((current) =>
+      new Map(current).set(id, {
+        answer,
+        before: heldRemovals[id]?.requestId,
+      }),
+    );
+    act();
+  };
   const steering = running && canSteer;
   const Chevron = open ? ChevronDown : ChevronRight;
   const sendNow = (id: string) => {
@@ -170,19 +249,52 @@ export function PromptQueueLedge({
       >
         <ListOrdered aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate text-left">
-          {held
-            ? count > 0
-              ? `Queue paused · ${count}`
-              : "Stopped"
-            : count > 0
-              ? `${count} queued`
-              : `${unhandled} background ${unhandled === 1 ? "update" : "updates"} not handled`}
+          {[
+            held
+              ? count > 0
+                ? `Queue paused · ${count}`
+                : "Stopped"
+              : count > 0
+                ? `${count} queued`
+                : toPutBack === 0
+                  ? `${unhandled} background ${unhandled === 1 ? "update" : "updates"} not handled`
+                  : undefined,
+            toPutBack > 0 ? `${toPutBack} to put back` : undefined,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
         </span>
         <Chevron aria-hidden="true" />
       </Button>
       {open ? (
         <div className="max-h-72 divide-y overflow-y-auto border-t text-sm text-muted-foreground">
           <ul className="divide-y">
+            {heldInputs.map((input) => (
+              <HeldInputRow
+                key={`held:${input.id}`}
+                input={input}
+                settling={settling.get(input.id)?.answer}
+                failure={
+                  settling.has(input.id)
+                    ? undefined
+                    : heldRemovals[input.id]?.error
+                }
+                {...(onPutBackHeld
+                  ? {
+                      onPutBack: (chosen: HeldInput) =>
+                        settle(chosen.id, "putBack", () =>
+                          onPutBackHeld(chosen),
+                        ),
+                    }
+                  : {})}
+                {...(onDiscardHeld
+                  ? {
+                      onDiscard: (id: string) =>
+                        settle(id, "discard", () => onDiscardHeld(id)),
+                    }
+                  : {})}
+              />
+            ))}
             {queue.items.map((item) => (
               <QueuedRow
                 key={item.id}
@@ -248,6 +360,96 @@ export function PromptQueueLedge({
     </div>
   );
 }
+
+const EMPTY_HELD: readonly HeldInput[] = [];
+
+const NO_REMOVALS: Readonly<Record<string, HeldInputRemoval>> = {};
+
+/** A held-input answer the user gave, until its own request is answered. */
+interface HeldSettling {
+  answer: "putBack" | "discard";
+  /**
+   * The request the row held when the user answered: its answer is an
+   * earlier one's, so it does not settle this.
+   */
+  before: string | undefined;
+}
+
+/**
+ * A held input: what the user sent that a pending runtime selection refused
+ * and that cannot wait in the queue. It never sends on its own; Put back
+ * hands it to the composer, Discard drops it.
+ */
+const HeldInputRow = memo(function HeldInputRow({
+  input,
+  settling,
+  failure,
+  onPutBack,
+  onDiscard,
+}: {
+  input: HeldInput;
+  /** The user's answer, while the server has not dropped it yet. */
+  settling: "putBack" | "discard" | undefined;
+  /** Why the last answer failed, until the user gives an answer again. */
+  failure: string | undefined;
+  onPutBack?: (input: HeldInput) => void;
+  onDiscard?: (id: string) => void;
+}) {
+  return (
+    <li data-held-input={input.id} className="min-w-0">
+      <Item
+        size="xs"
+        className="flex-nowrap gap-1.5 rounded-none py-0 pr-1.5 pl-2.5 hover:bg-muted dark:hover:bg-muted/50"
+      >
+        <Undo2 aria-hidden="true" className="size-3.5 shrink-0" />
+        <div className="flex h-7 min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
+          <span
+            className="min-w-0 flex-1 truncate text-foreground"
+            title={input.text}
+          >
+            {input.text}
+          </span>
+          {failure ? (
+            <span
+              role="alert"
+              className="min-w-0 truncate text-xs text-destructive"
+              title={failure}
+            >
+              {failure}
+            </span>
+          ) : (
+            <span className="shrink-0 text-xs">did not run</span>
+          )}
+        </div>
+        <ItemActions className="shrink-0 gap-0.5">
+          {onDiscard ? (
+            <Button
+              variant="ghost"
+              size="xs"
+              busy={settling === "discard"}
+              disabled={settling === "putBack"}
+              onClick={() => onDiscard(input.id)}
+            >
+              Discard
+            </Button>
+          ) : null}
+          {onPutBack ? (
+            <Button
+              variant="secondary"
+              size="xs"
+              title="Put it back into your message box"
+              busy={settling === "putBack"}
+              disabled={settling === "discard"}
+              onClick={() => onPutBack(input)}
+            >
+              Put back
+            </Button>
+          ) : null}
+        </ItemActions>
+      </Item>
+    </li>
+  );
+});
 
 /**
  * Background updates a turn was given and did not finish handling. Nothing

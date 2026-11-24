@@ -5,10 +5,14 @@ import {
 } from "../lib/newSessionRuntime.ts";
 import { persistentStore } from "../lib/persistentStore.ts";
 
-/** Best-effort browser-local text draft, isolated by the caller-owned key. */
+/**
+ * Best-effort browser-local text draft, isolated by the caller-owned key. The
+ * third value is the key the text was read for: for one render after the key
+ * changes it is still the previous key, and the text still that key's.
+ */
 export function useBrowserDraft(
   storageKey: string | undefined,
-): [string, (value: string) => void] {
+): [string, (value: string) => void, string | undefined] {
   // `edited`: the user changed the text since it was read for `key`. Only then
   // is it written: writing back what was read (or the empty field a slow store
   // load rendered) would replace the stored draft.
@@ -62,7 +66,7 @@ export function useBrowserDraft(
     );
   }, []);
 
-  return [state.text, setDraft];
+  return [state.text, setDraft, state.key];
 }
 
 function loadBrowserDraft(storageKey: string | undefined): string {
