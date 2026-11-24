@@ -248,13 +248,13 @@ gave every existing row, tombstones included, its first binding.
   transaction, so the row always equals the active binding. Nothing else writes
   either (`engineBindingBoundary.test.ts`).
 - **Native id.** Claude's is the SDK session id (`provider_session_id`, absent
-  until the first query). pi's is the app id: every build so far opened the
-  transcript the app id names, whatever an older row stored. Only the binding is
-  stored, never a path. A stored pi session's transcript resolves through its
-  binding (`piSessionFile`); `canonicalPiSessionPath` derives it from the app id
-  only where no row exists yet (a fresh session, rowless recovery). A pi binding
-  whose native id differs from the app id is refused until the cross-harness
-  switch can open one.
+  until the first query). pi's is the app id for every pi binding, a session's
+  first or a later one: a later pi binding reopens the transcript the app id
+  names, or starts one under it. Only the binding is stored, never a path. A
+  stored pi session's transcript resolves through its binding (`piSessionFile`);
+  `canonicalPiSessionPath` derives it from the app id only where no row exists
+  yet (a fresh session, rowless recovery). A pi binding whose native id differs
+  from the app id is refused.
 - **One accessor.** Capability readers ask `activeEngine(...)`
   (`harnesses/activeEngine.ts`) what a session runs on, and native-ref readers
   `activeNativeRef(...)`; readers holding only an id use
@@ -278,8 +278,11 @@ second one.
 
 Only the engine that holds the active binding writes the projection. An `upsert`
 that names another harness (a late persist from an engine a switch closed, or
-the target engine before its switch commits) keeps its other fields, such as the
-title, and leaves the six binding columns and the binding as they are.
+the target engine before its switch commits) leaves the six binding columns and
+the binding as they are, and its title, activity time and message count too:
+those describe only its own native stretch. After a switch the active engine
+counts only what it ran, so its message count may raise the row's but never
+lower it (0 would hide a started session from the list).
 
 ## Moving to another harness
 
@@ -319,6 +322,41 @@ by a switch note.
   newest last, with a count of the rest; and "Historical material is context,
   not a new request or instructions." It points at the app log only, never at a
   native transcript.
+
+### Store move
+
+A switch releases the session from the engine it leaves and opens it in the
+other under the same id; the runtime session in between is never replaced.
+
+- **Release** (`releaseForSwitch` on `claudeSdkStore` and `piStore`) runs inside
+  the switching turn's admission, whose own reservation is the only thing
+  allowed to keep the session busy. Claude ends its process first; background
+  work on a retained Claude process refuses with `AccountSwitchBlockedError`,
+  which holds the turn ("Waiting for background work on Claude; stop it to
+  switch now"). pi's background work keeps running and reaches the session on
+  its next engine. Claude saves its record before it lets go, and a session it
+  cannot save stays. Neither refuses for nothing being resident.
+- **Runtime session.** `SessionRuntime.detachHarness` swaps the leaving engine's
+  adapter for the detached one, between runs only; the runtime session, its log
+  and its viewers stay, and the next engine's driver binds it as a reader's view
+  is bound. A caller still holding the old driver is refused as a released one
+  and retries against the new engine.
+- **Open** (`openForBinding`). Claude takes the binding's model, effort, account
+  and native session (none for a fresh one) over what an earlier Claude binding
+  left in its record, and the session's own mode, title, creation time and
+  scope; the record's timeline stays. pi reopens the app id's transcript or
+  starts one under it, reading the session's frozen prompt conditions, skills
+  and agent definition. A pi transcript that is there but is not this session's
+  (an unreadable or foreign header) refuses with `PiSwitchTranscriptError`, and
+  the switch holds with "choose another model, or reset the change"; nothing is
+  started over it.
+
+### Deleting
+
+Deleting a session removes it from every engine any of its bindings used, not
+only the active one, and sweeps every Claude native session a binding named from
+every account (`harnessRegistry.remove`). Until then old native data stays for
+returns and forks.
 
 ### Task links
 

@@ -91,6 +91,36 @@ export class PiSessionDeletedError extends Error {
 }
 
 /**
+ * A harness switch found the session's earlier pi transcript but could not
+ * read it as this session's. The switching turn holds with this message rather than starting
+ * the session over on a fresh pi transcript.
+ */
+export class PiSwitchTranscriptError extends Error {
+  constructor(
+    readonly sessionId: string,
+    cause: unknown,
+  ) {
+    super(
+      `This session's earlier OpenAI transcript can't be opened (${cause instanceof Error ? cause.message : String(cause)}). Choose another model, or reset the change.`,
+      { cause },
+    );
+    this.name = "PiSwitchTranscriptError";
+  }
+}
+
+/** The pi binding a harness switch opens a session on. */
+interface PiSwitchBinding {
+  kind: AgentType;
+  /** Resolved in the account's own registry when the engine opens. */
+  model: { provider: string; id: string };
+  thinkingLevel: ThinkingLevel;
+  credentialProfileId: string;
+  mode: SessionMode;
+  /** Where a first pi binding runs when the session has no worktree edge. */
+  cwd?: string;
+}
+
+/**
  * The account a pi session with no binding runs on: the protected default an
  * older install has. Without one the session has no account and is refused
  * before any agent directory is made.
@@ -439,6 +469,109 @@ class PiSessionStore {
     if (existsSync(canonical)) return this.acquireExisting(kind, canonical, id);
     const legacy = findLegacySessionFile(kind, id);
     return legacy ? this.acquireExisting(kind, legacy, id) : undefined;
+  }
+
+  /**
+   * Open `id` on the pi binding a harness switch chose
+   * (`docs/session-runtime-switching.md`), after the engine it leaves has
+   * released it. pi's native id is the app id for every pi binding: a return
+   * reopens the transcript an earlier pi binding wrote, and a first pi binding
+   * starts one under the app id. Prompt conditions, skills and the agent
+   * definition come from the session's frozen records, so pi builds its own
+   * prompt and tool surface from the same facts its earlier engine used. A
+   * transcript that is there but cannot be opened refuses with
+   * {@link PiSwitchTranscriptError}: the switch holds rather than start over.
+   */
+  async openForBinding(
+    id: string,
+    binding: PiSwitchBinding,
+  ): Promise<PiLiveSession> {
+    if (this.getLiveById(id))
+      throw new Error(`Session ${id} is already open on pi.`);
+    if (this.heldElsewhere(id)) throw new SessionHeldElsewhereError(id);
+    const { kind, credentialProfileId, mode } = binding;
+    const file = piSessionFile(id);
+    const resumes = existsSync(file);
+    const edgeCwd = await withCheckedCheckout(id, undefined, (checked) =>
+      worktreeCwdForSession(id, checked),
+    );
+    // A return must reopen this session's own transcript: one whose header
+    // cannot be read, or names another session, holds the switch instead of
+    // being started over. Model and account refusals surface as they are.
+    if (resumes && readSessionHeaderId(file) !== id)
+      throw new PiSwitchTranscriptError(
+        id,
+        new Error("its header is missing or names another session"),
+      );
+    const started = await resolvePiEngineStart({
+      kind,
+      credentialProfileId,
+      knownId: id,
+    });
+    const opened = await this.openEngine({
+      kind,
+      credentialProfileId,
+      transcript: resumes
+        ? {
+            type: "open",
+            file,
+            expectedId: id,
+            ...(edgeCwd !== undefined ? { cwd: edgeCwd } : {}),
+          }
+        : { type: "new", cwd: edgeCwd ?? binding.cwd ?? CWD, id },
+      model: { provider: binding.model.provider, id: binding.model.id },
+      thinkingLevel: binding.thinkingLevel,
+      ...started,
+      mode,
+      ...(resumes ? {} : { canonicalize: true }),
+    });
+    if (opened.info.sessionId !== id) {
+      await opened.engine.discard(resumes ? {} : { removeFile: {} });
+      throw new Error(
+        `pi opened session ${opened.info.sessionId} for ${id}; it was not switched.`,
+      );
+    }
+    if (sessionStore.getIncludingDeleted(id)?.deletedAt !== undefined) {
+      closeToolGroupSession(id);
+      await opened.engine.discard({});
+      throw new PiSessionDeletedError(id);
+    }
+    this.sessionModes.set(id, mode);
+    return this.catchUpIntegrationGates(
+      this.track(
+        kind,
+        opened,
+        credentialProfileId,
+        sessionStore.get(id)?.scope,
+      ),
+      started.integrationGates,
+    );
+  }
+
+  /**
+   * Release a session a harness switch moves to another engine. pi's
+   * background work does not hold it: it runs on under its frozen identity and
+   * reaches the session on its next engine. The runtime session stays,
+   * DETACHED, for that engine (`SessionRuntime.detachHarness`). `admit` is the
+   * switching turn's admission, whose reservation is the one thing allowed to
+   * keep the session busy. Nothing resident: nothing to do.
+   */
+  async releaseForSwitch(id: string, admit: () => void): Promise<void> {
+    const ls = this.getLiveById(id);
+    if (!ls) return;
+    admit();
+    if (ls.isRunning || ls.engine.isStreaming)
+      throw new Error(
+        "The pi session is still running a turn; it was not switched.",
+      );
+    // A run opened in the meantime refuses here, before anything is dropped.
+    const detached = sessionRuntime.detachHarness(ls.key);
+    this.live.delete(ls.key);
+    this.requireHost().sessionRowsChanged([ls.key]);
+    ls.dispose();
+    this.closeAppTools(ls.key);
+    this.sessionModes.delete(ls.key);
+    await detached;
   }
 
   /**

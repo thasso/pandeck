@@ -504,6 +504,18 @@ function upsert(input: SessionUpsert): boolean {
             prev?.credential_profile_id ?? input.credentialProfileId ?? null,
         };
     const createdAt = prev?.created_at_ms ?? input.createdAt ?? now;
+    // A foreign engine's figures describe only its own native stretch, so its
+    // title, activity and message count stay as they are. The active engine
+    // after a switch counts only what it ran, so it may raise the count but
+    // never lower it: 0 would hide a started session from the list.
+    const messageCount = foreign
+      ? prev.message_count
+      : input.messageCount !== undefined &&
+          prev !== undefined &&
+          input.messageCount < prev.message_count &&
+          (activeBinding(input.id)?.seq ?? 1) > 1
+        ? prev.message_count
+        : input.messageCount;
     inDbTransaction(() => {
       getDb()
         .prepare(upsertSql)
@@ -520,12 +532,12 @@ function upsert(input: SessionUpsert): boolean {
           pick(input.purpose, prev?.purpose, "chat"),
           binding.harness,
           input.agentType,
-          pick(input.title, prev?.title, "New chat"),
+          pick(foreign ? undefined : input.title, prev?.title, "New chat"),
           // createdAt is insert-only: the first stored value always wins so an update
           // can never move a session's creation time.
           createdAt,
-          pick(input.updatedAt, prev?.updated_at_ms, now),
-          pick(input.messageCount, prev?.message_count, 0),
+          pick(foreign ? undefined : input.updatedAt, prev?.updated_at_ms, now),
+          pick(messageCount, prev?.message_count, 0),
           binding.provider,
           binding.providerSessionId,
           binding.model,

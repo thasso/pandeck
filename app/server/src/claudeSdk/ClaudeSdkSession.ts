@@ -1699,32 +1699,12 @@ export class ClaudeSdkSession implements LiveSession {
         );
       };
       check();
-      const closing = this.queryLoop;
-      const retained = this.retainedEpochKey;
-      if (retained) {
-        const closed = await backgroundWorkSupervisor.closeIdleHost(
-          this.id,
-          retained,
-          "switching the session's account",
-        );
-        if (!closed)
-          throw new AccountSwitchBlockedError(
-            "Background work still holds this session's Claude host. Stop it before switching accounts.",
-          );
-        check();
-      }
-      await this.closeProcess("switching the session's account");
-      if (
-        closing &&
-        !(await settlesWithin(closing, this.processCloseTimeoutMs))
-      ) {
-        this.abortController?.abort();
-        if (!(await settlesWithin(closing, this.processCloseTimeoutMs)))
-          throw new Error(
-            "The old Claude process did not exit before the account switch.",
-          );
-      }
-      check();
+      await this.endProcessFor(check, {
+        reason: "switching the session's account",
+        blocked:
+          "Background work still holds this session's Claude host. Stop it before switching accounts.",
+        stuck: "The old Claude process did not exit before the account switch.",
+      });
       const transfer = providerSessionId
         ? await copyClaudeSessionForAccount(
             previous,
@@ -1760,6 +1740,79 @@ export class ClaudeSdkSession implements LiveSession {
     } finally {
       this.accountSwitches -= 1;
     }
+  }
+
+  /**
+   * End this session's Claude process so the session can move to another
+   * engine (a harness switch, `docs/session-runtime-switching.md`). Background
+   * work on a retained process refuses with {@link AccountSwitchBlockedError}:
+   * the switching turn is held until the user stops it. `admit` is that turn's
+   * admission, rechecked at every step. The caller releases the session.
+   * Like an account switch, it waits behind earlier admissions and then
+   * refuses model and effort changes, prompts and provider turns until it
+   * ends: the account moves with the engine.
+   */
+  async closeForEngineSwitch(admit: () => void): Promise<void> {
+    this.assertNotDisposed();
+    const place = this.admission.enter();
+    try {
+      await place.ready;
+      this.assertNotDisposed();
+      this.accountSwitches += 1;
+    } finally {
+      place.release();
+    }
+    try {
+      const check = () => {
+        this.assertNotDisposed();
+        admit();
+        if (this.running)
+          throw new Error(
+            "The Claude session started a turn while it switched.",
+          );
+      };
+      check();
+      await this.endProcessFor(check, {
+        reason: "switching the session to another engine",
+        blocked:
+          "Background work still holds this session's Claude host. Stop it before switching engines.",
+        stuck: "The Claude process did not exit before the engine switch.",
+      });
+    } finally {
+      this.accountSwitches -= 1;
+    }
+  }
+
+  /**
+   * End the current query epoch for a move off it: close a retained host only
+   * when its background work lets go, then the process, waiting (bounded) for
+   * its loop to settle. `check` runs after every await.
+   */
+  private async endProcessFor(
+    check: () => void,
+    text: { reason: string; blocked: string; stuck: string },
+  ): Promise<void> {
+    const closing = this.queryLoop;
+    const retained = this.retainedEpochKey;
+    if (retained) {
+      const closed = await backgroundWorkSupervisor.closeIdleHost(
+        this.id,
+        retained,
+        text.reason,
+      );
+      if (!closed) throw new AccountSwitchBlockedError(text.blocked);
+      check();
+    }
+    await this.closeProcess(text.reason);
+    if (
+      closing &&
+      !(await settlesWithin(closing, this.processCloseTimeoutMs))
+    ) {
+      this.abortController?.abort();
+      if (!(await settlesWithin(closing, this.processCloseTimeoutMs)))
+        throw new Error(text.stuck);
+    }
+    check();
   }
 
   /* --------------------------------- prompt -------------------------------- */

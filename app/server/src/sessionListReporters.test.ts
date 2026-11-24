@@ -530,7 +530,11 @@ const CLASSIFIED: Record<
   piStoreModule: {
     exports: piStoreModule,
     funnel: ["sessionRowsChanged"],
-    kinds: { PiSessionDeletedError: "read", piStore: "projected-write" },
+    kinds: {
+      PiSessionDeletedError: "read",
+      PiSwitchTranscriptError: "read",
+      piStore: "projected-write",
+    },
   },
   piLiveModule: {
     exports: piLiveModule,

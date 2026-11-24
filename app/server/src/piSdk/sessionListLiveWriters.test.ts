@@ -910,3 +910,34 @@ test.each([
       assert.equal(sessionRuntime.get(live.id), undefined);
   },
 );
+
+test("Pi engine-switch release and reopen on a binding report the live overlay", async () => {
+  interceptPi();
+  const profile = account("openai-codex");
+  const live = await freshPi(profile);
+  ensureRuntimeSessionWithRuntime(sessionRuntime, live);
+  await sessionRuntime.prompt(live.id, "before the switch");
+  await oracle(
+    "PiStore.releaseForSwitch",
+    () => piStore.releaseForSwitch(live.id, () => {}),
+    { changed: [live.id] },
+  );
+  assert.equal(piStore.get(live.id), undefined);
+  assert.equal(sessionRuntime.get(live.id)?.isDetached, true);
+  // A return: the transcript the first binding wrote opens under the app id.
+  const reopened = await oracle(
+    "PiStore.openForBinding",
+    () =>
+      piStore.openForBinding(live.id, {
+        kind: "assistant",
+        model: live.modelSelection().model!,
+        thinkingLevel: "off",
+        credentialProfileId: profile,
+        mode: "build",
+      }),
+    { changed: [live.id] },
+  );
+  assert.equal(piStore.getLiveById(live.id), reopened);
+  assert.notEqual(reopened, live);
+  assert.ok(reopened.listInfo().messageCount >= 2, "its history is back");
+});

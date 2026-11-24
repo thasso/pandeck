@@ -305,7 +305,7 @@ test("engineOf names the bound engine first, else the engine holding it on disk"
   assert.equal(harnessRegistry.engineOf(freshId("nowhere")), undefined);
 });
 
-test("an engine that does not hold the active binding never rewrites the projection", () => {
+test("an engine that does not hold the active binding never rewrites the projection or its own figures", () => {
   const id = freshId("foreign-writer");
   assert.ok(
     sessionStore.upsert({
@@ -317,11 +317,14 @@ test("an engine that does not hold the active binding never rewrites the project
       thinkingLevel: "medium",
       credentialProfileId: "acct-a",
       title: "Before",
+      updatedAt: 1_000,
+      messageCount: 40,
     }),
   );
   const before = sessionStore.bindings(id);
-  // A late persist from the other engine (the one a switch closed, or the
-  // target before its switch commits): its title lands, its binding does not.
+  // A late persist from the other engine (the one a switch closed, or a fresh
+  // target before its switch commits): its figures cover only its own native
+  // stretch, so neither they nor its binding land.
   assert.ok(
     sessionStore.upsert({
       id,
@@ -332,10 +335,14 @@ test("an engine that does not hold the active binding never rewrites the project
       model: "claude-opus-5-5",
       thinkingLevel: "high",
       title: "After",
+      updatedAt: 2_000,
+      messageCount: 0,
     }),
   );
   const row = sessionStore.get(id);
-  assert.equal(row?.title, "After");
+  assert.equal(row?.title, "Before");
+  assert.equal(row?.updatedAt, 1_000);
+  assert.equal(row?.messageCount, 40);
   assert.equal(row?.harness, "pi");
   assert.equal(row?.model, "gpt-5.6-sol");
   assert.equal(row?.provider, "openai-codex");
@@ -343,4 +350,63 @@ test("an engine that does not hold the active binding never rewrites the project
   assert.equal(row?.providerSessionId, undefined);
   assert.deepEqual(sessionStore.bindings(id), before);
   assertRowIsActiveBinding(id);
+});
+
+test("after a switch the active engine raises the message count but never lowers it", () => {
+  const id = freshId("switched-count");
+  assert.ok(
+    sessionStore.upsert({
+      id,
+      harness: "pi",
+      agentType: "developer",
+      provider: "openai-codex",
+      model: "gpt-5.6-sol",
+      credentialProfileId: "acct-a",
+      messageCount: 40,
+    }),
+  );
+  // A first binding counts freely, down as well as up.
+  assert.ok(
+    sessionStore.upsert({
+      id,
+      harness: "pi",
+      agentType: "developer",
+      messageCount: 38,
+    }),
+  );
+  assert.equal(sessionStore.get(id)?.messageCount, 38);
+  // Seed a second binding (no production writer starts one yet).
+  const db = getDb();
+  db.prepare(
+    "UPDATE session_engine_binding SET ended_at_ms = 1 WHERE session_id = ? AND ended_at_ms IS NULL",
+  ).run(id);
+  db.prepare(
+    `INSERT INTO session_engine_binding (
+       session_id, seq, harness, credential_profile_id, provider, model,
+       thinking_level, native_session_id, started_seq, started_run_id,
+       created_at_ms, ended_at_ms
+     ) VALUES (?, 2, 'claude-sdk', 'acct-c', 'claude', 'claude-opus-5-5', NULL, NULL, 90, NULL, 2, NULL)`,
+  ).run(id);
+  db.prepare(
+    "UPDATE session_index SET harness = 'claude-sdk', provider = 'claude', model = 'claude-opus-5-5', credential_profile_id = 'acct-c' WHERE id = ?",
+  ).run(id);
+  // The fresh engine counts only its own two messages: the row keeps 38.
+  assert.ok(
+    sessionStore.upsert({
+      id,
+      harness: "claude-sdk",
+      agentType: "developer",
+      messageCount: 2,
+    }),
+  );
+  assert.equal(sessionStore.get(id)?.messageCount, 38);
+  assert.ok(
+    sessionStore.upsert({
+      id,
+      harness: "claude-sdk",
+      agentType: "developer",
+      messageCount: 39,
+    }),
+  );
+  assert.equal(sessionStore.get(id)?.messageCount, 39);
 });

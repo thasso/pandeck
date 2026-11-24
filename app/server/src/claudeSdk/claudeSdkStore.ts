@@ -12,6 +12,7 @@ import {
   type AgentType,
   DEFAULT_SESSION_SCOPE,
   type SessionForkOrigin,
+  type SessionMode,
   type SessionScope,
 } from "@assistant/shared";
 import { CWD } from "../config.ts";
@@ -52,6 +53,45 @@ import {
 } from "./claudeSdkRecords.ts";
 
 const STORE_DIR = CLAUDE_SDK_STORE_DIR;
+
+/** What a caller acquiring a Claude session may ask for; a record beats it. */
+interface ClaudeAcquireOptions {
+  createdAt?: number;
+  modelId?: string;
+  thinkingLevel?: string;
+  mode?: string;
+  agentType?: AgentType;
+  cwd?: string;
+  additionalSystemPrompt?: string;
+  credentialProfileId?: string;
+  requiresEnterprise?: boolean;
+  /**
+   * Whose session this is, declared by the CREATING caller: it is persisted
+   * before the session enters the live map, because the session list treats
+   * a live session with no row as the user's.
+   */
+  scope?: SessionScope;
+}
+
+/**
+ * The engine binding a harness switch opens a session on
+ * (`docs/session-runtime-switching.md`). Every field is the SESSION's or the
+ * binding's own, so nothing an earlier Claude binding left in the record
+ * decides it.
+ */
+export interface ClaudeSwitchBinding {
+  model: string;
+  thinkingLevel: string;
+  credentialProfileId: string;
+  /** The native session a return resumes; undefined starts a fresh one. */
+  providerSessionId: string | undefined;
+  agentType: AgentType;
+  mode: SessionMode;
+  title: string;
+  createdAt: number;
+  /** Where a fresh session runs when the session has no worktree edge. */
+  cwd?: string;
+}
 
 class ClaudeSdkSessionStore {
   private sessions = new Map<string, ClaudeSdkSession>();
@@ -153,23 +193,7 @@ class ClaudeSdkSessionStore {
    */
   acquire(
     id: string,
-    opts: {
-      createdAt?: number;
-      modelId?: string;
-      thinkingLevel?: string;
-      mode?: string;
-      agentType?: AgentType;
-      cwd?: string;
-      additionalSystemPrompt?: string;
-      credentialProfileId?: string;
-      requiresEnterprise?: boolean;
-      /**
-       * Whose session this is, declared by the CREATING caller: it is persisted
-       * before the session enters the live map, because the session list treats
-       * a live session with no row as the user's.
-       */
-      scope?: SessionScope;
-    } = {},
+    opts: ClaudeAcquireOptions = {},
     /**
      * The construction's own check of the session's worktree, taken right
      * before this call in the caller's continuation; the cwd comes from it.
@@ -179,6 +203,45 @@ class ClaudeSdkSessionStore {
   ): ClaudeSdkSession {
     const existing = this.getForDrive(id);
     if (existing) return existing;
+    return this.open(id, opts, checkout, undefined);
+  }
+
+  /**
+   * Open `id` on the binding a harness switch chose, after the engine it
+   * leaves has released it. A return finds the record an earlier Claude
+   * binding left; its timeline stays, but the binding's model, effort,
+   * account and native session and the session's own mode, title and
+   * creation time win over what that record says. Never reuses a resident
+   * session: a switch to Claude starts from a session Claude does not hold.
+   */
+  openForBinding(
+    id: string,
+    binding: ClaudeSwitchBinding,
+    checkout?: CheckedCheckout,
+  ): ClaudeSdkSession {
+    if (this.sessions.has(id))
+      throw new Error(`Session ${id} is already open on Claude.`);
+    // The session's stored scope, so the claim confirms it rather than
+    // contradicting an agent- or workflow-scoped session.
+    const scope = sessionStore.get(id)?.scope;
+    return this.open(
+      id,
+      {
+        agentType: binding.agentType,
+        ...(scope ? { scope } : {}),
+        ...(binding.cwd !== undefined ? { cwd: binding.cwd } : {}),
+      },
+      checkout,
+      binding,
+    );
+  }
+
+  private open(
+    id: string,
+    opts: ClaudeAcquireOptions,
+    checkout: CheckedCheckout | undefined,
+    binding: ClaudeSwitchBinding | undefined,
+  ): ClaudeSdkSession {
     // An id belongs to one engine: one pi holds resident is never taken here,
     // whichever caller asks.
     if (this.heldElsewhere(id)) throw new SessionHeldElsewhereError(id);
@@ -186,34 +249,41 @@ class ClaudeSdkSessionStore {
       ? undefined
       : readClaudeSdkRecord(STORE_DIR, id);
     const record = loaded?.record;
-    const modelIdValue = record?.modelId ?? opts.modelId;
-    const thinkingLevelValue = record?.thinkingLevel ?? opts.thinkingLevel;
-    const modeValue = record?.mode ?? opts.mode;
-    const agentTypeValue = record?.agentType ?? opts.agentType;
+    const modelIdValue = binding?.model ?? record?.modelId ?? opts.modelId;
+    const thinkingLevelValue =
+      binding?.thinkingLevel ?? record?.thinkingLevel ?? opts.thinkingLevel;
+    const modeValue = binding?.mode ?? record?.mode ?? opts.mode;
+    const agentTypeValue =
+      binding?.agentType ?? record?.agentType ?? opts.agentType;
     const additionalSystemPromptValue =
       record?.additionalSystemPrompt ?? opts.additionalSystemPrompt;
     const cwdValue =
       worktreeCwdForSession(id, checkout) ?? record?.cwd ?? opts.cwd;
     // An unbound session runs as the protected default where the install has
-    // one; without it the session has no account and its turns refuse.
+    // one; without it the session has no account and its turns refuse. A
+    // switch names its account: the row still projects the engine it leaves.
     const credentialProfileId =
+      binding?.credentialProfileId ??
       sessionStore.get(id)?.credentialProfileId ??
       record?.credentialProfileId ??
       opts.credentialProfileId ??
       legacyDefaultProfileId("claude");
+    const providerSessionId = binding
+      ? binding.providerSessionId
+      : record?.providerSessionId;
+    const title = binding?.title ?? record?.title;
     const session = new ClaudeSdkSession(id, {
       buildSessionState: this.requireStateBuilder(),
       seam: () => this.seam(),
-      createdAt: record?.createdAt ?? opts.createdAt ?? Date.now(),
+      createdAt:
+        binding?.createdAt ?? record?.createdAt ?? opts.createdAt ?? Date.now(),
       // Restore last activity too: without it every restart back-dates the
       // session to its creation time until the next mutation.
       ...(record?.updatedAt !== undefined
         ? { updatedAt: record?.updatedAt }
         : {}),
-      ...(record?.title !== undefined ? { title: record?.title } : {}),
-      ...(record?.providerSessionId !== undefined
-        ? { providerSessionId: record?.providerSessionId }
-        : {}),
+      ...(title !== undefined ? { title } : {}),
+      ...(providerSessionId !== undefined ? { providerSessionId } : {}),
       ...(record?.entries !== undefined ? { entries: record?.entries } : {}),
       ...(record?.forkOrigin !== undefined
         ? { forkOrigin: record?.forkOrigin }
@@ -516,6 +586,41 @@ class ClaudeSdkSessionStore {
     session.dispose();
     void sessionRuntime.releaseHarness(session.id);
     return true;
+  }
+
+  /**
+   * Release a session a harness switch moves to another engine
+   * (`docs/session-runtime-switching.md`). Its process ends first; background
+   * work on a retained one refuses with `AccountSwitchBlockedError`, which
+   * the switching turn turns into a hold. Then, as for an idle release, it
+   * goes only once its record holds everything it does, but the runtime
+   * session stays for the next engine (`SessionRuntime.detachHarness`).
+   * `admit` is the switching turn's admission, whose reservation is the one
+   * thing allowed to keep the session busy. Nothing resident: nothing to do.
+   */
+  async releaseForSwitch(id: string, admit: () => void): Promise<void> {
+    const session = this.sessions.get(id);
+    if (!session) return;
+    await session.closeForEngineSwitch(admit);
+    admit();
+    if (this.sessions.get(id) !== session)
+      throw new Error("The Claude session was released while it switched.");
+    if (!session.isQuiescent)
+      throw new Error(
+        "The Claude session still has work in flight; it was not switched.",
+      );
+    if (!this.persist(session))
+      throw new Error(
+        "The Claude session could not be saved; it was not switched.",
+      );
+    // The adapter lets go of the session before the session itself goes; a
+    // run opened in the meantime refuses here, before anything is dropped.
+    const detached = sessionRuntime.detachHarness(id);
+    this.sessions.delete(id);
+    this.logs.delete(id);
+    session.dispose();
+    this.onChange(id);
+    await detached;
   }
 
   /**

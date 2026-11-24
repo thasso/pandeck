@@ -504,6 +504,22 @@ export class SessionRuntime {
   }
 
   /**
+   * The harness behind this session is leaving it for another engine (a
+   * harness switch). Unlike {@link releaseHarness} the runtime session stays,
+   * DETACHED, so its viewers keep their transcript stream and the next
+   * engine's driver rebinds it (`ensureRuntimeSessionWithRuntime`). Refused
+   * while a run is open. A session nobody views is released after the grace
+   * like any detached one, unless an engine has bound it again by then.
+   */
+  detachHarness(sessionId: string): Promise<void> {
+    const session = this.live.get(sessionId);
+    if (!session || session.isDetached) return Promise.resolve();
+    const released = session.detachAdapter(detachedAdapter(sessionId));
+    if (!this.viewCounts.has(session)) this.scheduleViewRelease(session);
+    return Promise.resolve(released);
+  }
+
+  /**
    * A session is about to be torn down: close its open run as a deliberate
    * end while its outcome can still be told ({@link LiveRuntimeSession.endForTeardown}).
    * Harness stores call this BEFORE disposing their own session, whose
