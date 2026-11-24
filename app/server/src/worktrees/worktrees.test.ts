@@ -18,7 +18,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join, sep } from "node:path";
 import { test, vi } from "vitest";
 
 // Real git worktrees are created, rebased and removed end to end: seconds
@@ -2538,21 +2538,43 @@ const { isWorkerFailure } = await import("../workers/fileClient.ts");
 const { holdFileForTests } = await import("../fileReads.ts");
 const { writeAsInProcessWorkerForTests } =
   await import("../workers/inProcessWorker.ts");
+const { captureNextNativeWatchForTests } = await import("../worker/watch.ts");
+
+/**
+ * `path`'s real path; for one that does not exist (a removed checkout, a
+ * missing remote) its deepest existing ancestor's real path and the rest.
+ */
+function canonicalLocation(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") throw err;
+  }
+  const parent = dirname(path);
+  return parent === path
+    ? path
+    : join(canonicalLocation(parent), basename(path));
+}
 
 /** A worktree with work no remote holds, and `remotes` added to the main checkout. */
 async function undeliveredWithRemotes(
   name: string,
   remotes: Record<string, string>,
+  { projectId, repo }: { projectId: string; repo: string } = {
+    projectId: "wt-proj",
+    repo: repoPath,
+  },
 ) {
-  const record = await createWorktree({ projectId: "wt-proj", name });
+  const record = await createWorktree({ projectId, name });
   writeFileSync(join(record.path, `${name}.txt`), "undelivered\n");
   sh(record.path, "add", "-A");
   sh(record.path, "commit", "-m", "undelivered work");
   for (const [remote, url] of Object.entries(remotes))
-    sh(repoPath, "remote", "add", remote, url);
+    sh(repo, "remote", "add", remote, url);
   const cleanup = async () => {
     for (const remote of Object.keys(remotes))
-      sh(repoPath, "remote", "remove", remote);
+      sh(repo, "remote", "remove", remote);
     await removeWorktree(record.id, { deleteBranch: true, force: true });
   };
   return { record, cleanup };
@@ -2564,12 +2586,38 @@ test("delivery heads read a local remote's presence on the checkout's side", asy
   sh(tmp, "init", "--bare", fileRemote);
   sh(tmp, "init", "--bare", plainRemote);
   const missing = join(tmp, "missing-proof.git");
-  const { record, cleanup } = await undeliveredWithRemotes("local-proofs", {
-    "by-url": `file://${fileRemote}`,
-    // Relative: resolved against the main checkout.
-    "by-path": `../${basename(plainRemote)}`,
-    gone: missing,
+  // Its own repository, whose git-dir watch is a substitute that reports
+  // nothing: on the shared one the watcher's status scan, on its debounce
+  // after the commit below, runs `rev-list` on the Worker mid-recording.
+  const deliveryRepo = join(tmp, "delivery-proofs");
+  initRepo(deliveryRepo);
+  projectStore.put({
+    id: "delivery-proj",
+    name: "Delivery Proofs Project",
+    key: "DP",
+    description: "",
+    status: "active",
+    localPaths: [{ path: deliveryRepo, kind: "repo", match: "prefix" }],
+    worktreeRoot: join(tmp, "delivery-wt-root"),
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
   });
+  const silentGitDir = captureNextNativeWatchForTests();
+  const { record, cleanup } = await undeliveredWithRemotes(
+    "local-proofs",
+    {
+      "by-url": `file://${fileRemote}`,
+      // Relative: resolved against the main checkout.
+      "by-path": `../${basename(plainRemote)}`,
+      gone: missing,
+    },
+    { projectId: "delivery-proj", repo: deliveryRepo },
+  );
+  assert.equal(
+    (await silentGitDir.subscribed).path,
+    realpathSync(join(deliveryRepo, ".git")),
+    "the repository's only watch is the silent substitute",
+  );
   const recorder = recordServedForTests([
     ...Object.values(CHECKOUT_GIT_METHODS),
     FILE_METHODS.exists,
@@ -2580,9 +2628,33 @@ test("delivery heads read a local remote's presence on the checkout's side", asy
     recorder.stop();
     await cleanup();
   }
-  const served = recorder.served.map((request) =>
-    request.args ? request.args.join(" ") : `exists ${request.path}`,
-  );
+  // Only what this delivery read serves: its checkout, its main checkout and
+  // the remotes, compared by canonical location so no spelling (macOS `/var`
+  // is `/private/var`) drops one. A shared repository's scan still debouncing
+  // from an earlier test's removal names its own checkouts, never these; one
+  // dropped from inside any of them fails instead.
+  const scope = [
+    record.path,
+    deliveryRepo,
+    fileRemote,
+    plainRemote,
+    missing,
+  ].map(canonicalLocation);
+  const inScope = (request: { path: string }) => {
+    assert.ok(request.path, "every recorded request names its location");
+    const location = canonicalLocation(request.path);
+    if (scope.includes(location)) return true;
+    assert.ok(
+      !scope.some((root) => location.startsWith(`${root}${sep}`)),
+      `a request about this delivery was dropped: ${request.path}`,
+    );
+    return false;
+  };
+  const served = recorder.served
+    .filter(inScope)
+    .map((request) =>
+      request.args ? request.args.join(" ") : `exists ${request.path}`,
+    );
   for (const [remote, path] of [
     ["by-url", fileRemote],
     // Relative, it is resolved against the main checkout's real root.
