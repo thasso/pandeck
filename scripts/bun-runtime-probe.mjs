@@ -3501,26 +3501,71 @@ async function checkWorkerLifecycle() {
     console.log("lifecycle O3 ok");
 
     // O4: a failed create's discard and the managed clone's delete, as
-    // base's `rmSync` (with its retries and owner repair) and `rm`.
+    // `docs/workers.md` ("Checkout lifecycle") states the discard and as
+    // base's `rm` deletes. The discard's reference is written from that
+    // contract with native `fs`, not from the Worker's code: one plain
+    // `rmSync`; on a permission or not-empty failure (macOS Node reports a
+    // read-only subdirectory as ENOTEMPTY) owner access is restored; then
+    // `rmSync` with `maxRetries: 10, retryDelay: 200`; on its failure owner
+    // access is restored again and the failure is the answer.
+    const discardReference = (tree, { repairFirst = true } = {}) => {
+      try {
+        rmSync(tree, { recursive: true, force: true });
+        return {};
+      } catch (error) {
+        if (
+          repairFirst &&
+          ["EACCES", "EPERM", "ENOTEMPTY"].includes(error?.code)
+        )
+          restoreOwnerAccess(tree);
+      }
+      try {
+        rmSync(tree, {
+          recursive: true,
+          force: true,
+          maxRetries: 10,
+          retryDelay: 200,
+        });
+        return {};
+      } catch (error) {
+        restoreOwnerAccess(tree);
+        return { failed: errorText(error) };
+      }
+    };
+    // The locked fixture must need the first repair: without it an
+    // unprivileged discard fails, with it the tree goes and nothing outside
+    // changes. Root unlinks below 0o000 directories without any repair, so
+    // there the control only shows that both succeed.
+    {
+      const control = join(base, "O4-discard-control");
+      lifecycleFixture(control, "locked");
+      const unrepaired = discardReference(join(control, "tree"), {
+        repairFirst: false,
+      });
+      assert(
+        uid === 0 ? !("failed" in unrepaired) : "failed" in unrepaired,
+        `lifecycle O4 control: without the first repair the discard answered ${JSON.stringify(unrepaired)} (uid ${uid})`,
+      );
+      const repaired = join(base, "O4-discard-repaired");
+      lifecycleFixture(repaired, "locked");
+      const outsideBefore = JSON.stringify(
+        treeSnapshot(join(repaired, "outside")),
+      );
+      const answer = discardReference(join(repaired, "tree"));
+      assert(
+        JSON.stringify(answer) === "{}" &&
+          !existsSync(join(repaired, "tree")) &&
+          JSON.stringify(treeSnapshot(join(repaired, "outside"))) ===
+            outsideBefore,
+        `lifecycle O4 control: the repairing discard answered ${JSON.stringify(answer)}, tree ${existsSync(join(repaired, "tree")) ? "left" : "gone"}`,
+      );
+    }
     for (const shape of ["locked", "missing"]) {
       await differential(
         `O4-discard-${shape}`,
         shape,
         LIFECYCLE_METHODS.discardTree,
-        (tree) => {
-          try {
-            rmSync(tree, {
-              recursive: true,
-              force: true,
-              maxRetries: 10,
-              retryDelay: 200,
-            });
-            return {};
-          } catch (error) {
-            restoreOwnerAccess(tree);
-            return { failed: errorText(error) };
-          }
-        },
+        (tree) => discardReference(tree),
         (tree) => lifecycle.discardTree(tree),
       );
       await differential(
