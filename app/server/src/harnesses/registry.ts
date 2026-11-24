@@ -22,6 +22,7 @@ import { piSessionFile } from "../piSessionFile.ts";
 import { withCheckedCheckout } from "../worktrees/sessionCwd.ts";
 import { CWD } from "../config.ts";
 import { readClaudeSdkRecordCwd } from "../claudeSdk/claudeSdkRecords.ts";
+import { removeClaudeSessionFromAllProfiles } from "../claudeSdk/profileSessionStore.ts";
 import { readSessionHeaderCwd } from "../piSdk/sessionOpen.ts";
 import { piInterruptedTurn } from "../piSdk/interruptedTurn.ts";
 import { claudeInterruptedTurn } from "../claudeSdk/interruptedTurn.ts";
@@ -361,10 +362,45 @@ export const harnessRegistry = {
   /**
    * Take a deleted session out of whichever engine holds it: dispose it and
    * delete what it stored (Claude's native transcript in the background).
-   * Everything harness-neutral about a delete is the caller's.
+   * Every engine an earlier binding ran it on deletes its data too, and every
+   * Claude native session any binding named is swept from every profile
+   * (`docs/session-runtime-switching.md`: old native data stays until the
+   * session is deleted). Everything harness-neutral about a delete is the
+   * caller's.
    */
-  remove(ref: SessionRef & { harness: Harness }): Promise<void> {
-    return sessions[ref.harness].remove(ref);
+  async remove(ref: SessionRef & { harness: Harness }): Promise<void> {
+    // Read before the engine's removal: a tombstoned row keeps its bindings,
+    // but nothing here should depend on that ordering.
+    const bound = sessionStore.bindings(ref.id);
+    await sessions[ref.harness].remove(ref);
+    const earlier = [
+      ...new Set(bound.map((binding) => binding.harness)),
+    ].filter((harness) => harness !== ref.harness);
+    await Promise.all(
+      earlier.map((harness) =>
+        sessions[harness].remove({
+          id: ref.id,
+          agentType: ref.agentType,
+          file: sessionRefFile({ harness, sessionId: ref.id }),
+        }),
+      ),
+    );
+    await Promise.all(
+      bound.flatMap((binding) =>
+        binding.harness === "claude-sdk" && binding.nativeSessionId
+          ? [
+              removeClaudeSessionFromAllProfiles(
+                binding.nativeSessionId,
+                binding.credentialProfileId,
+              ).catch(() => {
+                console.warn(
+                  "[delete] An earlier Claude binding's transcript sweep failed.",
+                );
+              }),
+            ]
+          : [],
+      ),
+    );
   },
 
   /**

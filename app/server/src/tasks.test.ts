@@ -1334,7 +1334,11 @@ test("a session's Tasks are resolved from its own links, not by listing every Ta
 
 test("a session ref names the session only, whatever an old edge or client stored", async () => {
   const { addLink } = await import("./db/links.ts");
-  const created = createTask({ title: "Engine-free refs", status: "todo" });
+  const created = createTask({
+    title: "Engine-free refs",
+    status: "todo",
+    source: { createdBy: "user" },
+  });
   try {
     // A client still sending the old fields: they are dropped on the way in.
     linkSessionToTask(created.id, {

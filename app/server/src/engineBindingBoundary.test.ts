@@ -65,7 +65,7 @@ const HARNESS_READ_EXEMPT =
 const HARNESS_READS: Record<string, number> = {
   "backgroundWork/policy.ts": 3,
   "checkPromptBudgets.ts": 1,
-  "connection.ts": 13,
+  "connection.ts": 12,
   "measurePrompts.ts": 3,
   "measureSession.ts": 1,
   "measureTaskOverhead.ts": 1,
@@ -77,15 +77,12 @@ const HARNESS_READS: Record<string, number> = {
   "sessionState.ts": 2,
   "sessions.ts": 2,
   "taskOverhead.ts": 2,
-  "tasks.ts": 8,
   "tools/backgroundTasksTools.ts": 2,
   "tools/knowledge/knowledgeBaseTools.ts": 1,
   "tools/library/libraryTools.ts": 1,
   "tools/sessions/sessionAuditTool.ts": 1,
-  "tools/tasks/taskTools.ts": 2,
   "validateClientMessage.ts": 4,
   "viewSession.ts": 3,
-  "workflow/agentExecutor.ts": 1,
 };
 
 const PROJECTION_COLUMNS =
