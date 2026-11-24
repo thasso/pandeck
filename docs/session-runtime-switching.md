@@ -349,7 +349,11 @@ other under the same id; the runtime session in between is never replaced.
   and agent definition. A pi transcript that is there but is not this session's
   (an unreadable or foreign header) refuses with `PiSwitchTranscriptError`, and
   the switch holds with "choose another model, or reset the change"; nothing is
-  started over it.
+  started over it. Both engines read the one insert-only prompt-conditions
+  record the session froze at its start and render it their own way: pi its
+  persona layer and bare tool names, Claude the `claude_code` preset's append
+  and its mounted server's `mcp__pa__` names
+  (`claudeSdk/claudeSdkSwitchSurface.test.ts`).
 
 ### Deleting
 
@@ -357,6 +361,11 @@ Deleting a session removes it from every engine any of its bindings used, not
 only the active one, and sweeps every Claude native session a binding named from
 every account (`harnessRegistry.remove`). Until then old native data stays for
 returns and forks.
+
+### Forking
+
+Until forks can cross a switch, a session with more than one binding refuses
+every fork before any engine is asked (`prepareFork` in `harnesses/fork.ts`).
 
 ### Task links
 
