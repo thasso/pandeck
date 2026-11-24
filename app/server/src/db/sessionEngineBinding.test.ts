@@ -428,6 +428,71 @@ test("an engine that does not hold the active binding never rewrites the project
   assertRowIsActiveBinding(id);
 });
 
+test("on one harness, only the instance of the active binding writes it: never the next one before its commit, never the one it left after (F023, F025)", () => {
+  const id = freshId("same-harness-writer");
+  const codex = {
+    id,
+    harness: "pi" as const,
+    agentType: "developer" as const,
+    provider: "openai-codex",
+    model: "gpt-5.6-sol",
+    thinkingLevel: "high",
+    credentialProfileId: "acct-codex",
+    bindingSeq: 1,
+  };
+  assert.ok(sessionStore.upsert({ ...codex, title: "Codex", messageCount: 4 }));
+  const endpoint = {
+    id,
+    harness: "pi" as const,
+    agentType: "developer" as const,
+    provider: "openai-compatible-endpoint",
+    model: "llama3",
+    thinkingLevel: "off",
+  };
+  const before = sessionStore.bindings(id);
+  // The switch's target, opened for seq 2, before the commit.
+  assert.ok(
+    sessionStore.upsert({
+      ...endpoint,
+      bindingSeq: 2,
+      title: "Endpoint",
+      messageCount: 6,
+    }),
+  );
+  assert.deepEqual(sessionStore.bindings(id), before);
+  assert.equal(sessionStore.get(id)?.title, "Codex");
+  assert.equal(sessionStore.get(id)?.messageCount, 4);
+
+  switchTo(id, {
+    harness: "pi",
+    credentialProfileId: "acct-endpoint",
+    provider: endpoint.provider,
+    model: endpoint.model,
+    thinkingLevel: "off",
+    providerSessionId: null,
+  });
+  const committed = sessionStore.bindings(id);
+  // A late write from the instance of the binding it left: same harness, but
+  // not the active binding's.
+  assert.ok(
+    sessionStore.upsert({ ...codex, title: "Late codex", messageCount: 9 }),
+  );
+  assert.deepEqual(sessionStore.bindings(id), committed);
+  const row = sessionStore.get(id);
+  assert.equal(row?.provider, endpoint.provider);
+  assert.equal(row?.model, "llama3");
+  assert.equal(row?.credentialProfileId, "acct-endpoint");
+  assert.equal(row?.title, "Codex", "a stale title does not land either");
+  assertRowIsActiveBinding(id);
+
+  // The committed target writes as the active binding.
+  assert.ok(
+    sessionStore.upsert({ ...endpoint, bindingSeq: 2, title: "Endpoint" }),
+  );
+  assert.equal(sessionStore.get(id)?.title, "Endpoint");
+  assertRowIsActiveBinding(id);
+});
+
 test("after a switch the active engine raises the message count but never lowers it", () => {
   const id = freshId("switched-count");
   assert.ok(

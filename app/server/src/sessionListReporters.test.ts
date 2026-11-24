@@ -192,8 +192,6 @@ const CLASSIFIED: Record<
       setPendingRuntime: "projected-write",
       switchCredentialProfile: "projected-write",
       switchEngineBinding: "projected-write",
-      // In memory only: it changes how a later upsert merges, never a row.
-      holdSwitchTarget: "read",
       stampBindingRun: "non-projected-write",
       requireEnterprise: "projected-write",
       setCompactionWindow: "non-projected-write",

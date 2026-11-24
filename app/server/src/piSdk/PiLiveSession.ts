@@ -313,6 +313,12 @@ export class PiLiveSession implements LiveSession {
     private readonly reopenForAccount?: (
       profileId: string,
     ) => Promise<PiAccountSession>,
+    /**
+     * The engine binding this instance runs (`seq`): every row write names it,
+     * so one for a binding that is not (or no longer) the active one is
+     * foreign (`docs/session-runtime-switching.md` "Engine bindings").
+     */
+    readonly bindingSeq?: number,
   ) {
     const engine = currentEngine;
     // Our id is fixed here, from the engine the session opened on: a pi
@@ -382,6 +388,9 @@ export class PiLiveSession implements LiveSession {
    * hiccup must never affect the run.
    */
   private syncRegistry(): void {
+    // A released instance no longer runs the session: a late write (a naming
+    // run that outlived it) must not reach the row.
+    if (this.disposed) return;
     try {
       const stats = this.engine.stats();
       if (stats.totalMessages === 0) return;
@@ -407,6 +416,9 @@ export class PiLiveSession implements LiveSession {
         // the session in the list.
         ...(this.updatedAt ? { updatedAt: this.updatedAt } : {}),
         messageCount: stats.totalMessages,
+        ...(this.bindingSeq !== undefined
+          ? { bindingSeq: this.bindingSeq }
+          : {}),
       });
     } catch {
       // Best-effort metadata write; never break a run on store trouble.
@@ -1481,7 +1493,42 @@ export class PiLiveSession implements LiveSession {
     this.host.checkPendingReload();
   }
 
-  private async autoNameFromFirstPrompt(
+  /**
+   * Naming runs in flight. A harness switch does not release the session
+   * while one runs: it holds, and the run's end offers the held turn again
+   * (`piStore.releaseForSwitch`), as Claude does.
+   */
+  private namingRuns = 0;
+  /** Called each time the last naming run ends; set by the store. */
+  onNamingSettled: (() => void) | undefined;
+
+  /** Whether work of the session's own (naming) is still running. */
+  get isNaming(): boolean {
+    return this.namingRuns > 0;
+  }
+
+  /** Run one naming routine, counted while it runs. */
+  private async naming(run: () => Promise<void>): Promise<void> {
+    this.namingRuns += 1;
+    try {
+      await run();
+    } finally {
+      this.namingRuns -= 1;
+      if (this.namingRuns === 0) this.onNamingSettled?.();
+    }
+  }
+
+  private autoNameFromFirstPrompt(
+    prompt: string,
+    attachments: PromptAttachment[],
+    settings: SessionNamingSettings,
+  ): Promise<void> {
+    return this.naming(() =>
+      this.autoNameFromFirstPromptRun(prompt, attachments, settings),
+    );
+  }
+
+  private async autoNameFromFirstPromptRun(
     prompt: string,
     attachments: PromptAttachment[],
     settings: SessionNamingSettings,
@@ -1496,6 +1543,8 @@ export class PiLiveSession implements LiveSession {
       console.warn("Failed to auto-name session:", errorText(err));
     }
     try {
+      // Released meanwhile: the session's title is no longer this instance's.
+      if (this.disposed) return;
       // Do not overwrite a user/manual rename that happened while generation ran.
       if (this.engine.sessionName) return;
       await this.rename(
@@ -1514,7 +1563,23 @@ export class PiLiveSession implements LiveSession {
     }
   }
 
-  private async autoNameForkFromFirstPrompt(
+  private autoNameForkFromFirstPrompt(
+    prompt: string,
+    priorContext: string | undefined,
+    originalName: string | undefined,
+    attachments: PromptAttachment[],
+  ): Promise<void> {
+    return this.naming(() =>
+      this.autoNameForkFromFirstPromptRun(
+        prompt,
+        priorContext,
+        originalName,
+        attachments,
+      ),
+    );
+  }
+
+  private async autoNameForkFromFirstPromptRun(
     prompt: string,
     priorContext: string | undefined,
     originalName: string | undefined,
@@ -1531,8 +1596,10 @@ export class PiLiveSession implements LiveSession {
           attachments,
         },
       );
-      // Do not overwrite a user/manual rename that happened while generation ran.
-      if (!title || this.engine.sessionName !== originalName) return;
+      // Do not overwrite a user/manual rename that happened while generation
+      // ran, and a released instance names nothing.
+      if (!title || this.disposed || this.engine.sessionName !== originalName)
+        return;
       await this.rename(title);
       this.host.sessionRowsChanged([this.key]);
     } catch (err) {
@@ -1680,11 +1747,16 @@ export class PiLiveSession implements LiveSession {
       harness: "pi",
       agentType: this.kind,
       mode,
+      ...(this.bindingSeq !== undefined ? { bindingSeq: this.bindingSeq } : {}),
     });
     this.broadcastState();
   }
 
   async rename(title: string): Promise<void> {
+    // A released instance's transcript may belong to the engine that runs
+    // the session now (a kind change within pi reopens it): never append.
+    if (this.disposed)
+      throw new Error("This pi session was released; it was not renamed.");
     // `setSessionName` may emit synchronously; spend the working state first so
     // no broadcast ever shows a final title with the pending treatment.
     if (this.titleGenerationPending) {

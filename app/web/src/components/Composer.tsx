@@ -805,11 +805,15 @@ export function slashState(
     const items = options
       .filter(
         (option) =>
-          option.value.toLowerCase().startsWith(typed) ||
           // A `provider/id` value (an id two providers offer) also completes
-          // from its bare id.
-          option.value.toLowerCase().split("/").at(-1)!.startsWith(typed) ||
-          option.label.toLowerCase().startsWith(typed),
+          // from its bare id, itself possibly `vendor/model`: from the text
+          // after any slash.
+          option.value
+            .toLowerCase()
+            .split("/")
+            .some((_, at, parts) =>
+              parts.slice(at).join("/").startsWith(typed),
+            ) || option.label.toLowerCase().startsWith(typed),
       )
       .slice(0, 8)
       .map((option) => ({

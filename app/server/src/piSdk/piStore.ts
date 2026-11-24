@@ -65,7 +65,8 @@ import { compatProviderFeed } from "./compatProviderFeed.ts";
 import { createPiHostedEngineFactory } from "./piEngineHosted.ts";
 import { serverPiModelPort } from "./piModelPort.ts";
 import { openRemotePiEngine } from "./remotePiEngine.ts";
-import type { HarnessHost } from "../harness.ts";
+import { SessionSettlingError, type HarnessHost } from "../harness.ts";
+import { wakeSessionDelivery } from "../deliveryWake.ts";
 import {
   credentialProfileById,
   legacyDefaultProfileId,
@@ -112,6 +113,8 @@ export class PiSwitchTranscriptError extends Error {
 /** The pi binding a harness switch opens a session on. */
 interface PiSwitchBinding {
   kind: AgentType;
+  /** The binding the switch's commit starts, which the session writes as. */
+  bindingSeq: number;
   /** Resolved in the account's own registry when the engine opens. */
   model: { provider: string; id: string };
   thinkingLevel: ThinkingLevel;
@@ -173,6 +176,8 @@ function piToolSessionFromHandle(
  */
 class PiSessionStore {
   private live = new Map<string, PiLiveSession>();
+  /** Sessions a switch could not release while they named themselves. */
+  private readonly wakeWhenSettled = new Set<string>();
   /**
    * Reopens in flight, by canonical file: two concurrent acquisitions of one
    * session (a rapid A→B→A, two tabs) must share ONE open. Without this both
@@ -585,6 +590,8 @@ class PiSessionStore {
           opened,
           credentialProfileId,
           sessionStore.get(id)?.scope,
+          undefined,
+          binding.bindingSeq,
         ),
         started.integrationGates,
       ),
@@ -610,6 +617,13 @@ class PiSessionStore {
       throw new Error(
         "The pi session is still running a turn; it was not switched.",
       );
+    if (ls.isNaming) {
+      // Work of the session's own that ends by itself: the switching turn
+      // holds, and its end offers the held work again. Released now, the
+      // naming run would append to a transcript the next engine reopens.
+      this.wakeWhenSettled.add(id);
+      throw new SessionSettlingError(id);
+    }
     // A run opened in the meantime refuses here, before anything is dropped.
     const detached = sessionRuntime.detachHarness(ls.key);
     this.live.delete(ls.key);
@@ -840,9 +854,14 @@ class PiSessionStore {
     credentialProfileId: string,
     scope?: SessionScope,
     requiresEnterprise?: boolean,
+    /** A switch's target writes as the binding its commit starts. */
+    switchBindingSeq?: number,
   ): PiLiveSession {
     const { engine, info } = opened;
     const id = info.sessionId;
+    // The binding this instance runs: the active one, or a session's first.
+    const bindingSeq =
+      switchBindingSeq ?? sessionStore.activeBinding(id)?.seq ?? 1;
     // The scope is claimed BEFORE the live map can hand this session to the
     // session list: a not-yet-persisted live row is treated as the user's
     // everywhere, so a session that is not may never reach the registry first.
@@ -908,7 +927,11 @@ class PiSessionStore {
           dispose: () => replacement.discard({}),
         };
       },
+      bindingSeq,
     );
+    ls.onNamingSettled = () => {
+      if (this.wakeWhenSettled.delete(id)) wakeSessionDelivery(id);
+    };
     this.live.set(ls.key, ls);
     // A live row overlays the persisted one (`listInfo`).
     this.requireHost().sessionRowsChanged([ls.key]);

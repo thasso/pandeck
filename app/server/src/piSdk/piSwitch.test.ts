@@ -121,6 +121,8 @@ const binding = {
   thinkingLevel: "high" as const,
   credentialProfileId: "cp_pi",
   mode: "build" as const,
+  // The binding the switch's commit would start after the row's first.
+  bindingSeq: 2,
 };
 
 test("a first pi binding starts its transcript under the app id", async () => {

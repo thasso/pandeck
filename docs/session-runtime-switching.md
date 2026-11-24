@@ -162,11 +162,14 @@ kind's accounts: the bound account only when it serves the target and
 `boundEligible`, then the listed accounts. `/account` is offered only when that
 gives more than one account, and not before the list has answered; the client
 never judges an account itself. They are offered only for a started session.
-`/model` names a model by its bare id while one provider offers it, else as
-`provider/id` (two OpenAI-compatible endpoints may both offer `llama3`): the
-completion inserts that, also when typed as the bare id, and a bare id or name
-that more than one provider offers is refused with the `provider/id` choices,
-never resolved to the first.
+`/model` reads its argument as a model's `provider/id` and as a bare id at once
+(an endpoint's id may itself hold a slash, `openai/gpt-5.5`), then as a display
+name. The completion inserts the bare id when that names only this model in both
+readings, else `provider/id` (two OpenAI-compatible endpoints may both offer
+`llama3`), and completes it from the text after any slash. A model that neither
+names alone is listed disabled: choose it in the Runtime section. Text that
+names more than one model is refused with the `provider/id` choices, never
+resolved to the first.
 
 A started session refuses `setModel` and `setThinkingLevel` with "This session
 has started: change its model or effort in the Runtime section, from its next
@@ -314,17 +317,22 @@ inserts the next with the session log's cursor, projects it onto the row and
 clears the pending selection the switch applied when that is still the stored
 one. The first run the new binding starts stamps it (`started_run_id`).
 
-Only the engine that holds the active binding writes the projection. An `upsert`
-that names another harness (a late persist from an engine a switch closed), or
-any write from the target engine before its switch commits, whatever its harness
-(`sessionStore.holdSwitchTarget`, held from just before the target opens until
-the commit, or until the target let the session go on abandon), leaves the six
-binding columns and the binding as they are, and its title, activity time and
-message count too: those describe only its own native stretch. A kind change
-within pi therefore leaves the binding it left exactly as it was, and an
-abandoned one changes nothing. After a switch the active engine counts only what
-it ran, so its message count may raise the row's but never lower it (0 would
-hide a started session from the list).
+Only the engine instance that holds the active binding writes the projection.
+Each engine instance names the binding it runs (`bindingSeq`) on every row
+write: the active binding when it opens, a session's first (1) when there is no
+row yet, and for a switch's target the binding the commit starts. An `upsert`
+that names another harness, or another binding than the active one, whatever its
+harness, leaves the six binding columns and the binding as they are, and its
+title, activity time and message count too: those describe only its own native
+stretch. So the target writes nothing before its commit, a late write from an
+instance of the binding a switch left never lands after it, and a kind change
+within pi leaves the binding it left exactly as it was; an abandoned one changes
+nothing. Claude's usage totals follow the same rule. A released instance also
+writes nothing at all: pi's late naming run neither renames nor appends to a
+transcript the next binding reopens, and Claude's store persists only the
+instance it holds. After a switch the active engine counts only what it ran, so
+its message count may raise the row's but never lower it (0 would hide a started
+session from the list).
 
 ## Moving to another harness
 
@@ -347,10 +355,10 @@ handoff: the transcript it reopened holds the whole session.
   account serves another kind and is never kept.
 - **Move.** The store move below runs inside the turn's admission. Its refusals
   hold the turn as on one engine; background work on Claude holds it with
-  "Waiting for background work on Claude; stop it to switch now." Claude work
-  that ends by itself (the naming agent) holds it with "Waiting for the session
-  to finish its own work…", and its end wakes the session's delivery. Another
-  switch of the same session holding the fence refuses the turn as busy.
+  "Waiting for background work on Claude; stop it to switch now." Work that ends
+  by itself (the naming agent, on either engine) holds it with "Waiting for the
+  session to finish its own work…", and its end wakes the session's delivery.
+  Another switch of the same session holding the fence refuses the turn as busy.
 - **Turn.** The turn runs on the new engine's driver (`deliverWithRuntime`),
   which rebinds the detached runtime session. A refusal after the move and
   before the commit (the final admission included) abandons it. The commit runs
@@ -419,10 +427,10 @@ other under the same id; the runtime session in between is never replaced.
   which holds the turn ("Waiting for background work on Claude; stop it to
   switch now"). pi's background work keeps running and reaches the session on
   its next engine. Claude saves its record before it lets go, and a session it
-  cannot save stays. Neither refuses for nothing being resident. Claude work
-  that ends by itself (the naming agent) refuses with `SessionSettlingError` and
-  wakes the session's delivery once the session is quiescent again; a browser
-  the agent keeps open refuses outright.
+  cannot save stays. Neither refuses for nothing being resident. Work that ends
+  by itself (the naming agent, on either engine) refuses with
+  `SessionSettlingError` and wakes the session's delivery once it has ended; a
+  browser the agent keeps open on Claude refuses outright.
 - **Runtime session.** `SessionRuntime.detachHarness` swaps the leaving engine's
   adapter for the detached one, between runs only; the runtime session, its log
   and its viewers stay, and the next engine's driver binds it as a reader's view

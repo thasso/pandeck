@@ -186,11 +186,13 @@ async function open(
   target: EngineSwitchTarget,
   plan: { earlier?: SessionEngineBinding; resumed?: SessionEngineBinding },
   cwd: string | undefined,
+  bindingSeq: number,
 ): Promise<{ driver: LiveSession; resumed?: SessionEngineBinding }> {
   const mode = sessionModeOrDefault(row.mode);
   if (target.harness === "pi") {
     const opened = await piStore.openForBinding(row.id, {
       kind: row.agentType,
+      bindingSeq,
       model: target.model,
       thinkingLevel: target.thinkingLevel,
       credentialProfileId: target.credentialProfileId,
@@ -207,6 +209,7 @@ async function open(
     claudeSdkStore.openForBinding(
       row.id,
       {
+        bindingSeq,
         model: target.model.id,
         thinkingLevel: target.thinkingLevel,
         credentialProfileId: target.credentialProfileId,
@@ -262,9 +265,6 @@ export async function prepareEngineSwitch(
       );
     });
   };
-  // Lifted with the fence: until the commit, the target engine writes no
-  // binding, even on the source's own harness (a kind change within pi).
-  let releaseTarget = () => {};
   let row: SessionMeta | undefined;
   let active: SessionEngineBinding | undefined;
   let driver: LiveSession;
@@ -287,11 +287,11 @@ export async function prepareEngineSwitch(
     admit();
     await release(active.harness, sessionId, admit);
     admit();
-    releaseTarget = sessionStore.holdSwitchTarget(sessionId, target.harness);
-    ({ driver, resumed } = await open(row, target, plan, cwd));
+    // The target writes as the binding the commit starts: until then its
+    // writes are foreign, and the binding it leaves stays as it is.
+    ({ driver, resumed } = await open(row, target, plan, cwd, active.seq + 1));
   } catch (error) {
     await rollback();
-    releaseTarget();
     lifted(false);
     throw error;
   }
@@ -309,7 +309,6 @@ export async function prepareEngineSwitch(
       },
     );
     await rollback();
-    releaseTarget();
     lifted(false);
   };
   try {
@@ -368,7 +367,6 @@ export async function prepareEngineSwitch(
         pending,
       });
       ended = true;
-      releaseTarget();
       lifted(true);
       void transfer?.commit().catch(() => {
         console.warn(

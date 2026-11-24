@@ -84,6 +84,8 @@ interface ClaudeAcquireOptions {
  * decides it.
  */
 export interface ClaudeSwitchBinding {
+  /** The binding the switch's commit starts, which the session writes as. */
+  bindingSeq: number;
   model: string;
   thinkingLevel: string;
   credentialProfileId: string;
@@ -139,6 +141,12 @@ class ClaudeSdkSessionStore {
    * still finishing (the naming agent); delivery is woken once they settle.
    */
   private wakeWhenSettled = new Set<string>();
+  /**
+   * The engine binding each instance runs (`seq`), named on its row writes:
+   * one for a binding that is not the active one is foreign
+   * (`docs/session-runtime-switching.md` "Engine bindings").
+   */
+  private readonly bindingSeqs = new WeakMap<ClaudeSdkSession, number>();
   /** Where each live session's next persist continues its timeline log. */
   private logs = new Map<string, ClaudeSdkLogCursor>();
   /** Lazily-built real seam, shared by every live session. */
@@ -392,6 +400,12 @@ class ClaudeSdkSessionStore {
       ...(opts.scope ? { scope: opts.scope } : {}),
       ...(opts.requiresEnterprise ? { requiresEnterprise: true } : {}),
     });
+    // The active binding, a session's first, or the one a switch's commit
+    // starts.
+    this.bindingSeqs.set(
+      session,
+      binding?.bindingSeq ?? sessionStore.activeBinding(id)?.seq ?? 1,
+    );
     // Registry sync: record the session's metadata on create (providerSessionId
     // is not known until the first turn ends; persist() fills it in then).
     this.syncRegistry(session);
@@ -571,6 +585,8 @@ class ClaudeSdkSessionStore {
         scope: sourceMeta?.scope ?? DEFAULT_SESSION_SCOPE,
         ...(requiresEnterprise ? { requiresEnterprise: true } : {}),
       });
+      // A fork is a new session: it runs its first binding.
+      this.bindingSeqs.set(session, 1);
       this.sessions.set(id, session);
       this.persist(session);
       session.armIdleIfUnviewed();
@@ -723,6 +739,7 @@ class ClaudeSdkSessionStore {
     const committed = session.committedTimeline();
     this.syncRegistryRecord(
       session.toRecordMeta(),
+      this.bindingSeqs.get(session),
       cursor?.kind === "append" && cursor.log.count === committed.length
         ? cursor.log
         : claudeSdkEntryFigures(committed),
@@ -731,6 +748,7 @@ class ClaudeSdkSessionStore {
 
   private syncRegistryRecord(
     record: ClaudeSdkRecordMeta,
+    bindingSeq: number | undefined,
     figures: ClaudeSdkEntryFigures,
   ): void {
     try {
@@ -778,9 +796,17 @@ class ClaudeSdkSessionStore {
             ? { credentialProfileId: record.credentialProfileId }
             : {}),
           ...(record.forkOrigin ? { forkOrigin: record.forkOrigin } : {}),
+          ...(bindingSeq !== undefined ? { bindingSeq } : {}),
         });
       }
-      if (record.usage) {
+      // Usage totals are the active binding's too: a switch's target before
+      // its commit (a return brings back an earlier record) replaces none.
+      const activeSeq = sessionStore.activeBinding(record.id)?.seq;
+      const owns =
+        bindingSeq === undefined ||
+        activeSeq === undefined ||
+        activeSeq === bindingSeq;
+      if (record.usage && owns) {
         sessionStore.replaceUsage(record.id, {
           inputTokens: record.usage.input,
           outputTokens: record.usage.output,

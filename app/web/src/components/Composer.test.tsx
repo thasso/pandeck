@@ -684,6 +684,13 @@ describe("Composer runtime commands", () => {
       "model openai-compatible-a/llama3",
       "model openai-compatible-b/llama3",
     ]);
+    // A slash id behind its provider completes from the id itself (F026).
+    expect(
+      slashState("/model openai/gp", commands, [], "developer", "pi", () => [
+        { value: "gpt-5.5", label: "GPT 5.5" },
+        { value: "openai-compatible-b/openai/gpt-5.5", label: "Proxy GPT" },
+      ]).items.map((item) => item.name),
+    ).toEqual(["model openai-compatible-b/openai/gpt-5.5"]);
     expect(
       slashState("/model claude", commands, [], "developer", "claude-sdk")
         .active,

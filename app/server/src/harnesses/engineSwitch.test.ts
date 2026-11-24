@@ -10,7 +10,15 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeAll, test } from "vitest";
+import { afterEach, beforeAll, test, vi } from "vitest";
+
+/** Naming runs, each answered by the test. */
+const titles = vi.hoisted(() => [] as Array<(title: string) => void>);
+vi.mock("../sessionNaming.ts", async (original) => ({
+  ...(await original<object>()),
+  generateSessionTitle: () =>
+    new Promise<string>((resolve) => titles.push(resolve)),
+}));
 import type { SessionPendingRuntime } from "@assistant/shared";
 import { claudeSdkStore } from "../claudeSdk/claudeSdkStore.ts";
 import {
@@ -965,6 +973,104 @@ test("a kind change within pi writes nothing to the binding it leaves before it 
     rmSync(file, { force: true });
   } finally {
     // Still bound to the test's session, so it cannot be deleted.
+    setCredentialProfileEnabled(endpoint.id, false);
+  }
+});
+
+test("a pi kind change waits for a naming run, and one that outlives its released instance writes nothing after the commit (F025)", async () => {
+  const endpoint = createCredentialProfile({
+    name: "Naming kind change LLM",
+    provider: "openai-compatible",
+  });
+  const id = freshId();
+  try {
+    assert.ok(
+      sessionStore.upsert({
+        id,
+        harness: "pi",
+        agentType: "developer",
+        provider: "openai-codex",
+        providerSessionId: id,
+        model: "gpt-5.6-sol",
+        thinkingLevel: "high",
+        credentialProfileId: "default",
+        messageCount: 2,
+      }),
+    );
+    const file = canonicalPiSessionPath(id);
+    mkdirSync(join(file, ".."), { recursive: true });
+    writeFileSync(
+      file,
+      `${JSON.stringify({ type: "session", version: 3, id, timestamp: new Date().toISOString(), cwd: process.cwd() })}\n`,
+    );
+    // The source: Codex, opened and tracked as the store opens any session.
+    piTracksForReal({
+      provider: "openai-codex",
+      id: "gpt-5.6-sol",
+      thinkingLevel: "high",
+    });
+    const source = await piStore.acquireByRecordId(id, "developer");
+    assert.ok(source);
+    assert.equal(source.bindingSeq, 1);
+    // Its first answer started the naming agent (the production routine).
+    const naming = (
+      source as unknown as {
+        autoNameFromFirstPrompt(
+          prompt: string,
+          attachments: never[],
+          settings: { enabled: boolean },
+        ): Promise<void>;
+      }
+    ).autoNameFromFirstPrompt("name this", [], { enabled: true });
+    assert.equal(titles.length, 1);
+
+    const toEndpoint: EngineSwitchTarget = {
+      harness: "pi",
+      model: { provider: endpoint.id, id: "llama3" },
+      thinkingLevel: "off",
+      credentialProfileId: endpoint.id,
+    };
+    const pending: SessionPendingRuntime = {
+      ...PENDING_PI,
+      model: toEndpoint.model,
+      thinkingLevel: "off",
+      account: { kind: "account", id: endpoint.id },
+    };
+    sessionStore.setPendingRuntime(id, pending);
+    piTracksForReal({ ...toEndpoint.model, thinkingLevel: "off" });
+    await assert.rejects(
+      prepareEngineSwitch(id, toEndpoint, pending, () => {}),
+      (error: Error) => error.name === "SessionSettlingError",
+    );
+    assert.equal(piStore.getLiveById(id), source, "pi keeps it meanwhile");
+    assert.equal(isSwitchingEngines(id), false);
+    assert.equal(sessionStore.get(id)?.provider, "openai-codex");
+
+    // Released anyway (nothing does so now): the switch commits meanwhile.
+    piStore.evict(id);
+    const prepared = await prepareEngineSwitch(
+      id,
+      toEndpoint,
+      pending,
+      () => {},
+    );
+    prepared.commit();
+    const committed = sessionStore.get(id);
+    assert.equal(committed?.provider, endpoint.id);
+    assert.equal(committed?.model, "llama3");
+
+    titles.shift()!("Too late");
+    await naming;
+    assert.deepEqual(sessionStore.get(id), committed);
+    assert.equal(
+      source.engine.sessionName,
+      undefined,
+      "nothing is appended to the transcript the endpoint binding reopened",
+    );
+    await piStore.releaseForSwitch(id, () => {});
+    rmSync(file, { force: true });
+  } finally {
+    titles.length = 0;
     setCredentialProfileEnabled(endpoint.id, false);
   }
 });

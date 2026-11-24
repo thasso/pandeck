@@ -56,19 +56,38 @@ function distinct(models: readonly ModelOption[]): ModelOption[] {
 }
 
 /**
- * The text that names `model` and no other: its bare id while only one
- * provider offers that id, else `provider/id` (two OpenAI-compatible endpoints
- * may both offer `llama3`).
+ * The models a typed text names by id, in either reading: as one model's
+ * `provider/id`, or as another's bare id. An endpoint's id may itself hold a
+ * slash (`openai/gpt-5.5`), so one text can be both.
+ */
+function namedById(
+  models: readonly ModelOption[],
+  text: string,
+): ModelOption[] {
+  const wanted = normalize(text);
+  return models.filter(
+    (model) =>
+      normalize(qualified(model)) === wanted || normalize(model.id) === wanted,
+  );
+}
+
+/**
+ * The text that names `model` and no other, in every reading: its bare id
+ * when that is unique, else its `provider/id` (two OpenAI-compatible
+ * endpoints may both offer `llama3`). None when both are ambiguous.
  */
 function modelArgument(
   model: ModelOption,
   models: readonly ModelOption[],
-): string {
-  const sameId = models.filter(
-    (other) => normalize(other.id) === normalize(model.id),
-  );
-  return sameId.length > 1 ? qualified(model) : model.id;
+): string | undefined {
+  return [model.id, qualified(model)].find((text) => {
+    const named = namedById(models, text);
+    return named.length === 1 && named[0] === model;
+  });
 }
+
+const UNNAMEABLE =
+  "No typed name picks only this model; choose it in the Runtime section";
 
 /** The arguments a command offers, for the composer's autocomplete. */
 export function runtimeArgumentOptions(
@@ -79,6 +98,13 @@ export function runtimeArgumentOptions(
     const models = distinct(context.models);
     return models.map((model) => {
       const value = modelArgument(model, models);
+      if (value === undefined)
+        return {
+          value: qualified(model),
+          label: model.name,
+          detail: UNNAMEABLE,
+          disabled: true,
+        };
       return {
         value,
         label: model.name,
@@ -123,12 +149,12 @@ export function resolveRuntimeCommand(
   if (!wanted) return { kind: "open" };
   if (name === "model") {
     const models = distinct(context.models);
-    // `provider/id` first, then the bare id, then the display name. A bare id
-    // or name that more than one provider offers is refused, never guessed:
-    // the first match could send the session to another endpoint.
+    // By id first, as `provider/id` or bare id together, then by display
+    // name. Text that names more than one model in any reading is refused,
+    // never guessed: the first match could send the session to another
+    // endpoint.
     const tiers = [
-      models.filter((option) => normalize(qualified(option)) === wanted),
-      models.filter((option) => normalize(option.id) === wanted),
+      namedById(models, wanted),
       models.filter((option) => normalize(option.name) === wanted),
     ];
     const matches = tiers.find((tier) => tier.length > 0) ?? [];
