@@ -29,7 +29,7 @@ export interface ClaudeModelPin {
  * The refusal of every Claude run while the integration is off: what is off,
  * and the one switch that turns it on.
  */
-const CLAUDE_SDK_DISABLED =
+export const CLAUDE_SDK_DISABLED_MESSAGE =
   'Claude SDK is disabled in settings. Turn on "Enable Claude SDK sessions" in Settings > Claude SDK to run Claude models.';
 
 /**
@@ -49,7 +49,7 @@ export async function resolveClaudeAccountModel(
   pin: ClaudeModelPin = {},
 ): Promise<string> {
   if (!getSettings().claudeSdk.enabled)
-    throw new ModelUnavailableOnAccountError(CLAUDE_SDK_DISABLED);
+    throw new ModelUnavailableOnAccountError(CLAUDE_SDK_DISABLED_MESSAGE);
   if (profileId !== undefined) await ensureClaudeAccountModels(profileId);
   const id = resolveClaudeSdkModel(
     aliasOrId,

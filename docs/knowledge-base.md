@@ -129,7 +129,8 @@ gets the file's name, absolute path and viewer route, never its content.
   `convert_pdf`/`convert_xlsx` (`kbPath`). A scanned PDF's Claude fallback runs
   only with the Claude SDK enabled in settings (`docs/agent-harnesses.md` models
   port); otherwise `convert_pdf` returns the low-text result with a note saying
-  how to enable it.
+  how to enable it. If the SDK is enabled but no Claude account exists, the note
+  directs the user to add or sign in to one in Settings > Accounts.
 - `kb_list` lists folders and files with Markdown titles, depth- and
   count-bounded.
 - `kb_write` creates or replaces one file from text, base64, or a session

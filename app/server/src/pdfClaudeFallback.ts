@@ -7,9 +7,11 @@
  */
 import { Buffer } from "node:buffer";
 import { CLAUDE_SDK_PROVIDER } from "@assistant/shared";
+import { CLAUDE_SDK_DISABLED_MESSAGE } from "./harnesses/claudeModelResolution.ts";
 import { runOneShot } from "./harnesses/oneShot.ts";
 import { PDF_MIME, setPdfClaudeFallback } from "./documentConversion.ts";
 import { getSettings } from "./settings.ts";
+import { listCredentialProfiles } from "./credentialProfiles.ts";
 import { ModelUnavailableOnAccountError } from "./settingsModelSlots.ts";
 
 const SYSTEM_PROMPT = `You transcribe a PDF document into clean, faithful GitHub-flavored Markdown.
@@ -22,12 +24,21 @@ const SYSTEM_PROMPT = `You transcribe a PDF document into clean, faithful GitHub
 
 const USER_PROMPT =
   "Transcribe the attached PDF document to Markdown, following the rules exactly.";
+const NO_CLAUDE_ACCOUNT =
+  "No Claude account is configured. Add or sign in to a Claude account in Settings > Accounts, then retry.";
 
 /** Register the Claude document-block fallback used for scanned/image PDFs. */
 export function registerPdfClaudeFallback(): void {
   setPdfClaudeFallback(async ({ bytes }) => {
-    const settings = getSettings().pdfConversion;
+    const appSettings = getSettings();
+    const settings = appSettings.pdfConversion;
     if (!settings.fallbackEnabled) return null;
+    if (!appSettings.claudeSdk.enabled)
+      return { unavailable: CLAUDE_SDK_DISABLED_MESSAGE };
+    if (
+      !listCredentialProfiles().some((profile) => profile.provider === "claude")
+    )
+      return { unavailable: NO_CLAUDE_ACCOUNT };
     let run: Awaited<ReturnType<typeof runOneShot>>;
     try {
       run = await runOneShot({

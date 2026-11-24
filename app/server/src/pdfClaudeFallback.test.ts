@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, test, vi } from "vitest";
 import {
   disableClaudeSdkForTests,
@@ -35,6 +37,8 @@ import {
   type ClaudeSdkSeam,
 } from "./claudeSdk/sdkSeam.ts";
 import { updateSettings } from "./settings.ts";
+import { CREDENTIAL_PROFILES_ROOT } from "./credentialProfilePaths.ts";
+import { listCredentialProfiles } from "./credentialProfiles.ts";
 import { seedLegacyDefaultAccounts } from "./test/legacyDefaultAccounts.ts";
 
 const CLAUDE_DEFAULTS = {
@@ -204,4 +208,88 @@ describe("registerPdfClaudeFallback", () => {
         .mock.calls.every(([request]) => !request.excludeProfileIds?.length),
     );
   });
+
+  for (const sdkEnabled of [false, true]) {
+    test(`degrades without a Claude account when the SDK is ${sdkEnabled ? "enabled" : "disabled"}`, async () => {
+      updateSettings({
+        pdfConversion: { fallbackEnabled: true, ...CLAUDE_DEFAULTS },
+      });
+      if (sdkEnabled) await enableClaudeSdkForTests();
+      else await disableClaudeSdkForTests();
+
+      const registry = join(CREDENTIAL_PROFILES_ROOT, "profiles.json");
+      const originalRegistry = existsSync(registry)
+        ? readFileSync(registry, "utf8")
+        : undefined;
+      const profiles = originalRegistry
+        ? (JSON.parse(originalRegistry) as Array<{
+            id: string;
+            provider: string;
+          }>)
+        : [];
+      writeFileSync(
+        registry,
+        `${JSON.stringify(
+          profiles.filter((profile) => profile.provider !== "claude"),
+          null,
+          2,
+        )}\n`,
+        { mode: 0o600 },
+      );
+      try {
+        assert.equal(
+          listCredentialProfiles().some(
+            (profile) => profile.provider === "claude",
+          ),
+          false,
+          "fixture has no current Claude accounts or protected legacy default",
+        );
+        assert.equal(
+          profiles.some((profile) => profile.id === "claude-default"),
+          true,
+          "fixture starts with the protected legacy default that it removes",
+        );
+
+        const state = { called: false };
+        setClaudeSdkOneShotSeam(() =>
+          Promise.resolve(fakeSeam("should not run", state)),
+        );
+        registerPdfClaudeFallback();
+        vi.mocked(health.observeAccountHealth).mockClear();
+        vi.mocked(health.reportAccountRunFailure).mockClear();
+        vi.mocked(health.reportAccountRunWorking).mockClear();
+        vi.mocked(router.pickAccount).mockClear();
+
+        const result = await convertPdfToMarkdown({
+          bytes: buildTestPdf({ pages: 2 }),
+        });
+        assert.equal(state.called, false, "Claude is never called");
+        assert.equal(result.engine, "pdf2md");
+        assert.equal(result.usedClaudeFallback, false);
+        assert.equal(result.lowText, true);
+        assert.equal(
+          result.note,
+          sdkEnabled
+            ? "PDF text layer looks empty (likely scanned); the Claude fallback could not run. No Claude account is configured. Add or sign in to a Claude account in Settings > Accounts, then retry."
+            : 'PDF text layer looks empty (likely scanned); the Claude fallback could not run. Claude SDK is disabled in settings. Turn on "Enable Claude SDK sessions" in Settings > Claude SDK to run Claude models.',
+        );
+        assert.equal(vi.mocked(router.pickAccount).mock.calls.length, 0);
+        assert.equal(
+          vi.mocked(health.observeAccountHealth).mock.calls.length,
+          0,
+        );
+        assert.equal(
+          vi.mocked(health.reportAccountRunFailure).mock.calls.length,
+          0,
+        );
+        assert.equal(
+          vi.mocked(health.reportAccountRunWorking).mock.calls.length,
+          0,
+        );
+      } finally {
+        if (originalRegistry === undefined) writeFileSync(registry, "[]\n");
+        else writeFileSync(registry, originalRegistry, { mode: 0o600 });
+      }
+    });
+  }
 });
