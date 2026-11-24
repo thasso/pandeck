@@ -10,6 +10,8 @@ import assert from "node:assert/strict";
 import type { AppSettings, ModelOption } from "@assistant/shared";
 import { describe, test } from "vitest";
 import { pinnedModelIdsFor } from "../harnesses/models.ts";
+import { resetClaudeAccountModelsForTests } from "../harnesses/claudeAccountModels.ts";
+import { COMPANY, Y } from "../test/claudeListings.ts";
 import type { AgentManifest } from "./agentLibrary.ts";
 import {
   checkAgentRuntime,
@@ -106,21 +108,87 @@ describe("resolveAgentModel", () => {
 
   test("a concrete Claude id resolves to its alias only while the alias runs exactly it", () => {
     // The real pin data the models port reports for an enabled Claude account.
-    const pins = pinnedModelIdsFor({ provider: "claude" }, {
+    const pins = pinnedModelIdsFor([{ id: "unread", provider: "claude" }], {
       claudeSdk: { enabled: true },
     } as AppSettings);
     assert.ok(pins.size > 0);
-    const live = [...pins].map(([key, pinnedId]) => ({
+    const live = [...pins].map(([key, pinnedIds]) => ({
       ...model("claude-sdk", key.slice(key.indexOf(":") + 1)),
-      pinnedId,
+      pinnedIds,
     }));
     for (const row of live)
-      assert.equal(resolveAgentModel(row.pinnedId, live).id, row.id);
+      for (const pinnedId of row.pinnedIds)
+        assert.equal(resolveAgentModel(pinnedId, live).id, row.id);
     // A version the alias no longer runs is refused, never moved to the alias.
     assert.throws(
       () => resolveAgentModel("claude-opus-1-0", live),
       /No enabled account offers a model "claude-opus-1-0"/,
     );
+  });
+
+  test("the catalog unions each account's pinnable ids in candidate order, whatever the account order", async () => {
+    const settings = { claudeSdk: { enabled: true } } as AppSettings;
+    const listed: Record<string, readonly string[]> = { x: COMPANY, y: Y };
+    const cache = resetClaudeAccountModelsForTests({
+      read: async (id) => (listed[id] ? [...listed[id]] : undefined),
+      readable: (id) => id in listed,
+    });
+    try {
+      await cache.refresh({ profileIds: ["x", "y"], force: true });
+      const x = { id: "x", provider: "claude" } as const;
+      const y = { id: "y", provider: "claude" } as const;
+      const both = pinnedModelIdsFor([x, y], settings);
+      assert.deepEqual(both, pinnedModelIdsFor([y, x], settings));
+      assert.deepEqual(both.get("claude-sdk:fable"), [
+        "claude-fable-5-2",
+        "claude-fable-5-1",
+      ]);
+      const rows = (pins: Map<string, string[]>) =>
+        [...pins].map(([key, pinnedIds]) => ({
+          ...model("claude-sdk", key.slice(key.indexOf(":") + 1)),
+          pinnedIds,
+        }));
+      const live = rows(both);
+      for (const spec of [
+        "claude-fable-5-2",
+        "claude-fable-5-1",
+        "claude-sdk/claude-fable-5-2",
+      ])
+        assert.equal(resolveAgentModel(spec, live).id, "fable", spec);
+      assert.equal(resolveAgentModel("claude-mythos-5-1", live).id, "mythos");
+      assert.throws(
+        () =>
+          resolveAgentModel(
+            "claude-mythos-5-1",
+            rows(pinnedModelIdsFor([y], settings)),
+          ),
+        /No enabled account offers a model "claude-mythos-5-1"/,
+      );
+
+      // An unknown account (gateway off): every candidate of an alias offered
+      // without a listing, never mythos, never a legacy id.
+      const unknown = pinnedModelIdsFor(
+        [{ id: "unread", provider: "claude" }],
+        settings,
+      );
+      assert.deepEqual(unknown.get("claude-sdk:fable"), [
+        "claude-fable-5-2",
+        "claude-fable-5-1",
+      ]);
+      assert.equal(unknown.has("claude-sdk:mythos"), false);
+      const offline = rows(unknown);
+      assert.equal(resolveAgentModel("claude-fable-5-1", offline).id, "fable");
+      assert.throws(
+        () => resolveAgentModel("claude-opus-5", offline),
+        /No enabled account offers a model "claude-opus-5"/,
+      );
+      assert.throws(
+        () => resolveAgentModel("claude-mythos-5-2", offline),
+        /No enabled account offers a model "claude-mythos-5-2"/,
+      );
+    } finally {
+      resetClaudeAccountModelsForTests();
+    }
   });
 
   test("provider/id names one row when two providers offer the same id", () => {
@@ -135,7 +203,7 @@ describe("resolveAgentModel", () => {
 
   test("provider/id also names a pin when two providers offer the concrete id", () => {
     const rows = [
-      { ...model("claude-sdk", "opus"), pinnedId: "claude-opus-5-5" },
+      { ...model("claude-sdk", "opus"), pinnedIds: ["claude-opus-5-5"] },
       model("anthropic", "claude-opus-5-5"),
     ];
     assert.throws(
@@ -157,7 +225,7 @@ describe("resolveAgentModel", () => {
     );
     // Once the alias runs another version, the qualified pin is refused too.
     const moved = [
-      { ...model("claude-sdk", "opus"), pinnedId: "claude-opus-6-0" },
+      { ...model("claude-sdk", "opus"), pinnedIds: ["claude-opus-6-0"] },
     ];
     assert.throws(
       () => resolveAgentModel("claude-sdk/claude-opus-5-5", moved),
@@ -256,7 +324,7 @@ describe("checkAgentRuntime", () => {
     const pinnedSources = {
       ...sources,
       models: async () => [
-        { ...model("claude-sdk", "opus"), pinnedId: "claude-opus-5-5" },
+        { ...model("claude-sdk", "opus"), pinnedIds: ["claude-opus-5-5"] },
       ],
     };
     const pinned = await defaultOf(
@@ -265,7 +333,7 @@ describe("checkAgentRuntime", () => {
     );
     assert.equal(pinned?.model.id, "opus");
     assert.equal(pinned?.pinnedModel, "claude-opus-5-5");
-    assert.ok(!("pinnedId" in pinned!.model));
+    assert.ok(!("pinnedIds" in pinned!.model));
     const alias = await defaultOf(base, { sources: pinnedSources });
     assert.equal(alias?.pinnedModel, undefined);
   });

@@ -212,6 +212,15 @@ function refusalCategoryOf(
  * passed on only for a usage or rate limit whose provider stated it as a field
  * (`resetAt`), never derived from a relative duration or from wording.
  */
+/**
+ * The facts of a run PA itself refused before any provider call: never
+ * re-analyzed from its text, and `kind: "unknown"` keeps every kind-keyed
+ * consumer inert even where it ignores the marker.
+ */
+export function localPolicyRunFailure(): RunFailureFacts {
+  return { kind: "unknown", localPolicy: true };
+}
+
 export function runFailureFacts(info: ProviderErrorInfo): RunFailureFacts {
   const limited = info.kind === "quota" || info.kind === "rate_limit";
   const resetAtMs =

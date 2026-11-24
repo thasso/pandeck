@@ -10,7 +10,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, test, vi } from "vitest";
+import { afterEach, beforeEach, test, vi } from "vitest";
+import { enableClaudeSdkForTests } from "../test/claudeSdkEnabled.ts";
 import type { SessionState } from "@assistant/shared";
 import type { Viewer } from "../harness.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -40,6 +41,9 @@ const { inProcessWorkerEnginesForTests } =
 const ENV_BEFORE = process.env[CLAUDE_AUTO_COMPACT_WINDOW_ENV];
 // Runs on an install that still has its protected default accounts.
 await seedLegacyDefaultAccounts();
+
+// These suites drive Claude runs; the integration is off by default.
+beforeEach(enableClaudeSdkForTests);
 
 afterEach(() => {
   vi.useRealTimers();

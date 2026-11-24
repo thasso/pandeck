@@ -21,6 +21,7 @@ import {
 } from "../piSdk/models.ts";
 import { CLAUDE_SDK_MODELS } from "../claudeSdk/modelSettings.ts";
 import { resetClaudeAccountModelsForTests } from "./claudeAccountModels.ts";
+import { COMPANY, PRIVATE } from "../test/claudeListings.ts";
 import { curatedModelOption } from "./curatedModels.ts";
 import {
   accountLacksModel,
@@ -69,11 +70,15 @@ function claudeAccount(id: string, enabled = true): CredentialProfileSummary {
 
 /** The curated alias ids, in curated order. */
 const CURATED = CLAUDE_SDK_MODELS.map((model) => model.id);
-const ALL_IDS = CLAUDE_SDK_MODELS.map((model) => model.sdkModelId);
+const ALL_IDS = CLAUDE_SDK_MODELS.flatMap((model) => model.sdkModelIds);
 const NO_HAIKU = ALL_IDS.filter((id) => id !== "claude-haiku-5-5");
+/** What an unknown account offers: every alias but the entitlement-gated. */
+const UNKNOWN_OFFERED = CURATED.filter((id) => id !== "mythos");
 
 /** Give each listed account its snapshot, as a successful gateway read would. */
-async function listings(byAccount: Record<string, string[]>): Promise<void> {
+async function listings(
+  byAccount: Record<string, string[] | undefined>,
+): Promise<void> {
   const cache = resetClaudeAccountModelsForTests({
     read: async (id) => byAccount[id],
     readable: (id) => id in byAccount,
@@ -130,7 +135,9 @@ test("the pickers offer pi's models plus the curated Claude list while it is ena
   } as AppSettings);
   assert.deepEqual(models[0], piModel);
   assert.ok(models.some((m) => m.provider === "claude-sdk" && m.id === "opus"));
-  assert.ok(models.every((m) => !("sdkModelId" in m)));
+  assert.ok(
+    models.every((m) => !("sdkModelIds" in m) && !("offeredWhenUnknown" in m)),
+  );
 
   assert.deepEqual(
     pickerModels({ claudeSdk: { enabled: false } } as AppSettings),
@@ -233,7 +240,7 @@ test("a stored session's model renders from the harness that ran it", () => {
   );
 });
 
-test("a Claude account offers the curated models its listing names; unknown keeps the curated list", async () => {
+test("a Claude account offers the curated models its listing names; unknown keeps the curated list but mythos", async () => {
   await listings({ c1: ALL_IDS, c2: NO_HAIKU });
   assert.deepEqual(
     claudeIds(await modelsForAccount({ id: "c1", provider: "claude" })),
@@ -245,8 +252,8 @@ test("a Claude account offers the curated models its listing names; unknown keep
   );
   assert.deepEqual(
     claudeIds(await modelsForAccount({ id: "c3", provider: "claude" })),
-    CURATED,
-    "an unknown account keeps every existing model",
+    UNKNOWN_OFFERED,
+    "an unknown account keeps every existing model, never the gated one",
   );
   assert.equal(await accountOffersModel("c1", "claude-sdk", "haiku"), true);
   assert.equal(await accountOffersModel("c2", "claude-sdk", "haiku"), false);
@@ -331,7 +338,11 @@ test("the port waits (bounded) for an account's first listing", async () => {
 
 test("the Claude picker is the union over enabled Claude accounts, in curated order", async () => {
   const settings = { claudeSdk: { enabled: true } } as AppSettings;
-  assert.deepEqual(claudeIds(pickerModels(settings)), CURATED, "no account");
+  assert.deepEqual(
+    claudeIds(pickerModels(settings)),
+    UNKNOWN_OFFERED,
+    "no account: what an unknown account offers",
+  );
 
   profiles = [claudeAccount("c1"), claudeAccount("c2")];
   await listings({ c1: NO_HAIKU, c2: ["claude-haiku-5-5"] });
@@ -360,6 +371,115 @@ test("the Claude picker is the union over enabled Claude accounts, in curated or
     claudeIds(pickerModels(settings)),
     CURATED,
     "an unknown enabled account offers the curated list",
+  );
+});
+
+test("mythos is offered once where a company account lists it, never by private, unknown or failed accounts", async () => {
+  const settings = { claudeSdk: { enabled: true } } as AppSettings;
+  const mythosCount = () =>
+    claudeIds(pickerModels(settings)).filter((id) => id === "mythos").length;
+  profiles = [claudeAccount("company"), claudeAccount("private")];
+  await listings({ company: [...COMPANY], private: [...PRIVATE] });
+  assert.equal(mythosCount(), 1);
+  profiles = [claudeAccount("private")];
+  assert.equal(mythosCount(), 0);
+  profiles = [];
+  assert.equal(mythosCount(), 0, "none enabled: the flag-true aliases only");
+
+  assert.equal(
+    await accountLacksModel("private", "claude-sdk", "mythos"),
+    true,
+  );
+  assert.equal(
+    await accountOffersModel("private", "claude-sdk", "mythos"),
+    false,
+  );
+  assert.equal(
+    await accountLacksModel("company", "claude-sdk", "mythos"),
+    false,
+  );
+  // A failed read leaves the account unknown, where mythos never runs.
+  resetClaudeAccountModelsForTests({
+    read: async () => {
+      throw new Error("listing failed");
+    },
+    readable: () => true,
+  });
+  assert.equal(await accountLacksModel("failed", "claude-sdk", "mythos"), true);
+  assert.equal(await accountLacksModel("failed", "claude-sdk", "fable"), false);
+  assert.equal(
+    await accountLacksModel("failed", "claude-sdk", "opus", {
+      pinnedModelId: "claude-mythos-5-1",
+      persistedPinnedModelId: "claude-mythos-5-1",
+    }),
+    true,
+  );
+});
+
+test("a pin is judged exactly: offered and lacking are complements on an enabled account", async () => {
+  await listings({ y: PRIVATE.filter((id) => id !== "claude-fable-5-2") });
+  for (const [pin, lacking] of [
+    ["claude-fable-5-2", true],
+    ["claude-fable-5-1", false],
+  ] as const) {
+    assert.equal(
+      await accountLacksModel("y", "claude-sdk", "fable", {
+        pinnedModelId: pin,
+      }),
+      lacking,
+      pin,
+    );
+    assert.equal(
+      await accountOffersModel("y", "claude-sdk", "fable", {
+        pinnedModelId: pin,
+      }),
+      !lacking,
+      pin,
+    );
+  }
+});
+
+test("a known listing naming a session's exact legacy pin offers it, though not the alias's current candidate", async () => {
+  const legacy = ["claude-opus-5", "claude-sonnet-5-5"];
+  await listings({ legacy, unknown: undefined });
+  const stored = {
+    pinnedModelId: "claude-opus-5",
+    persistedPinnedModelId: "claude-opus-5",
+  };
+  // Complements with the pin: the account runs exactly that version.
+  for (const pin of [stored, { pinnedModelId: "claude-opus-5" }]) {
+    assert.equal(
+      await accountLacksModel("legacy", "claude-sdk", "opus", pin),
+      false,
+    );
+    assert.equal(
+      await accountOffersModel("legacy", "claude-sdk", "opus", pin),
+      true,
+    );
+  }
+  // Unpinned, the alias's current candidate is what counts: not listed.
+  assert.equal(await accountLacksModel("legacy", "claude-sdk", "opus"), true);
+  assert.equal(await accountOffersModel("legacy", "claude-sdk", "opus"), false);
+  // An unknown account keeps only the session's own stored legacy pin (D1-legacy).
+  assert.equal(
+    await accountOffersModel("unknown", "claude-sdk", "opus", stored),
+    true,
+  );
+  assert.equal(
+    await accountOffersModel("unknown", "claude-sdk", "opus", {
+      pinnedModelId: "claude-opus-5",
+    }),
+    false,
+  );
+  // Only a curated alias of that provider, and only with the integration on.
+  assert.equal(
+    await accountOffersModel("legacy", "claude-sdk", "claude-opus-5", stored),
+    false,
+  );
+  claudeEnabled = false;
+  assert.equal(
+    await accountOffersModel("legacy", "claude-sdk", "opus", stored),
+    false,
   );
 });
 

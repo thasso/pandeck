@@ -10,7 +10,8 @@
  * session keeps every message the user can still read.
  */
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { beforeEach, test } from "vitest";
+import { enableClaudeSdkForTests } from "../test/claudeSdkEnabled.ts";
 import type { ServerMessage } from "@assistant/shared";
 import { entriesToDisplayMessages } from "@assistant/shared/display";
 import { runClearForHost } from "../hostSlashCommands.ts";
@@ -205,6 +206,9 @@ async function testNoProviderHistory(): Promise<void> {
 
 // Runs on an install that still has its protected default accounts.
 await seedLegacyDefaultAccounts();
+
+// These suites drive Claude runs; the integration is off by default.
+beforeEach(enableClaudeSdkForTests);
 
 test(
   "Claude /clear drops the resume id, reports what it dropped, and renders one durable card",

@@ -67,9 +67,10 @@ export interface AgentRuntimeSources {
 
 /**
  * A model as a definition may name it: its id, and for an alias model the
- * concrete version that alias runs today (`opus` → `claude-opus-5-5`).
+ * concrete versions a connected account can run under it, newest first
+ * (`fable` → `claude-fable-5-2`, `claude-fable-5-1`).
  */
-export type AgentModelOption = ModelOption & { pinnedId?: string };
+export type AgentModelOption = ModelOption & { pinnedIds?: readonly string[] };
 
 /** How many candidate ids a resolution failure names. */
 const MAX_LISTED_MODELS = 12;
@@ -79,18 +80,24 @@ async function connectedModels(
   includeDisabled = false,
 ): Promise<AgentModelOption[]> {
   const byKey = new Map<string, AgentModelOption>();
-  for (const profile of listCredentialProfiles()) {
-    if (!profile.enabled && !includeDisabled) continue;
+  const profiles = listCredentialProfiles().filter(
+    (profile) => profile.enabled || includeDisabled,
+  );
+  for (const profile of profiles) {
     const models = await modelsForAccount(profile).catch(() => []);
-    const pins = pinnedModelIdsFor(profile);
     for (const model of models) {
       const key = `${model.provider}:${model.id}`;
       if (!profile.enabled && byKey.has(key)) continue;
-      const pinnedId = pins.get(key);
-      byKey.set(key, pinnedId ? { ...model, pinnedId } : model);
+      byKey.set(key, model);
     }
   }
-  return [...byKey.values()];
+  // Each alias's pins over every account in scope, in candidate order, so
+  // the catalog never depends on the accounts' order.
+  const pins = pinnedModelIdsFor(profiles);
+  return [...byKey.entries()].map(([key, model]) => {
+    const pinnedIds = pins.get(key);
+    return pinnedIds ? { ...model, pinnedIds } : model;
+  });
 }
 
 const liveSources: AgentRuntimeSources = {
@@ -118,15 +125,31 @@ export function setAgentRuntimeSourcesForTests(
 }
 
 /**
+ * The pinned version `spec` names on `model` (`claude-fable-5-1`, or
+ * `claude-sdk/claude-fable-5-1`), if any.
+ */
+function pinnedIdNamed(
+  spec: string,
+  model: AgentModelOption,
+): string | undefined {
+  const wanted = spec.toLowerCase();
+  return model.pinnedIds?.find((id) =>
+    [id, `${model.provider}/${id}`].some(
+      (form) => form.toLowerCase() === wanted,
+    ),
+  );
+}
+
+/**
  * Resolve a definition's `model` to exactly one model a connected account
- * offers. An exact id wins — a model's own id, or the concrete version an
- * alias model runs today (`claude-opus-5-5` resolves to `opus` only while
- * `opus` still runs exactly that version, so a pin never silently follows the
- * alias to another one). Otherwise the spec must equal one hyphen-separated
- * token of exactly one id (`sol` → `gpt-6.1-sol`). `provider/id` names one
- * row when two providers offer the same id, pins included
- * (`claude-sdk/claude-opus-5-5`). Never a guess: none, or
- * more than one, is a refusal that names the candidates.
+ * offers. An exact id wins — a model's own id, or a concrete version an alias
+ * model can run on a connected account (`claude-fable-5-1` resolves to
+ * `fable` only while some account can run exactly that version, so a pin
+ * never silently follows the alias to another one). Otherwise the spec must
+ * equal one hyphen-separated token of exactly one id (`sol` → `gpt-6.1-sol`).
+ * `provider/id` names one row when two providers offer the same id, pins
+ * included (`claude-sdk/claude-opus-5-5`). Never a guess: none, or more than
+ * one, is a refusal that names the candidates.
  */
 export function resolveAgentModel(
   spec: string,
@@ -138,9 +161,7 @@ export function resolveAgentModel(
       model.id.toLowerCase() === wanted ||
       // `provider/id` names one row even when two providers offer the id.
       `${model.provider}/${model.id}`.toLowerCase() === wanted ||
-      (model.pinnedId !== undefined &&
-        (model.pinnedId.toLowerCase() === wanted ||
-          `${model.provider}/${model.pinnedId}`.toLowerCase() === wanted)),
+      pinnedIdNamed(spec, model) !== undefined,
   );
   if (exact.length === 1) return exact[0]!;
   const matches =
@@ -183,12 +204,8 @@ function agentRuntimeFor(
   compactionWindow?: number,
 ): AgentRuntime {
   const model = resolveAgentModel(spec, models);
-  const { pinnedId, ...option } = model;
-  const pinned =
-    pinnedId !== undefined &&
-    [pinnedId, `${model.provider}/${pinnedId}`].some(
-      (form) => form.toLowerCase() === spec.toLowerCase(),
-    );
+  const { pinnedIds: _pinnedIds, ...option } = model;
+  const pinned = pinnedIdNamed(spec, model);
   const window =
     compactionWindow !== undefined
       ? estimateSpawnCompactionWindow(option, {
@@ -200,7 +217,7 @@ function agentRuntimeFor(
   return {
     ...(window && !("refused" in window) ? { compactionWindow: window } : {}),
     model: option,
-    ...(pinned ? { pinnedModel: pinnedId } : {}),
+    ...(pinned !== undefined ? { pinnedModel: pinned } : {}),
     thinkingLevel: clampThinkingLevelForModel(
       option,
       effort ?? AGENT_DEFAULT_EFFORT,

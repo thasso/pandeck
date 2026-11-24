@@ -11,7 +11,8 @@
  * carry an attachment content block per file so the transcript renders the chips.
  */
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { beforeEach, test } from "vitest";
+import { enableClaudeSdkForTests } from "../test/claudeSdkEnabled.ts";
 import type { PromptAttachment } from "@assistant/shared";
 import { ClaudeSdkSession } from "../test/claudeSdkSession.ts";
 import type {
@@ -68,6 +69,9 @@ function scriptedTurn(): ClaudeSdkMessage[] {
 
 // Runs on an install that still has its protected default accounts.
 await seedLegacyDefaultAccounts();
+
+// These suites drive Claude runs; the integration is off by default.
+beforeEach(enableClaudeSdkForTests);
 
 test("Claude SDK prompt threads attachments to the model and durable entry", async () => {
   let capturedPrompt: ClaudeQueryParams["prompt"] | undefined;

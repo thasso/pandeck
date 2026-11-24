@@ -151,6 +151,7 @@ import {
 import type {
   PromptableAdapter,
   ProviderActivityKind,
+  RunFailureFacts,
 } from "../session/adapters/contract.ts";
 import {
   appendText,
@@ -201,7 +202,13 @@ import {
   backgroundWorkDescription,
   backgroundWorkTitle,
 } from "../backgroundWork/title.ts";
-import { analyzeProviderError, runFailureFacts } from "../providerErrors.ts";
+import {
+  analyzeProviderError,
+  localPolicyRunFailure,
+  runFailureFacts,
+} from "../providerErrors.ts";
+import { resolveClaudeAccountModel } from "../harnesses/claudeModelResolution.ts";
+import { ModelUnavailableOnAccountError } from "../settingsModelSlots.ts";
 import {
   claudeBackgroundWorkBackend,
   registerClaudeBackgroundWorkBackend,
@@ -227,9 +234,9 @@ import {
   resultProviderError,
 } from "./messageMapper.ts";
 import {
-  claudeQueryModel,
   claudeQueryOpenSpec,
   claudeSessionHookBinding,
+  claudeSessionPin,
 } from "./options.ts";
 import { registerInProcessEngineFactory } from "../workers/inProcessWorker.ts";
 import { registerSessionHooks } from "../workers/sessionHookHost.ts";
@@ -267,6 +274,22 @@ const DEFAULT_TITLE = "New Claude SDK";
 const STEER_CANCEL_TIMEOUT_MS = 2_000;
 /** Drop answers plus the retained Stop's interrupt acknowledgement. */
 const STOP_INTERRUPT_TIMEOUT_MS = 2 * STEER_CANCEL_TIMEOUT_MS;
+
+/** How often a model change re-judges a session that keeps moving accounts. */
+const MODEL_CHANGE_ATTEMPTS = 3;
+
+/**
+ * A model change that lost a race with an account move: nothing changed, and
+ * the user picks the model again on the account the session now has.
+ */
+class AccountChangedDuringModelChangeError extends Error {
+  override name = "AccountChangedDuringModelChangeError";
+  constructor() {
+    super(
+      "The session moved to another account while its model was changing. Pick the model again.",
+    );
+  }
+}
 const COMPACTION_STATE_UNREAD =
   "Could not read this session's compaction state; nothing changed.";
 
@@ -1328,24 +1351,44 @@ export class ClaudeSdkSession implements LiveSession {
    * fixes them at query time), so this throws after the first prompt.
    */
   async setModel(modelId: string): Promise<void> {
-    if (
-      this.activeQuery &&
-      this.retainedEpochKey !== undefined &&
-      this.retainedEpochKey === this.queryEpochKey &&
-      this.activeQuery.setModel
-    ) {
-      const alias = claudeSdkModelAlias(modelId);
-      // The same pin-aware choice a new query makes: back on a pinned
-      // agent's alias, the retained process runs the pinned version.
-      await this.activeQuery.setModel(
-        claudeQueryModel(alias, sessionAgent(this.id)),
+    const alias = claudeSdkModelAlias(modelId);
+    // The session's account must run the new model before anything changes.
+    // Back on a pinned agent's alias, that is the pinned version; a model
+    // change is no stored pin, so no legacy allowance applies.
+    const pin = claudeSessionPin(alias, sessionAgent(this.id));
+    // Nothing holds the account during a model change, so an account move can
+    // commit while a resolve waits for its listing: an answer is only used for
+    // the account it was asked about, and a moved session is judged again on
+    // the account it now has (bounded).
+    for (let attempt = 0; attempt < MODEL_CHANGE_ATTEMPTS; attempt++) {
+      const account = this.credentialProfileId;
+      const sdkModelId = await resolveClaudeAccountModel(
+        account,
+        alias,
+        pin !== undefined ? { pinnedModelId: pin } : {},
       );
-      this.modelId = alias;
-      this.broadcastState();
-      this.onPersist();
+      if (this.credentialProfileId !== account) continue;
+      if (
+        this.activeQuery &&
+        this.retainedEpochKey !== undefined &&
+        this.retainedEpochKey === this.queryEpochKey &&
+        this.activeQuery.setModel
+      ) {
+        // The retained process runs the version its account resolved.
+        await this.activeQuery.setModel(sdkModelId);
+        // A move during that call closed this process before committing; the
+        // new account never judged the model, so nothing changes.
+        if (this.credentialProfileId !== account)
+          throw new AccountChangedDuringModelChangeError();
+        this.modelId = alias;
+        this.broadcastState();
+        this.onPersist();
+        return;
+      }
+      this.configure(modelId, undefined);
       return;
     }
-    this.configure(modelId, undefined);
+    throw new AccountChangedDuringModelChangeError();
   }
 
   /** Select thinking for later turns on a retained process through controls. */
@@ -1778,9 +1821,31 @@ export class ClaudeSdkSession implements LiveSession {
             : {
                 errorMessage:
                   error instanceof Error ? error.message : String(error),
+                // The account is not entitled to the model: PA refused before
+                // any provider call, so the turn's failure is no evidence.
+                ...(error instanceof ModelUnavailableOnAccountError
+                  ? { localPolicy: true as const }
+                  : {}),
               }),
         });
     }
+  }
+
+  /**
+   * The concrete id the session's model runs on its current account, with the
+   * agent's pin and the stored pin (`harnesses/claudeModelResolution.ts`).
+   * Throws {@link ModelUnavailableOnAccountError} when the account does not
+   * offer it: a backstop, as turn admission and `/compact` check first.
+   */
+  private resolveSessionModel(): Promise<string> {
+    const pin = claudeSessionPin(this.modelId, sessionAgent(this.id));
+    return resolveClaudeAccountModel(
+      this.credentialProfileId,
+      this.modelId,
+      pin !== undefined
+        ? { pinnedModelId: pin, persistedPinnedModelId: pin }
+        : {},
+    );
   }
 
   /**
@@ -2150,6 +2215,10 @@ export class ClaudeSdkSession implements LiveSession {
     if (!ownsTurn()) return;
     const carried = await this.savedProviderTotals();
     if (!ownsTurn()) return;
+    // Resolved on the session's current account at every open: the alias is
+    // what persists, the concrete id is this account's.
+    const sdkModelId = await this.resolveSessionModel();
+    if (!ownsTurn()) return;
     // A query opened meanwhile takes the prompt the way it would have above.
     if (this.activeQuery)
       return this.sendPromptToProcess(
@@ -2200,6 +2269,7 @@ export class ClaudeSdkSession implements LiveSession {
           sessionId: this.id,
           cwd: this.cwd,
           modelId: this.modelId,
+          sdkModelId,
           thinkingLevel: this.thinkingLevel,
           ...(this.providerSessionId !== undefined
             ? { providerSessionId: this.providerSessionId }
@@ -3457,35 +3527,44 @@ export class ClaudeSdkSession implements LiveSession {
     stopReason: "end" | "error" | "aborted";
     errorMessage?: string;
     statusCode?: number;
+    /** PA refused the turn before any provider call (`localPolicyRunFailure`). */
+    localPolicy?: true;
   }): void {
     if (!this.running && !this.liveTurn) return;
     const errorMessage =
       result.stopReason === "error" ? result.errorMessage : undefined;
     // A refusal this turn saw decides the classification, not its prose.
     const refusal = this.pendingProviderError?.refusal;
-    const errorInfo = errorMessage
-      ? analyzeProviderError(errorMessage, {
-          provider: "anthropic",
-          model: this.modelId,
-          ...(refusal
-            ? {
-                structuredRefusal: true,
-                ...(refusal.category !== undefined
-                  ? { refusalCategory: refusal.category }
-                  : {}),
-              }
-            : {}),
-          ...(result.statusCode !== undefined
-            ? { statusCode: result.statusCode }
-            : {}),
-          // A credential profile is a CLI OAuth login with inherited
-          // credential variables scrubbed; otherwise an API key may answer.
-          authMode: this.credentialProfileId ? "subscription" : "unknown",
-        })
-      : undefined;
+    // A local refusal is never classified from its text: it carries its own
+    // facts and no provider error info.
+    const localFailure =
+      errorMessage && result.localPolicy ? localPolicyRunFailure() : undefined;
+    const errorInfo =
+      errorMessage && !localFailure
+        ? analyzeProviderError(errorMessage, {
+            provider: "anthropic",
+            model: this.modelId,
+            ...(refusal
+              ? {
+                  structuredRefusal: true,
+                  ...(refusal.category !== undefined
+                    ? { refusalCategory: refusal.category }
+                    : {}),
+                }
+              : {}),
+            ...(result.statusCode !== undefined
+              ? { statusCode: result.statusCode }
+              : {}),
+            // A credential profile is a CLI OAuth login with inherited
+            // credential variables scrubbed; otherwise an API key may answer.
+            authMode: this.credentialProfileId ? "subscription" : "unknown",
+          })
+        : undefined;
+    const failure =
+      localFailure ?? (errorInfo ? runFailureFacts(errorInfo) : undefined);
     // The runtime receives the structured failure before viewers see the end.
-    if (errorMessage && errorInfo)
-      this.adapterEvents.runFailing(errorMessage, runFailureFacts(errorInfo));
+    if (errorMessage && failure)
+      this.adapterEvents.runFailing(errorMessage, failure);
     // A run that ends — failed, stopped or with a steer the turn never read —
     // took nothing more: whatever is still queued goes back to its sender.
     void this.withdrawPendingSteers();
@@ -3530,7 +3609,7 @@ export class ClaudeSdkSession implements LiveSession {
         model: this.modelId,
         ...(usage ? { usage } : {}),
         ...(errorMessage ? { errorMessage } : {}),
-        ...(errorInfo ? { failure: runFailureFacts(errorInfo) } : {}),
+        ...(failure ? { failure } : {}),
         ...(aborted ? { aborted: true } : {}),
         ...(this.pendingNativeMessageId
           ? { providerMessageId: this.pendingNativeMessageId }
@@ -3648,7 +3727,12 @@ export class ClaudeSdkSession implements LiveSession {
   }
 
   /** Finish a synthetic tool turn with plain tool output. */
-  finishSyntheticTool(toolId: string, output: string, isError = false): void {
+  finishSyntheticTool(
+    toolId: string,
+    output: string,
+    isError = false,
+    failure?: RunFailureFacts,
+  ): void {
     const turn = this.liveTurn;
     if (!turn || !this.liveTurnId) return;
     finishHostCommandTool(
@@ -3657,6 +3741,7 @@ export class ClaudeSdkSession implements LiveSession {
       toolId,
       output,
       isError,
+      failure,
     );
     this.commitSyntheticTurn(turn);
   }
@@ -3716,6 +3801,9 @@ export class ClaudeSdkSession implements LiveSession {
     this.abortingTurn = false;
     try {
       await this.seamFactory();
+      // The same per-account resolution as a turn; a refusal here (the listing
+      // changed after `/compact`'s own check) reaches its catch typed.
+      const sdkModelId = await this.resolveSessionModel();
       // A standalone compaction is its own query epoch, so its usage rebases onto
       // the session rather than onto whatever the previous epoch had reported.
       this.beginUsageEpoch(await this.savedProviderTotals());
@@ -3727,6 +3815,7 @@ export class ClaudeSdkSession implements LiveSession {
           sessionId: this.id,
           cwd: this.cwd,
           modelId: this.modelId,
+          sdkModelId,
           thinkingLevel: this.thinkingLevel,
           providerSessionId: this.providerSessionId,
           mountToolServer: false,

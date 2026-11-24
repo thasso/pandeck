@@ -10,7 +10,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterAll, afterEach, test, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, test, vi } from "vitest";
+import { enableClaudeSdkForTests } from "../test/claudeSdkEnabled.ts";
 import type { ClaudeSdkMessage, ClaudeSdkSeam } from "./sdkSeam.ts";
 
 const naming = vi.hoisted(() => ({
@@ -222,6 +223,9 @@ async function freshClaude(profile = account()) {
 async function flushNames() {
   for (let i = 0; i < 12; i++) await Promise.resolve();
 }
+// These suites drive Claude runs; the integration is off by default.
+beforeEach(enableClaudeSdkForTests);
+
 afterEach(async () => {
   for (const session of claudeSdkStore.list())
     claudeSdkStore.remove(session.id);

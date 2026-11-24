@@ -253,6 +253,13 @@ export interface RunFailureFacts {
    * (`refusalCategory: "cyber"`): an enterprise account may run it.
    */
   cyberRefusal?: true;
+  /**
+   * PA refused the run before any provider call (an account not entitled to
+   * the model): this is not provider evidence. Health, benches, switches and
+   * retries ignore such a run's failure. Only a PA refusal made before the
+   * provider was asked may set it; never a real provider failure.
+   */
+  localPolicy?: true;
 }
 
 /**

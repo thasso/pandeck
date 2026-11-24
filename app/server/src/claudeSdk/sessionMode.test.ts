@@ -17,7 +17,8 @@
  *      record winning over a stale client's requested mode.
  */
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { beforeEach, test } from "vitest";
+import { enableClaudeSdkForTests } from "../test/claudeSdkEnabled.ts";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR } from "../config.ts";
@@ -251,6 +252,9 @@ async function main(): Promise<void> {
 
 // Runs on an install that still has its protected default accounts.
 await seedLegacyDefaultAccounts();
+
+// These suites drive Claude runs; the integration is off by default.
+beforeEach(enableClaudeSdkForTests);
 
 test("carries the Build/Plan session mode into every turn and across restarts", async () => {
   try {

@@ -19,6 +19,7 @@ vi.mock("./credentialProfiles.ts", () => ({
 vi.mock("./harnesses/models.ts", () => ({
   accountLacksModel: vi.fn(async () => false),
   modelsForAccount: vi.fn(),
+  pinnedModelOption: vi.fn(),
 }));
 vi.mock("./usageCache.ts", () => ({ cachedUsageIndicator: vi.fn() }));
 vi.mock("./settings.ts", () => ({
@@ -455,6 +456,86 @@ test("the disabled default is never returned when its listing lacks the model", 
     degraded: "disabled-default",
   });
 });
+test("model-unavailable only when a lacking account would otherwise have been usable", () => {
+  const disabled = (candidate: AccountCandidate): AccountCandidate => ({
+    ...candidate,
+    profile: { ...candidate.profile, enabled: false },
+  });
+  const d = disabled({ ...account("d"), lacksModel: true });
+  assert.deepEqual(rank([d]), {
+    profileId: null,
+    degraded: "no-enabled-account",
+  });
+  const e = { ...account("e"), lacksModel: true };
+  assert.deepEqual(rank([d, e]), {
+    profileId: null,
+    degraded: "model-unavailable",
+  });
+  assert.deepEqual(rank([disabled(account("x")), e]), {
+    profileId: null,
+    degraded: "model-unavailable",
+  });
+  // The protected default it may fall back to, lacking: entitlement decided.
+  const fallback = disabled({ ...account("default"), lacksModel: true });
+  assert.deepEqual(rank([fallback], { allowDisabledDefault: true }), {
+    profileId: null,
+    degraded: "model-unavailable",
+  });
+  assert.deepEqual(rank([d], { requiresEnterprise: true }), {
+    profileId: null,
+    degraded: "no-enterprise-account",
+  });
+  const enterpriseDisabled = disabled({
+    ...account("f"),
+    lacksModel: true,
+  });
+  enterpriseDisabled.profile.enterprise = true;
+  assert.deepEqual(rank([enterpriseDisabled], { requiresEnterprise: true }), {
+    profileId: null,
+    degraded: "no-enterprise-account",
+  });
+});
+
+test("a pinned request routes only to accounts that run the pin (X runs 5-2, Y does not)", () => {
+  // The gather marks Y lacking for `fable` pinned to `claude-fable-5-2`.
+  const x = account("x", 50, 50);
+  const y = { ...account("y", 0, 0), lacksModel: true };
+  const both = (a: AccountCandidate, b: AccountCandidate) => [
+    [a, b],
+    [b, a],
+  ];
+  for (const candidates of both(x, y))
+    assert.deepEqual(rank(candidates), { profileId: "x" });
+  const benched = { ...x, limited: { until: now + 60_000 } };
+  for (const candidates of both(benched, y))
+    assert.deepEqual(rank(candidates), {
+      profileId: "x",
+      degraded: "no-eligible-account",
+      limited: { until: now + 60_000 },
+    });
+  // A disabled X stays in scope but is never ranked; Y lacks the pin.
+  const off = { ...x, profile: { ...x.profile, enabled: false } };
+  for (const candidates of both(off, y))
+    assert.deepEqual(rank(candidates), {
+      profileId: null,
+      degraded: "model-unavailable",
+    });
+  assert.deepEqual(rank([y]), {
+    profileId: null,
+    degraded: "model-unavailable",
+  });
+  // X is the disabled protected default this request may fall back to.
+  const protectedDefault = {
+    ...account("default"),
+    profile: { ...account("default").profile, enabled: false },
+  };
+  for (const candidates of both(protectedDefault, y))
+    assert.deepEqual(rank(candidates, { allowDisabledDefault: true }), {
+      profileId: "default",
+      degraded: "disabled-default",
+    });
+});
+
 test("an account with no known listing takes part as before", () => {
   const unknown = { ...account("unknown", 1, 1, 1), lacksModel: false };
   assert.deepEqual(rank([unknown, account("other")]), {

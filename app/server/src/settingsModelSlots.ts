@@ -145,16 +145,18 @@ async function modelName(provider: string, modelId: string): Promise<string> {
 }
 
 /**
- * Refuse an account whose known model listing lacks the model ("<account>
- * can't run <model>."). An account with no known listing passes.
+ * Refuse an account that is not entitled to the model ("<account> can't run
+ * <model>."), with the pin a Claude start or session carries
+ * (`accountLacksModel`).
  */
 export async function assertAccountCanRunModel(
   profileId: string,
   provider: string,
   modelId: string,
+  pin: { pinnedModelId?: string; persistedPinnedModelId?: string } = {},
 ): Promise<void> {
   const { accountLacksModel } = await import("./harnesses/models.ts");
-  if (!(await accountLacksModel(profileId, provider, modelId))) return;
+  if (!(await accountLacksModel(profileId, provider, modelId, pin))) return;
   const account = credentialProfileById(profileId)?.name ?? "This account";
   throw new ModelUnavailableOnAccountError(
     `${account} can't run ${await modelName(provider, modelId)}.`,

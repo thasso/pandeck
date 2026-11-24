@@ -225,24 +225,25 @@ test("answers a refusal as the move's error, binding unchanged", async () => {
   }
 });
 
+function claudeAccount(name: string): string {
+  const p = profiles.createCredentialProfile({ name, provider: "claude" });
+  // A fake credential file: only its presence keeps the login healthy.
+  mkdirSync(profiles.claudeConfigDir(p.id), { recursive: true });
+  writeFileSync(
+    join(profiles.claudeConfigDir(p.id), ".credentials.json"),
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken: "fake-access",
+        refreshToken: "fake-refresh",
+        expiresAt: Date.now() + 86400_000,
+      },
+    }),
+  );
+  accounts.push(p.id);
+  return p.id;
+}
+
 test("a Claude account whose listing lacks the session's model is no target and refuses the move", async () => {
-  const claudeAccount = (name: string): string => {
-    const p = profiles.createCredentialProfile({ name, provider: "claude" });
-    // A fake credential file: only its presence keeps the login healthy.
-    mkdirSync(profiles.claudeConfigDir(p.id), { recursive: true });
-    writeFileSync(
-      join(profiles.claudeConfigDir(p.id), ".credentials.json"),
-      JSON.stringify({
-        claudeAiOauth: {
-          accessToken: "fake-access",
-          refreshToken: "fake-refresh",
-          expiresAt: Date.now() + 86400_000,
-        },
-      }),
-    );
-    accounts.push(p.id);
-    return p.id;
-  };
   const before = getSettings().claudeSdk;
   updateSettings({ claudeSdk: { ...before, enabled: true } });
   const from = claudeAccount("Claude From");
@@ -306,9 +307,196 @@ test("a Claude account whose listing lacks the session's model is no target and 
       type: "sessionAccountMoveAnswer",
       requestId: "claude-move",
       sessionId: id,
-      error: "Claude Private does not offer haiku at this session's effort.",
+      error: "Claude Private can't run Claude Haiku.",
     });
     assert.equal(sessionStore.get(id)?.credentialProfileId, from);
+  } finally {
+    connection.dispose();
+    resetClaudeAccountModelsForTests();
+    updateSettings({ claudeSdk: before });
+  }
+});
+
+/** PRIVATE minus `claude-fable-5-2`: the evidence file's Y listing. */
+const Y_LISTING = [
+  "claude-haiku-5-5",
+  "claude-sonnet-5-5",
+  "claude-opus-5-5",
+  "claude-fable-5-1",
+  "claude-opus-5",
+  "claude-sonnet-5",
+  "claude-fable-5",
+];
+
+test.each([
+  {
+    pinned: true,
+    error:
+      "Claude Y can't run claude-fable-5-2, the version this session is pinned to.",
+  },
+  { pinned: false, error: undefined },
+])(
+  "a 5-2-pinned fable session is refused a move to an account without 5-2 (pinned: $pinned)",
+  async ({ pinned, error }) => {
+    const before = getSettings().claudeSdk;
+    updateSettings({ claudeSdk: { ...before, enabled: true } });
+    const from = claudeAccount("Claude From");
+    const y = claudeAccount("Claude Y");
+    resetClaudeAccountModelsForTests({
+      read: async (id) =>
+        id === y ? Y_LISTING : [...Y_LISTING, "claude-fable-5-2"],
+    });
+    const id = `account-move-message-${sequence++}`;
+    sessionStore.upsert({
+      id,
+      harness: "claude-sdk",
+      agentType: "assistant",
+      credentialProfileId: from,
+    });
+    sessions.push(id);
+    if (pinned)
+      sessionStore.freezeAgent(
+        id,
+        JSON.stringify({
+          name: "pinned-fable",
+          blob: "0".repeat(40),
+          persona: "assistant",
+          provider: "claude-sdk",
+          model: "fable",
+          pinnedModel: "claude-fable-5-2",
+          effort: "high",
+          runtimeSource: "definition",
+          denyTools: [],
+          skills: [],
+          body: "",
+        }),
+      );
+    const driver = new FakeRuntimeDriver(id) as InstanceType<
+      typeof FakeRuntimeDriver
+    > & {
+      modelSelection(): {
+        model: { provider: string; id: string };
+        thinkingLevel: "high";
+      };
+      switchAccount(profileId: string, admit: () => void): Promise<void>;
+    };
+    driver.modelSelection = () => ({
+      model: { provider: "claude-sdk", id: "fable" },
+      thinkingLevel: "high",
+    });
+    driver.switchAccount = async (next, admit) => {
+      admit();
+      sessionStore.switchCredentialProfile(id, from, next);
+    };
+    setAccountMoveHostForTests({
+      runtime: sessionRuntime,
+      resident: async () => driver,
+      acquire: async () => driver,
+      publishRows: async () => {},
+    });
+    const { sent, connection } = connect();
+    try {
+      await connection.handle({
+        type: "moveSessionAccount",
+        sessionId: id,
+        credentialProfileId: y,
+        requestId: "pin-move",
+      });
+      assert.deepEqual(answers(sent, "sessionAccountMoveAnswer").at(-1), {
+        type: "sessionAccountMoveAnswer",
+        requestId: "pin-move",
+        sessionId: id,
+        ...(error ? { error } : {}),
+      });
+      assert.equal(sessionStore.get(id)?.credentialProfileId, error ? from : y);
+    } finally {
+      connection.dispose();
+      resetClaudeAccountModelsForTests();
+      updateSettings({ claudeSdk: before });
+    }
+  },
+);
+
+test("an opus session pinned to claude-opus-5 lists and moves to an account offering that exact version", async () => {
+  const before = getSettings().claudeSdk;
+  updateSettings({ claudeSdk: { ...before, enabled: true } });
+  const from = claudeAccount("Claude From");
+  const legacy = claudeAccount("Claude Legacy");
+  resetClaudeAccountModelsForTests({
+    read: async (id) =>
+      id === legacy
+        ? ["claude-opus-5", "claude-sonnet-5-5"]
+        : ["claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"],
+  });
+  const id = `account-move-message-${sequence++}`;
+  sessionStore.upsert({
+    id,
+    harness: "claude-sdk",
+    agentType: "assistant",
+    credentialProfileId: from,
+  });
+  sessions.push(id);
+  sessionStore.freezeAgent(
+    id,
+    JSON.stringify({
+      name: "pinned-opus",
+      blob: "0".repeat(40),
+      persona: "assistant",
+      provider: "claude-sdk",
+      model: "opus",
+      pinnedModel: "claude-opus-5",
+      effort: "high",
+      runtimeSource: "definition",
+      denyTools: [],
+      skills: [],
+      body: "",
+    }),
+  );
+  const driver = new FakeRuntimeDriver(id) as InstanceType<
+    typeof FakeRuntimeDriver
+  > & {
+    modelSelection(): {
+      model: { provider: string; id: string };
+      thinkingLevel: "high";
+    };
+    switchAccount(profileId: string, admit: () => void): Promise<void>;
+  };
+  driver.modelSelection = () => ({
+    model: { provider: "claude-sdk", id: "opus" },
+    thinkingLevel: "high",
+  });
+  driver.switchAccount = async (next, admit) => {
+    admit();
+    sessionStore.switchCredentialProfile(id, from, next);
+  };
+  setAccountMoveHostForTests({
+    runtime: sessionRuntime,
+    resident: async () => driver,
+    acquire: async () => driver,
+    publishRows: async () => {},
+  });
+  const { sent, connection } = connect();
+  try {
+    await connection.handle({
+      type: "listSessionAccountMoveTargets",
+      sessionId: id,
+      requestId: "legacy-list",
+    });
+    const listed = answers(sent, "sessionAccountMoveTargets").at(-1)?.accounts;
+    assert.ok(listed?.some((target) => target.id === legacy));
+
+    await connection.handle({
+      type: "moveSessionAccount",
+      sessionId: id,
+      credentialProfileId: legacy,
+      requestId: "legacy-move",
+    });
+    assert.deepEqual(answers(sent, "sessionAccountMoveAnswer").at(-1), {
+      type: "sessionAccountMoveAnswer",
+      requestId: "legacy-move",
+      sessionId: id,
+    });
+    assert.equal(sessionStore.get(id)?.credentialProfileId, legacy);
   } finally {
     connection.dispose();
     resetClaudeAccountModelsForTests();

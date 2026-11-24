@@ -332,6 +332,20 @@ test("curated model options load no engine SDK", () => {
 });
 
 /**
+ * Every Claude query open, retained model change and one-shot resolves its
+ * concrete id through the bound resolver (`docs/agent-harnesses.md`), so it
+ * may not reach pi's registry through the models port.
+ */
+test("the bound Claude model resolver loads no engine SDK", () => {
+  const reach = staticReach("harnesses/claudeModelResolution.ts");
+  assert.ok(
+    reach.modules.includes("claudeSdk/modelResolution.ts"),
+    "the walk reaches the pure rule",
+  );
+  assert.deepEqual(engineLoads(reach), []);
+});
+
+/**
  * Session creation sits below app code (`docs/agent-harnesses.md`): it reaches
  * the hub's behaviour only through what the hub hands the registry, never by
  * importing `hub.ts` or the connection.

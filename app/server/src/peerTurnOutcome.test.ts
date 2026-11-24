@@ -32,6 +32,7 @@ import {
   it,
   vi,
 } from "vitest";
+import { enableClaudeSdkForTests } from "./test/claudeSdkEnabled.ts";
 import type { AgentType, Harness } from "@assistant/shared";
 import { sessionStore } from "./db/sessionStore.ts";
 import { peerPromptStore } from "./db/peerPromptStore.ts";
@@ -156,7 +157,9 @@ let delivery: ReturnType<typeof installDeliveryTestScheduler>;
 // Runs on an install that still has its protected default accounts.
 await seedLegacyDefaultAccounts();
 
-beforeEach(() => {
+beforeEach(async () => {
+  // These suites drive Claude runs; the integration is off by default.
+  await enableClaudeSdkForTests();
   delivery = installDeliveryTestScheduler({
     live: (id) => fakeHub.getLiveById(id) as RuntimePromptDriver | undefined,
     acquire: async (id) =>

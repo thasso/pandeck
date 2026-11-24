@@ -816,7 +816,7 @@ describe("agent tool races and pins", () => {
   test("a pinned Claude id shows the version it holds the alias to", async () => {
     setAgentRuntimeSourcesForTests({
       models: async () => [
-        { ...model("claude-sdk", "opus"), pinnedId: "claude-opus-5-5" },
+        { ...model("claude-sdk", "opus"), pinnedIds: ["claude-opus-5-5"] },
       ],
       skillNames: async () => [],
       toolNames: async () => ["worktree_push"],

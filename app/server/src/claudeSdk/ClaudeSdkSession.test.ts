@@ -21,7 +21,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "vitest";
+import { beforeEach, test } from "vitest";
+import { enableClaudeSdkForTests } from "../test/claudeSdkEnabled.ts";
 import { UNLABELED_SESSION_TITLE, type ServerMessage } from "@assistant/shared";
 import { ClaudeSdkSession } from "../test/claudeSdkSession.ts";
 import { claudeSdkModelId } from "./modelSettings.ts";
@@ -351,6 +352,9 @@ async function main(): Promise<void> {
 
 // Runs on an install that still has its protected default accounts.
 await seedLegacyDefaultAccounts();
+
+// These suites drive Claude runs; the integration is off by default.
+beforeEach(enableClaudeSdkForTests);
 
 test("maps scripted Claude SDK turns", async () => {
   await main();

@@ -686,6 +686,7 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
     try {
       const result = await env.runClaudeSdkOneShot({
         modelId: "sonnet",
+        sdkModelId: "claude-sonnet-5-5",
         thinkingLevel: "off",
         systemPrompt: "You answer in one word.",
         prompt: "Say hello.",

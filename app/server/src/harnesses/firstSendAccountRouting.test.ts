@@ -17,6 +17,7 @@ const {
   setCredentialProfileEnabled,
 } = await import("../credentialProfiles.ts");
 const { resolveSessionAccount } = await import("../sessionAccount.ts");
+const { MYTHOS_LESS_READS } = await import("../test/claudeListings.ts");
 const { resetClaudeAccountModelsForTests } =
   await import("./claudeAccountModels.ts");
 
@@ -281,4 +282,103 @@ test("Automatic with every Claude account lacking the model names the model", as
     admission.refusal.message,
     "No Claude account can run Claude Haiku.",
   );
+});
+
+test.each(MYTHOS_LESS_READS)(
+  "a mythos first send on a %s account refuses by name; the other aliases start",
+  async (_cause, deps) => {
+    const only = createCredentialProfile({
+      name: "Mythos-less",
+      provider: "claude",
+    });
+    resetClaudeAccountModelsForTests(deps);
+    try {
+      const engine = firstSendEngine("claude-sdk");
+      const mythos = {
+        ...entitledSend,
+        modelId: "mythos",
+        credentialProfileId: only.id,
+      };
+      const admission = await engine.account(mythos);
+      assert.ok("refusal" in admission);
+      assert.equal(
+        admission.refusal.message,
+        "Mythos-less can't run Claude Mythos.",
+      );
+      const prepared = await engine.prepare(mythos, only.id);
+      assert.ok("refusal" in prepared && !("create" in prepared));
+      assert.equal(
+        prepared.refusal.message,
+        "Mythos-less can't run Claude Mythos.",
+      );
+      for (const modelId of ["opus", "sonnet", "haiku", "fable"])
+        assert.deepEqual(
+          await engine.account({ ...mythos, modelId }),
+          { profileId: only.id },
+          modelId,
+        );
+      assert.equal(vi.mocked(pickAccount).mock.calls.length, 0);
+    } finally {
+      setCredentialProfileEnabled(only.id, false);
+      resetClaudeAccountModelsForTests();
+    }
+  },
+);
+
+test("an Automatic mythos first send no account can run names Claude Mythos", async () => {
+  vi.mocked(pickAccount).mockResolvedValue({
+    profileId: null,
+    degraded: "model-unavailable",
+  });
+  const admission = await firstSendEngine("claude-sdk").account({
+    ...entitledSend,
+    modelId: "mythos",
+  });
+  assert.ok("refusal" in admission);
+  assert.equal(
+    admission.refusal.message,
+    "No Claude account can run Claude Mythos.",
+  );
+});
+
+test("an unknown account accepts a new fable 5-1 pin and refuses a new mythos pin", async () => {
+  const off = createCredentialProfile({
+    name: "Gateway off",
+    provider: "claude",
+  });
+  const failed = createCredentialProfile({
+    name: "Failed read",
+    provider: "claude",
+  });
+  resetClaudeAccountModelsForTests({
+    read: async (id) =>
+      id === failed.id
+        ? Promise.reject(new Error("listing failed"))
+        : undefined,
+  });
+  try {
+    assert.equal(
+      await resolveSessionAccount("claude-sdk", {
+        credentialProfileId: off.id,
+        modelProvider: "claude-sdk",
+        modelId: "fable",
+        pinnedModelId: "claude-fable-5-1",
+      }),
+      off.id,
+    );
+    await assert.rejects(
+      resolveSessionAccount("claude-sdk", {
+        credentialProfileId: failed.id,
+        modelProvider: "claude-sdk",
+        modelId: "mythos",
+        pinnedModelId: "claude-mythos-5-2",
+      }),
+      /Failed read can't run/,
+    );
+    assert.equal(vi.mocked(pickAccount).mock.calls.length, 0);
+  } finally {
+    setCredentialProfileEnabled(off.id, false);
+    setCredentialProfileEnabled(failed.id, false);
+    resetClaudeAccountModelsForTests();
+  }
 });

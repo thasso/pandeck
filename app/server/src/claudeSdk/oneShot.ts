@@ -31,7 +31,6 @@ import {
   type ClaudeUsage,
 } from "./messageMapper.ts";
 import {
-  claudeSdkModelId,
   CLAUDE_SDK_HARNESS_SETTINGS,
   reasoningToThinking,
 } from "./modelSettings.ts";
@@ -67,6 +66,11 @@ export const OUTPUT_LIMIT_FAILURE =
 export interface RunClaudeSdkOneShotInput {
   /** Model alias/id (opus/sonnet/haiku, or anything resolvable to one). */
   modelId: string;
+  /**
+   * The concrete id the alias runs on this run's account, resolved by the
+   * caller (`harnesses/claudeModelResolution.ts`); passed to the SDK verbatim.
+   */
+  sdkModelId: string;
   thinkingLevel: ThinkingLevel;
   /** Full system prompt (replaces the default — a custom prompt). */
   systemPrompt: string;
@@ -127,7 +131,7 @@ function buildOneShotOptions(
     abortController,
     ...claudeSdkExecutableOptions(),
     env: oneShotEnvironment(input),
-    model: claudeSdkModelId(input.modelId),
+    model: input.sdkModelId,
     systemPrompt: input.systemPrompt,
     // Native tools and inherited settings stay disabled. A caller-supplied
     // app-tool allowlist is mounted only through the private pa MCP namespace.

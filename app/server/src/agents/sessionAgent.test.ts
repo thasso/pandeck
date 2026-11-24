@@ -12,7 +12,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { test } from "vitest";
+import { beforeEach, test } from "vitest";
+import { enableClaudeSdkForTests } from "../test/claudeSdkEnabled.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "session-agent-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -48,6 +49,9 @@ const reviewer = {
   skills: [],
   body: "Prove every new test fails without the change.",
 };
+
+// These suites drive Claude runs; the integration is off by default.
+beforeEach(enableClaudeSdkForTests);
 
 test("the first freeze wins for the session's life", () => {
   assert.equal(sessionAgent("fresh"), undefined);
@@ -263,14 +267,14 @@ test("Claude: a pinned agent runs its version even after the alias moves", () =>
       agent: pinned,
     }).model;
   const opus = CLAUDE_SDK_MODELS.find((entry) => entry.id === "opus")!;
-  const original = opus.sdkModelId;
-  opus.sdkModelId = "claude-opus-future";
+  const original = opus.sdkModelIds;
+  opus.sdkModelIds = ["claude-opus-future"];
   try {
     assert.equal(query("opus"), "claude-opus-5-5");
     // A model the user switched the session to runs as usual.
     assert.equal(
       query("sonnet"),
-      CLAUDE_SDK_MODELS.find((entry) => entry.id === "sonnet")!.sdkModelId,
+      CLAUDE_SDK_MODELS.find((entry) => entry.id === "sonnet")!.sdkModelIds[0],
     );
     // An unpinned agent follows its alias.
     assert.equal(
@@ -285,7 +289,7 @@ test("Claude: a pinned agent runs its version even after the alias moves", () =>
       "claude-opus-future",
     );
   } finally {
-    opus.sdkModelId = original;
+    opus.sdkModelIds = original;
   }
 });
 
@@ -322,19 +326,21 @@ test("Claude: a retained process switched back to the agent's alias runs the pin
   };
   const opus = CLAUDE_SDK_MODELS.find((entry) => entry.id === "opus")!;
   const sonnet = CLAUDE_SDK_MODELS.find((entry) => entry.id === "sonnet")!;
-  const original = opus.sdkModelId;
-  opus.sdkModelId = "claude-opus-future";
+  const original = opus.sdkModelIds;
+  // The alias now runs a newer version first; the pin is still one of its
+  // candidates, so the session's (unknown) account may run it on a change.
+  opus.sdkModelIds = ["claude-opus-future", "claude-opus-5-5"];
   try {
     assert.deepEqual(await switches("claude-retained"), [
-      sonnet.sdkModelId,
+      sonnet.sdkModelIds[0],
       "claude-opus-5-5",
     ]);
     // A session not spawned from a pinned definition follows the alias.
     assert.deepEqual(await switches("claude-retained-plain"), [
-      sonnet.sdkModelId,
+      sonnet.sdkModelIds[0],
       "claude-opus-future",
     ]);
   } finally {
-    opus.sdkModelId = original;
+    opus.sdkModelIds = original;
   }
 });

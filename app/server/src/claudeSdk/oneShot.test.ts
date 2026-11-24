@@ -19,7 +19,10 @@ import type {
   ClaudeSdkMessage,
   ClaudeSdkSeam,
 } from "./sdkSeam.ts";
-import { CLAUDE_SDK_HARNESS_SETTINGS } from "./modelSettings.ts";
+import {
+  CLAUDE_SDK_HARNESS_SETTINGS,
+  claudeSdkModelId,
+} from "./modelSettings.ts";
 import {
   OUTPUT_LIMIT_FAILURE,
   runClaudeSdkOneShot as runClaudeSdkOneShotOnAccount,
@@ -105,6 +108,7 @@ async function main(): Promise<void> {
   );
   const out = await runClaudeSdkOneShot({
     modelId: "sonnet",
+    sdkModelId: "claude-sonnet-5-5",
     thinkingLevel: "off",
     systemPrompt: "SYS PROMPT",
     prompt: "Refine this",
@@ -132,6 +136,11 @@ async function main(): Promise<void> {
   );
   assert.equal(opts!.maxTurns, 1, "single turn");
   assert.equal(
+    opts!.model,
+    "claude-sonnet-5-5",
+    "the caller's resolved id reaches the SDK verbatim",
+  );
+  assert.equal(
     captured?.prompt,
     "Refine this",
     "prompt passed as plain string",
@@ -157,6 +166,7 @@ async function main(): Promise<void> {
   );
   await runClaudeSdkOneShot({
     modelId: "sonnet",
+    sdkModelId: "claude-sonnet-5-5",
     thinkingLevel: "off",
     systemPrompt: "SYS",
     prompt: "Research",
@@ -190,6 +200,7 @@ async function main(): Promise<void> {
   );
   await runClaudeSdkOneShot({
     modelId: "sonnet",
+    sdkModelId: "claude-sonnet-5-5",
     thinkingLevel: "off",
     systemPrompt: "SYS",
     prompt: "Transcribe",
@@ -227,6 +238,7 @@ async function main(): Promise<void> {
   );
   const failed = await runClaudeSdkOneShot({
     modelId: "sonnet",
+    sdkModelId: "claude-sonnet-5-5",
     thinkingLevel: "off",
     systemPrompt: "x",
     prompt: "y",
@@ -250,6 +262,7 @@ test("an API failure is reported as the failure, never as model text", async () 
     setClaudeSdkOneShotSeam(() => Promise.resolve(fakeSeam(messages)));
     return runClaudeSdkOneShot({
       modelId: "sonnet",
+      sdkModelId: "claude-sonnet-5-5",
       thinkingLevel: "off",
       systemPrompt: "x",
       prompt: "y",
@@ -397,6 +410,7 @@ test.each([
     );
     const run = await runClaudeSdkOneShot({
       modelId,
+      sdkModelId: claudeSdkModelId(modelId),
       thinkingLevel: "off",
       systemPrompt: "x",
       prompt: "y",
@@ -445,6 +459,7 @@ test("a reply cut off at the output limit is reported as a failure", async () =>
 
   const cut = await runClaudeSdkOneShot({
     modelId: "haiku",
+    sdkModelId: "claude-haiku-5-5",
     thinkingLevel: "off",
     systemPrompt: "x",
     prompt: "y",
@@ -485,6 +500,7 @@ test("AC8: with a server lease the child's only credential is the lease at the g
     );
     await runClaudeSdkOneShotOnAccount({
       modelId: "sonnet",
+      sdkModelId: "claude-sonnet-5-5",
       thinkingLevel: "off",
       systemPrompt: "SYS",
       prompt: "P",

@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { afterAll, test, vi } from "vitest";
 import type { Harness } from "@assistant/shared";
 import type { PromptableAdapter } from "./session/adapters/contract.ts";
+import { MYTHOS_LESS_READS, Y } from "./test/claudeListings.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "account-router-sdk-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -18,11 +19,13 @@ process.env.DATA_DIR = join(tmp, "data");
 const {
   claudeConfigDir,
   createCredentialProfile,
+  listCredentialProfiles,
   piAgentDir,
   patchCredentialProfile,
   setCredentialProfileEnabled,
 } = await import("./credentialProfiles.ts");
-const { pickAccount } = await import("./accountRouter.ts");
+const { gatherAccountCandidate, pickAccount } =
+  await import("./accountRouter.ts");
 const { modelsForAccount, piModelForAccount } =
   await import("./harnesses/models.ts");
 const { createSession } = await import("./harnesses/create.ts");
@@ -38,6 +41,7 @@ const { promptRuntimeSessionWithRuntime, beginRuntimeProviderTurn } =
   await import("./session/runtimePrompt.ts");
 const { resetClaudeAccountModelsForTests } =
   await import("./harnesses/claudeAccountModels.ts");
+const { getSettings, updateSettings } = await import("./settings.ts");
 await import("./hub.ts");
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
@@ -476,3 +480,135 @@ test("real snapshots: an entitled account needing login beats an unentitled heal
     resetClaudeAccountModelsForTests();
   }
 });
+
+/** Run `body` with the Claude integration on, as a user who uses it. */
+async function withClaudeSdk(body: () => Promise<void>): Promise<void> {
+  // Only the accounts a test creates take part.
+  for (const profile of listCredentialProfiles())
+    if (profile.provider === "claude" && profile.enabled)
+      setCredentialProfileEnabled(profile.id, false);
+  const before = getSettings().claudeSdk;
+  updateSettings({ claudeSdk: { ...before, enabled: true } });
+  try {
+    await body();
+  } finally {
+    updateSettings({ claudeSdk: before });
+  }
+}
+
+/** A healthy Claude account: a fake credential file, no real login. */
+function healthyClaude(name: string): string {
+  const profile = createCredentialProfile({ name, provider: "claude" });
+  mkdirSync(claudeConfigDir(profile.id), { recursive: true });
+  writeFileSync(
+    join(claudeConfigDir(profile.id), ".credentials.json"),
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken: "fake-access",
+        refreshToken: "fake-refresh",
+        expiresAt: Date.now() + 3_600_000,
+      },
+    }),
+  );
+  return profile.id;
+}
+
+test("real port: a 5-2 pin routes to the account that may run it; a disabled one leaves model-unavailable", () =>
+  withClaudeSdk(async () => {
+    const x = healthyClaude("Pinned X");
+    const y = healthyClaude("Pinned Y");
+    // X is never read (unknown): 5-2 is a fable candidate, so it is not lacking.
+    resetClaudeAccountModelsForTests({
+      read: async (id) => (id === y ? [...Y] : undefined),
+    });
+    const pinned = {
+      model: { provider: "claude-sdk", modelId: "fable" },
+      pinnedModelId: "claude-fable-5-2",
+    };
+    try {
+      assert.deepEqual(await pickAccount(pinned), { profileId: x });
+      // A 5-1 pin runs on both: the unpinned order decides, never a refusal.
+      const either = await pickAccount({
+        ...pinned,
+        pinnedModelId: "claude-fable-5-1",
+      });
+      assert.ok(either.profileId === x || either.profileId === y);
+      setCredentialProfileEnabled(x, false);
+      assert.deepEqual(await pickAccount(pinned), {
+        profileId: null,
+        degraded: "model-unavailable",
+      });
+    } finally {
+      setCredentialProfileEnabled(x, false);
+      setCredentialProfileEnabled(y, false);
+      resetClaudeAccountModelsForTests();
+    }
+  }));
+
+test.each(MYTHOS_LESS_READS)(
+  "real port: an Automatic mythos pick on a %s account is model-unavailable; the others run",
+  (_cause, deps) =>
+    withClaudeSdk(async () => {
+      const only = healthyClaude("Mythos-less");
+      resetClaudeAccountModelsForTests(deps);
+      try {
+        assert.deepEqual(
+          await pickAccount({
+            model: { provider: "claude-sdk", modelId: "mythos" },
+          }),
+          { profileId: null, degraded: "model-unavailable" },
+        );
+        for (const modelId of ["opus", "sonnet", "haiku", "fable"])
+          assert.deepEqual(
+            await pickAccount({ model: { provider: "claude-sdk", modelId } }),
+            { profileId: only },
+            modelId,
+          );
+      } finally {
+        setCredentialProfileEnabled(only, false);
+        resetClaudeAccountModelsForTests();
+      }
+    }),
+);
+
+test("real port: a healthy account listing a session's exact legacy pin is a full candidate, effort still judged", () =>
+  withClaudeSdk(async () => {
+    const target = healthyClaude("Legacy target");
+    resetClaudeAccountModelsForTests({
+      read: async () => ["claude-opus-5", "claude-sonnet-5-5"],
+    });
+    const legacy = {
+      model: { provider: "claude-sdk", modelId: "opus" },
+      thinkingLevel: "high" as const,
+      pinnedModelId: "claude-opus-5",
+      persistedPinnedModelId: "claude-opus-5",
+    };
+    try {
+      const profile = listCredentialProfiles().find(({ id }) => id === target)!;
+      const candidate = await gatherAccountCandidate(profile, legacy);
+      assert.equal(candidate.offersModel, true);
+      assert.equal(candidate.lacksModel, undefined);
+      assert.deepEqual(await pickAccount(legacy), { profileId: target });
+      // An effort the model does not support is still not offered.
+      assert.equal(
+        (
+          await gatherAccountCandidate(profile, {
+            ...legacy,
+            thinkingLevel: "minimal",
+          })
+        ).offersModel,
+        false,
+      );
+      // Unpinned, the alias's current candidate is not listed: nothing runs.
+      assert.deepEqual(
+        await pickAccount({
+          model: legacy.model,
+          thinkingLevel: legacy.thinkingLevel,
+        }),
+        { profileId: null, degraded: "model-unavailable" },
+      );
+    } finally {
+      setCredentialProfileEnabled(target, false);
+      resetClaudeAccountModelsForTests();
+    }
+  }));

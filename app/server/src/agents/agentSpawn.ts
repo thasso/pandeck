@@ -77,10 +77,12 @@ export interface AgentSpawnSources {
   accountFor(
     request: AccountPickRequest,
   ): Promise<AccountPickResult> | AccountPickResult;
+  /** Whether the account runs the model; with a pin, exactly that version. */
   offers(
     profileId: string,
     provider: string,
     modelId: string,
+    pin?: { pinnedModelId?: string },
   ): Promise<boolean>;
   accountName(profileId: string): string | undefined;
 }
@@ -356,6 +358,32 @@ function creationDefaultsOf(manifest: AgentManifest): {
   };
 }
 
+/** The listed model a user-picked runtime is, matched exactly, if any. */
+function listedRuntimeOf(
+  read: AgentDefinitionRead,
+  runtime: { provider: string; modelId: string; thinkingLevel: ThinkingLevel },
+): AgentRuntime | undefined {
+  return read.listed.find(
+    (choice) =>
+      choice.runtime?.model.provider === runtime.provider &&
+      choice.runtime.model.id === runtime.modelId &&
+      choice.runtime.thinkingLevel === runtime.thinkingLevel,
+  )?.runtime;
+}
+
+/**
+ * The concrete version a definition pins for a user-picked runtime: the pin
+ * of the listed model it matches exactly (as {@link resolveAgentOnRuntime}
+ * freezes it), else none. Read before the runtime's account is chosen, so
+ * only an account that runs the pin is picked.
+ */
+export async function agentListedPin(
+  name: string,
+  runtime: { provider: string; modelId: string; thinkingLevel: ThinkingLevel },
+): Promise<string | undefined> {
+  return listedRuntimeOf(await readAgentDefinition(name), runtime)?.pinnedModel;
+}
+
 /**
  * A definition started on a runtime the USER picked on the new-session page:
  * that pick is their approval. A listed model at the definition's effort runs
@@ -373,12 +401,15 @@ export async function resolveAgentOnRuntime(
   compactionWindow?: number;
 }> {
   const read = await readAgentDefinition(name);
+  // The listed match first: its pin is what the account must run.
+  const listed = listedRuntimeOf(read, runtime);
   let offered: boolean;
   try {
     offered = await sources.offers(
       profileId,
       runtime.provider,
       runtime.modelId,
+      listed?.pinnedModel ? { pinnedModelId: listed.pinnedModel } : {},
     );
   } catch (error) {
     throw new AgentSpawnRefusedError(
@@ -387,14 +418,8 @@ export async function resolveAgentOnRuntime(
   }
   if (!offered)
     throw new AgentSpawnRefusedError(
-      `Agent "${name}" cannot run: the account picked for it (${sources.accountName(profileId) ?? profileId}) does not offer ${runtime.provider}/${runtime.modelId}.`,
+      `Agent "${name}" cannot run: the account picked for it (${sources.accountName(profileId) ?? profileId}) does not offer ${runtime.provider}/${listed?.pinnedModel ?? runtime.modelId}.`,
     );
-  const listed = read.listed.find(
-    (choice) =>
-      choice.runtime?.model.provider === runtime.provider &&
-      choice.runtime.model.id === runtime.modelId &&
-      choice.runtime.thinkingLevel === runtime.thinkingLevel,
-  )?.runtime;
   return {
     ...(read.manifest.peerTurns !== undefined
       ? { peerTurnCap: read.manifest.peerTurns }
@@ -446,6 +471,8 @@ export async function resolveAgentSpawn(
         model: { provider: runtime.model.provider, modelId: runtime.model.id },
         thinkingLevel: runtime.thinkingLevel,
         requiresEnterprise: options.requiresEnterprise === true,
+        // A pinned definition runs only where its exact version runs.
+        ...(runtime.pinnedModel ? { pinnedModelId: runtime.pinnedModel } : {}),
       });
     let account = options.profileId
       ? { profileId: options.profileId }
@@ -536,6 +563,7 @@ async function spawnRuntimeOf(
       credentialProfileId,
       model.provider,
       model.id,
+      pinnedModel ? { pinnedModelId: pinnedModel } : {},
     );
   } catch (error) {
     // An account whose models cannot be read refuses this definition, not
@@ -546,7 +574,7 @@ async function spawnRuntimeOf(
   }
   if (!offered)
     throw new AgentSpawnRefusedError(
-      `Agent "${name}" cannot run: the account its ${model.provider} sessions use (${sources.accountName(credentialProfileId) ?? credentialProfileId}) does not offer ${model.provider}/${model.id}.`,
+      `Agent "${name}" cannot run: the account its ${model.provider} sessions use (${sources.accountName(credentialProfileId) ?? credentialProfileId}) does not offer ${model.provider}/${pinnedModel ?? model.id}.`,
     );
   const accountName = sources.accountName(credentialProfileId);
   return {

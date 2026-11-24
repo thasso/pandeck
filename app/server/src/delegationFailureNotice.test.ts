@@ -32,6 +32,7 @@ import {
   it,
   vi,
 } from "vitest";
+import { enableClaudeSdkForTests } from "./test/claudeSdkEnabled.ts";
 import type { AgentType, Harness } from "@assistant/shared";
 import type { PromptOrigin } from "@assistant/shared/session";
 import { sessionStore } from "./db/sessionStore.ts";
@@ -138,7 +139,9 @@ function setPeerPromptDeliveryStoppedForTests(stopped: boolean) {
   deliveryStopped = stopped;
   setPeerDeliveryStopped(stopped);
 }
-beforeEach(() => {
+beforeEach(async () => {
+  // These suites drive Claude runs; the integration is off by default.
+  await enableClaudeSdkForTests();
   delivery = installDeliveryTestScheduler({
     live: (id) => fakeHub.getLiveById(id) as RuntimePromptDriver | undefined,
     acquire: async (id) =>
@@ -1746,6 +1749,7 @@ if (mode === "crash") {
     listener({ type: "agent_settled" });
   } else if (scenario === "claude-fanout") {
     const { ClaudeSdkSession } = await import(src + "test/claudeSdkSession.ts");
+    await (await import(src + "test/claudeSdkEnabled.ts")).enableClaudeSdkForTests();
     const seam = { query() { return { async *[Symbol.asyncIterator]() {
       yield { type: "assistant", uuid: "s1", session_id: "p", error: "rate_limit", message: { id: "m1", role: "assistant", model: "<synthetic>", content: [{ type: "text", text: "You've hit your org's monthly spend limit" }], usage: { input_tokens: 0, output_tokens: 0 } } };
       yield { type: "result", subtype: "success", session_id: "p", is_error: true, api_error_status: 429, result: "API Error: 429", total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 }, modelUsage: {} };
@@ -2795,6 +2799,21 @@ describe("a journaled failure replays only what it was owed when it happened", (
     const text = delegationFailureNoticeLines([row!]).join("\n");
     assert.match(text, /will likely be refused again/);
     assert.doesNotMatch(text, /cybersecurity/);
+  });
+
+  it("a local-policy refusal keeps its facts: misleading text is never read as a usage limit or login", () => {
+    freshJournal();
+    const { id: parent } = coordinator("Local refusal parent");
+    const child = piChild(parent, "Local refusal child");
+    const [row] = recordRunFailureNotices({
+      sessionId: child.sessionId,
+      runId: "local-refusal",
+      origin: BACKGROUND,
+      errorMessage: "usage limit 401 account can't run Claude Mythos.",
+      failure: { kind: "unknown", localPolicy: true },
+      at: Date.now(),
+    });
+    assert.equal(row!.category, "provider_error");
   });
 
   it("a cybersecurity refusal reported only in prose is still classified as one", () => {

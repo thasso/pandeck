@@ -4,7 +4,12 @@
  * from `models.ts`, which reaches pi's registry and loads the pi SDK, so list
  * and row projections can name a Claude model cheaply.
  */
-import type { Harness, ModelOption } from "@assistant/shared";
+import {
+  harnessForModelProvider,
+  type Harness,
+  type ModelOption,
+} from "@assistant/shared";
+import { sessionAgent } from "../agents/sessionAgent.ts";
 import {
   CLAUDE_SDK_MODELS,
   claudeSdkModelAlias,
@@ -36,4 +41,30 @@ export function claudeModelAlias(
 /** Every model id the Claude SDK's curated list offers. */
 export function curatedClaudeModelIds(): string[] {
   return CLAUDE_SDK_MODELS.map((model) => model.id);
+}
+
+/**
+ * An existing Claude session's pin, for every check that judges its account:
+ * the concrete version its agent definition pinned, while the session is
+ * still on that agent's alias (the rule its query open applies). Both fields
+ * are the stored `pinnedModel` string: it is the effective pin and the
+ * persisted one a legacy allowance may match (`claudeSdk/modelResolution.ts`).
+ * Empty for any other session or model.
+ */
+export function sessionClaudePin(
+  sessionId: string,
+  provider: string,
+  modelId: string,
+): { pinnedModelId?: string; persistedPinnedModelId?: string } {
+  if (harnessForModelProvider(provider) !== "claude-sdk") return {};
+  const agent = sessionAgent(sessionId);
+  if (
+    !agent?.pinnedModel ||
+    claudeSdkModelAlias(modelId) !== claudeSdkModelAlias(agent.model)
+  )
+    return {};
+  return {
+    pinnedModelId: agent.pinnedModel,
+    persistedPinnedModelId: agent.pinnedModel,
+  };
 }

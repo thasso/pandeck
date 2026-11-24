@@ -49,11 +49,29 @@ export const CLAUDE_SDK_HARNESS_SETTINGS = {
 } as const satisfies ClaudeSdkSettings;
 
 /**
- * Curated Claude SDK models. The picker advertises stable aliases (opus/sonnet/
- * haiku); the SDK is given the concrete model id because the in-process SDK takes
- * a concrete `--model` string.
+ * A curated Claude model: the alias the picker advertises and a session
+ * persists, plus the concrete ids it can run. The in-process SDK takes a
+ * concrete `--model` string, chosen per account (`./modelResolution.ts`).
  */
-export const CLAUDE_SDK_MODELS: Array<ModelOption & { sdkModelId: string }> = [
+export type CuratedClaudeModel = ModelOption & {
+  /**
+   * The concrete ids this alias runs, newest first. An account runs the first
+   * one its model listing names; the first is also the account-free default.
+   */
+  sdkModelIds: readonly [string, ...string[]];
+  /**
+   * Whether an account whose listing is unknown (no successful read, gateway
+   * off) may run this alias. False for an entitlement-gated model: it runs
+   * only where a listing names one of its ids.
+   */
+  offeredWhenUnknown: boolean;
+};
+
+/**
+ * Curated Claude SDK models. The picker advertises stable aliases (opus/sonnet/
+ * haiku/fable/mythos); each run resolves the concrete id on its account.
+ */
+export const CLAUDE_SDK_MODELS: CuratedClaudeModel[] = [
   // Opus 5.5: same adaptive-thinking surface as Opus 5, a larger real context
   // window, and cheaper per token ($4/$20 per MTok against $5/$25). Like the
   // `fable` entry below, `opus` is an ALIAS re-resolved on every run, so
@@ -71,7 +89,8 @@ export const CLAUDE_SDK_MODELS: Array<ModelOption & { sdkModelId: string }> = [
     reasoning: true,
     supportedThinkingLevels: ["off", "low", "medium", "high", "xhigh"],
     contextWindow: 1_000_000,
-    sdkModelId: "claude-opus-5-5",
+    sdkModelIds: ["claude-opus-5-5"],
+    offeredWhenUnknown: true,
   },
   // Sonnet 5.5 and Haiku 5.5 are alias repoints like Opus above: existing
   // sessions move on their next turn and re-read history uncached. Both reject
@@ -84,7 +103,8 @@ export const CLAUDE_SDK_MODELS: Array<ModelOption & { sdkModelId: string }> = [
     reasoning: true,
     supportedThinkingLevels: ["off", "low", "medium", "high", "xhigh"],
     contextWindow: 200_000,
-    sdkModelId: "claude-sonnet-5-5",
+    sdkModelIds: ["claude-sonnet-5-5"],
+    offeredWhenUnknown: true,
   },
   {
     provider: CLAUDE_SDK_PROVIDER,
@@ -93,19 +113,20 @@ export const CLAUDE_SDK_MODELS: Array<ModelOption & { sdkModelId: string }> = [
     reasoning: true,
     supportedThinkingLevels: ["off", "low", "medium", "high", "xhigh"],
     contextWindow: 200_000,
-    sdkModelId: "claude-haiku-5-5",
+    sdkModelIds: ["claude-haiku-5-5"],
+    offeredWhenUnknown: true,
   },
   // Fable's thinking is ALWAYS on (see reasoningToThinking): the API rejects a
   // disabled/fixed-budget thinking config, so `off` is intentionally omitted
-  // from its levels. 1M context window.
+  // from its levels. 1M context window, 128k output (measured `/v1/models`
+  // objects of 5.1 and 5.2).
   //
   // The `fable` alias — not a concrete id — is what a session persists, and the
-  // id is re-resolved on every run, resumes included. So repointing this
-  // carries EXISTING fable sessions onto the new model on their next turn:
-  // sound (the wire id is accepted on resume and history is retained) but it
-  // re-reads the whole history uncached, because the prompt cache is
-  // per-model. The Agent SDK's own `supportedModels()` does not advertise 5.1
-  // yet; the explicit id is passed through to the API and honored.
+  // id is re-resolved on every run, resumes included: 5.2 where the account
+  // lists it, else 5.1. So a session moves between versions on its next turn
+  // when a newer one is listed or it changes account: sound (the wire id is
+  // accepted on resume and history is retained) but it re-reads the whole
+  // history uncached, because the prompt cache is per-model.
   {
     provider: CLAUDE_SDK_PROVIDER,
     id: "fable",
@@ -113,11 +134,27 @@ export const CLAUDE_SDK_MODELS: Array<ModelOption & { sdkModelId: string }> = [
     reasoning: true,
     supportedThinkingLevels: ["low", "medium", "high", "xhigh"],
     contextWindow: 1_000_000,
-    sdkModelId: "claude-fable-5-1",
+    sdkModelIds: ["claude-fable-5-2", "claude-fable-5-1"],
+    offeredWhenUnknown: true,
+  },
+  // Mythos is entitlement-gated: only some subscriptions list it, so it runs
+  // only on an account whose listing names a mythos id, never on an unknown
+  // one. Its measured capabilities equal Fable's: adaptive thinking only (no
+  // `off`), 1M context, 128k output.
+  {
+    provider: CLAUDE_SDK_PROVIDER,
+    id: "mythos",
+    name: "Claude Mythos",
+    reasoning: true,
+    supportedThinkingLevels: ["low", "medium", "high", "xhigh"],
+    contextWindow: 1_000_000,
+    sdkModelIds: ["claude-mythos-5-2", "claude-mythos-5-1"],
+    offeredWhenUnknown: false,
   },
 ];
 
-export type ClaudeSdkModelAlias = "opus" | "sonnet" | "haiku" | "fable";
+export type ClaudeSdkModelAlias =
+  "opus" | "sonnet" | "haiku" | "fable" | "mythos";
 
 /** Normalize a recognized Claude model id to one of our curated aliases. */
 export function knownClaudeSdkModelAlias(
@@ -125,6 +162,8 @@ export function knownClaudeSdkModelAlias(
 ): ClaudeSdkModelAlias | undefined {
   if (!id) return undefined;
   const value = id.toLowerCase();
+  // Mythos first: any id naming it is Mythos, whatever else it contains.
+  if (value.includes("mythos")) return "mythos";
   if (value.includes("opus")) return "opus";
   if (value.includes("sonnet")) return "sonnet";
   if (value.includes("haiku")) return "haiku";
@@ -140,16 +179,18 @@ export function claudeSdkModelAlias(
 }
 
 /** The curated model entry for an alias/id (defaults to sonnet). */
-function claudeSdkModel(
-  id: string | undefined,
-): ModelOption & { sdkModelId: string } {
+export function claudeSdkModel(id: string | undefined): CuratedClaudeModel {
   const alias = claudeSdkModelAlias(id);
   return CLAUDE_SDK_MODELS.find((m) => m.id === alias) ?? CLAUDE_SDK_MODELS[1]!;
 }
 
-/** The concrete SDK `--model` string for an alias/id. */
+/**
+ * The account-free concrete SDK `--model` string for an alias/id: its first
+ * (newest) candidate. A run on an account resolves per account instead
+ * (`./modelResolution.ts`).
+ */
 export function claudeSdkModelId(id: string | undefined): string {
-  return claudeSdkModel(id).sdkModelId;
+  return claudeSdkModel(id).sdkModelIds[0];
 }
 
 /**
@@ -162,7 +203,11 @@ export function claudeSdkModelOption(
   id: string | undefined,
   contextWindow?: number,
 ): ModelOption {
-  const { sdkModelId: _sdkModelId, ...option } = claudeSdkModel(id);
+  const {
+    sdkModelIds: _sdkModelIds,
+    offeredWhenUnknown: _offeredWhenUnknown,
+    ...option
+  } = claudeSdkModel(id);
   return contextWindow ? { ...option, contextWindow } : option;
 }
 
@@ -176,20 +221,23 @@ export function claudeSdkModelOption(
  * to the CLI as `--thinking` / `--thinking-display` / `--max-thinking-tokens` /
  * `--effort`.
  *
- * Policy: every curated model (Opus 5.5 / Sonnet 5.5 / Haiku 5.5 / Fable 5.1)
- * uses ADAPTIVE thinking with `effort` and `display:"summarized"` so summaries
- * stream (mirrors the pi harness). They REJECT a fixed `budgetTokens` (400), so
- * we never send one. Fable can't disable thinking (400) — its `off` becomes
- * lowest-effort adaptive; the others send `off` as {type:"disabled"}, which the
- * CLI maps to each model's lowest thinking setting.
+ * Policy: every curated model (Opus 5.5 / Sonnet 5.5 / Haiku 5.5 / Fable /
+ * Mythos) uses ADAPTIVE thinking with `effort` and `display:"summarized"` so
+ * summaries stream (mirrors the pi harness). They REJECT a fixed `budgetTokens`
+ * (400), so we never send one. A model whose levels lack `off` (Fable, Mythos)
+ * can't disable thinking (400) — its `off` becomes lowest-effort adaptive; the
+ * others send `off` as {type:"disabled"}, which the CLI maps to each model's
+ * lowest thinking setting.
  */
 export function reasoningToThinking(
   level: ThinkingLevel,
   modelId?: string,
 ): Pick<ClaudeSdkOptions, "thinking" | "effort"> {
-  const alias = claudeSdkModelAlias(modelId);
-  // Fable's thinking is always on; every other model honors `off` as disabled.
-  if (level === "off" && alias !== "fable") {
+  // A model without an `off` level always thinks; the others honor `off` as
+  // disabled.
+  const levels = claudeSdkModel(modelId).supportedThinkingLevels;
+  const alwaysThinks = levels !== undefined && !levels.includes("off");
+  if (level === "off" && !alwaysThinks) {
     return { thinking: { type: "disabled" } };
   }
   const effortLevel = level === "off" ? "low" : level;

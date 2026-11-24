@@ -23,7 +23,11 @@ import {
   DEFAULT_OPENAI_PROFILE_ID,
   listCredentialProfiles,
 } from "./credentialProfiles.ts";
-import { accountLacksModel, modelsForAccount } from "./harnesses/models.ts";
+import {
+  accountLacksModel,
+  pinnedModelOption,
+  modelsForAccount,
+} from "./harnesses/models.ts";
 import { getSettings } from "./settings.ts";
 import { cachedUsageIndicator } from "./usageCache.ts";
 import { readAccountBench } from "./accountHealth.ts";
@@ -35,6 +39,16 @@ export interface AccountPickRequest {
   excludeProfileIds?: readonly string[];
   /** Background automation alone may use the protected, disabled default. */
   allowDisabledDefault?: boolean;
+  /**
+   * A Claude run's pinned concrete version: only an account that runs this
+   * exact id is in scope (`harnesses/models.ts` `accountLacksModel`).
+   */
+  pinnedModelId?: string;
+  /**
+   * The existing session's stored pin string, for the unknown-account legacy
+   * allowance. Never set for a new start, spawn or definition.
+   */
+  persistedPinnedModelId?: string;
 }
 
 type RoutingProfile = Pick<
@@ -106,14 +120,24 @@ export function rankAccountCandidates(
         ...(fallback.limited ? { limited: fallback.limited } : {}),
       };
   }
+  // "model-unavailable" only when entitlement decided it: a lacking account
+  // would otherwise have been usable (enabled, or the disabled default this
+  // request may fall back to). A disabled account that lacks the model is
+  // excluded twice, and the accurate reason is the other one.
+  const usableLacking = served.some(
+    ({ profile, lacksModel }) =>
+      lacksModel &&
+      (profile.enabled ||
+        (request.allowDisabledDefault === true &&
+          profile.id === defaultProfileId)),
+  );
   return {
     profileId: null,
-    degraded:
-      served.length > scope.length
-        ? "model-unavailable"
-        : request.requiresEnterprise
-          ? "no-enterprise-account"
-          : "no-enabled-account",
+    degraded: usableLacking
+      ? "model-unavailable"
+      : request.requiresEnterprise
+        ? "no-enterprise-account"
+        : "no-enabled-account",
   };
 }
 
@@ -151,21 +175,47 @@ function rankingUsage(
  */
 export async function gatherAccountCandidate(
   profile: RoutingProfile,
-  request: Pick<AccountPickRequest, "model" | "thinkingLevel">,
+  request: Pick<
+    AccountPickRequest,
+    "model" | "thinkingLevel" | "pinnedModelId" | "persistedPinnedModelId"
+  >,
 ): Promise<AccountCandidate> {
-  const [models, lacksModel] = await Promise.all([
-    profile.enabled ? modelsForAccount(profile).catch(() => []) : [],
+  const pin = {
+    ...(request.pinnedModelId !== undefined
+      ? { pinnedModelId: request.pinnedModelId }
+      : {}),
+    ...(request.persistedPinnedModelId !== undefined
+      ? { persistedPinnedModelId: request.persistedPinnedModelId }
+      : {}),
+  };
+  // A pinned session is offered by its pin, never by whether the account
+  // also lists the alias's current candidate.
+  const [model, lacksModel] = await Promise.all([
+    !profile.enabled
+      ? undefined
+      : pin.pinnedModelId !== undefined
+        ? pinnedModelOption(
+            profile.id,
+            request.model.provider,
+            request.model.modelId,
+            pin,
+          ).catch(() => undefined)
+        : modelsForAccount(profile)
+            .catch(() => [])
+            .then((models) =>
+              models.find(
+                (option) =>
+                  option.provider === request.model.provider &&
+                  option.id === request.model.modelId,
+              ),
+            ),
     accountLacksModel(
       profile.id,
       request.model.provider,
       request.model.modelId,
+      pin,
     ).catch(() => false),
   ]);
-  const model = models.find(
-    (option) =>
-      option.provider === request.model.provider &&
-      option.id === request.model.modelId,
-  );
   // Usage and benches speak only for subscription logins; any other
   // account ranks on its own state alone.
   const kind = profile.provider;

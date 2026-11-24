@@ -5,8 +5,10 @@
  * (`claudeSdk/modelsViaGateway.ts`). In memory only, rebuilt at boot.
  *
  * An account with no successful read is UNKNOWN, and the models port then
- * offers the curated list as before; a failed read keeps the last success. So
- * a read can only ever narrow an account to what it really lists.
+ * offers the curated list as before, except the entitlement-gated models
+ * (mythos), which need a listing; a failed read keeps the last success. So a
+ * read can only ever narrow an account to what it really lists, or grant it a
+ * gated model it lists.
  *
  * Ordering: every read carries a generation. A credential change, the user's
  * Refresh or a deletion starts a new generation, and only a read of the
@@ -79,7 +81,9 @@ export interface ClaudeAccountModelCache {
 }
 
 /** The curated concrete ids a plausible listing names at least one of. */
-const CURATED_SDK_IDS = new Set(CLAUDE_SDK_MODELS.map((m) => m.sdkModelId));
+const CURATED_SDK_IDS = new Set(
+  CLAUDE_SDK_MODELS.flatMap((m) => m.sdkModelIds),
+);
 
 function sameIds(
   a: ReadonlySet<string> | undefined,

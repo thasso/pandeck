@@ -12,7 +12,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "vitest";
+import { beforeEach, test } from "vitest";
+import { enableClaudeSdkForTests } from "../test/claudeSdkEnabled.ts";
 import type { AdapterEvent } from "../session/adapters/contract.ts";
 import type {
   ClaudeQuery,
@@ -210,6 +211,9 @@ async function steerIntoTurn(h: ReturnType<typeof makeHarness>) {
 
 // Runs on an install that still has its protected default accounts.
 await seedLegacyDefaultAccounts();
+
+// These suites drive Claude runs; the integration is off by default.
+beforeEach(enableClaudeSdkForTests);
 
 test("a steer the CLI dequeues mid-turn joins that turn", async () => {
   const h = makeHarness();

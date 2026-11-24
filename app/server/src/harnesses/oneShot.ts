@@ -54,6 +54,7 @@ import {
   resolveSlotAccount,
 } from "../settingsModelSlots.ts";
 import { credentialProfileById } from "../credentialProfiles.ts";
+import { resolveClaudeAccountModel } from "./claudeModelResolution.ts";
 import type { RunFailureFacts } from "../session/adapters/contract.ts";
 import { sourceRequiresEnterprise } from "../sessionEnterprise.ts";
 
@@ -127,7 +128,7 @@ type ResolvedOneShotRequest = OneShotRequest & { credentialProfileId: string };
 
 type AttemptResult =
   | { run: EngineRun; failure?: RunFailureFacts }
-  | { error: unknown; failure: RunFailureFacts; policyRejection?: true };
+  | { error: unknown; failure?: RunFailureFacts; policyRejection?: true };
 
 /** Run one helper prompt, retrying an automatic account once after a limit or dead login. */
 export async function runOneShot(
@@ -214,6 +215,20 @@ export async function runOneShot(
 async function runAttempt(
   request: ResolvedOneShotRequest,
 ): Promise<AttemptResult> {
+  // A Claude run executes the id its account resolves. An account not entitled
+  // to the model is PA's refusal, before any provider call: no health
+  // observation, no failure facts, never a retry.
+  let sdkModelId: string | undefined;
+  if (request.model.provider === CLAUDE_SDK_PROVIDER) {
+    try {
+      sdkModelId = await resolveClaudeAccountModel(
+        request.credentialProfileId,
+        request.model.modelId,
+      );
+    } catch (err) {
+      return { error: err, policyRejection: true };
+    }
+  }
   const startedAt = Date.now();
   const observation = observeAccountHealth(request.credentialProfileId);
   let healthModelProvider = request.model.provider;
@@ -222,8 +237,8 @@ async function runAttempt(
   try {
     assertCurrentEnterpriseAccount(request);
     run =
-      request.model.provider === CLAUDE_SDK_PROVIDER
-        ? await runOnClaude(request)
+      sdkModelId !== undefined
+        ? await runOnClaude(request, sdkModelId)
         : await runOnPi(request, (provider, modelId) => {
             healthModelProvider = provider;
             healthModelId = modelId;
@@ -302,10 +317,12 @@ async function runAttempt(
 
 async function runOnClaude(
   request: ResolvedOneShotRequest,
+  sdkModelId: string,
 ): Promise<EngineRun> {
   const gateway = await serverGatewayAccess(request.credentialProfileId);
   const result = await runClaudeSdkOneShot({
     modelId: request.model.modelId,
+    sdkModelId,
     thinkingLevel: request.thinkingLevel,
     credentialProfileId: request.credentialProfileId,
     systemPrompt: request.systemPrompt,

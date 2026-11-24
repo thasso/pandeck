@@ -4,6 +4,10 @@ import type {
   WorktreeProvisionDisplay,
 } from "@assistant/shared";
 import type { HostCommandResult } from "./sessionKit/hostCommandTurn.ts";
+import type { RunFailureFacts } from "./session/adapters/contract.ts";
+import { localPolicyRunFailure } from "./providerErrors.ts";
+import { assertSessionModelEntitled } from "./sessionAccount.ts";
+import { ModelUnavailableOnAccountError } from "./settingsModelSlots.ts";
 import { parseCommitArgs, parsePrArgs } from "./slashCommands.ts";
 import {
   type CommitWorkflowOptions,
@@ -77,6 +81,12 @@ export interface SyntheticToolHost {
    * "wrote anyway" surprise Plan exists to prevent.
    */
   readonly sessionMode?: SessionMode;
+  /** The account the session is bound to now, when the harness knows it. */
+  readonly credentialProfileId?: string | undefined;
+  /** The session's live model selection, when the harness has one. */
+  modelSelection?(): {
+    model?: { provider: string; id: string } | undefined;
+  };
   /** Open a host-driven assistant turn carrying a single in-progress tool block. */
   beginSyntheticTool(
     name: string,
@@ -84,8 +94,16 @@ export interface SyntheticToolHost {
   ): { assistantId: string; toolId: string };
   /** Stream progress text into the in-flight synthetic tool block. */
   updateSyntheticTool(output: string): void;
-  /** Finish the synthetic turn with plain tool output. */
-  finishSyntheticTool(toolId: string, output: string, isError?: boolean): void;
+  /**
+   * Finish the synthetic turn with plain tool output. `failure` classifies an
+   * error the caller knows the cause of (a local policy refusal).
+   */
+  finishSyntheticTool(
+    toolId: string,
+    output: string,
+    isError?: boolean,
+    failure?: RunFailureFacts,
+  ): void;
   /** Drop a normal skipped phase without persisting its wrapper tool turn. */
   discardSyntheticTool(): void;
   /**
@@ -369,6 +387,15 @@ export async function runCompactForHost(
 ): Promise<void> {
   // Refused before any synthetic turn, like a busy session.
   assertNotFinishedSetup(host.sessionId);
+  // Compaction runs the session's model: an account not entitled to it is
+  // refused like a turn, before any synthetic turn or run exists.
+  await assertSessionModelEntitled({
+    sessionId: host.sessionId,
+    credentialProfileId: host.credentialProfileId,
+    model: host.modelSelection?.()?.model,
+  });
+  // Setup may have finished while the check awaited.
+  assertNotFinishedSetup(host.sessionId);
   const customInstructions = rawArgs.trim() || undefined;
   const commandText = `/compact${customInstructions ? ` ${customInstructions}` : ""}`;
   const { toolId } = host.beginSyntheticTool("/compact", {
@@ -408,6 +435,11 @@ export async function runCompactForHost(
       toolId,
       err instanceof Error ? err.message : String(err),
       true,
+      // The listing changed after the check above: still PA's refusal, made
+      // before any provider call, never provider evidence.
+      err instanceof ModelUnavailableOnAccountError
+        ? localPolicyRunFailure()
+        : undefined,
     );
   }
 }

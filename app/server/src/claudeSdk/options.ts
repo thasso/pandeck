@@ -140,6 +140,12 @@ export interface BuildClaudeSdkQueryOptionsInput {
   cwd: string;
   abortController: AbortController;
   modelId: string;
+  /**
+   * The concrete id resolved on the run's account
+   * (`harnesses/claudeModelResolution.ts`). Absent, the account-free choice
+   * ({@link claudeQueryModel}) runs.
+   */
+  sdkModelId?: string;
   thinkingLevel: ThinkingLevel;
   /** Provider session id from a prior run, to resume. */
   providerSessionId?: string;
@@ -602,7 +608,7 @@ function claudeQuerySpec(
       : {}),
     // Deliberately omit the SDK `skills` filter: coding sessions retain the
     // CLI-default discovery of repository `.claude/skills` alongside the plugin.
-    model: claudeQueryModel(input.modelId, input.agent),
+    model: input.sdkModelId ?? claudeQueryModel(input.modelId, input.agent),
     systemPrompt: claudeSdkSystemPrompt(
       agentType,
       input.additionalSystemPrompt,
@@ -630,21 +636,32 @@ function claudeQuerySpec(
 }
 
 /**
- * The SDK model a query runs. A spawned agent that pinned a concrete version
- * runs exactly that version while the session is still on the agent's alias,
- * however the alias is mapped by then; a model the user switched to runs as
- * usual.
+ * The account-free SDK model a query runs. A spawned agent that pinned a
+ * concrete version runs exactly that version while the session is still on the
+ * agent's alias, however the alias is mapped by then; a model the user
+ * switched to runs its alias's first candidate. A live session resolves on its
+ * account instead (`sdkModelId`, `claudeSessionPin`).
  */
-export function claudeQueryModel(
+function claudeQueryModel(
   modelId: string,
   agent: SessionAgent | undefined,
 ): string {
-  if (
-    agent?.pinnedModel &&
+  return claudeSessionPin(modelId, agent) ?? claudeSdkModelId(modelId);
+}
+
+/**
+ * The pin a session's agent puts on `modelId`: its stored `pinnedModel` while
+ * the session is still on the agent's alias, else none. The same rule as the
+ * app's `sessionClaudePin`.
+ */
+export function claudeSessionPin(
+  modelId: string,
+  agent: SessionAgent | undefined,
+): string | undefined {
+  return agent?.pinnedModel &&
     claudeSdkModelAlias(modelId) === claudeSdkModelAlias(agent.model)
-  )
-    return agent.pinnedModel;
-  return claudeSdkModelId(modelId);
+    ? agent.pinnedModel
+    : undefined;
 }
 
 /**

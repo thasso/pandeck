@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { beforeEach, test, vi } from "vitest";
+import { enableClaudeSdkForTests } from "../test/claudeSdkEnabled.ts";
 import { reportAccountRunFailure } from "../accountHealth.ts";
 import { createCredentialProfile } from "../credentialProfiles.ts";
 import { setClaudeSdkOneShotSeam } from "../claudeSdk/oneShot.ts";
@@ -13,7 +14,11 @@ vi.mock("../accountHealth.ts", async (importOriginal) => ({
   reportAccountRunWorking: vi.fn(),
 }));
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(async () => {
+  vi.clearAllMocks();
+  // These suites drive Claude runs; the integration is off by default.
+  await enableClaudeSdkForTests();
+});
 
 /** The Claude account the helper runs route to: the only one there is. */
 const claudeAccount = createCredentialProfile({

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { beforeEach, describe, test, vi } from "vitest";
+import { enableClaudeSdkForTests } from "./test/claudeSdkEnabled.ts";
 import {
   curateTaskIntake,
   parseCuratedTask,
@@ -33,7 +34,9 @@ const input = {
 // Runs on an install that still has its protected default accounts.
 await seedLegacyDefaultAccounts();
 
-beforeEach(() => {
+beforeEach(async () => {
+  // These suites drive Claude runs; the integration is off by default.
+  await enableClaudeSdkForTests();
   vi.resetAllMocks();
 });
 

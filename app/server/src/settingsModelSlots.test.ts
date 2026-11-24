@@ -8,6 +8,7 @@ import {
   accountKindForModelProvider,
   CLAUDE_SDK_PROVIDER,
 } from "@assistant/shared";
+import { MYTHOS_LESS_READS } from "./test/claudeListings.ts";
 
 // Settings and the profile registry both resolve DATA_DIR at import time.
 const tmp = mkdtempSync(join(tmpdir(), "settings-model-slots-test-"));
@@ -247,6 +248,53 @@ test("a pin whose account's known listing lacks the model refuses and never spen
   } finally {
     resetClaudeAccountModelsForTests();
   }
+});
+
+test.each(MYTHOS_LESS_READS)(
+  "a helper slot pinned to a %s account refuses mythos and runs the rest",
+  async (_cause, deps) => {
+    const pinned = createCredentialProfile({
+      name: "Mythos-less",
+      provider: "claude",
+    });
+    const slot = {
+      provider: CLAUDE_SDK_PROVIDER,
+      modelId: "mythos",
+      credentialProfileId: pinned.id,
+    };
+    resetClaudeAccountModelsForTests(deps);
+    try {
+      await assert.rejects(resolveSlotAccount(slot), (err: Error) => {
+        assert.ok(err instanceof ModelUnavailableOnAccountError);
+        assert.equal(err.message, "Mythos-less can't run Claude Mythos.");
+        return true;
+      });
+      for (const modelId of ["opus", "sonnet", "haiku", "fable"])
+        assert.deepEqual(
+          await resolveSlotAccount({ ...slot, modelId }),
+          { profileId: pinned.id },
+          modelId,
+        );
+      assert.equal(vi.mocked(pickAccount).mock.calls.length, 0);
+    } finally {
+      resetClaudeAccountModelsForTests();
+    }
+  },
+);
+
+test("an unpinned mythos slot with no Claude account able to run it says so", async () => {
+  vi.mocked(pickAccount).mockResolvedValueOnce({
+    profileId: null,
+    degraded: "model-unavailable",
+  });
+  await assert.rejects(
+    resolveSlotAccount({ provider: CLAUDE_SDK_PROVIDER, modelId: "mythos" }),
+    (err: Error) => {
+      assert.ok(err instanceof ModelUnavailableOnAccountError);
+      assert.equal(err.message, "No Claude account can run Claude Mythos.");
+      return true;
+    },
+  );
 });
 
 test("an unpinned slot whose every account lacks the model says so", async () => {

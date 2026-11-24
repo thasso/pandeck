@@ -98,7 +98,10 @@ import {
   type PiDriver,
   type PiPromptResponse,
 } from "../session/adapters/pi.ts";
-import type { PromptableAdapter } from "../session/adapters/contract.ts";
+import type {
+  PromptableAdapter,
+  RunFailureFacts,
+} from "../session/adapters/contract.ts";
 import {
   appendText,
   estimateTokens,
@@ -1003,7 +1006,12 @@ export class PiLiveSession implements LiveSession {
     this.endSyntheticTurn();
   }
 
-  finishSyntheticTool(toolId: string, output: string, isError = false): void {
+  finishSyntheticTool(
+    toolId: string,
+    output: string,
+    isError = false,
+    failure?: RunFailureFacts,
+  ): void {
     if (!this.currentAssistantId || !this.liveTurn) return;
     finishHostCommandTool(
       this.hostCommandTarget,
@@ -1011,6 +1019,7 @@ export class PiLiveSession implements LiveSession {
       toolId,
       output,
       isError,
+      failure,
     );
     this.endSyntheticTurn();
   }

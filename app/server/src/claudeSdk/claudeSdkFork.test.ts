@@ -13,7 +13,8 @@
  *   pnpm --filter @assistant/server test src/claudeSdk/claudeSdkFork.test.ts
  */
 import assert from "node:assert/strict";
-import { afterAll, test, vi } from "vitest";
+import { afterAll, beforeEach, test, vi } from "vitest";
+import { enableClaudeSdkForTests } from "../test/claudeSdkEnabled.ts";
 import {
   existsSync,
   mkdirSync,
@@ -231,6 +232,9 @@ function seamOf(messages: ClaudeSdkMessage[]): ClaudeSdkSeam {
     }),
   };
 }
+
+// These suites drive Claude runs; the integration is off by default.
+beforeEach(enableClaudeSdkForTests);
 
 test("a turn's LAST native uuid becomes its fork anchor", async () => {
   const session = new ClaudeSdkSession("anchor-capture", {

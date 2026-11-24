@@ -6,7 +6,10 @@
  * is attached to the normalized runtime before prompting, so run-state and the
  * durable app-owned log are updated for viewed and background runs alike.
  */
-import type { AccountSwitchOptions } from "../sessionAccount.ts";
+import {
+  assertSessionModelEntitled,
+  type AccountSwitchOptions,
+} from "../sessionAccount.ts";
 import type {
   AgentType,
   ContextInfo,
@@ -414,6 +417,15 @@ async function deliverWithRuntime(
             assertTurnAllowed(driver.sessionId, options.resumeHold);
             assertRecoveryAdmission();
           });
+    // The settled account must be entitled to the session's model (and its
+    // pinned version): refused here, before any run, the refusal is a local
+    // policy decision that never reaches the provider or account health.
+    if (!options.steerOnly)
+      await assertSessionModelEntitled({
+        sessionId: driver.sessionId,
+        credentialProfileId: driver.credentialProfileId,
+        model: driver.modelSelection?.()?.model,
+      });
     assertTurnAllowed(driver.sessionId, options.resumeHold);
     assertRecoveryAdmission();
     // Nothing below awaits before the append. The enterprise check runs before
