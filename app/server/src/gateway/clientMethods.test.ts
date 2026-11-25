@@ -35,12 +35,13 @@ function invalidParams(run: () => unknown): void {
 }
 
 describe("the version", () => {
-  test("is 1.2; a 1.0, 1.1 and 1.2 peer are compatible, another major is not", () => {
-    expect(GATEWAY_CLIENT_VERSION).toBe("gateway-client/1.2");
+  test("is 1.3; every 1.x peer is compatible, another major is not", () => {
+    expect(GATEWAY_CLIENT_VERSION).toBe("gateway-client/1.3");
     const { compatible } = GATEWAY_CLIENT_PROTOCOL;
     expect(compatible("gateway-client/1.0")).toBe(true);
     expect(compatible("gateway-client/1.1")).toBe(true);
     expect(compatible("gateway-client/1.2")).toBe(true);
+    expect(compatible("gateway-client/1.3")).toBe(true);
     expect(compatible("gateway-client/1.7")).toBe(true);
     expect(compatible("gateway-client/2.0")).toBe(false);
     expect(compatible("gateway-client/0.9")).toBe(false);

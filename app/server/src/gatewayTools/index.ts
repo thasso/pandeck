@@ -14,6 +14,7 @@ import {
   type AtlassianCheck,
 } from "./atlassian.ts";
 import {
+  createFileBudget,
   createToolHost,
   longestDeadlineMs,
   type ToolHost,
@@ -27,6 +28,7 @@ import {
 import { confluenceDeleteSwitchFor } from "./confluenceMutatePage.ts";
 import { describeSlackAccessView } from "./slack.ts";
 import { edgeTools } from "./tools.ts";
+import { createUploadStore, type UploadStore } from "./uploads.ts";
 
 interface AtlassianIntegration {
   parse(
@@ -48,6 +50,11 @@ export interface EdgeToolSet {
   ): void;
   /** The same host, for gateway client 1.x's `tools.*` (Task-1398, Task-1463). */
   host: ToolHost;
+  /**
+   * The client connections' upload store (1.3, Task-1441 P8a), on the
+   * host's own file budget.
+   */
+  uploads: UploadStore;
   integrations: {
     atlassian: AtlassianIntegration;
     /** The vault's Slack access view, for the page's status (Task-1453). */
@@ -68,7 +75,10 @@ export function createEdgeTools(options: EdgeToolOptions = {}): EdgeToolSet {
   const tools = edgeTools({
     confluenceDeletes: confluenceDeleteSwitchFor(options.atlassianScopes),
   });
-  const host = createToolHost(tools, { ...options, log });
+  // One file permit for the process: a download and an upload never overlap
+  // (Task-1441 P8a, v10 S2).
+  const fileBudget = options.fileBudget ?? createFileBudget();
+  const host = createToolHost(tools, { ...options, log, fileBudget });
   return {
     handleMcp: createMcpHandler(host, log, {
       // A write tool's own deadline can outlast the host's (Task-1463). A
@@ -82,6 +92,7 @@ export function createEdgeTools(options: EdgeToolOptions = {}): EdgeToolSet {
         : {}),
     }),
     host,
+    uploads: createUploadStore({ fileBudget }),
     integrations: {
       atlassian: {
         parse(input) {

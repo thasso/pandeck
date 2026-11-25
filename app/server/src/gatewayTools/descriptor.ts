@@ -19,6 +19,7 @@
  *   stay fixed.
  */
 import type { SlackAccessView } from "./slack.ts";
+import type { AttachedUpload, UploadEntry } from "./uploads.ts";
 import type {
   ApplyAnswer,
   ApplyRequest,
@@ -250,6 +251,16 @@ export type AtlassianToolDescriptor = ToolDescriptorBase & {
   phases?: TwoPhaseTool;
 };
 
+/** A two-phase tool's prepare context (Task-1441 P8a, v09 P1(b)). */
+export interface PrepareContext extends ToolContext<AtlassianCredential> {
+  /**
+   * The upload sources a client connection's `tools.prepare` declared, by
+   * `stagedAttachmentId`; set only by the host from that option, never from
+   * an argument. Absent, an upload item is refused.
+   */
+  uploads?: ReadonlyMap<string, UploadEntry>;
+}
+
 /** What a two-phase tool's apply runs with besides its request deadline. */
 export interface ApplyContext extends ToolContext<AtlassianCredential> {
   /** Aborts only at the deadline: a cancel never aborts a running request. */
@@ -258,6 +269,11 @@ export interface ApplyContext extends ToolContext<AtlassianCredential> {
   cancel: AbortSignal;
   /** The call's effects ledger, which the host reads whatever apply does. */
   ledger: WriteLedger;
+  /**
+   * The sealed upload this apply consumed (Task-1441 P8a, v09 P1(c)); set
+   * only by the host. Absent, an upload item is refused.
+   */
+  upload?: AttachedUpload;
 }
 
 /** A write tool's two phases (Task-1463 P6a). */
@@ -265,7 +281,7 @@ export interface TwoPhaseTool {
   /** Gates, then the credential, then the shared prepare; sends no write. */
   prepare(
     params: Record<string, unknown>,
-    ctx: ToolContext<AtlassianCredential>,
+    ctx: PrepareContext,
   ): Promise<PreparedProposal>;
   /** Gates, credential, site, closed check, then the shared apply. */
   apply(request: ApplyRequest, ctx: ApplyContext): Promise<ApplyAnswer>;

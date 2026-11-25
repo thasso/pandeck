@@ -32,6 +32,25 @@ export async function settleGc(): Promise<void> {
 /** Node's live `arrayBuffers` bytes. */
 export const arrayBuffersNow = (): number => process.memoryUsage().arrayBuffers;
 
+/**
+ * The `arrayBuffers` figure once it stops falling: V8 frees a dead buffer's
+ * backing store on a concurrent sweeper, so the figure can lag a collection
+ * that a `WeakRef` already shows. Settles again until two readings agree (at
+ * most 20 rounds); a buffer that is still held never falls, so the bound a
+ * caller checks keeps its meaning.
+ */
+export async function settledArrayBuffers(): Promise<number> {
+  await settleGc();
+  let reading = arrayBuffersNow();
+  for (let round = 0; round < 20; round += 1) {
+    await settleGc();
+    const next = arrayBuffersNow();
+    if (next >= reading) return next;
+    reading = next;
+  }
+  return reading;
+}
+
 /** Bytes a non-uniform pattern, so a shifted or clipped copy shows. */
 export function patterned(length: number, seed = 1): Uint8Array {
   const bytes = new Uint8Array(length);
@@ -53,8 +72,7 @@ export async function retentionControl(): Promise<{
   clearedAfterDrop: boolean;
   arrayBuffersAfterDrop: number;
 }> {
-  await settleGc();
-  const baseline = arrayBuffersNow();
+  const baseline = await settledArrayBuffers();
   let view: Uint8Array | undefined;
   const target = ((): WeakRef<ArrayBufferLike> => {
     const big = new Uint8Array(100 * MIB);
@@ -68,11 +86,11 @@ export async function retentionControl(): Promise<{
   // The view is read after the sample, so it is live through it.
   if (view?.byteLength !== 1) throw new Error("the control lost its view");
   view = undefined;
-  await settleGc();
+  const afterDrop = await settledArrayBuffers();
   return {
     retainedVisible,
     retainedArrayBuffers,
     clearedAfterDrop: target.deref() === undefined,
-    arrayBuffersAfterDrop: arrayBuffersNow() - baseline,
+    arrayBuffersAfterDrop: afterDrop - baseline,
   };
 }

@@ -31,10 +31,10 @@ import {
 import { ConfluenceMutationError } from "./confluenceMutationErrors.ts";
 import {
   MIB,
-  arrayBuffersNow,
   forceGc,
   retentionControl,
   settleGc,
+  settledArrayBuffers,
 } from "./test/forcedGc.ts";
 import {
   hasClosingBoundary,
@@ -131,8 +131,7 @@ async function peerProcess(): Promise<{
 
 test("100 MiB arrives whole with Content-Length framing, within 16 MiB live", async () => {
   const peer = await peerProcess();
-  await settleGc();
-  const baseline = arrayBuffersNow();
+  const baseline = await settledArrayBuffers();
   let livePeak = 0;
   let expected = "";
   let contentLength = 0;
@@ -202,7 +201,7 @@ test("100 MiB arrives whole with Content-Length framing, within 16 MiB live", as
   expect(livePeak).toBeLessThanOrEqual(16 * MIB);
   await settleGc();
   expect(target.deref()).toBeUndefined();
-  expect(arrayBuffersNow() - baseline).toBeLessThanOrEqual(2 * MIB);
+  expect((await settledArrayBuffers()) - baseline).toBeLessThanOrEqual(2 * MIB);
 }, 120_000);
 
 // ---------------------------------------------------------------------------
@@ -328,8 +327,7 @@ describe("the shared executor's upload against a local peer", () => {
       const peer = await uploadPeer(scenario.handler(log));
       peers.push(peer);
       built.length = 0;
-      await settleGc();
-      const baseline = arrayBuffersNow();
+      const baseline = await settledArrayBuffers();
       const deadline = new AbortController();
       const timer =
         scenario.deadlineMs === undefined
@@ -407,7 +405,9 @@ describe("the shared executor's upload against a local peer", () => {
       log.bytes.length = 0;
       await settleGc();
       expect(target.deref()).toBeUndefined();
-      expect(arrayBuffersNow() - baseline).toBeLessThanOrEqual(2 * MIB);
+      expect((await settledArrayBuffers()) - baseline).toBeLessThanOrEqual(
+        2 * MIB,
+      );
       built.length = 0;
     },
     60_000,

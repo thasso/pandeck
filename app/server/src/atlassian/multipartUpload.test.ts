@@ -8,10 +8,10 @@ import { createHash } from "node:crypto";
 import { describe, expect, test } from "vitest";
 import {
   MIB,
-  arrayBuffersNow,
   patterned,
   retentionControl,
   settleGc,
+  settledArrayBuffers,
 } from "../test/forcedGc.ts";
 import {
   multipartUpload,
@@ -366,8 +366,7 @@ describe("a terminal body keeps none of the source", () => {
   );
 
   test.each(CASES)("%s", async (_name, matching, end, source) => {
-    await settleGc();
-    const baseline = arrayBuffersNow();
+    const baseline = await settledArrayBuffers();
     const { upload, target } = ((): {
       upload: MultipartUpload;
       target: WeakRef<ArrayBufferLike>;
@@ -386,7 +385,9 @@ describe("a terminal body keeps none of the source", () => {
     expect(upload.state).not.toBe("pending");
     await settleGc();
     expect(target.deref()).toBeUndefined();
-    expect(arrayBuffersNow() - baseline).toBeLessThanOrEqual(2 * MIB);
+    expect((await settledArrayBuffers()) - baseline).toBeLessThanOrEqual(
+      2 * MIB,
+    );
     // The upload itself is still alive: it, not its collection, let go.
     expect(upload.contentLength).toBeGreaterThan(SIZE);
   });

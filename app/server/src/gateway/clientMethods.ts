@@ -78,6 +78,30 @@
  *   `APPLY_ANSWER_MAX_BYTES`: the edge never sends a larger answer, and the
  *   client refuses one.
  *
+ * Client-mode uploads (1.3, Task-1441 P8a): Pandeck sends the approved bytes
+ * before the apply that writes them, on the same connection.
+ *
+ * - `tools.prepare` may carry `uploads: [{stagedAttachmentId, name, mimeType,
+ *   size, sha256, source}]` beside `name` and `args`: the sources its upload
+ *   items name by `sourceAttachmentId`. At most ten, ids unique.
+ * - `uploads.open {streams: [{stagedAttachmentId, size, sha256}], work}`
+ *   answers `{ok: true, uploadId}`: one to ten streams, `work` (W) the items'
+ *   total bytes, at least the streams' and at most 100 MiB. It reserves the
+ *   edge's one file permit, so a running download or upload answers busy.
+ * - `uploads.put {uploadId, stagedAttachmentId, offset}` with exactly one
+ *   bytes stream, `chunk` (1 B to 1 MiB), at exactly the bytes received so
+ *   far, answers `{ok: true, received, streamComplete, sealed}`:
+ *   `streamComplete` on the put that completes its stream with the declared
+ *   digest, `sealed` once every stream is complete.
+ * - `uploads.release {uploadId}` answers `{ok: true}` and discards an
+ *   upload no apply took; it is idempotent.
+ * - `tools.apply` may carry `uploadId`: the apply consumes that sealed upload,
+ *   whose streams must match its upload items exactly. It answers only in the
+ *   apply envelope.
+ * - Each `uploads.*` request has exactly its JSON keys and no other stream;
+ *   any failure answers `{ok: false, code: "tool_error", message}` with a
+ *   fixed text, and a bad put or request discards the upload.
+ *
  * Gateway → client: `accounts.changed {accounts}`, the full list after any
  * change, and `logins.event {loginId, accountId, event}`, each answered `{}`.
  */
@@ -103,9 +127,10 @@ import type {
 
 /**
  * 1.1 (Task-1463 P6a) adds `tools.prepare` and `tools.apply`, 1.2 (Task-1441
- * P7a) file answers; a 1.0 or 1.1 peer still connects.
+ * P7a) file answers, 1.3 (Task-1441 P8a) the upload methods and fields; every
+ * 1.x peer still connects.
  */
-export const GATEWAY_CLIENT_VERSION = "gateway-client/1.2";
+export const GATEWAY_CLIENT_VERSION = "gateway-client/1.3";
 
 const CLIENT_VERSION_RE =
   /^gateway-client\/(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/;
@@ -134,6 +159,9 @@ export const CLIENT_METHODS = {
   toolsCall: "tools.call",
   toolsPrepare: "tools.prepare",
   toolsApply: "tools.apply",
+  uploadsOpen: "uploads.open",
+  uploadsPut: "uploads.put",
+  uploadsRelease: "uploads.release",
   /** Gateway → client. */
   accountsChanged: "accounts.changed",
   loginEvent: "logins.event",
@@ -628,12 +656,95 @@ export function decodeFileAnswer(
   };
 }
 
-/** `tools.prepare`: as `tools.call`. */
+/** One upload source a `tools.prepare` declares (1.3). */
+export interface UploadMeta {
+  stagedAttachmentId: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  sha256: string;
+  source: string;
+}
+
+/**
+ * The upload bounds, mirrored from the edge's store
+ * (`gatewayTools/uploads.ts`), which checks them again: `gateway/` imports no
+ * tool module.
+ */
+const UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
+export const UPLOAD_CHUNK_MAX_BYTES = 1024 * 1024;
+const UPLOAD_MAX_STREAMS = 10;
+const UPLOAD_TEXT_MAX = 1024;
+/** A staged attachment id: 1-128 printable ASCII characters. */
+const STAGED_ID_RE = /^[\x20-\x7e]{1,128}$/;
+/** An upload id as the edge mints it, `upl-` and 32 hex digits. */
+const UPLOAD_ID_RE = /^upl-[0-9a-f]{32}$/;
+
+const isUploadSize = (value: unknown): value is number =>
+  Number.isSafeInteger(value) &&
+  (value as number) >= 1 &&
+  (value as number) <= UPLOAD_MAX_BYTES;
+const isBoundedText = (value: unknown): value is string =>
+  typeof value === "string" && value.length <= UPLOAD_TEXT_MAX;
+
+/** v02 AC2's `uploads`: 1-10 exact entries, ids unique, else undefined. */
+function uploadMetas(value: unknown): UploadMeta[] | undefined {
+  if (
+    !Array.isArray(value) ||
+    value.length < 1 ||
+    value.length > UPLOAD_MAX_STREAMS
+  )
+    return undefined;
+  const ids = new Set<string>();
+  const out: UploadMeta[] = [];
+  for (const raw of value) {
+    const entry = record(raw);
+    if (
+      !entry ||
+      !exactKeys(entry, [
+        "stagedAttachmentId",
+        "name",
+        "mimeType",
+        "size",
+        "sha256",
+        "source",
+      ])
+    )
+      return undefined;
+    const { stagedAttachmentId, name, mimeType, size, sha256, source } = entry;
+    if (
+      typeof stagedAttachmentId !== "string" ||
+      !STAGED_ID_RE.test(stagedAttachmentId) ||
+      ids.has(stagedAttachmentId) ||
+      !isBoundedText(name) ||
+      !isBoundedText(mimeType) ||
+      !isBoundedText(source) ||
+      !isUploadSize(size) ||
+      typeof sha256 !== "string" ||
+      !SHA256_RE.test(sha256)
+    )
+      return undefined;
+    ids.add(stagedAttachmentId);
+    out.push({ stagedAttachmentId, name, mimeType, size, sha256, source });
+  }
+  return out;
+}
+
+/**
+ * `tools.prepare`: as `tools.call`, plus the optional `uploads` (1.3), never
+ * read from `args`.
+ */
 export function decodeToolPrepare(payload: Payload): {
   name: string;
   args: Record<string, unknown>;
+  uploads?: UploadMeta[];
 } {
-  return decodeToolCall(payload);
+  const call = decodeToolCall(payload);
+  const raw = record(payload.json)?.uploads;
+  if (raw === undefined) return call;
+  const uploads = uploadMetas(raw);
+  if (!uploads) invalid("uploads");
+  return { ...call, uploads };
 }
 
 const SITE_MAX = 253;
@@ -645,14 +756,232 @@ const SITE_MAX = 253;
 export function decodeToolApply(payload: Payload): {
   name: string;
   request: ApplyRequest;
+  uploadId?: string;
 } {
-  const { name, site, items } = record(payload.json) ?? {};
+  const { name, site, items, uploadId } = record(payload.json) ?? {};
   if (typeof name !== "string" || !TOOL_NAME_RE.test(name))
     invalid("tool name");
   if (typeof site !== "string" || site.length === 0 || site.length > SITE_MAX)
     invalid("site");
   if (!Array.isArray(items)) invalid("items");
-  return { name, request: { site, items } };
+  if (uploadId === undefined) return { name, request: { site, items } };
+  if (typeof uploadId !== "string" || !UPLOAD_ID_RE.test(uploadId))
+    invalid("upload id");
+  // The id is the listener's, never part of the request the tool sees.
+  return { name, request: { site, items }, uploadId };
+}
+
+/** Whether `payload` carries a text stream, or a bytes stream not in `allowed`. */
+function hasOtherStreams(payload: Payload, allowed: string[] = []): boolean {
+  return (
+    Object.keys(payload.text ?? {}).length > 0 ||
+    Object.keys(payload.bytes ?? {}).some((name) => !allowed.includes(name))
+  );
+}
+
+/**
+ * `uploads.open` (1.3): the streams and W with v02 AC6's bounds, exact keys
+ * and no stream; undefined when invalid, which the edge answers with a fixed
+ * refusal rather than failing the call (v03 K3).
+ */
+export function decodeUploadOpen(payload: Payload):
+  | {
+      streams: { stagedAttachmentId: string; size: number; sha256: string }[];
+      work: number;
+    }
+  | undefined {
+  const request = record(payload.json);
+  if (
+    !request ||
+    hasOtherStreams(payload) ||
+    !exactKeys(request, ["streams", "work"])
+  )
+    return undefined;
+  const { streams: raw, work } = request;
+  if (
+    !Array.isArray(raw) ||
+    raw.length < 1 ||
+    raw.length > UPLOAD_MAX_STREAMS ||
+    !Number.isSafeInteger(work)
+  )
+    return undefined;
+  const ids = new Set<string>();
+  const streams: {
+    stagedAttachmentId: string;
+    size: number;
+    sha256: string;
+  }[] = [];
+  let total = 0;
+  for (const value of raw) {
+    const stream = record(value);
+    if (!stream || !exactKeys(stream, ["stagedAttachmentId", "size", "sha256"]))
+      return undefined;
+    const { stagedAttachmentId, size, sha256 } = stream;
+    if (
+      typeof stagedAttachmentId !== "string" ||
+      !STAGED_ID_RE.test(stagedAttachmentId) ||
+      ids.has(stagedAttachmentId) ||
+      !isUploadSize(size) ||
+      typeof sha256 !== "string" ||
+      !SHA256_RE.test(sha256)
+    )
+      return undefined;
+    ids.add(stagedAttachmentId);
+    total += size;
+    streams.push({ stagedAttachmentId, size, sha256 });
+  }
+  if (total > (work as number) || (work as number) > UPLOAD_MAX_BYTES)
+    return undefined;
+  return { streams, work: work as number };
+}
+
+/**
+ * `uploads.put` (1.3): `put` when the envelope is valid (exact keys, a
+ * non-negative safe offset, exactly one bytes stream `chunk` of 1 B to
+ * 1 MiB, no text stream); `uploadId` whenever the request names a
+ * well-formed one, so the edge can discard that upload on a bad put.
+ */
+export function decodeUploadPut(payload: Payload): {
+  uploadId?: string;
+  put?: {
+    uploadId: string;
+    stagedAttachmentId: string;
+    offset: number;
+    chunk: Uint8Array;
+  };
+} {
+  const request = record(payload.json);
+  const named =
+    typeof request?.uploadId === "string" && UPLOAD_ID_RE.test(request.uploadId)
+      ? request.uploadId
+      : undefined;
+  const { stagedAttachmentId, offset } = request ?? {};
+  const chunk = payload.bytes?.chunk;
+  if (
+    !request ||
+    named === undefined ||
+    !exactKeys(request, ["uploadId", "stagedAttachmentId", "offset"]) ||
+    typeof stagedAttachmentId !== "string" ||
+    !STAGED_ID_RE.test(stagedAttachmentId) ||
+    !Number.isSafeInteger(offset) ||
+    (offset as number) < 0 ||
+    hasOtherStreams(payload, ["chunk"]) ||
+    !(chunk instanceof Uint8Array) ||
+    chunk.byteLength < 1 ||
+    chunk.byteLength > UPLOAD_CHUNK_MAX_BYTES
+  )
+    return named === undefined ? {} : { uploadId: named };
+  return {
+    uploadId: named,
+    put: {
+      uploadId: named,
+      stagedAttachmentId,
+      offset: offset as number,
+      chunk,
+    },
+  };
+}
+
+/** `uploads.release` (1.3): the id, exact keys and no stream; else undefined. */
+export function decodeUploadRelease(payload: Payload): string | undefined {
+  const request = record(payload.json);
+  if (
+    !request ||
+    hasOtherStreams(payload) ||
+    !exactKeys(request, ["uploadId"]) ||
+    typeof request.uploadId !== "string" ||
+    !UPLOAD_ID_RE.test(request.uploadId)
+  )
+    return undefined;
+  return request.uploadId;
+}
+
+/** An `uploads.*` failure, on the client: always `tool_error`, its text capped. */
+type UploadRefusal = { ok: false; code: "tool_error"; message: string };
+
+function uploadRefusal(
+  payload: Payload,
+  answer: Record<string, unknown> | undefined,
+): UploadRefusal | undefined {
+  if (answer?.ok !== false) return undefined;
+  if (
+    hasStreams(payload) ||
+    !exactKeys(answer, ["ok", "code", "message"]) ||
+    answer.code !== "tool_error" ||
+    typeof answer.message !== "string"
+  )
+    malformed("upload answer");
+  return {
+    ok: false,
+    code: "tool_error",
+    message: answer.message.slice(0, TOOL_MESSAGE_MAX),
+  };
+}
+
+/** An `uploads.open` answer, on the client (1.3). */
+export function decodeUploadOpenAnswer(
+  payload: Payload,
+): { ok: true; uploadId: string } | UploadRefusal {
+  const answer = record(payload.json);
+  const refused = uploadRefusal(payload, answer);
+  if (refused) return refused;
+  if (
+    !answer ||
+    hasStreams(payload) ||
+    !exactKeys(answer, ["ok", "uploadId"]) ||
+    answer.ok !== true ||
+    typeof answer.uploadId !== "string" ||
+    !UPLOAD_ID_RE.test(answer.uploadId)
+  )
+    malformed("upload answer");
+  return { ok: true, uploadId: answer.uploadId };
+}
+
+/** An `uploads.put` answer, on the client (1.3). */
+export function decodeUploadPutAnswer(
+  payload: Payload,
+):
+  | { ok: true; received: number; streamComplete: boolean; sealed: boolean }
+  | UploadRefusal {
+  const answer = record(payload.json);
+  const refused = uploadRefusal(payload, answer);
+  if (refused) return refused;
+  if (
+    !answer ||
+    hasStreams(payload) ||
+    !exactKeys(answer, ["ok", "received", "streamComplete", "sealed"]) ||
+    answer.ok !== true ||
+    !Number.isSafeInteger(answer.received) ||
+    (answer.received as number) < 1 ||
+    (answer.received as number) > UPLOAD_MAX_BYTES ||
+    typeof answer.streamComplete !== "boolean" ||
+    typeof answer.sealed !== "boolean" ||
+    (answer.sealed && !answer.streamComplete)
+  )
+    malformed("upload answer");
+  return {
+    ok: true,
+    received: answer.received as number,
+    streamComplete: answer.streamComplete as boolean,
+    sealed: answer.sealed as boolean,
+  };
+}
+
+/** An `uploads.release` answer, on the client (1.3). */
+export function decodeUploadReleaseAnswer(
+  payload: Payload,
+): { ok: true } | UploadRefusal {
+  const answer = record(payload.json);
+  const refused = uploadRefusal(payload, answer);
+  if (refused) return refused;
+  if (
+    !answer ||
+    hasStreams(payload) ||
+    !exactKeys(answer, ["ok"]) ||
+    answer.ok !== true
+  )
+    malformed("upload answer");
+  return { ok: true };
 }
 
 /**

@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { generateKeyPairSync, X509Certificate } from "node:crypto";
+import { createHash, generateKeyPairSync, X509Certificate } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdtemp, readFile, writeFile, unlink, rename } from "node:fs/promises";
@@ -44,12 +44,14 @@ import {
 import { encodeAtlassianCredential } from "../gatewayTools/atlassian.ts";
 import { createEdgeTools } from "../gatewayTools/index.ts";
 import {
+  ITEMS_INVALID,
   PROPOSAL_TOO_LARGE,
   RESULT_TOO_LARGE,
   STOPPED,
   TWO_PHASE_ONLY,
   applyAnswerWithinCap,
   prepareAnswerWithinCap,
+  type ApplyAnswer,
 } from "../gatewayTools/twoPhase.ts";
 import type { JiraIssueMutationItemDisplay } from "@assistant/shared/jiraMutation";
 import { checkJiraIssueItems } from "../jiraMutationCheck.ts";
@@ -92,6 +94,11 @@ import {
   ToolError,
   type AtlassianToolDescriptor,
 } from "../gatewayTools/descriptor.ts";
+import {
+  UPLOAD_BUSY,
+  UPLOAD_INVALID,
+  createUploadStore,
+} from "../gatewayTools/uploads.ts";
 type LoginDriverEvents = Parameters<NonNullable<LoginDrivers["claude"]>>[1];
 
 /** What the helpers need: a gateway, or a listener started on its own. */
@@ -3117,12 +3124,14 @@ async function fileEdge(
   const budget = countingFileBudget();
   const tool = fixtureFileTool(options.tool);
   const lines: string[] = [];
+  // One budget for downloads and uploads, as `createEdgeTools` wires it.
   const tools: EdgeTools = {
     ...createEdgeTools({ log: () => {} }),
     host: createToolHost([tool, ...(options.extra ?? [])], {
       log: (line) => lines.push(line),
       fileBudget: budget,
     }),
+    uploads: createUploadStore({ fileBudget: budget }),
   };
   const edge = await listenerWith(
     vault,
@@ -3448,4 +3457,362 @@ test("P7a: a file call's failure answer and its cancel reply to a client that st
     assert.equal(free.message, "Fixture refused.", answer);
     await waitFor(() => budget.releases === releases + 2);
   }
+});
+
+// --- P8a (Task-1441): uploads over a client connection ---
+
+const UPLOAD_SOURCE = new TextEncoder().encode("UPLOAD-SENTINEL-bytes");
+const UPLOAD_STAGE = "STAGE-SENTINEL-1";
+const uploadSha = (bytes: Uint8Array) =>
+  createHash("sha256").update(bytes).digest("hex");
+const UPLOAD_ITEMS = [
+  {
+    operation: "uploadAttachment",
+    attachment: {
+      fileName: "NAME-SENTINEL.png",
+      source: "/SOURCE-SENTINEL/chart.png",
+      stagedAttachmentId: UPLOAD_STAGE,
+      size: UPLOAD_SOURCE.byteLength,
+      sha256: uploadSha(UPLOAD_SOURCE),
+    },
+  },
+];
+
+/** A two-phase fixture whose apply waits for `release()` when told to. */
+function fixtureWriteTool() {
+  const waiting: (() => void)[] = [];
+  const tool = {
+    started: 0,
+    hold: false,
+    release: () => waiting.splice(0).forEach((resolve) => resolve()),
+    descriptor: {
+      name: "fixture_write",
+      description: "A two-phase fixture.",
+      inputSchema: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+      },
+      effect: "write",
+      actionKey: "fixture:write",
+      integration: "atlassian",
+      execute: () => Promise.reject(new Error("not on /mcp")),
+      phases: {
+        prepare: () =>
+          Promise.resolve({
+            site: "acme.atlassian.net",
+            items: [],
+            warnings: [],
+          }),
+        apply: async (): Promise<ApplyAnswer> => {
+          tool.started += 1;
+          if (tool.hold)
+            await new Promise<void>((resolve) => waiting.push(resolve));
+          return {
+            ok: true as const,
+            results: [{ effects: "possible" }],
+            effects: "possible" as const,
+          };
+        },
+      },
+    } satisfies AtlassianToolDescriptor,
+  };
+  return tool;
+}
+
+async function openUpload(connection: WorkerConnection): Promise<string> {
+  const opened = (
+    await connection.request(
+      CLIENT_METHODS.uploadsOpen,
+      encodeClientMessage({
+        streams: [
+          {
+            stagedAttachmentId: UPLOAD_STAGE,
+            size: UPLOAD_SOURCE.byteLength,
+            sha256: uploadSha(UPLOAD_SOURCE),
+          },
+        ],
+        work: UPLOAD_SOURCE.byteLength,
+      }),
+    )
+  ).json as { ok: boolean; uploadId?: string; message?: string };
+  assert.equal(opened.ok, true, opened.message);
+  const put = await connection.request(CLIENT_METHODS.uploadsPut, {
+    json: {
+      uploadId: opened.uploadId,
+      stagedAttachmentId: UPLOAD_STAGE,
+      offset: 0,
+    },
+    bytes: { chunk: UPLOAD_SOURCE },
+  });
+  assert.deepEqual(put.json, {
+    ok: true,
+    received: UPLOAD_SOURCE.byteLength,
+    streamComplete: true,
+    sealed: true,
+  });
+  return opened.uploadId!;
+}
+
+const applyUpload = (connection: WorkerConnection, uploadId?: string) =>
+  connection.request(
+    CLIENT_METHODS.toolsApply,
+    encodeClientMessage({
+      name: "fixture_write",
+      site: "acme.atlassian.net",
+      items: UPLOAD_ITEMS,
+      ...(uploadId === undefined ? {} : { uploadId }),
+    }),
+  );
+
+test("P8a: one permit for both directions (S2): an upload makes a download FILE_BUSY and an open UPLOAD_BUSY until its apply's answer left", async () => {
+  const write = fixtureWriteTool();
+  write.hold = true;
+  const { edge, a, b, budget, reads, lines } = await fileEdge({
+    extra: [write.descriptor],
+  });
+  const first = await dialClient(edge, a);
+  const second = await dialClient(edge, b);
+  const uploadId = await openUpload(first);
+  const busy = async () => {
+    const readsBefore = reads();
+    assert.deepEqual((await callFile(second, { id: "bin" })).json, {
+      ok: false,
+      code: "tool_error",
+      message: FILE_BUSY,
+    });
+    assert.deepEqual(
+      (
+        await second.request(
+          CLIENT_METHODS.uploadsOpen,
+          encodeClientMessage({
+            streams: [
+              { stagedAttachmentId: "x", size: 1, sha256: "a".repeat(64) },
+            ],
+            work: 1,
+          }),
+        )
+      ).json,
+      { ok: false, code: "tool_error", message: UPLOAD_BUSY },
+    );
+    assert.equal(reads(), readsBefore, "nothing read for a busy call");
+  };
+  // Sealed and unattached.
+  await busy();
+  // Attached and executing.
+  const applied = applyUpload(first, uploadId);
+  await waitFor(() => write.started === 1);
+  await busy();
+  write.release();
+  assert.deepEqual((await applied).json, {
+    ok: true,
+    results: [{ effects: "possible" }],
+    effects: "possible",
+  });
+  await waitFor(() => budget.reserved === 0);
+  assert.equal(budget.releases, 1);
+  assert.equal(
+    decodeFileAnswer(await callFile(second, { id: "bin" }), { maxBytes: 5 })
+      .kind,
+    "file",
+  );
+  // The same id again: consumed once, refused with nothing run.
+  assert.deepEqual((await applyUpload(first, uploadId)).json, {
+    ok: false,
+    code: "invalid_params",
+    message: ITEMS_INVALID,
+    effects: "none",
+  });
+  assert.equal(write.started, 1);
+  // No log line names the upload, its source, name or stream.
+  for (const line of lines) assert.doesNotMatch(line, /upl-|SENTINEL/, line);
+});
+
+test("P8a: the connection's end discards its unattached upload; another connection never sees it", async () => {
+  const { edge, a, b, budget } = await fileEdge();
+  const first = await dialClient(edge, a);
+  const second = await dialClient(edge, b);
+  const uploadId = await openUpload(first);
+  // A foreign connection's release and apply touch nothing.
+  assert.deepEqual(
+    (
+      await second.request(
+        CLIENT_METHODS.uploadsRelease,
+        encodeClientMessage({ uploadId }),
+      )
+    ).json,
+    { ok: true },
+  );
+  assert.notEqual(budget.reserved, 0);
+  first.end("test");
+  await waitFor(() => budget.reserved === 0);
+  assert.equal(budget.releases, 1);
+});
+
+test("P8a: malformed upload requests answer the store's fixed text; without a store the methods are unavailable", async () => {
+  const { edge, a, budget } = await fileEdge();
+  const connection = await dialClient(edge, a);
+  const uploadId = await openUpload(connection);
+  // A malformed open discards nothing it cannot name.
+  assert.deepEqual(
+    (
+      await connection.request(
+        CLIENT_METHODS.uploadsOpen,
+        encodeClientMessage({ streams: [], work: 0 }),
+      )
+    ).json,
+    { ok: false, code: "tool_error", message: UPLOAD_INVALID },
+  );
+  assert.notEqual(budget.reserved, 0);
+  // A malformed put naming the upload discards it.
+  assert.deepEqual(
+    (
+      await connection.request(CLIENT_METHODS.uploadsPut, {
+        json: { uploadId, stagedAttachmentId: UPLOAD_STAGE, offset: -1 },
+        bytes: { chunk: UPLOAD_SOURCE },
+      })
+    ).json,
+    { ok: false, code: "tool_error", message: UPLOAD_INVALID },
+  );
+  assert.equal(budget.reserved, 0);
+
+  const vault = stubVault();
+  const bare = await listenerWith(
+    vault,
+    fakeTools(() => Promise.resolve({ ok: true })),
+  );
+  const plain = await dialClient(bare, await enroll(bare));
+  for (const [method, payload] of [
+    [CLIENT_METHODS.uploadsOpen, encodeClientMessage({})],
+    [CLIENT_METHODS.uploadsRelease, encodeClientMessage({ uploadId })],
+    [
+      CLIENT_METHODS.toolsApply,
+      encodeClientMessage({
+        name: "fixture_write",
+        site: "acme.atlassian.net",
+        items: [],
+        uploadId,
+      }),
+    ],
+  ] as const)
+    assert.equal(
+      failureOf(await plain.request(method, payload).catch((err) => err)).code,
+      "tools_unavailable",
+      method,
+    );
+});
+
+test("P8a: declared sources reach the host's prepare option; only an apply naming an upload registers an output hold", async () => {
+  const seen: { uploads?: unknown; upload?: unknown; onSettled: boolean }[] =
+    [];
+  const tools: EdgeTools = {
+    ...fakeTools(() => Promise.resolve({ ok: true }), {
+      prepare: (_name, _args, caller, options) => {
+        seen.push({ uploads: options?.uploads, onSettled: !!caller.onSettled });
+        return Promise.resolve({ ok: false, code: "tool_error", message: "x" });
+      },
+      apply: (_name, _request, caller, options) => {
+        seen.push({
+          upload: options?.upload?.id,
+          onSettled: !!caller.onSettled,
+        });
+        return Promise.resolve({
+          ok: false,
+          code: "tool_error",
+          message: "x",
+          effects: "none",
+        });
+      },
+    }),
+    uploads: createUploadStore({ fileBudget: createFileBudget() }),
+  };
+  const edge = await listenerWith(stubVault(), tools);
+  const connection = await dialClient(edge, await enroll(edge));
+  const meta = {
+    stagedAttachmentId: UPLOAD_STAGE,
+    name: "chart.png",
+    mimeType: "image/png",
+    size: 3,
+    sha256: "a".repeat(64),
+    source: "chart.png",
+  };
+  await connection.request(
+    CLIENT_METHODS.toolsPrepare,
+    encodeClientMessage({ name: "fixture_write", args: {}, uploads: [meta] }),
+  );
+  await connection.request(
+    CLIENT_METHODS.toolsPrepare,
+    encodeClientMessage({ name: "fixture_write", args: {} }),
+  );
+  const uploadId = `upl-${"0".repeat(32)}`;
+  await applyUpload(connection, uploadId);
+  await applyUpload(connection);
+  assert.deepEqual(seen, [
+    { uploads: [meta], onSettled: false },
+    { uploads: undefined, onSettled: false },
+    { upload: uploadId, onSettled: true },
+    { upload: undefined, onSettled: false },
+  ]);
+});
+
+test("P8a S1: an upload apply whose answer cannot drain ends the connection at the bound and frees the permit once", async () => {
+  const MiB = 1024 * 1024;
+  const DRAIN_MS = 300;
+  const FILL = 48;
+  let fills = 0;
+  const { file: _plain, ...plainBase } = fixtureFileTool();
+  const filler: AtlassianToolDescriptor = {
+    ...plainBase,
+    name: "fixture_fill",
+    maxResultChars: 2 * MiB,
+    execute() {
+      fills += 1;
+      return Promise.resolve({ content: "x".repeat(1.5 * MiB) });
+    },
+  };
+  const write = fixtureWriteTool();
+  const { edge, a, b, budget } = await fileEdge({
+    fileOutputMs: DRAIN_MS,
+    extra: [filler, write.descriptor],
+  });
+  const other = await dialClient(edge, b);
+  const socket = tls.connect({
+    host: "127.0.0.1",
+    port: edge.clients!.clientPort,
+    ca: edge.clients!.caPem,
+    key: a.key,
+    cert: a.cert,
+  });
+  await new Promise<void>((resolve, reject) => {
+    socket.once("secureConnect", resolve);
+    socket.once("error", reject);
+  });
+  const stalled = new WorkerConnection(socketEndpoint(socket), {
+    handshake: { role: "worker", workerId: "stalled-client" },
+    protocol: GATEWAY_CLIENT_PROTOCOL,
+  });
+  open.push({ close: () => stalled.end("test done") });
+  const uploadId = await openUpload(stalled);
+  socket.pause();
+  for (let i = 0; i < FILL; i += 1)
+    void stalled
+      .request(
+        CLIENT_METHODS.toolsCall,
+        encodeClientMessage({ name: "fixture_fill", args: { id: "f" } }),
+      )
+      .catch(() => undefined);
+  await waitFor(() => fills === FILL, 10_000);
+  const pending = applyUpload(stalled, uploadId).catch(() => "ended");
+  await waitFor(() => write.started === 1);
+  // The answer queues behind the unread fill: the permit stays held.
+  const written = Date.now();
+  assert.equal(budget.releases, 0);
+  assert.notEqual(budget.reserved, 0);
+  await waitFor(() => budget.releases === 1, 10 * DRAIN_MS);
+  assert.ok(Date.now() - written < 10 * DRAIN_MS);
+  assert.equal(budget.reserved, 0);
+  socket.resume();
+  assert.equal(await pending, "ended");
+  assert.equal(other.isEnded, false);
+  assert.equal(budget.releases, 1);
 });

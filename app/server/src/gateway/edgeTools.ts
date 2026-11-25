@@ -2,8 +2,8 @@
  * What the edge takes from its tools (Task-1397, ADR-0005): the MCP handler
  * behind the `/mcp` gate, the tool host gateway client 1.x's `tools.*` call
  * (Task-1398; `tools.prepare` and `tools.apply` in 1.1, Task-1463 P6a;
- * file answers in 1.2, Task-1441 P7a), and the integrations' credential
- * checks. The edge's entry
+ * file answers in 1.2, Task-1441 P7a; uploads in 1.3, Task-1441 P8a), and
+ * the integrations' credential checks. The edge's entry
  * injects them (`gatewayTools/index.ts`); `gateway/` holds no tool code or
  * package. The gateway hands tools typed credential outcomes and never
  * builds a tool error. Types only (`workerBoundary.test.ts`).
@@ -106,6 +106,42 @@ export type ApplyAnswer =
       trimmed?: true;
     });
 
+/** One upload source a client's `tools.prepare` declared (1.3). */
+interface UploadMeta {
+  stagedAttachmentId: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  sha256: string;
+  source: string;
+}
+
+type UploadRefusal = { ok: false; code: "tool_error"; message: string };
+
+/**
+ * One client connection's view of the edge's upload store (Task-1441 P8a):
+ * opaque, made once per connection, never named on the wire. `consume` is
+ * the host's; the listener only passes the scope on.
+ */
+export interface UploadScope {
+  open(request: {
+    streams: { stagedAttachmentId: string; size: number; sha256: string }[];
+    work: number;
+  }): { ok: true; uploadId: string } | UploadRefusal;
+  put(
+    request: { uploadId: string; stagedAttachmentId: string; offset: number },
+    chunk: Uint8Array,
+  ):
+    | { ok: true; received: number; streamComplete: boolean; sealed: boolean }
+    | UploadRefusal;
+  release(uploadId: string): { ok: true } | UploadRefusal;
+  /** An undecodable request: the named unattached upload is discarded. */
+  invalid(uploadId?: string): UploadRefusal;
+  /** The connection ended. */
+  end(): void;
+  consume(uploadId: string, items: readonly unknown[]): unknown;
+}
+
 export type IntegrationCheck =
   | { ok: true; displayName?: string; accountId?: string }
   | { ok: false; problem: "rejected" | "unreachable" | "failed" };
@@ -125,17 +161,26 @@ export interface EdgeTools {
       args: unknown,
       caller: ToolCaller,
     ): Promise<ToolAnswer>;
+    /** `uploads`: the sources a 1.3 prepare declared, never an argument. */
     prepare(
       name: string,
       args: unknown,
       caller: ToolCaller,
+      options?: { uploads?: readonly UploadMeta[] },
     ): Promise<PrepareAnswer>;
+    /**
+     * `upload`: the connection's upload a 1.3 apply names, consumed by the
+     * host; it needs `caller.onSettled`.
+     */
     apply(
       name: string,
       request: ApplyRequest,
       caller: ToolCaller,
+      options?: { upload?: { id: string; scope: UploadScope } },
     ): Promise<ApplyAnswer>;
   };
+  /** The upload store (1.3); absent, the upload methods are unavailable. */
+  uploads?: { scope(userId: string): UploadScope };
   integrations: {
     atlassian: {
       /** The checked credential as the opaque text the vault stores. */

@@ -680,6 +680,7 @@ const GATEWAY_TOOLS_ALLOWED = new Set([
   "atlassian/adfToMarkdown.ts",
   "atlassian/atlassianFetch.ts",
   "atlassian/confluenceClient.ts",
+  "atlassian/multipartUpload.ts",
   "atlassian/storageToMarkdown.ts",
   "confluenceAttachmentChange.ts",
   "confluenceDownload.ts",

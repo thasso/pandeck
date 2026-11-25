@@ -8,8 +8,11 @@
  * stop cutoff. Pandeck's client mode still drops write entries
  * (`remoteTools.ts`).
  *
- * The operation gate runs first, before the credential is read: an upload is
- * refused until the edge can stage bytes (P8), and `delete`/`deleteAttachment`
+ * The operation gate runs first, before the credential is read: an upload
+ * passes only where the host set an upload context, a client connection's
+ * `tools.prepare` with declared sources or its `tools.apply` with a consumed
+ * upload (Task-1441 P8a), and is refused everywhere else, `/mcp` included;
+ * `delete`/`deleteAttachment`
  * only pass where the gateway's requested Atlassian scope list holds their
  * scope (`confluenceDeleteSwitchFor`), fixed when the edge starts. The first
  * offending item in input order refuses the whole call. Every gate refusal
@@ -35,6 +38,10 @@ import type {
   ConfluencePageMutationOperation,
 } from "@assistant/shared/confluenceMutation";
 import type { ConfluenceConfig } from "../atlassian/confluenceClient.ts";
+import type {
+  AttachmentChangeRequest,
+  FrozenUpload,
+} from "../confluenceAttachmentChange.ts";
 import {
   MAX_MUTATION_ITEMS,
   buildConfluenceMutationItems,
@@ -68,6 +75,13 @@ import {
   type PrepareProduct,
 } from "./twoPhase.ts";
 import { REDACTED } from "./upstreamText.ts";
+import {
+  UPLOAD_MAX_BYTES,
+  UPLOAD_MISMATCH,
+  UPLOAD_SOURCE_MISSING,
+  type AttachedUpload,
+  type UploadEntry,
+} from "./uploads.ts";
 import {
   WRITE_DEADLINE_MS,
   runWrite,
@@ -473,9 +487,15 @@ function withheldUnlessSafe(
  * The gate (AC4): each item's operation (`edit` when absent), in input
  * order; the first one this edge does not offer refuses the whole call. It
  * also runs on `tools.apply`'s items before their check, so it reads any
- * value: a non-string operation is left to the check.
+ * value: a non-string operation is left to the check. An upload passes only
+ * with `via.uploads`, which only the host's upload context sets (Task-1441
+ * P8a, v09 P1(e)).
  */
-function gate(items: unknown, deletes: ConfluenceDeleteSwitch): void {
+function gate(
+  items: unknown,
+  deletes: ConfluenceDeleteSwitch,
+  via: { uploads: boolean },
+): void {
   if (!Array.isArray(items)) return;
   for (const item of items as unknown[]) {
     const raw: unknown =
@@ -483,7 +503,7 @@ function gate(items: unknown, deletes: ConfluenceDeleteSwitch): void {
         ? (item as { operation?: unknown }).operation
         : undefined;
     const operation = raw ?? "edit";
-    if (operation === "uploadAttachment")
+    if (operation === "uploadAttachment" && !via.uploads)
       throw new ToolError(UPLOAD_UNAVAILABLE);
     if (operation === "delete" && !deletes.page)
       throw new ToolError(PAGE_DELETE_OFF);
@@ -512,18 +532,72 @@ const CONFLUENCE_WRITE: WriteProduct<ConfluenceConfig> = {
 };
 
 /**
- * One call's phases: prepare's reads on its own signal, with no upload seam;
- * apply on the call's signal, with no staged bytes.
+ * v02 AC2's whole-call rules for a client's declared sources, before the
+ * credential is read: every upload item names a declared source by
+ * `sourceAttachmentId` and no `sourcePath`, every source is named, and the
+ * items' total is at most 100 MiB. Any break is `UPLOAD_SOURCE_MISSING`.
+ */
+function checkDeclaredSources(
+  items: ConfluenceMutateParams["items"],
+  uploads: ReadonlyMap<string, UploadEntry>,
+): void {
+  const named = new Set<string>();
+  let work = 0;
+  for (const item of items ?? []) {
+    if (item.operation !== "uploadAttachment") continue;
+    const entry =
+      item.sourceAttachmentId === undefined
+        ? undefined
+        : uploads.get(item.sourceAttachmentId);
+    if (!entry || item.sourcePath !== undefined)
+      throw new ToolError(UPLOAD_SOURCE_MISSING);
+    named.add(entry.stagedAttachmentId);
+    work += entry.size;
+  }
+  if (named.size !== uploads.size || work > UPLOAD_MAX_BYTES)
+    throw new ToolError(UPLOAD_SOURCE_MISSING);
+}
+
+/**
+ * The edge's `freezeUpload` (v02 AC2): the declared source the item names,
+ * as Pandeck froze it. Nothing is read; `source` stays card text.
+ */
+const freezeDeclared =
+  (uploads: ReadonlyMap<string, UploadEntry>) =>
+  async (request: AttachmentChangeRequest): Promise<FrozenUpload> => {
+    const entry =
+      request.sourceAttachmentId === undefined || request.sourcePath
+        ? undefined
+        : uploads.get(request.sourceAttachmentId);
+    if (!entry) throw new ConfluenceMutationError(UPLOAD_SOURCE_MISSING);
+    return {
+      name: entry.name,
+      mimeType: entry.mimeType,
+      size: entry.size,
+      sha256: entry.sha256,
+      source: entry.source,
+      stagedAttachmentId: entry.stagedAttachmentId,
+    };
+  };
+
+/**
+ * One call's phases: prepare's reads on its own signal, with the declared
+ * sources' seam when a client declared them; apply on the call's signal,
+ * with no staged bytes (`/mcp` never uploads).
  */
 function confluencePhases(
   items: ConfluenceMutateParams["items"],
+  uploads?: ReadonlyMap<string, UploadEntry>,
 ): (
   config: ConfluenceConfig,
   credential: AtlassianCredential,
 ) => WritePhases<ConfluencePrepared, ConfluenceApplied> {
   return (config, credential) => ({
     prepare(signal) {
-      return buildConfluenceMutationItems(config, items ?? [], { signal });
+      return buildConfluenceMutationItems(config, items ?? [], {
+        signal,
+        ...(uploads ? { freezeUpload: freezeDeclared(uploads) } : {}),
+      });
     },
     apply(prepared, signal, stopBefore) {
       return applyConfluenceMutationItems(config, prepared.items, {
@@ -555,7 +629,8 @@ export function confluenceMutatePageTool(
     async execute(params, ctx) {
       const requested = params as ConfluenceMutateParams;
       // Before the credential, so a refused call reads and sends nothing.
-      gate(requested.items, deletes);
+      // `/mcp` never carries an upload context.
+      gate(requested.items, deletes, { uploads: false });
       const { credential, prepared, applied } = await runWrite(
         ctx,
         CONFLUENCE_WRITE,
@@ -575,12 +650,13 @@ export function confluenceMutatePageTool(
     phases: {
       prepare(params, ctx) {
         const { items } = params as ConfluenceMutateParams;
-        gate(items, deletes);
-        return runPrepare(ctx, CONFLUENCE_PREPARE(items));
+        gate(items, deletes, { uploads: ctx.uploads !== undefined });
+        if (ctx.uploads) checkDeclaredSources(items, ctx.uploads);
+        return runPrepare(ctx, CONFLUENCE_PREPARE(items, ctx.uploads));
       },
       apply(request, ctx) {
-        gate(request.items, deletes);
-        return runApply(ctx, CONFLUENCE_APPLY, request);
+        gate(request.items, deletes, { uploads: ctx.upload !== undefined });
+        return runApply(ctx, CONFLUENCE_APPLY(ctx.upload), request);
       },
     },
   };
@@ -589,10 +665,11 @@ export function confluenceMutatePageTool(
 /** Confluence's prepare for `tools.prepare`: the one-call prepare, on its own. */
 const CONFLUENCE_PREPARE = (
   items: ConfluenceMutateParams["items"],
+  uploads: ReadonlyMap<string, UploadEntry> | undefined,
 ): PrepareProduct<ConfluenceConfig, ConfluencePageMutationItemDisplay> => ({
   ...CONFLUENCE_WRITE,
   prepare: (config, credential, signal) =>
-    confluencePhases(items)(config, credential).prepare(signal),
+    confluencePhases(items, uploads)(config, credential).prepare(signal),
   check: checkConfluencePageItems,
 });
 
@@ -627,12 +704,18 @@ export function confluenceOutcomeOf(
   };
 }
 
-/** Confluence's apply for `tools.apply`: the shared apply and its contract. */
-const CONFLUENCE_APPLY: ApplyProduct<
+/**
+ * Confluence's apply for `tools.apply`: the shared apply and its contract,
+ * reading an upload item's bytes from the upload this apply consumed. A
+ * mismatch fails that item before its own write (v02 AC6).
+ */
+const CONFLUENCE_APPLY = (
+  upload: AttachedUpload | undefined,
+): ApplyProduct<
   ConfluenceConfig,
   ConfluencePageMutationItemDisplay,
   ConfluenceResultRecord
-> = {
+> => ({
   ...CONFLUENCE_WRITE,
   check: checkConfluencePageItems,
   apply: (config, credential, items, deps) =>
@@ -640,10 +723,18 @@ const CONFLUENCE_APPLY: ApplyProduct<
       ...deps,
       describeError: (err) =>
         describeConfluenceWriteFailure(err, credential, [deps.signal]),
+      ...(upload
+        ? {
+            stagedBytes: (attachment: ConfluenceAttachmentMutationDisplay) =>
+              upload.stagedBytes(attachment).catch(() => {
+                throw new ConfluenceMutationError(UPLOAD_MISMATCH);
+              }),
+          }
+        : {}),
     }),
   vetting: vettingFor,
   record: buildConfluenceResultRecord,
   // Item results are small and only the attachment nests: no stage to run.
   shrink: () => false,
   outcomeOf: confluenceOutcomeOf,
-};
+});
