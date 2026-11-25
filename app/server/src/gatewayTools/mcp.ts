@@ -26,6 +26,9 @@
  * - Each POST is its own SDK server, so a `notifications/cancelled` on a
  *   separate POST never reaches a running call: only the call's own response
  *   closing aborts it.
+ * - A file tool (Task-1441 P7a) is not listed, and a call of one answers
+ *   "No such tool." before any vault read: its bytes travel only on a
+ *   client connection.
  */
 import type http from "node:http";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -37,7 +40,7 @@ import {
   SUPPORTED_PROTOCOL_VERSIONS,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { CredentialSource } from "./toolCredential.ts";
-import type { ToolHost } from "./host.ts";
+import { NO_SUCH_TOOL, type ToolHost } from "./host.ts";
 
 const MAX_BODY_BYTES = 1024 * 1024;
 /** How long a refused upload may keep its connection after the answer. */
@@ -58,6 +61,16 @@ const ERROR_TEXT: Record<number, string> = {
   [-32000]: "Bad request.",
 };
 const FALLBACK_ERROR_TEXT = "The request failed.";
+
+/** The tools `/mcp` lists and runs: every one but a file tool (J2). */
+function mcpTools(host: Pick<ToolHost, "list">) {
+  return host.list().filter((tool) => !tool.file);
+}
+
+/** Whether `name` is a registered file tool; a request string is only compared. */
+function fileToolNamed(host: Pick<ToolHost, "list">, name: string): boolean {
+  return host.list().some((tool) => tool.file && tool.name === name);
+}
 
 /** The caller the gateway hands in: the client and its credential reads. */
 export interface McpCaller extends CredentialSource {
@@ -242,8 +255,10 @@ export function createMcpHandler(
       expire();
       close();
     });
+    // A file tool answers bytes, which `/mcp` cannot carry: it is neither
+    // listed nor run here, only on a client connection (Task-1441 P7a, J2).
     server.setRequestHandler(ListToolsRequestSchema, () => ({
-      tools: host.list().map((tool) => ({
+      tools: mcpTools(host).map((tool) => ({
         name: tool.name,
         description: tool.description,
         inputSchema: tool.inputSchema,
@@ -251,6 +266,11 @@ export function createMcpHandler(
       })),
     }));
     server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+      if (fileToolNamed(host, request.params.name))
+        return {
+          content: [{ type: "text", text: NO_SUCH_TOOL }],
+          isError: true,
+        };
       const answer = await host.call(
         request.params.name,
         request.params.arguments,

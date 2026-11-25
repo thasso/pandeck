@@ -94,6 +94,7 @@ test("the edge's tools offer the host's listing", () => {
       "confluence_search",
       "confluence_get_page",
       "confluence_lookup",
+      "confluence_download_attachment",
       "slack_search",
       "slack_conversation_read",
       "slack_thread_read",

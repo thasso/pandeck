@@ -1,4 +1,5 @@
 /** The edge's tools (Task-1397): adding one is its module plus one line. */
+import { confluenceDownloadAttachment } from "./confluenceDownload.ts";
 import { confluenceGetPage } from "./confluenceGetPage.ts";
 import { confluenceLookup } from "./confluenceLookup.ts";
 import {
@@ -31,6 +32,7 @@ export function edgeTools(
     confluenceSearch,
     confluenceGetPage,
     confluenceLookup,
+    confluenceDownloadAttachment,
     slackSearch,
     slackConversationRead,
     slackThreadRead,
