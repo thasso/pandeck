@@ -27,18 +27,44 @@ import type { ByteEndpoint } from "./inProcessTransport.ts";
 /** A peer that never closes after `close` is cut off after this long. */
 const CLOSE_GRACE_MS = 1000;
 
+/**
+ * A socket as a byte endpoint. A write's `onFlushed` is called once, when the
+ * socket reports the write done or failed, or at the latest when the socket
+ * closes: at its `close` event, when it is destroyed and its buffers released,
+ * every callback still outstanding is called, whatever the runtime reports
+ * for pending writes (Task-1441 P7a, H1). A write after close calls it in a
+ * microtask.
+ */
 export function socketEndpoint(socket: net.Socket): ByteEndpoint {
   let closeListener: (() => void) | undefined;
   let closed = false;
+  const outstanding = new Set<() => void>();
   socket.on("close", () => {
+    for (const flushed of [...outstanding]) flushed();
     if (closed) return;
     closed = true;
     closeListener?.();
   });
   socket.on("error", () => socket.destroy());
   return {
-    write(bytes) {
-      if (!closed && !socket.destroyed) socket.write(bytes);
+    write(bytes, onFlushed) {
+      if (closed || socket.destroyed) {
+        if (onFlushed) queueMicrotask(onFlushed);
+        return;
+      }
+      if (!onFlushed) {
+        socket.write(bytes);
+        return;
+      }
+      let called = false;
+      const flushed = (): void => {
+        if (called) return;
+        called = true;
+        outstanding.delete(flushed);
+        onFlushed();
+      };
+      outstanding.add(flushed);
+      socket.write(bytes, () => flushed());
     },
     close() {
       // Written bytes go out first.

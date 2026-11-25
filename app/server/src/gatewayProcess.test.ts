@@ -438,8 +438,10 @@ test("a saved hold with a lost acquisition answer is released before reconnect b
       drop = false;
       gateway.attachControl({
         ...endpoint,
-        write(bytes) {
-          if (!drop) endpoint.write(bytes);
+        // A dropped write is still settled once (Task-1441 P7a, H4).
+        write(bytes, onFlushed) {
+          if (!drop) endpoint.write(bytes, onFlushed);
+          else if (onFlushed) queueMicrotask(onFlushed);
         },
       });
     });

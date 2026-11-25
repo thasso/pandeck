@@ -9,11 +9,21 @@
  * call. Nothing here holds a handle, so an idle pair never keeps a process
  * alive. Bytes written before `close` still arrive, ahead of the close
  * notification; writes after it are dropped.
+ *
+ * A write's `onFlushed` (Task-1441 P7a, H1) is called exactly once, when its
+ * bytes have left this side: here after delivery to the peer's listener,
+ * even when that listener throws, and in a microtask for a write after
+ * `close`.
  */
 
 /** One end of a byte stream. Listeners are set before the first delivery. */
 export interface ByteEndpoint {
-  write(bytes: Uint8Array): void;
+  /**
+   * Sends `bytes`. `onFlushed`, when given, is called exactly once: when the
+   * bytes left this side, or when the endpoint discarded them because it
+   * closed. Never synchronously.
+   */
+  write(bytes: Uint8Array, onFlushed?: () => void): void;
   /** Ends the stream for both ends; idempotent. */
   close(): void;
   onData(listener: (bytes: Uint8Array) => void): void;
@@ -29,9 +39,18 @@ export function createInProcessTransport(): [ByteEndpoint, ByteEndpoint] {
   const endpoint = (self: 0 | 1): ByteEndpoint => {
     const peer = listeners[1 - self]!;
     return {
-      write(bytes) {
-        if (closed) return;
-        queueMicrotask(() => peer.data?.(bytes));
+      write(bytes, onFlushed) {
+        if (closed) {
+          if (onFlushed) queueMicrotask(onFlushed);
+          return;
+        }
+        queueMicrotask(() => {
+          try {
+            peer.data?.(bytes);
+          } finally {
+            onFlushed?.();
+          }
+        });
       },
       close() {
         if (closed) return;

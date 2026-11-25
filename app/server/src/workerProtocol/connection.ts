@@ -55,9 +55,32 @@ export interface ConnectionLimits extends AssemblyLimits {
   maxServing: number;
 }
 
+/**
+ * What a handler may ask of its request's response (Task-1441 P7a, H1).
+ * Only a handler that calls `onSettled` changes how its request is counted:
+ * its id stays in `serving`, and so under `maxServing`, until the response
+ * has settled. Every other request is counted only while its handler runs.
+ */
+export interface MethodContext {
+  /**
+   * Calls `fn` once when this request's response has settled: every frame
+   * written for it was flushed or discarded by the transport, or, when the
+   * connection had ended before the handler finished, at that finish, with
+   * no frame written. Never at the connection's end alone.
+   */
+  onSettled(fn: () => void): void;
+  /**
+   * Ends the connection with `reason` unless the response settles within
+   * `ms` of its last frame being written: a peer that stops reading cannot
+   * hold the response's bytes here for ever.
+   */
+  drainWithin(ms: number, reason: string): void;
+}
+
 export type MethodHandler = (
   payload: Payload,
   signal: AbortSignal,
+  context?: MethodContext,
 ) => Promise<Payload>;
 
 export type MethodHandlers = Readonly<Record<string, MethodHandler>>;
@@ -437,27 +460,107 @@ export class WorkerConnection {
     }
     const controller = new AbortController();
     this.serving.set(id, controller);
+    const output = new ResponseOutput(() => {
+      if (this.serving.get(id) === controller) this.serving.delete(id);
+    });
     const run = (async () => {
       try {
-        const result = await handler(payload, controller.signal);
-        this.respond(id, {}, result);
+        const result = await handler(payload, controller.signal, output);
+        this.respond(id, {}, result, output);
       } catch (err) {
         this.respond(
           id,
           { failure: err instanceof WorkerMethodError ? err.code : "failed" },
           { text: { message: errorText(err) } },
+          output,
         );
       } finally {
-        this.serving.delete(id);
+        if (!output.registered) this.serving.delete(id);
       }
     })();
     this.inflight.add(run);
     void run.then(() => this.inflight.delete(run));
   }
 
-  private respond(id: number, head: { failure?: string }, payload: Payload) {
-    if (this.endReason !== undefined) return;
-    for (const frame of encodeMessage("response", id, head, payload))
-      this.transport.write(frame);
+  private respond(
+    id: number,
+    head: { failure?: string },
+    payload: Payload,
+    output?: ResponseOutput,
+  ) {
+    if (this.endReason !== undefined) {
+      // Nothing is written: the response is unreachable once this returns.
+      output?.settle();
+      return;
+    }
+    if (!output?.registered) {
+      for (const frame of encodeMessage("response", id, head, payload))
+        this.transport.write(frame);
+      output?.settle();
+      return;
+    }
+    let pending = 0;
+    let sealed = false;
+    const flushed = (): void => {
+      pending -= 1;
+      if (sealed && pending === 0) output.settle();
+    };
+    for (const frame of encodeMessage("response", id, head, payload)) {
+      pending += 1;
+      this.transport.write(frame, flushed);
+    }
+    // Only now may the count reach zero: a callback for an early frame
+    // cannot settle a batch still being written.
+    sealed = true;
+    if (pending === 0) output.settle();
+    else output.armDrain((reason) => this.end(reason));
+  }
+}
+
+/**
+ * One request's response as its handler sees it (`MethodContext`): the
+ * functions to call once it settles, and the drain bound. Settles once.
+ */
+class ResponseOutput implements MethodContext {
+  registered = false;
+  private settled = false;
+  private readonly settledFns: (() => void)[] = [];
+  private drain: { ms: number; reason: string } | undefined;
+  private drainTimer: ReturnType<typeof setTimeout> | undefined;
+
+  constructor(private readonly onSettledOnce: () => void) {}
+
+  onSettled(fn: () => void): void {
+    this.registered = true;
+    if (this.settled) queueMicrotask(fn);
+    else this.settledFns.push(fn);
+  }
+
+  drainWithin(ms: number, reason: string): void {
+    this.drain = { ms, reason };
+  }
+
+  /** Starts the drain bound, if any, after the last frame was written. */
+  armDrain(end: (reason: string) => void): void {
+    const { drain } = this;
+    if (!drain || this.settled) return;
+    this.drainTimer = setTimeout(() => {
+      if (!this.settled) end(drain.reason);
+    }, drain.ms);
+    this.drainTimer.unref?.();
+  }
+
+  settle(): void {
+    if (this.settled) return;
+    this.settled = true;
+    clearTimeout(this.drainTimer);
+    if (this.registered) this.onSettledOnce();
+    for (const fn of this.settledFns.splice(0))
+      try {
+        fn();
+      } catch {
+        // Fixed text: a callback's error may carry what it was working on.
+        console.error("[worker-protocol] a settled callback failed");
+      }
   }
 }
