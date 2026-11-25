@@ -243,19 +243,36 @@ const scheduleTopicWrites: StateTopicWrites = {
   },
 };
 
+const writeListeners = new Set<() => void>();
+
 /**
  * One write transaction with a change set. Every Schedule id `fn` adds to
  * `touched` is stamped with the transaction's `schedules` revision as its last
  * statement and reported to the topic after commit, so a throw anywhere, the
- * stamp included, rolls back the whole write and announces nothing.
+ * stamp included, rolls back the whole write and announces nothing. A write
+ * that touched a Schedule then tells each {@link scheduleStore.onWrite}
+ * listener, after commit.
  */
 function write<T>(fn: (touched: Set<string>) => T): T {
-  return withChangeSet((changes) => {
+  let wrote = false;
+  const value = withChangeSet((changes) => {
     const touched = new Set<string>();
     const value = fn(touched);
     changes.touch(scheduleTopicWrites, [...touched]);
+    wrote = touched.size > 0;
     return value;
   });
+  if (wrote)
+    for (const listener of writeListeners)
+      try {
+        listener();
+      } catch (err) {
+        console.warn(
+          "[schedules] write listener failed:",
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+  return value;
 }
 
 function hasClaimed(scheduleId: string): boolean {
@@ -813,6 +830,15 @@ export const scheduleStore = {
         )
         .all(sessionId) as unknown as OccurrenceRow[]
     ).map(occurrenceRecordOf);
+  },
+
+  /**
+   * Hear about every committed write that touched a Schedule: the clock
+   * re-arms on it. A listener's throw is logged and never fails the write.
+   */
+  onWrite(listener: () => void): () => void {
+    writeListeners.add(listener);
+    return () => writeListeners.delete(listener);
   },
 
   /** The earliest due time among enabled Schedules, for arming the clock. */

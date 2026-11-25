@@ -215,6 +215,10 @@ import {
   stopSessionAutoArchiveSweep,
 } from "./sessionRetention.ts";
 import {
+  startScheduleClock,
+  stopScheduleClock,
+} from "./schedules/scheduleClock.ts";
+import {
   startOpenAiResetAutoRedeemSweep,
   stopOpenAiResetAutoRedeemSweep,
 } from "./openaiResetAutoRedeem.ts";
@@ -1877,6 +1881,7 @@ function requestGracefulShutdown(signal: NodeJS.Signals): void {
   stopPermanentAssistant();
   stopMemoryMaintenance();
   stopTaskAutoArchiveSweep();
+  stopScheduleClock();
   stopSessionAutoArchiveSweep();
   stopOpenAiResetAutoRedeemSweep();
   stopSlackShortcutIntake();
@@ -2334,6 +2339,10 @@ server.listen(PORT, HOST, () => {
   bootStep("peer-prompt recovery offers", () =>
     drainAllQueuedOnBoot(offerOnBoot),
   );
+  // After every delivery recovery, so an occurrence the clock claims finds the
+  // owed work restored. Its boot tick runs the first maintenance sweep, which
+  // also deletes Schedules whose target session was deleted while down.
+  bootStep("schedule clock", () => startScheduleClock());
   // After recovery and the idle wiring: children that waited for a slot across
   // the restart start as the surviving work allows.
   bootStep("held direct peer starts", () => startHeldDirectPeersOnBoot());

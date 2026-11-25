@@ -111,7 +111,15 @@ is equally supported.
 
 The schedule clock keeps one timer on the earliest `next_due_at_ms` of the
 enabled Schedules, capped at 24 hours so it re-reads the wall clock after sleep
-or drift. Every Schedule write and boot re-arms it.
+or drift. Every Schedule write, a change to the Schedules settings and boot
+re-arm it.
+
+The same timer carries the maintenance sweep (Retention). Its deadline is due at
+boot and moves to 24 hours after each sweep that completes; re-arming never
+moves it later, so a steady stream of writes cannot starve the sweep. The timer
+fires at the earlier of the next due time and that deadline. A tick that fails
+is logged and runs again no sooner than a minute later, never in a tight loop,
+and a failed sweep keeps its deadline.
 
 Claiming is one transaction: insert the occurrence row (unique on
 `(schedule_id, due_at_ms)`) and advance `next_due_at_ms` to the next future
@@ -363,17 +371,30 @@ creates a Schedule yet.
   member, a tombstone leaves as a delete at its delete's revision. Every web
   connection holds it and diffs a digest on resubscribe; nothing renders it.
 - The `schedules` Settings section, rendered from its three registry fields.
+- The schedule clock (`app/server/src/schedules/scheduleClock.ts`), started
+  after the boot's delivery recoveries and stopped at shutdown. It claims due
+  occurrences with the grace window and Pause all from the settings, and runs
+  the maintenance sweep on its own deadline. Its `claimed` hook runs after each
+  claim commits, with the target from the occurrence's frozen copy; nothing is
+  attached to it yet, so a claimed occurrence stays `claimed`.
+- Deleting a session deletes the Schedules that target it; the boot sweep
+  catches those whose target was deleted while the server was down.
 
-The schedule clock, the scheduled prompts lane and the tools are not built yet.
+Not built yet ([Task-1503](pa://task/1503)): the scheduled prompts lane and its
+crash recovery, the `schedule` transcript origin and its label, and the agent
+tools. Until then nothing creates a Schedule.
 
 ## Phases
 
-1. **Engine** ([Task-1499](pa://task/1499)): model and `nextOccurrencesAfter`
-   with DST tests, migration, schedule clock, the scheduled prompts lane, Pause
-   all, the tools for near targets, this document. Because a protocol change
-   lands across shared, server and web together (root `CLAUDE.md`), this phase
-   also wires the `schedules` topic into the web state engine, without visible
-   surfaces.
+1. **Engine** ([Task-1499](pa://task/1499)), in two pull requests:
+   - [Task-1502](pa://task/1502): model and `nextOccurrencesAfter` with DST
+     tests, migration, store, the `schedules` topic wired into the web state
+     engine without visible surfaces (a protocol change lands across shared,
+     server and web together, root `CLAUDE.md`), the Settings section, the
+     schedule clock with Pause all and retention. Inert.
+   - [Task-1503](pa://task/1503): the scheduled prompts lane with crash
+     recovery, the `schedule` origin with a plain "Scheduled prompt" label, and
+     the tools for near targets.
 2. **UI** ([Task-1500](pa://task/1500)): Schedules page, detail editor,
    inspector, header badge, transcript label, needs-attention badge.
 3. **New sessions and the card** ([Task-1501](pa://task/1501)): new-session

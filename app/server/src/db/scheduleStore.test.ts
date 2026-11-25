@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type { ScheduleTiming } from "@assistant/shared/schedules";
-import { describe, it } from "vitest";
+import { describe, it, vi } from "vitest";
 import { getDb } from "./index.ts";
 import {
   SCHEDULE_HISTORY_LIMIT,
@@ -685,5 +685,42 @@ describe("scheduleStore", () => {
     assert.equal(scheduleStore.earliestDueAtMs(), DEC1);
     assert.deepEqual(scheduleStore.dueIds(DEC1 - 1), []);
     assert.deepEqual(scheduleStore.dueIds(DEC1 + 60 * MINUTE), [sooner, later]);
+  });
+});
+
+describe("scheduleStore.onWrite", () => {
+  it("hears a committed write after commit, never a no-op or a rollback", () => {
+    const heard: boolean[] = [];
+    const off = scheduleStore.onWrite(() => heard.push(getDb().isTransaction));
+    try {
+      const created = scheduleStore.create(input(), DEC1 - 1);
+      assert.deepEqual(heard, [false], "after commit");
+      scheduleStore.setEnabled(created.id, true, DEC1 - 1);
+      assert.equal(heard.length, 1, "a write that changed nothing");
+      withFailingStamp(() =>
+        assert.throws(() => scheduleStore.delete(created.id, DEC1)),
+      );
+      assert.equal(heard.length, 1, "a rolled-back write");
+      off();
+      scheduleStore.delete(created.id, DEC1);
+      assert.equal(heard.length, 1, "unsubscribed");
+    } finally {
+      off();
+    }
+  });
+
+  it("logs a listener's throw and keeps the write", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const off = scheduleStore.onWrite(() => {
+      throw new Error("listener broke");
+    });
+    try {
+      const created = scheduleStore.create(input(), DEC1 - 1);
+      assert.ok(scheduleStore.get(created.id));
+      assert.match(String(warn.mock.calls[0]?.[1]), /listener broke/);
+    } finally {
+      off();
+      warn.mockRestore();
+    }
   });
 });

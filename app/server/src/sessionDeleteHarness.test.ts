@@ -116,3 +116,28 @@ test("a cleanup step that fails leaves the rest of the delete to run", async () 
   assert.equal(warn.mock.calls.length, 1);
   assert.match(String(warn.mock.calls[0]?.[1]), /EACCES/);
 });
+
+test("a delete deletes the Schedules that target the session, and only those", async () => {
+  const { scheduleStore } = await import("./db/scheduleStore.ts");
+  const id = "delete-schedule-target";
+  sessionStore.upsert({ id, harness: "claude-sdk", agentType: "assistant" });
+  const schedule = (sessionId: string) =>
+    scheduleStore.create({
+      name: "Check",
+      prompt: "Check CI",
+      timing: { kind: "daily", time: "09:00", timeZone: "UTC" },
+      target: { kind: "session", sessionId },
+      createdBy: { kind: "user" },
+    });
+  const doomed = schedule(id);
+  const other = schedule("delete-schedule-other-target");
+
+  await connection().onDeleteSession(id);
+
+  assert.equal(scheduleStore.get(doomed.id), undefined);
+  assert.equal(
+    scheduleStore.revisionsFor([doomed.id]).get(doomed.id)?.live,
+    false,
+  );
+  assert.ok(scheduleStore.get(other.id));
+});
