@@ -71,7 +71,9 @@ const FROZEN: FrozenUpload = {
   name: "diagram.png",
   mimeType: "image/png",
   size: 3,
-  sha256: "a".repeat(64),
+  // The digest of the bytes `stagedBytes` gives below: the streamed body
+  // checks it before its closing boundary (P8a v04 V1).
+  sha256: "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
   source: "/tmp/diagram.png",
   stagedAttachmentId: "staged-1",
 };

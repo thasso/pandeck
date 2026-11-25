@@ -9,9 +9,13 @@
  * with 429, while a write gets ONE attempt unless the caller opts in, so an
  * issue, comment or page the server already committed is never replayed.
  *
- * A `FormData` body goes out as multipart — attachment uploads are the only
- * caller — with the XSRF opt-out header Confluence requires on that route;
- * fetch writes the boundary, so no Content-Type is set by hand.
+ * A `MultipartUpload` body (`multipartUpload.ts`; attachment uploads are the
+ * only caller) goes out as a streamed request with its own Content-Type and
+ * exact Content-Length, and the XSRF opt-out header Confluence requires on that
+ * route. Its private signal joins the call's own, so retiring the body aborts
+ * the request. A stream is single-use, so such a body never takes `retry` and
+ * never follows a redirect: it is sent with `redirect: "error"`, without which
+ * fetch keeps a tee of the whole body for a replay.
  *
  * A Bearer config (Task-1411) never goes to the site: its destination is
  * fixed to `https://api.atlassian.com/ex/<jira|confluence>/<cloudId>`, the
@@ -20,6 +24,7 @@
  * URLs only.
  */
 import { fetchWithRetry } from "../httpRetry.ts";
+import { MultipartUpload } from "./multipartUpload.ts";
 
 export interface AtlassianApiConfig {
   /** Atlassian site host, e.g. `example.atlassian.net`. */
@@ -128,29 +133,44 @@ export async function atlassianFetch<T>(
   for (const [key, value] of Object.entries(query ?? {})) {
     if (value !== undefined) url.searchParams.set(key, String(value));
   }
-  const multipart = body instanceof FormData;
-  const res = await fetchWithRetry(
-    url,
-    {
-      method,
-      headers: {
-        Authorization: authorization(config),
-        Accept: "application/json",
-        ...(body === undefined
-          ? {}
-          : multipart
-            ? { "X-Atlassian-Token": "no-check" }
-            : { "Content-Type": "application/json" }),
-      },
+  const upload = body instanceof MultipartUpload ? body : undefined;
+  if (upload && options.retry)
+    throw new TypeError(
+      "A streamed upload body is single-use; it never retries.",
+    );
+  const signal = upload
+    ? options.signal
+      ? AbortSignal.any([options.signal, upload.signal])
+      : upload.signal
+    : options.signal;
+  const init: RequestInit & { duplex?: "half" } = {
+    method,
+    headers: {
+      Authorization: authorization(config),
+      Accept: "application/json",
       ...(body === undefined
         ? {}
-        : { body: multipart ? body : JSON.stringify(body) }),
+        : upload
+          ? {
+              "X-Atlassian-Token": "no-check",
+              "Content-Type": upload.contentType,
+              "Content-Length": String(upload.contentLength),
+            }
+          : { "Content-Type": "application/json" }),
     },
-    {
-      ...(options.retry ? {} : { attempts: 1 }),
-      ...(options.signal ? { signal: options.signal } : {}),
-    },
-  );
+    ...(body === undefined
+      ? {}
+      : upload
+        ? // `redirect: "error"`: under any other mode fetch tees the body
+          // to replay it on a redirect, and the unread branch buffers every
+          // byte sent. A stream cannot be replayed anyway.
+          { body: upload.stream, duplex: "half", redirect: "error" }
+        : { body: JSON.stringify(body) }),
+  };
+  const res = await fetchWithRetry(url, init, {
+    ...(options.retry ? {} : { attempts: 1 }),
+    ...(signal ? { signal } : {}),
+  });
   const text = await res.text();
   if (!res.ok)
     throw new AtlassianHttpError(

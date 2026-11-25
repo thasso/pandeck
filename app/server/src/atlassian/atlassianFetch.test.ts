@@ -5,6 +5,7 @@ import {
   atlassianDownload,
   atlassianFetch,
 } from "./atlassianFetch.ts";
+import { multipartUpload } from "./multipartUpload.ts";
 
 const CONFIG = {
   host: "example.atlassian.net",
@@ -23,22 +24,94 @@ afterEach(() => {
 });
 
 describe("atlassianFetch", () => {
-  test("a FormData body goes out as multipart with the XSRF opt-out", async () => {
+  const upload = () =>
+    multipartUpload({
+      bytes: new Uint8Array([120]),
+      sha256:
+        "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+      fileName: "x.txt",
+      mediaType: "text/plain",
+      fields: [["minorEdit", "true"]],
+    });
+
+  test("a streamed upload goes out with its type, length, the XSRF opt-out, half duplex and no redirect", async () => {
     const fetchMock = stubFetch(() => Response.json({ results: [] }));
-    const form = new FormData();
-    form.append("file", new Blob(["x"]), "x.txt");
+    const body = upload();
     await atlassianFetch(
       CONFIG,
       "Confluence",
       "POST",
       "/wiki/rest/api/content/1/child/attachment",
-      form,
+      body,
     );
-    const init = fetchMock.mock.calls[0]?.[1];
-    expect(init?.body).toBe(form);
-    expect(init?.headers).toMatchObject({ "X-Atlassian-Token": "no-check" });
-    // fetch has to write the boundary itself.
-    expect(init?.headers).not.toHaveProperty("Content-Type");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit & {
+      duplex?: string;
+    };
+    expect(init.body).toBe(body.stream);
+    expect(init.duplex).toBe("half");
+    // Any other mode makes fetch tee the body and buffer it whole.
+    expect(init.redirect).toBe("error");
+    expect(init.headers).toMatchObject({
+      "X-Atlassian-Token": "no-check",
+      "Content-Type": body.contentType,
+      "Content-Length": String(body.contentLength),
+    });
+  });
+
+  test("the fetch signal aborts when the body is retired, with or without a deadline", async () => {
+    for (const deadline of [undefined, new AbortController()]) {
+      const fetchMock = stubFetch(() => Response.json({}));
+      const body = upload();
+      await atlassianFetch(
+        CONFIG,
+        "Confluence",
+        "POST",
+        "/wiki/rest/api/content/1/child/attachment",
+        body,
+        undefined,
+        deadline ? { signal: deadline.signal } : {},
+      );
+      const signal = fetchMock.mock.calls[0]?.[1]?.signal;
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(signal?.aborted).toBe(false);
+      body.retire();
+      expect(signal?.aborted).toBe(true);
+      // The deadline alone still aborts the combined signal.
+      if (deadline) {
+        const next = upload();
+        await atlassianFetch(
+          CONFIG,
+          "Confluence",
+          "POST",
+          "/wiki/rest/api/content/1/child/attachment",
+          next,
+          undefined,
+          { signal: deadline.signal },
+        );
+        const combined = fetchMock.mock.calls[1]?.[1]?.signal;
+        deadline.abort();
+        expect(combined?.aborted).toBe(true);
+        expect(next.signal.aborted).toBe(false);
+        next.retire();
+      }
+    }
+  });
+
+  test("a streamed upload with retry is refused before any fetch", async () => {
+    const fetchMock = stubFetch(() => Response.json({}));
+    await expect(
+      atlassianFetch(
+        CONFIG,
+        "Confluence",
+        "POST",
+        "/wiki/rest/api/content/1/child/attachment",
+        upload(),
+        undefined,
+        { retry: true },
+      ),
+    ).rejects.toThrow(/single-use/);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   test("a JSON body is still serialized", async () => {

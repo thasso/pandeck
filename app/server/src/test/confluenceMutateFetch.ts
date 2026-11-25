@@ -157,14 +157,28 @@ export function fakeConfluenceAnswer(
 export const isWrite = (request: SeenConfluenceWrite): boolean =>
   request.method !== "GET";
 
-/** The parts of a multipart body, read whole; `undefined` for any other body. */
+/**
+ * The parts of a multipart body, read whole as a server would before it
+ * answers (a streamed upload completes only then); `undefined` for any other
+ * body.
+ */
 async function uploadOf(
   init: RequestInit | undefined,
 ): Promise<SeenUpload | undefined> {
-  if (!(init?.body instanceof FormData)) return undefined;
+  const body = init?.body;
+  const type = new Headers(init?.headers).get("content-type") ?? "";
+  const form =
+    body instanceof ReadableStream && type.startsWith("multipart/form-data")
+      ? await new Response(body, {
+          headers: { "content-type": type },
+        }).formData()
+      : body instanceof FormData
+        ? body
+        : undefined;
+  if (!form) return undefined;
   const fields: [string, string][] = [];
   let file: File | undefined;
-  for (const [name, value] of init.body.entries()) {
+  for (const [name, value] of form.entries()) {
     if (typeof value === "string") fields.push([name, value]);
     else if (name === "file") file = value;
   }
