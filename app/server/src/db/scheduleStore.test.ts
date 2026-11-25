@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ScheduleTiming } from "@assistant/shared/schedules";
 import { afterEach, beforeEach, describe, it, vi } from "vitest";
@@ -44,7 +44,7 @@ function states(scheduleId: string): string[] {
     .map((o) => `${new Date(o.dueAtMs).toISOString()} ${o.state}`);
 }
 
-/** Pause all with no stored row and no settings file: the import comes next. */
+/** Pause all with no stored row, and no settings file left by a test. */
 function resetPause(): void {
   getDb().exec("DELETE FROM schedule_pause");
   rmSync(APP_SETTINGS_PATH, { force: true });
@@ -899,7 +899,7 @@ describe("scheduleStore Pause all", () => {
       assert.deepEqual(snapshot([id]), before);
       assert.deepEqual(heard, { reports: 0, writes: 0, claims: [] });
       resetPause();
-      // Not paused with no row: the import writes the row, nothing else.
+      // Not paused with no row: the read writes the row, nothing else.
       assert.equal(
         scheduleStore.setPaused(false, DEC2 + MINUTE, GRACE_MS).changed,
         false,
@@ -1036,55 +1036,62 @@ describe("scheduleStore Pause all", () => {
     });
   });
 
-  describe("the one-time import from the settings file (S7)", () => {
-    it("imports true, and false for an absent key or no file", () => {
-      writeSettingsFile(JSON.stringify({ schedules: { paused: true } }));
-      assert.equal(scheduleStore.paused(), true);
-      assert.equal(pauseRow(), 1);
-
-      resetPause();
-      writeSettingsFile(
-        JSON.stringify({ schedules: { graceWindowMinutes: 30 } }),
-      );
-      assert.equal(scheduleStore.paused(), false);
-      assert.equal(pauseRow(), 0);
-
-      resetPause();
-      assert.equal(scheduleStore.paused(), false);
-      assert.equal(pauseRow(), 0);
-    });
-
-    it("an unreadable file with no row throws and claims nothing; it never reads as false", () => {
+  describe("SQLite alone holds Pause all (S7)", () => {
+    it("with no row it starts unpaused whatever the settings file holds, and claims", () => {
       const { id } = scheduleStore.create(input(), DEC1 - DAY);
-      writeSettingsFile("{ not json");
-      assert.throws(
-        () => scheduleStore.paused(),
-        /Failed to read app settings/,
+      for (const text of [
+        JSON.stringify({ schedules: { paused: true } }),
+        "{ not json",
+      ]) {
+        resetPause();
+        writeSettingsFile(text);
+        assert.equal(scheduleStore.paused(), false, text);
+        assert.equal(pauseRow(), 0, text);
+      }
+      resetPause();
+      writeSettingsFile(JSON.stringify({ schedules: { paused: true } }));
+      assert.equal(
+        scheduleStore.claimDue(id, DEC1, GRACE).claimed?.dueAtMs,
+        DEC1,
       );
-      assert.equal(pauseRow(), undefined);
-      const revision = scheduleStore.revision(id);
-      assert.throws(
-        () => scheduleStore.claimDue(id, DEC1, GRACE),
-        /Failed to read app settings/,
-      );
-      assert.throws(
-        () => scheduleStore.setPaused(true, DEC1, GRACE_MS),
-        /Failed to read app settings/,
-      );
-      assert.deepEqual(states(id), []);
-      assert.equal(scheduleStore.get(id)?.nextDueAtMs, DEC1);
-      assert.equal(scheduleStore.revision(id), revision);
-      assert.equal(pauseRow(), undefined);
+      assert.equal(pauseRow(), 0);
     });
 
-    it("once the row exists the file is never read for it again, across a reopen", () => {
+    it("starts unpaused the same whether or not the settings directory can be read", () => {
+      const dir = dirname(APP_SETTINGS_PATH);
       writeSettingsFile(JSON.stringify({ schedules: { paused: true } }));
-      assert.equal(scheduleStore.paused(), true);
+      const mode = statSync(dir).mode & 0o777;
+      chmodSync(dir, 0o000);
+      try {
+        assert.equal(scheduleStore.paused(), false);
+        assert.equal(pauseRow(), 0);
+        // The switch reads no file either.
+        assert.equal(
+          scheduleStore.setPaused(true, DEC1, GRACE_MS).changed,
+          true,
+        );
+      } finally {
+        chmodSync(dir, mode);
+      }
+      closeDb();
+      assert.equal(scheduleStore.paused(), true, "the row, not the file");
+      resetPause();
+      writeSettingsFile(JSON.stringify({ schedules: { paused: true } }));
+      assert.equal(scheduleStore.paused(), false, "readable: still unpaused");
+      assert.equal(pauseRow(), 0);
+    });
+
+    it("a stored value is the only source, across a reopen", () => {
+      scheduleStore.setPaused(true, DEC1, GRACE_MS);
       writeSettingsFile(JSON.stringify({ schedules: { paused: false } }));
       closeDb();
       assert.equal(scheduleStore.paused(), true);
       writeSettingsFile("{ not json");
       assert.equal(scheduleStore.paused(), true, "an unreadable file too");
+      scheduleStore.setPaused(false, DEC1, GRACE_MS);
+      writeSettingsFile(JSON.stringify({ schedules: { paused: true } }));
+      closeDb();
+      assert.equal(scheduleStore.paused(), false);
     });
   });
 

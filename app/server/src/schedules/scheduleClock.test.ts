@@ -142,7 +142,7 @@ function started(h: ReturnType<typeof harness>) {
 }
 
 beforeEach(() => {
-  // Pause all starts with no row; no settings file holds `paused` to import.
+  // Pause all starts with no row, so unpaused.
   getDb().exec(
     "DELETE FROM schedule_occurrences; DELETE FROM schedules; DELETE FROM schedule_pause;",
   );

@@ -32,7 +32,6 @@ import {
   type ScheduleTerminalState,
   type ScheduleTiming,
 } from "@assistant/shared/schedules";
-import { readStoredAppSettings } from "../appSettingsFile.ts";
 import { withChangeSet, type StateTopicWrites } from "./changeSet.ts";
 import { getDb, inDbTransaction } from "./index.ts";
 import { nextId } from "./sequences.ts";
@@ -504,10 +503,8 @@ function dueTimesThrough(
 }
 
 /**
- * Pause all as stored, inside the caller's transaction. With no row yet, the
- * row is created once from the pause intent the settings file used to keep
- * (`schedules.paused: true`; any other or no value is not paused). A file that
- * cannot be read throws and rolls the caller back: it never reads as false.
+ * Pause all as stored, inside the caller's transaction. SQLite is its only
+ * source: with no row yet, the row is created unpaused.
  */
 function pausedIn(): boolean {
   const db = getDb();
@@ -515,11 +512,8 @@ function pausedIn(): boolean {
     .prepare("SELECT paused FROM schedule_pause WHERE id = 1")
     .get() as { paused: number } | undefined;
   if (row) return row.paused === 1;
-  const paused = readStoredAppSettings().schedules?.paused === true;
-  db.prepare("INSERT INTO schedule_pause (id, paused) VALUES (1, ?)").run(
-    paused ? 1 : 0,
-  );
-  return paused;
+  db.prepare("INSERT INTO schedule_pause (id, paused) VALUES (1, 0)").run();
+  return false;
 }
 
 /**
@@ -1048,9 +1042,8 @@ export const scheduleStore = {
   },
 
   /**
-   * Pause all as stored. The first read creates the row from the settings
-   * file's former `schedules.paused` (its own transaction, or the caller's);
-   * a file that cannot be read then throws.
+   * Pause all as stored. The first read creates the row unpaused (its own
+   * transaction, or the caller's).
    */
   paused(): boolean {
     const row = getDb()

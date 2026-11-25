@@ -367,12 +367,11 @@ Phase 1 lands in two pull requests ([Task-1502](pa://task/1502), then
 creates a Schedule yet.
 
 - `app/shared/schedules.ts`: the model and `nextOccurrencesAfter`.
-- Migration `0108_schedule_pause.sql`: Pause all as one row with no seed. The
-  first read creates it from the `schedules.paused` the settings file used to
-  hold (`true` imports as paused; absent as not paused; a file that cannot be
-  read throws and never reads as not paused). After that the file is never read
-  for it again, and a settings save drops the key from the file once the import
-  ran.
+- Migration `0108_schedule_pause.sql`: Pause all as one row with no seed. SQLite
+  is its only source: the first read creates the row unpaused, and the settings
+  file is never read for it. A `schedules.paused` key left in the file by an
+  earlier build of this branch is ignored and dropped by the next save of the
+  section.
 - Migration `0107_schedules.sql`. A Schedule's target is an open union
   (`target_kind`, with `target_session_id` for an existing session), so the
   new-session target adds columns rather than a table rebuild. The zone lives in

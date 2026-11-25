@@ -761,7 +761,7 @@ describe("Pause all through saveSettings", () => {
     while (cleanups.length) cleanups.pop()?.();
     vi.useRealTimers();
     vi.restoreAllMocks();
-    // Back to defaults, then no row: the next read imports from the file.
+    // Back to defaults, then no row: the next read starts it unpaused.
     await saveSettings({
       schedules: { graceWindowMinutes: 60, cardlessLimit: 10, paused: false },
     });
@@ -901,10 +901,8 @@ describe("Pause all through saveSettings", () => {
     assert.deepEqual(heard.sections, [{ sections: ["schedules"] }]);
   });
 
-  test("an unreadable settings file with no stored pause switches nothing and never reads as not paused", async () => {
+  test("an unreadable settings file rejects the save and switches nothing", async () => {
     const { id, owedId } = dueWithOwed();
-    // The fixture's claim imported the pause; start with no row again.
-    getDb().exec("DELETE FROM schedule_pause");
     const heard = record();
     const { readFileSync, writeFileSync } = await import("node:fs");
     const original = readFileSync(APP_SETTINGS_PATH, "utf8");
@@ -916,11 +914,7 @@ describe("Pause all through saveSettings", () => {
       }),
       /Failed to read app settings/,
     );
-    assert.equal(
-      getDb().prepare("SELECT 1 FROM schedule_pause").get(),
-      undefined,
-      "no row was manufactured",
-    );
+    assert.equal(scheduleStore.paused(), false);
     assert.deepEqual(states(id), ["2026-12-01T09:00:00.000Z claimed"]);
     assert.equal(scheduleStore.getOccurrence(owedId)?.state, "claimed");
     assert.deepEqual(heard.claims, []);
@@ -928,14 +922,16 @@ describe("Pause all through saveSettings", () => {
     assert.deepEqual(heard.sections, [{ sections: ["schedules"] }]);
   });
 
-  test("a save imports the file's former pause before dropping it from the file", async () => {
+  test("a paused key in the settings file is never read, and a save drops it", async () => {
     getDb().exec("DELETE FROM schedule_pause");
     const { writeStoredAppSettings } = await import("./appSettingsFile.ts");
-    writeStoredAppSettings({
-      ...readStoredAppSettings(),
-      schedules: { graceWindowMinutes: 60, cardlessLimit: 10, paused: true },
-    });
-    // A save that does not touch the pause keeps it.
+    const stale = (paused: boolean) =>
+      writeStoredAppSettings({
+        ...readStoredAppSettings(),
+        schedules: { graceWindowMinutes: 60, cardlessLimit: 10, paused },
+      });
+    stale(true);
+    // No row: the stored state starts unpaused; the file's `true` is ignored.
     await saveSettings(
       settingsPatchForWrites([
         { path: "schedules.graceWindowMinutes", value: 45 },
@@ -945,7 +941,14 @@ describe("Pause all through saveSettings", () => {
     assert.deepEqual(getSettings().schedules, {
       graceWindowMinutes: 45,
       cardlessLimit: 10,
-      paused: true,
+      paused: false,
     });
+    await saveSettings(
+      settingsPatchForWrites([{ path: "schedules.paused", value: true }]),
+    );
+    assert.equal("paused" in (readStoredAppSettings().schedules ?? {}), false);
+    stale(false);
+    closeDb();
+    assert.equal(getSettings().schedules.paused, true);
   });
 });

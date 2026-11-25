@@ -735,9 +735,6 @@ export function getSettings(publicBaseUrl?: string): AppSettings {
  * once committed it stands even when the final read throws.
  */
 export function updateSettings(patch: Partial<AppSettings>): AppSettings {
-  // Read first: the first read imports the pause intent the file may still
-  // hold, before the write below drops it from the file.
-  if (patch.schedules) scheduleStore.paused();
   const stored = readStoredAppSettings();
   const assistant = patch.permanentAssistant
     ? { ...DEFAULT_PERMANENT_ASSISTANT_SETTINGS, ...patch.permanentAssistant }
