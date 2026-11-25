@@ -870,22 +870,24 @@ export async function startClientListener(
     // the registry's, never a payload's.
     // A client never writes in one call: the host refuses a write tool here.
     // A file tool runs only with the connection's `onSettled` (J1), and its
-    // answer is the JSON plus the bytes as the `file` stream.
+    // answer is the JSON plus the bytes as the `file` stream. Whatever its
+    // answer (a file, a failure, a cancel or timeout reply, plain text), a
+    // file call's response holds the permit until it drains, so a client that
+    // stops reading is ended after the drain bound rather than holding it.
     [CLIENT_METHODS.toolsCall]: async (payload, client, signal, context) => {
       const { name, args } = decodeToolCall(payload);
+      const drain = {
+        ms: deps.fileOutputMs ?? FILE_OUTPUT_MS,
+        reason: "a file call's answer did not drain",
+      };
       const answer = await toolHost().callForClient(name, args, {
         clientId: client.id,
         credential: vaultCredential(client),
         signal,
-        ...(context ? { onSettled: (fn) => context.onSettled(fn) } : {}),
+        ...(context ? { onSettled: (fn) => context.onSettled(fn, drain) } : {}),
       });
       if (!answer.ok || !answer.file) return encodeClientMessage(answer);
       const { bytes, ...file } = answer.file;
-      // A client that stops reading must not hold the file permit forever.
-      context?.drainWithin(
-        deps.fileOutputMs ?? FILE_OUTPUT_MS,
-        "a file answer did not drain",
-      );
       return {
         json: { ok: true, text: answer.text, file },
         bytes: { file: bytes },

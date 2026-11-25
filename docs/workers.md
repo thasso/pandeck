@@ -3382,11 +3382,13 @@ tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
   ended. It rests on each byte endpoint's `write(bytes, onFlushed)`, whose
   `onFlushed` is called exactly once after delivery or on loss; a connection
   keeps a request in `serving` past its handler only when the handler registered
-  `onSettled`. The listener drains a file answer within 65 s and otherwise ends
-  that client's connection, and a client connection takes messages of at most 2
-  MiB (4 MiB buffered, 8 partial, 256 served). Download failures are fixed texts
-  chosen by error type, HTTP status or reason, never by a message
-  (`gatewayTools/confluenceDownload.ts`).
+  `onSettled`, and every registration carries its drain bound. The listener
+  gives every response to a file call 65 s to drain, whatever it says (a file, a
+  failure, a cancel or timeout reply, plain text), and otherwise ends that
+  client's connection, so a client that stops reading cannot hold the permit. A
+  client connection takes messages of at most 2 MiB (4 MiB buffered, 8 partial,
+  256 served). Download failures are fixed texts chosen by error type, HTTP
+  status or reason, never by a message (`gatewayTools/confluenceDownload.ts`).
 
 - **Pandeck in client mode** (`remoteIntegrations.ts`, installed by
   `gatewayClientLink.ts`): Settings → Jira sends a newly entered token with the

@@ -67,14 +67,20 @@ export interface MethodContext {
    * written for it was flushed or discarded by the transport, or, when the
    * connection had ended before the handler finished, at that finish, with
    * no frame written. Never at the connection's end alone.
+   *
+   * Every registration carries its drain bound, whatever the response turns
+   * out to be: the connection ends with `drain.reason` unless the response
+   * settles within `drain.ms` of its last frame being written, so a peer
+   * that stops reading cannot hold what waits on `fn` for ever. With several
+   * registrations the shortest bound applies.
    */
-  onSettled(fn: () => void): void;
-  /**
-   * Ends the connection with `reason` unless the response settles within
-   * `ms` of its last frame being written: a peer that stops reading cannot
-   * hold the response's bytes here for ever.
-   */
-  drainWithin(ms: number, reason: string): void;
+  onSettled(fn: () => void, drain: DrainBound): void;
+}
+
+/** How long a response with a settled hold may take to drain. */
+interface DrainBound {
+  ms: number;
+  reason: string;
 }
 
 export type MethodHandler = (
@@ -525,22 +531,19 @@ class ResponseOutput implements MethodContext {
   registered = false;
   private settled = false;
   private readonly settledFns: (() => void)[] = [];
-  private drain: { ms: number; reason: string } | undefined;
+  private drain: DrainBound | undefined;
   private drainTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private readonly onSettledOnce: () => void) {}
 
-  onSettled(fn: () => void): void {
+  onSettled(fn: () => void, drain: DrainBound): void {
     this.registered = true;
+    if (!this.drain || drain.ms < this.drain.ms) this.drain = drain;
     if (this.settled) queueMicrotask(fn);
     else this.settledFns.push(fn);
   }
 
-  drainWithin(ms: number, reason: string): void {
-    this.drain = { ms, reason };
-  }
-
-  /** Starts the drain bound, if any, after the last frame was written. */
+  /** Starts the drain bound after the last frame was written. */
   armDrain(end: (reason: string) => void): void {
     const { drain } = this;
     if (!drain || this.settled) return;

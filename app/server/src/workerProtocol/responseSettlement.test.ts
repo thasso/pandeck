@@ -5,7 +5,7 @@
  * `onSettled` only when every frame of its response did, never at the
  * connection's end alone. Only a handler that registered stays counted in
  * `serving` meanwhile (P7A-R3); `drainWithin` ends a connection whose
- * response stops draining (t4).
+ * response stops draining (t4), whatever the handler answered (F001).
  */
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -192,6 +192,9 @@ function connect(
   return { server, worker };
 }
 
+/** A bound no test here reaches. */
+const LONG = { ms: 60_000, reason: "long bound" };
+
 const LIMITS: ConnectionLimits = {
   maxMessageBytes: 64 * 1024 * 1024,
   maxBufferedBytes: 64 * 1024 * 1024,
@@ -204,7 +207,7 @@ test("onSettled fires once every frame of the response flushed, not when the han
   const events: string[] = [];
   const { worker } = connect(pair, {
     big: (_payload, _signal, context) => {
-      context?.onSettled(() => events.push("settled"));
+      context?.onSettled(() => events.push("settled"), LONG);
       return Promise.resolve({
         bytes: { file: new Uint8Array(3 * 1024 * 1024 + 5) },
       });
@@ -230,7 +233,7 @@ test("a registered request stays counted under maxServing until its response set
     pair,
     {
       registered: (_payload, _signal, context) => {
-        context?.onSettled(() => {});
+        context?.onSettled(() => {}, LONG);
         return Promise.resolve({ json: "r" });
       },
       plain: () => Promise.resolve({ json: "p" }),
@@ -260,7 +263,7 @@ test("a handler that finishes after the connection ended settles at that finish,
   const events: string[] = [];
   const { server, worker } = connect(pair, {
     slow: (_payload, _signal, context) => {
-      context?.onSettled(() => events.push("settled"));
+      context?.onSettled(() => events.push("settled"), LONG);
       return new Promise((resolve) => {
         finish = () => resolve({ bytes: { file: new Uint8Array(10) } });
       });
@@ -284,7 +287,7 @@ test("the connection's end does not settle a written response; its flush does", 
   const events: string[] = [];
   const { server, worker } = connect(pair, {
     big: (_payload, _signal, context) => {
-      context?.onSettled(() => events.push("settled"));
+      context?.onSettled(() => events.push("settled"), LONG);
       return Promise.resolve({ bytes: { file: new Uint8Array(10) } });
     },
   });
@@ -296,17 +299,15 @@ test("the connection's end does not settle a written response; its flush does", 
   assert.deepEqual(events, ["settled"]);
 });
 
-test("drainWithin ends the connection when the response does not flush in time (t4)", async () => {
+test("the drain bound ends the connection when the response does not flush in time (t4)", async () => {
   const pair = heldPair();
   const { server, worker } = connect(pair, {
     big: (_payload, _signal, context) => {
-      context?.onSettled(() => {});
-      context?.drainWithin(50, "a file answer did not drain");
+      context?.onSettled(() => {}, { ms: 50, reason: "did not drain" });
       return Promise.resolve({ bytes: { file: new Uint8Array(10) } });
     },
     quick: (_payload, _signal, context) => {
-      context?.onSettled(() => {});
-      context?.drainWithin(50, "never");
+      context?.onSettled(() => {}, { ms: 50, reason: "never" });
       return Promise.resolve({ json: 1 });
     },
   });
@@ -315,5 +316,43 @@ test("drainWithin ends the connection when the response does not flush in time (
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.equal(server.isEnded, false, "a flushed response stops the bound");
   await worker.request("big", {});
-  assert.equal(await server.ended, "a file answer did not drain");
+  assert.equal(await server.ended, "did not drain");
+});
+
+test("a registered hold is bounded whatever the handler answers: a thrown failure and a plain answer too (F001)", async () => {
+  for (const answer of ["throws", "plain"] as const) {
+    const pair = heldPair();
+    const events: string[] = [];
+    const { server, worker } = connect(pair, {
+      call: (_payload, _signal, context) => {
+        context?.onSettled(() => events.push("settled"), {
+          ms: 50,
+          reason: `${answer} did not drain`,
+        });
+        return answer === "throws"
+          ? Promise.reject(new Error("refused"))
+          : Promise.resolve({ json: "plain" });
+      },
+    });
+    await worker.request("call", {}).catch(() => undefined);
+    assert.equal(events.length, 0, `${answer}: written, not flushed`);
+    assert.equal(await server.ended, `${answer} did not drain`);
+    // A real transport discards held frames at the end; the stub releases.
+    pair.release();
+    assert.deepEqual(events, ["settled"], answer);
+  }
+});
+
+test("with several registrations the shortest drain bound applies", async () => {
+  const pair = heldPair();
+  const { server, worker } = connect(pair, {
+    call: (_payload, _signal, context) => {
+      context?.onSettled(() => {}, LONG);
+      context?.onSettled(() => {}, { ms: 50, reason: "shortest" });
+      context?.onSettled(() => {}, { ms: 40_000, reason: "middle" });
+      return Promise.resolve({ json: 1 });
+    },
+  });
+  await worker.request("call", {});
+  assert.equal(await server.ended, "shortest");
 });

@@ -88,6 +88,10 @@ import {
   fixtureFileText,
   fixtureFileTool,
 } from "../gatewayTools/fileFixtureTool.ts";
+import {
+  ToolError,
+  type AtlassianToolDescriptor,
+} from "../gatewayTools/descriptor.ts";
 type LoginDriverEvents = Parameters<NonNullable<LoginDrivers["claude"]>>[1];
 
 /** What the helpers need: a gateway, or a listener started on its own. */
@@ -3105,6 +3109,7 @@ async function fileEdge(
   options: {
     fileOutputMs?: number;
     tool?: Parameters<typeof fixtureFileTool>[0];
+    extra?: AtlassianToolDescriptor[];
   } = {},
 ) {
   const vault = stubVault();
@@ -3114,7 +3119,7 @@ async function fileEdge(
   const lines: string[] = [];
   const tools: EdgeTools = {
     ...createEdgeTools({ log: () => {} }),
-    host: createToolHost([tool], {
+    host: createToolHost([tool, ...(options.extra ?? [])], {
       log: (line) => lines.push(line),
       fileBudget: budget,
     }),
@@ -3343,4 +3348,104 @@ test("P7a: a client that stops reading a file answer is ended after the drain bo
     "file",
   );
   await waitFor(() => budget.releases === 2);
+});
+
+test("P7a: a file call's failure answer and its cancel reply to a client that stops reading are bounded too; the permit is freed within the drain bound (F001)", async () => {
+  const MiB = 1024 * 1024;
+  const DRAIN_MS = 300;
+  const FILL = 48;
+  let fills = 0;
+  let executing = 0;
+  // A plain tool whose answers fill the stalled client's socket buffers
+  // (tcp_rmem may reach 32 MiB), so the file call's answer queues behind
+  // them on the edge.
+  const { file: _plain, ...plainBase } = fixtureFileTool();
+  const filler: AtlassianToolDescriptor = {
+    ...plainBase,
+    name: "fixture_fill",
+    maxResultChars: 2 * MiB,
+    execute() {
+      fills += 1;
+      return Promise.resolve({ content: "x".repeat(1.5 * MiB) });
+    },
+  };
+  const { edge, a, b, budget } = await fileEdge({
+    fileOutputMs: DRAIN_MS,
+    extra: [filler],
+    tool: {
+      async execute(params, ctx) {
+        await ctx.credential();
+        executing += 1;
+        if (params.id === "fail") throw new ToolError("Fixture refused.");
+        // `wait` stops on its cancel.
+        return new Promise((_resolve, reject) => {
+          ctx.signal.addEventListener("abort", () =>
+            reject(new Error("aborted")),
+          );
+        });
+      },
+    },
+  });
+  const other = await dialClient(edge, b);
+  for (const answer of ["fail", "cancel"] as const) {
+    const releases = budget.releases;
+    const started = executing;
+    const socket = tls.connect({
+      host: "127.0.0.1",
+      port: edge.clients!.clientPort,
+      ca: edge.clients!.caPem,
+      key: a.key,
+      cert: a.cert,
+    });
+    await new Promise<void>((resolve, reject) => {
+      socket.once("secureConnect", resolve);
+      socket.once("error", reject);
+    });
+    const stalled = new WorkerConnection(socketEndpoint(socket), {
+      handshake: { role: "worker", workerId: "stalled-client" },
+      protocol: GATEWAY_CLIENT_PROTOCOL,
+    });
+    open.push({ close: () => stalled.end("test done") });
+    await stalled.request(CLIENT_METHODS.toolsList, encodeClientMessage({}));
+    socket.pause();
+    fills = 0;
+    for (let i = 0; i < FILL; i += 1)
+      void stalled
+        .request(
+          CLIENT_METHODS.toolsCall,
+          encodeClientMessage({ name: "fixture_fill", args: { id: "f" } }),
+        )
+        .catch(() => undefined);
+    await waitFor(() => fills === FILL, 10_000);
+    const cancel = new AbortController();
+    const pending = stalled
+      .request(
+        CLIENT_METHODS.toolsCall,
+        encodeClientMessage({
+          name: "fixture_file_read",
+          args: { id: answer === "fail" ? "fail" : "wait" },
+        }),
+        cancel.signal,
+      )
+      .catch(() => "ended");
+    await waitFor(() => executing === started + 1);
+    if (answer === "cancel") cancel.abort();
+    // The answer is written behind the unread fill; the permit is held.
+    const written = Date.now();
+    assert.equal(budget.releases, releases, answer);
+    assert.notEqual(budget.reserved, 0, answer);
+    // The drain bound ends the stalled connection and frees the permit.
+    await waitFor(() => budget.releases === releases + 1, 10 * DRAIN_MS);
+    assert.ok(Date.now() - written < 10 * DRAIN_MS, answer);
+    assert.equal(budget.reserved, 0, answer);
+    socket.resume();
+    assert.equal(await pending, "ended", answer);
+    assert.equal(other.isEnded, false, answer);
+    // Another client's download is not busy.
+    const free = (await callFile(other, { id: "fail" })).json as {
+      message?: string;
+    };
+    assert.equal(free.message, "Fixture refused.", answer);
+    await waitFor(() => budget.releases === releases + 2);
+  }
 });
