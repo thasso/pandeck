@@ -2205,9 +2205,13 @@ path above.
   - Reads and prepares have 40 s (`TOOL_CALL_MS`). At 1.7 MB/s they are late
     behind a download above about 65 MiB, and behind a 100 MiB download on any
     link below about 2.6 MB/s. Retry a read that timed out.
-  - Both need the download's `maxBytes` raised above its 50 MiB default
-    (`CONFLUENCE_DOWNLOAD_DEFAULT_BYTES`). At the default, and at 1.7 MB/s or
-    faster, neither happens.
+  - Each figure holds for a call sent as the file starts out. A call that had
+    already run t seconds is late once the file takes longer than its limit
+    minus t. The edge lets a read run up to 30 s and an apply up to 45 s. A file
+    at the 50 MiB default (`CONFLUENCE_DOWNLOAD_DEFAULT_BYTES`) takes about 31 s
+    at 1.7 MB/s, so only a read or prepare that had already run about 9 s, or an
+    apply that had run about 24 s, when the download started out can be late.
+    Mostly it takes a raised `maxBytes`.
   - Below about 1.6 MB/s, a 100 MiB answer outlasts the edge's 65 s output bound
     (`FILE_OUTPUT_MS` in `gateway/clientListener.ts`). The edge then ends the
     client connection, and every call in flight on it fails. That rate is
