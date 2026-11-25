@@ -28,6 +28,7 @@ import {
   CONFLUENCE_DOWNLOAD_LABEL,
   CONFLUENCE_DOWNLOAD_SCHEMA,
   CONFLUENCE_DOWNLOAD_SEARCH_HINT,
+  CONFLUENCE_DOWNLOAD_URL_MAX_CHARS,
 } from "../../confluenceDownload.ts";
 import { clamp } from "../../confluenceRead.ts";
 import {
@@ -154,7 +155,9 @@ function confluenceFileFields(text: string): ConfluenceFileFields | undefined {
     !orNull(version, safeCount) ||
     !orNull(
       downloadUrl,
-      (v): v is string => boundedString(v, 2048) && v.startsWith("https://"),
+      (v): v is string =>
+        boundedString(v, CONFLUENCE_DOWNLOAD_URL_MAX_CHARS) &&
+        v.startsWith("https://"),
     )
   )
     return undefined;

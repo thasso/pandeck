@@ -35,6 +35,8 @@ const { encodeAtlassianCredential } =
 const { remoteToolsFor } = await import("./tools/gateway/remoteToolGroup.ts");
 const { FILE_ADAPTERS, settleFileAnswer } =
   await import("./tools/gateway/remoteFiles.ts");
+const { CONFLUENCE_DOWNLOAD_URL_MAX_CHARS } =
+  await import("./confluenceDownload.ts");
 const { DISABLED, FILE_BUSY_HERE, UNEXPECTED_FILE_ANSWER } =
   await import("./tools/gateway/remoteReadRules.ts");
 const { listSessionAttachments, readSessionAttachmentBytes } =
@@ -50,6 +52,24 @@ const fixture = fixtureFileTool();
 const edgeLines: string[] = [];
 const linkLines: string[] = [];
 let host!: ReturnType<typeof createToolHost>;
+
+/**
+ * F002: a ~300-character CJK file name, percent-encoded in its download
+ * link as Confluence's `downloadLink` carries it (well over the old 2,048),
+ * and a link that makes `downloadUrl` one character over the bound.
+ */
+const CJK_TITLE = `${"設計資料".repeat(75)}.pdf`;
+const CJK_LINK = `/download/attachments/123/${encodeURIComponent(CJK_TITLE)}?version=1&api=v2`;
+const SITE_WIKI = `https://${ORACLE_SITE}/wiki`;
+const LONG_LINK_HEAD =
+  "/download/attachments/123/long.bin?version=1&api=v2&pad=";
+const LONG_LINK = `${LONG_LINK_HEAD}${"a".repeat(
+  CONFLUENCE_DOWNLOAD_URL_MAX_CHARS +
+    1 -
+    SITE_WIKI.length -
+    LONG_LINK_HEAD.length,
+)}`;
+let longServed = 0;
 
 /** Held downloads, by attachment id; released by the test. */
 const held = new Map<string, () => void>();
@@ -79,9 +99,24 @@ function chainFetch(): (
     if (id === "att900500") return Response.json({}, { status: 500 });
     if (id === "att900001") return meta(id, { downloadLink: undefined });
     if (id === "att900002") return meta(id, { fileSize: 101 * MiB });
+    if (id === "att900300")
+      return meta(id, {
+        title: CJK_TITLE,
+        mediaType: "application/pdf",
+        fileSize: 7,
+        downloadLink: CJK_LINK,
+      });
+    if (id === "att900301")
+      return meta(id, { title: "long.bin", downloadLink: LONG_LINK });
     if (id) return meta(id);
     if (path === "/wiki/api/v2/pages/777/attachments")
       return Response.json({ results: [] });
+    if (path.endsWith(CJK_LINK.split("?")[0]!))
+      return new Response(new TextEncoder().encode("cjk-pdf"));
+    if (path.endsWith("/download/attachments/123/long.bin")) {
+      longServed += 1;
+      return new Response(new Uint8Array([1, 2, 3, 4]));
+    }
     const waiting = /\/download\/attachments\/123\/(att9\d+)\.bin$/.exec(path);
     if (waiting) {
       await new Promise<void>((resolve, reject) => {
@@ -212,6 +247,44 @@ for (const entry of DOWNLOAD_ORACLE)
     const read = readSessionAttachmentBytes(sessionId, staged[0]!.id);
     assert.equal(read?.bytes.toString("utf8"), entry.content);
   });
+
+test("a ~300-character CJK file name, percent-encoded in its downloadUrl past the old 2,048, round-trips and stages (F002)", async () => {
+  const sessionId = newSession();
+  const result = await run({ attachmentId: "att900300" }, sessionId);
+  const answer = JSON.parse(textOf(result)) as {
+    attachment: { title: string; downloadUrl: string };
+    sessionAttachment: { id: string; name: string; size: number };
+  };
+  assert.equal(answer.attachment.title, CJK_TITLE);
+  assert.equal(answer.attachment.downloadUrl, `${SITE_WIKI}${CJK_LINK}`);
+  assert.ok(answer.attachment.downloadUrl.length > 2048);
+  assert.ok(
+    answer.attachment.downloadUrl.length <= CONFLUENCE_DOWNLOAD_URL_MAX_CHARS,
+  );
+  const staged = listSessionAttachments(sessionId);
+  assert.equal(staged.length, 1);
+  assert.equal(staged[0]!.name, CJK_TITLE);
+  assert.equal(answer.sessionAttachment.id, staged[0]!.id);
+  const read = readSessionAttachmentBytes(sessionId, staged[0]!.id);
+  assert.equal(read?.bytes.toString("utf8"), "cjk-pdf");
+});
+
+test("a downloadUrl one character over the bound is refused as today: the unexpected-file text, nothing staged (F002)", async () => {
+  assert.equal(CONFLUENCE_DOWNLOAD_URL_MAX_CHARS, 16_384);
+  assert.equal(
+    `${SITE_WIKI}${LONG_LINK}`.length,
+    CONFLUENCE_DOWNLOAD_URL_MAX_CHARS + 1,
+  );
+  const sessionId = newSession();
+  const before = longServed;
+  await assert.rejects(run({ attachmentId: "att900301" }, sessionId), {
+    message: UNEXPECTED_FILE_ANSWER,
+  });
+  assert.deepEqual(listSessionAttachments(sessionId), []);
+  // The edge does not bound the link: the file was fetched and sent, then
+  // refused here.
+  assert.equal(longServed, before + 1);
+});
 
 test("each edge text reaches the agent as the edge words it, and nothing is staged", async () => {
   const rejected =

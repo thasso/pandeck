@@ -22,6 +22,15 @@ import {
 export const CONFLUENCE_ATTACHMENT_MAX_BYTES = 100 * 1024 * 1024;
 /** A download's limit when the call names none. */
 export const CONFLUENCE_DOWNLOAD_DEFAULT_BYTES = 50 * 1024 * 1024;
+/**
+ * The longest `attachment.downloadUrl` a client-mode download accepts in the
+ * edge's answer (`tools/gateway/remoteFiles.ts`): room for a long non-Latin
+ * file name percent-encoded, as Confluence's `downloadLink` carries it. The
+ * one value for every side that checks it; today only that adapter does. The
+ * edge and the local tool pass Confluence's link through unbounded, and the
+ * wire decoder bounds only the whole text (60,000 characters).
+ */
+export const CONFLUENCE_DOWNLOAD_URL_MAX_CHARS = 16_384;
 
 /** The local tool's label and search hint, which client mode's tool shares. */
 export const CONFLUENCE_DOWNLOAD_LABEL = "Confluence: Download Attachment";

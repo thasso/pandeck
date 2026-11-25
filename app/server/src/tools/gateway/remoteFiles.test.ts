@@ -16,6 +16,7 @@ import {
   type RemoteFileAnswer,
 } from "../../remoteTools.ts";
 import { listSessionAttachments } from "../../sessionAttachments.ts";
+import { CONFLUENCE_DOWNLOAD_URL_MAX_CHARS } from "../../confluenceDownload.ts";
 import { FILE_ADAPTERS, effectiveFileBytes } from "./remoteFiles.ts";
 import {
   DISABLED,
@@ -321,7 +322,12 @@ test("the Confluence file text is checked exactly: each extra, missing or out-of
       "an http downloadUrl",
       att({ downloadUrl: "http://example.atlassian.net/x" }),
     ],
-    ["a long downloadUrl", att({ downloadUrl: `https://${"u".repeat(2041)}` })],
+    [
+      "a downloadUrl one over the bound",
+      att({
+        downloadUrl: `https://${"u".repeat(CONFLUENCE_DOWNLOAD_URL_MAX_CHARS - 7)}`,
+      }),
+    ],
   ];
   for (const [label, value] of refused)
     assert.equal(
@@ -338,7 +344,7 @@ test("the Confluence file text is checked exactly: each extra, missing or out-of
         ...att({
           id: "a".repeat(64),
           title: "t".repeat(1024),
-          downloadUrl: `https://${"u".repeat(2040)}`,
+          downloadUrl: `https://${"u".repeat(CONFLUENCE_DOWNLOAD_URL_MAX_CHARS - 8)}`,
         }),
         pageId: "1".repeat(64),
       }),
