@@ -65,6 +65,7 @@ export function patterned(length: number, seed = 1): Uint8Array {
 /**
  * X1's control: a 100 MiB allocation kept alive by one retained 1-byte view
  * must stay visible to both oracles, and dropping the view must clear both.
+ * Both states are sampled with `settledArrayBuffers`, the cases' sampler.
  */
 export async function retentionControl(): Promise<{
   retainedVisible: boolean;
@@ -80,9 +81,11 @@ export async function retentionControl(): Promise<{
     view = big.subarray(7, 8);
     return new WeakRef(big.buffer);
   })();
-  await settleGc();
+  // The same sampler the cases use, so the control shows it still sees a
+  // retained buffer (v06 X1).
+  const retained = await settledArrayBuffers();
   const retainedVisible = target.deref() !== undefined;
-  const retainedArrayBuffers = arrayBuffersNow() - baseline;
+  const retainedArrayBuffers = retained - baseline;
   // The view is read after the sample, so it is live through it.
   if (view?.byteLength !== 1) throw new Error("the control lost its view");
   view = undefined;

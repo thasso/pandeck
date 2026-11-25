@@ -96,6 +96,7 @@ import {
 } from "../gatewayTools/descriptor.ts";
 import {
   UPLOAD_BUSY,
+  UPLOAD_EXPIRED,
   UPLOAD_INVALID,
   createUploadStore,
 } from "../gatewayTools/uploads.ts";
@@ -3645,6 +3646,45 @@ test("P8a: the connection's end discards its unattached upload; another connecti
   );
   assert.notEqual(budget.reserved, 0);
   first.end("test");
+  await waitFor(() => budget.reserved === 0);
+  assert.equal(budget.releases, 1);
+});
+
+test("P8a ruling 1: a foreign connection's put and apply naming the upload are refused and leave the owner's upload and the budget untouched", async () => {
+  const write = fixtureWriteTool();
+  const { edge, a, b, budget } = await fileEdge({ extra: [write.descriptor] });
+  const owner = await dialClient(edge, a);
+  const foreign = await dialClient(edge, b);
+  const uploadId = await openUpload(owner);
+  const reserved = budget.reserved;
+  assert.notEqual(reserved, 0);
+
+  assert.deepEqual(
+    (
+      await foreign.request(CLIENT_METHODS.uploadsPut, {
+        json: { uploadId, stagedAttachmentId: UPLOAD_STAGE, offset: 0 },
+        bytes: { chunk: UPLOAD_SOURCE },
+      })
+    ).json,
+    { ok: false, code: "tool_error", message: UPLOAD_EXPIRED },
+  );
+  assert.deepEqual((await applyUpload(foreign, uploadId)).json, {
+    ok: false,
+    code: "invalid_params",
+    message: ITEMS_INVALID,
+    effects: "none",
+  });
+  assert.equal(write.started, 0, "the foreign apply ran nothing");
+  assert.equal(budget.reserved, reserved);
+  assert.equal(budget.releases, 0);
+
+  // The owner's sealed upload is intact: its apply consumes it.
+  assert.deepEqual((await applyUpload(owner, uploadId)).json, {
+    ok: true,
+    results: [{ effects: "possible" }],
+    effects: "possible",
+  });
+  assert.equal(write.started, 1);
   await waitFor(() => budget.reserved === 0);
   assert.equal(budget.releases, 1);
 });

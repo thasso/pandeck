@@ -265,6 +265,53 @@ function itemsMatch(upload: Upload, items: readonly unknown[]): boolean {
   );
 }
 
+/** The armed test probe, if any; production never arms one. */
+let allocationProbe:
+  { allocations: number; buffer: ArrayBuffer | undefined } | undefined;
+
+/** A stream's backing store: the store's one allocation per stream. */
+function allocateStream(size: number): Uint8Array {
+  const buffer = new ArrayBuffer(size);
+  if (allocationProbe) {
+    allocationProbe.allocations += 1;
+    allocationProbe.buffer = buffer;
+  }
+  return new Uint8Array(buffer);
+}
+
+/**
+ * Test-only (v04 V3, v06 X1): arms a probe on the store's stream allocation
+ * until `disarm`. It counts allocations, and `takeBuffer` returns the newest
+ * stream's backing `ArrayBuffer` once, then forgets it, so the caller can
+ * turn it into a `WeakRef` at once and hold nothing strong. Unarmed, the
+ * store keeps no reference beyond its own.
+ */
+export function probeUploadAllocations(): {
+  readonly allocations: number;
+  takeBuffer(): ArrayBuffer | undefined;
+  disarm(): void;
+} {
+  const probe = {
+    allocations: 0,
+    buffer: undefined as ArrayBuffer | undefined,
+  };
+  allocationProbe = probe;
+  return {
+    get allocations() {
+      return probe.allocations;
+    },
+    takeBuffer() {
+      const { buffer } = probe;
+      probe.buffer = undefined;
+      return buffer;
+    },
+    disarm() {
+      probe.buffer = undefined;
+      if (allocationProbe === probe) allocationProbe = undefined;
+    },
+  };
+}
+
 export function createUploadStore(options: StoreOptions): UploadStore {
   const idleMs = options.idleMs ?? UPLOAD_IDLE_MS;
   const maxUnattachedMs = options.maxUnattachedMs ?? UPLOAD_MAX_UNATTACHED_MS;
@@ -379,7 +426,7 @@ export function createUploadStore(options: StoreOptions): UploadStore {
           }
           // Copied and hashed synchronously, before anything can await: the
           // request's payload is not kept past this call (v03 K7).
-          stream.buffer ??= new Uint8Array(new ArrayBuffer(stream.size));
+          stream.buffer ??= allocateStream(stream.size);
           stream.hash ??= createHash("sha256");
           stream.buffer.set(chunk, offset);
           stream.hash.update(chunk);
