@@ -83,9 +83,15 @@ account (a pinned profile or automatic) and effort.
   worktree in the target; the agent creates one when it needs it.
 - The agent definition is read at occurrence time. The Schedule's explicit
   runtime overrides the definition's defaults.
-- An enterprise requirement is frozen when the Schedule is created, the way
-  `buildSpawnProposal` freezes it for spawns: if the proposing session requires
-  an enterprise account, every session the Schedule starts does too.
+- **Enterprise requirement.** Every agent-authored creation, prompt change or
+  change to a new-session target captures the proposing session's enterprise
+  requirement before its first await, the way `buildSpawnProposal` does
+  (`account-routing.md`). The Schedule's requirement is its previous value OR
+  the captured one: it can be added, never cleared, and no card edit, UI edit or
+  runtime change clears it. It is sealed server-side, not an editable field.
+  Account resolution at occurrence time and session admission enforce it, even
+  when the proposing session has since been deleted. A user-authored Schedule
+  requires enterprise only when the user sets it.
 - Title: "<Schedule name> — <local date>", e.g. "Roadmap update — Mon 30 Nov".
   The session and the Schedule are joined by a `links` edge.
 - A linked Task being completed or archived does not affect the Schedule. The
@@ -119,19 +125,57 @@ occurrence. An occurrence is therefore claimed at most once across restarts.
 
 ### States
 
-`claimed` → `delivered` (existing session) or `started` (new session), or
-`superseded`, `withdrawn`, `failed`, `missed`. Each row records the due time,
-the claim time, the target session and any error.
+`claimed` is the only open state: the occurrence is owed. It ends in exactly one
+terminal state: `delivered` (existing session), `started` (new session),
+`superseded`, `withdrawn`, `failed` or `missed`. Each row records the due time,
+the claim time, the frozen input (below), the target session once known, and any
+error.
 
+- **Frozen input.** Claiming copies the prompt, the target and, for a new
+  session, the runtime and enterprise requirement into the occurrence. Delivery
+  reads only that copy, never the Schedule. An edit to the Schedule affects
+  later occurrences, never a claimed one; to drop a claimed one, disable or
+  delete the Schedule.
 - **One undelivered occurrence per Schedule.** A newer claim for the same
-  Schedule supersedes an undelivered earlier one. The survivor is delivered when
-  the session can take it, with no expiry; its header shows the original due
-  time.
-- **Disabling or deleting** a Schedule withdraws its undelivered occurrence.
-- **Crash safety.** An existing-session occurrence is durable once claimed: the
-  lane owes it. A new-session occurrence gets its session id at claim time, so a
-  retry after a crash finds the session if it was already created instead of
-  starting a second one.
+  Schedule supersedes a still-`claimed` earlier one in the claim's transaction.
+  The survivor is delivered when the session can take it, with no expiry; its
+  header shows the original due time.
+- **Disabling or deleting** a Schedule withdraws its `claimed` occurrence in the
+  same transaction.
+- **What keeps it `claimed`.** A running turn, a Stop, a pending runtime
+  selection that cannot apply, and a session that cannot be acquired right now
+  are holds: the occurrence stays owed and is offered again on the next wake.
+- **What makes it `failed`.** A new session that cannot be created (agent
+  definition gone, pinned account unavailable, enterprise requirement unmet), or
+  delivery whose outcome is unknown (below). A failed occurrence is never
+  retried.
+
+### Admission and crash safety
+
+`delivered` and `started` mean the prompt was durably appended to the target's
+transcript — not that the session exists, and not that the turn finished.
+
+- **One admission key per occurrence**, derived from the occurrence id. It is
+  the `clientRequestId` of the append for an existing session and of the opening
+  prompt for a new one, as the prompt queue uses for its rows.
+- **Final admission check.** The lane rechecks that the occurrence is still
+  `claimed` at the last no-await admission boundary, through the lane's
+  late-admission guard. A supersede, withdrawal or Stop that commits before that
+  point prevents the append. After the append nothing retracts it: disabling the
+  Schedule does not stop that turn.
+- **Recovery.** At boot, and before retrying a `claimed` occurrence the server
+  may have tried before, the server looks for the admission key in the target's
+  canonical transcript, as peer-prompt recovery does. Found: the occurrence is
+  `delivered` or `started`. Absent: retry. Unreadable: the outcome is unknown,
+  never proof of absence, so the occurrence is `failed` with "delivery
+  uncertain" and the Schedule needs attention. It is never sent twice.
+- **New sessions.** Creation is keyed to the occurrence on both harnesses. The
+  Claude harness accepts a supplied session id; pi mints its own. So the
+  occurrence is recorded on the session (its Schedule link, written when the
+  session row is created), and recovery finds the session by that key. A session
+  found without its opening prompt gets the prompt through the same keyed
+  append, rather than a second session being started. Phase 3 picks the creation
+  seam.
 
 ### Overlap
 
@@ -143,19 +187,25 @@ not reliable.
 
 ### Retention
 
-A Schedule keeps its last 50 occurrences; older rows are pruned. A `once`
-Schedule becomes `done` after its occurrence, leaves the default list for the
-Done filter, and is deleted with its history 30 days later. Deleting a Schedule
-deletes its history.
+A Schedule keeps its last 50 terminal occurrences; older terminal rows are
+pruned. A `claimed` occurrence is owed and is never pruned.
+
+A Schedule becomes `done` when it can produce no further occurrence and its last
+one is terminal: a `once` Schedule after its single occurrence, a repeating one
+after the last occurrence before `endsOn`. A `done` Schedule leaves the default
+list for the Done filter and is deleted with its history 30 days after it became
+`done`, never counted from the due or claim time. Deleting a Schedule deletes
+its history.
 
 ## Delivering into an existing session
 
 The `scheduled prompts` lane in `app/server/src/sessionDeliveryLanes.ts` sits
 after the peer lanes and before background completions.
-`mayJoinRunningTurn: false`: an occurrence never steers into a running turn; it
-waits for the turn to end and is the next turn. It does not use the user's
-prompt queue, which can be paused or held and whose rows count as the user
-typing.
+`mayJoinRunningTurn: false`: an occurrence never steers into a running turn. It
+waits until the session is idle and starts a turn once the higher-priority lanes
+(handoffs, the user's queue, workflow assignments, peer prompts) owe no
+admissible work. It does not use the user's prompt queue, which can be paused or
+held and whose rows count as the user typing.
 
 - **Stop holds it.** An occurrence is an automatic turn
   (`steering-and-queueing.md`, "Stop holds automatic turns"). On a Stopped
@@ -191,19 +241,20 @@ The user changes any Schedule directly in the UI; no card. When the user edits
 an agent-controlled Schedule, `controlledBy` becomes the user and `createdBy`
 stays as history.
 
-An agent session needs no card to create, change, enable, disable or delete a
-Schedule it controls whose target is its own session or a session it spawned
-directly. Everything else is a `scheduleChange` card:
+A **near target** is the agent's own session or a direct child it still owns: a
+`spawned` edge from the agent AND the child still coordinator-owned. A child the
+user has taken over is not a near target, though the edge remains.
 
-| Agent action                                                                     | Approval                        |
-| -------------------------------------------------------------------------------- | ------------------------------- |
-| Target its own session or a direct child                                         | none, within the cardless limit |
-| Target any other session (grandchildren included)                                | card, or the `schedule` grant   |
-| Enable, disable or delete a Schedule it does not control                         | card, or the `schedule` grant   |
-| Change the timing of a Schedule it does not control                              | card, or the `schedule` grant   |
-| Create a new-session Schedule                                                    | card, always                    |
-| Change the prompt, target or runtime of a new-session Schedule                   | card, always                    |
-| Change the prompt or session of an existing-session Schedule it does not control | card, or the `schedule` grant   |
+Authorization is evaluated at the write, against the Schedule as stored then, by
+the first matching row:
+
+| Agent action                                                                                                                                                  | Approval                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| Create a new-session Schedule, change a Schedule's target to a new session, or change the prompt, target or runtime of a new-session Schedule                 | card, always                    |
+| Create an existing-session Schedule for a near target, or change, enable, disable or delete one this session controls whose target is and stays a near target | none, within the cardless limit |
+| Anything else: other targets (grandchildren included), and any change, enabling, disabling or deletion of a Schedule this session does not control            | card, or the `schedule` grant   |
+
+The near-target row never overrides `controlledBy` or the card-always row.
 
 - **Cardless limit:** a session may control at most 10 active Schedules it
   created without a card (setting). Card-approved and user-controlled Schedules
@@ -271,7 +322,10 @@ minutes), cardless limit (10), Pause all.
 
 1. **Engine** ([Task-1499](pa://task/1499)): model and `nextOccurrencesAfter`
    with DST tests, migration, schedule clock, the scheduled prompts lane, Pause
-   all, the tools for the own session and direct children, this document.
+   all, the tools for near targets, this document. Because a protocol change
+   lands across shared, server and web together (root `CLAUDE.md`), this phase
+   also wires the `schedules` topic into the web state engine, without visible
+   surfaces.
 2. **UI** ([Task-1500](pa://task/1500)): Schedules page, detail editor,
    inspector, header badge, transcript label, needs-attention badge.
 3. **New sessions and the card** ([Task-1501](pa://task/1501)): new-session
