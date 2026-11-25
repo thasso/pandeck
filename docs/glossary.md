@@ -83,6 +83,14 @@ from handling and records uncertainty rather than treating resolution as
 success.\
 _Avoid_: success flag, delivery acknowledgment
 
+**Schedule**: A prompt sent at a wall-clock time, once or repeating, into an
+existing session or as a new session's first prompt (`schedules.md`).\
+_Avoid_: cron job, timer, reminder
+
+**Occurrence**: One due time of a Schedule and what became of it: delivered,
+started, superseded, withdrawn, failed or missed.\
+_Avoid_: run, firing, wake
+
 **Worker**: A separately deployed process that hosts agent sessions' engines and
 native tools on the far side of the isolation boundary from the server, and
 reaches the server only through the worker protocol. The server can restart
