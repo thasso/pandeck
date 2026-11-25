@@ -2191,6 +2191,29 @@ path above.
     A write whose apply is cut off this way reads as lost, and its card fails as
     may have written (`docs/approvals.md` "Gateway-prepared cards"); check the
     site before asking again.
+- **Answers wait behind a file (accepted limitation,
+  [Task-1515](pa://task/1515)).** Pandeck has one gateway connection, and the
+  edge writes a file answer to it whole. While that file is in flight, every
+  other answer on that connection, for any session, waits behind it, for roughly
+  the file size divided by the link rate.
+  - Writes: an apply answer has 55 s (`APPLY_CALL_MS` in
+    `gatewayClientLink.ts`). At 1.7 MB/s it is late behind a download above
+    about 89 MiB, and behind a 100 MiB download on any link below about 1.9
+    MB/s. A write that succeeded then fails its card as may have written
+    (`docs/approvals.md` "Gateway-prepared cards"). Nothing is lost or written
+    twice. Check the site before asking again.
+  - Reads and prepares have 40 s (`TOOL_CALL_MS`). At 1.7 MB/s they are late
+    behind a download above about 65 MiB, and behind a 100 MiB download on any
+    link below about 2.6 MB/s. Retry a read that timed out.
+  - Both need the download's `maxBytes` raised above its 50 MiB default
+    (`CONFLUENCE_DOWNLOAD_DEFAULT_BYTES`). At the default, and at 1.7 MB/s or
+    faster, neither happens.
+  - Below about 1.6 MB/s, a 100 MiB answer outlasts the edge's 65 s output bound
+    (`FILE_OUTPUT_MS` in `gateway/clientListener.ts`). The edge then ends the
+    client connection, and every call in flight on it fails. That rate is
+    outside the plan's link assumption and is a replan trigger.
+  - The follow-up is [Task-1515](pa://task/1515): interleave a file answer's
+    frames with other answers.
 - **Known limitations of gateway tools.** A tool newly deployed on the gateway
   reaches a live pi session only at its next open, because pi registers its tool
   universe at open; Claude sessions get it once the next connection's listing is
