@@ -3296,9 +3296,9 @@ tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
   (`DELETE /installation/token`, only for a token that passed the first check)
   and answers `unavailable`. A connect, clear or refused refresh bumps the
   record's in-memory generation; a call whose generation moved, whose 25 s
-  budget ran out or whose vault is closing drops the token uncached and
-  unrevoked and answers `unavailable`. GitHub writes never use an installation
-  token (R-ME, ADR-0005).
+  budget ran out, whose vault is closing or whose proven token expired meanwhile
+  drops the token uncached and unrevoked and answers `unavailable`. GitHub
+  writes never use an installation token (R-ME, ADR-0005).
 - **Rotation recovery.** Sealing is best-effort, as for every vault writer: the
   rename can succeed while the seal fails (logged, the sweep retries), or the
   vault can die between the two. The rotated record then exists only in the
@@ -3328,7 +3328,10 @@ tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
   with a fixed text before anything listens) and the pair goes to that vault;
   with a remote vault the edge keeps only the id, for the page's sign-in link,
   never passes or uses a secret, and logs one fixed line per provider at start
-  while the file still holds one.
+  while the file still holds one. For GitHub the edge's UI config carries only
+  `github.clientId` (any other key refuses it), for the page's connect link; the
+  App's secret and key live only in the vault's `--integrations-config`, so an
+  in-process dev vault has no GitHub App and its connect is `not_configured`.
 - **Bearer destinations.** On an OAuth view the tools call Jira with
   `Authorization: Bearer` at `https://api.atlassian.com/ex/jira/<cloudId>`
   (`atlassian/atlassianFetch.ts`), and Confluence at
@@ -3600,17 +3603,20 @@ The page is `app/web/gateway.html`, its own React entry, built by
 `vite.gateway.config.ts` into `app/web/dist-gateway/` (`pnpm run build` builds
 both bundles); under a top bar with the signed-in email and Sign out it shows
 the user's Claude and ChatGPT accounts, Jira credential, Slack connection (where
-the config offers "Sign in with Slack") and clients, and reaches only its own
-origin with its session cookie. `pnpm --filter @assistant/web dev:gateway`
-serves the page on port 5180 over a dev-only fake `/api` and `/auth`
-(`app/web/gatewayDevApi.ts`, in-memory sample data, never in a build; the
-default shows a deployment that signs in with Atlassian: the plugin also serves
-its own `src/gateway/navigate.ts`, so "Sign in with Atlassian" goes to the dev
-`/auth/atlassian/callback` instead of Atlassian and finishes a fake sign-in
-without leaving localhost, "Sign in with Slack" likewise goes to the dev
-`/auth/slack/callback`, `GATEWAY_DEV_GENERIC=1` shows the generic gateway with
-the token form and no preset, and `GATEWAY_DEV_NO_SLACK=1` a gateway that does
-not offer Slack).
+the config offers "Sign in with Slack"), GitHub connection (where it offers
+"Connect GitHub") and clients, and reaches only its own origin with its session
+cookie. `pnpm --filter @assistant/web dev:gateway` serves the page on port 5180
+over a dev-only fake `/api` and `/auth` (`app/web/gatewayDevApi.ts`, in-memory
+sample data, never in a build; the default shows a deployment that signs in with
+Atlassian: the plugin also serves its own `src/gateway/navigate.ts`, so "Sign in
+with Atlassian" goes to the dev `/auth/atlassian/callback` instead of Atlassian
+and finishes a fake sign-in without leaving localhost, "Sign in with Slack"
+likewise goes to the dev `/auth/slack/callback` and "Connect GitHub" to the dev
+`/auth/github/callback`, whose fake check answers `integration_denied` for
+`castlabs/pandeck-gateway-s1-noapp` and read access for any other repository,
+`GATEWAY_DEV_GENERIC=1` shows the generic gateway with the token form and no
+preset, `GATEWAY_DEV_NO_SLACK=1` a gateway that does not offer Slack and
+`GATEWAY_DEV_NO_GITHUB=1` one that does not offer GitHub).
 
 - **Config.** One JSON file, refused unless mode 0600 (no group or other bits),
   so the client secret stays out of argv. Every refusal is a fixed message
@@ -3692,7 +3698,13 @@ not offer Slack).
   `users:read`, `users:read.email` and `usergroups:read`, in that order, as user
   scopes only (never a bot `scope`). The Slack app needs token rotation on, the
   redirect URL `<publicOrigin>/auth/slack/callback` and every user scope asked
-  for. An optional
+  for. An optional `"github": {"clientId": "<GitHub App's client id>"}`
+  (Task-1445) turns on "Connect GitHub" ("GitHub sign-in" below). It takes
+  exactly `clientId`: a `clientSecret`, `appId`, `privateKeyFile` or any other
+  key refuses the section with the fixed "github takes only clientId", since the
+  App's secret and key stay with the vault ("OAuth client config" under
+  Credentials). The App needs the callback URL
+  `<publicOrigin>/auth/github/callback`. An optional
   `"coder": {"googleClientId": "<Coder's Google client id>", "automaticApproval": true}`
   (Task-1410 PR2) turns on zero-click enrollment ("Zero-click enrollment" under
   Client mode): `googleClientId` is the OAuth client Coder signs its users in
@@ -3905,6 +3917,72 @@ not offer Slack).
     shows it in the Slack section (signed out, only `signed_out`, on the sign-in
     card); a connected record reads "Connected to <workspace>" or "Connected to
     your Slack workspace", and Disconnect asks first.
+  - **GitHub sign-in** (Task-1445), the same flow with its own pending table,
+    cookie and codes, so no other provider's state completes a GitHub callback
+    or the other way round. `GET /api/integrations/github` →
+    `{offered, connected, login?, problem?}`: `offered` is whether the config
+    names `github.clientId` (if not, the answer is
+    `{offered: false, connected: false}` without a vault call, and every other
+    GitHub route is `404`); `problem` one of `vault_locked`,
+    `vault_unavailable`, `invalid` (the vault's view did not decode), `rejected`
+    (GitHub refused the vault's refresh). `login` is the GitHub login as the
+    vault holds it, answered only when it passes `isGatewayUiGithubLogin` (1-39
+    of `A-Za-z0-9-`); never a token. Reading the status may refresh the token in
+    the vault. `POST /api/integrations/github/clear` → 204 (log line
+    `ui integration github: cleared user=<id>`), refused as the Atlassian clear.
+    It deletes only the vault's record: the App stays authorized under GitHub
+    Settings → Applications → Authorized GitHub Apps until the user revokes it
+    there, which the page's Disconnect dialog says.
+    `POST /api/integrations/github/connect {}` → `{authorizeUrl}`, GitHub's
+    `https://github.com/login/oauth/authorize` with exactly `client_id`,
+    `redirect_uri=<publicOrigin>/auth/github/callback` and a fresh `state` (no
+    scope and no PKCE: the App's permissions decide, and the vault exchanges the
+    code with the App's secret); the cookie is `__Host-pgw_github`, the table,
+    bounds and state rule as Atlassian's. `GET /auth/github/callback` checks as
+    Atlassian's does, then hands the code and the same redirect URI to the
+    vault's connect (`UserOperations.connectGithub`). It answers `303 /` on
+    success, else `303 /?github=<code>` with `code` one of `rejected`,
+    `unreachable`, `not_configured` (the vault has no GitHub App),
+    `vault_locked`, `vault_unavailable`, `busy`, `signed_out`, `expired`,
+    `failed`, `denied`. Log lines are `ui github connect: started|ok user=<id>`,
+    `refused, busy user=<id>` and `failed (<code>|state)[ user=<id>]`.
+    `POST /api/integrations/github/check {owner, repo}` asks the vault's
+    `github.token` for the session user and that repository (`createGithubCheck`
+    in `gateway/userOperations.ts`, outside the per-user writer slot so a
+    Disconnect during a check reaches the vault's fence, one check per user at a
+    time). The body is exactly those two strings, `owner` a GitHub login and
+    `repo` 1-100 of `A-Za-z0-9._-` other than `.` and `..`
+    (`isGatewayUiGithubRepoName`); anything else, an `access`, `token` or
+    `userId` member included, is `400 bad_request` without a vault call, and a
+    body over the listener's `MAX_BODY_BYTES` is `413` before routing. The
+    socket waits up to the connect bound (40 s), since the remote `github.token`
+    bound is 30 s. The edge drops the token at once and answers
+    `200 {repository: "<owner>/<repo>", expiresAt}` (epoch ms); the token never
+    reaches an answer, log line, record or state file. Refusals:
+
+    | Vault answer             | HTTP | Body `error`                   |
+    | ------------------------ | ---- | ------------------------------ |
+    | `absent`                 | 409  | `integration_sign_in_required` |
+    | `denied`                 | 403  | `integration_denied`           |
+    | `rejected`               | 422  | `integration_rejected`         |
+    | `invalid`                | 400  | `integration_invalid`          |
+    | `locked`                 | 503  | `vault_locked`                 |
+    | `unavailable`            | 503  | `vault_unavailable`            |
+    | a second check in flight | 409  | `integration_busy`             |
+    | anything else thrown     | 503  | `unavailable`                  |
+
+    `denied` is GitHub not granting this user, or the App, that repository (the
+    user cannot pull it, or the App is not installed on it). Log lines are
+    `ui integration github: check ok user=<id>`,
+    `ui integration github: check refused (<code>) user=<id>` and
+    `ui integration github: check failed user=<id>`; no owner, repository,
+    expiry or GitHub text. The page reads `?github=` once, independently of the
+    other codes, and shows it in the GitHub section (signed out, only
+    `signed_out`, on the sign-in card); a connected record reads "Connected as
+    <login>" or "Connected as your GitHub account", Disconnect asks first, and
+    "Check repository access" shows "Read access to <owner>/<repo> works; token
+    valid until HH:MM" (local time) or a fixed text per refusal.
+
   - `GET /api/clients` → `{clients: [{id, label, createdAt, mcpToken}]}`, the
     user's clients that are not revoked, `mcpToken` a boolean.
     `POST /api/clients/code {label}` → `{code, validForSeconds: 900}`;

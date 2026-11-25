@@ -1,6 +1,6 @@
 /**
- * The dev server's "Sign in with Atlassian" (Task-1411) and "Sign in with
- * Slack" (Task-1453) stay on localhost: the serve-only plugin replaces
+ * The dev server's "Sign in with Atlassian" (Task-1411), "Sign in with Slack"
+ * (Task-1453) and "Connect GitHub" (Task-1445) stay on localhost: the serve-only plugin replaces
  * `navigate.ts`, and that replacement turns each start answer (which the
  * shared decoder still pins to its provider) into this server's callback for
  * that provider, which finishes a fake sign-in. No network, no browser.
@@ -10,6 +10,9 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { fileURLToPath } from "node:url";
 import {
   decodeGatewayUiAtlassianConnectStart,
+  decodeGatewayUiGithub,
+  decodeGatewayUiGithubCheck,
+  decodeGatewayUiGithubConnectStart,
   decodeGatewayUiSlack,
   decodeGatewayUiSlackConnectStart,
 } from "@assistant/shared/gatewayUi";
@@ -34,7 +37,12 @@ function devServer() {
 }
 
 /** One request through the dev middleware; answers status, headers and body. */
-function request(handler: Handler, method: string, url: string) {
+function request(
+  handler: Handler,
+  method: string,
+  url: string,
+  body: unknown = {},
+) {
   return new Promise<{
     status: number;
     location?: string | undefined;
@@ -59,7 +67,7 @@ function request(handler: Handler, method: string, url: string) {
       () => reject(new Error(`not handled: ${url}`)),
     );
     if (method === "POST") {
-      req.emit("data", "{}");
+      req.emit("data", JSON.stringify(body));
       req.emit("end");
     }
   });
@@ -181,9 +189,16 @@ test("each provider's authorize URL goes to its own dev callback", async () => {
   expect(new URL(atlassian!, "http://dev").pathname).toBe(
     "/auth/atlassian/callback",
   );
+  const [github] = await devGoTo(
+    "https://github.com/login/oauth/authorize?state=G_STATE",
+  );
   expect(new URL(slack!, "http://dev").pathname).toBe("/auth/slack/callback");
   expect(new URL(slack!, "http://dev").searchParams.get("state")).toBe(
     "S_STATE",
+  );
+  expect(new URL(github!, "http://dev").pathname).toBe("/auth/github/callback");
+  expect(new URL(github!, "http://dev").searchParams.get("state")).toBe(
+    "G_STATE",
   );
 });
 
@@ -198,4 +213,87 @@ test("a dev callback's ?slack= code replays a failure; GATEWAY_DEV_NO_SLACK hide
   expect(
     await request(handler, "POST", "/api/integrations/slack/connect"),
   ).toMatchObject({ status: 404 });
+});
+
+test("Connect GitHub on the dev page ends on the GitHub dev callback, connected, and checks", async () => {
+  vi.stubEnv("GATEWAY_DEV_NO_GITHUB", "");
+  const { handler } = devServer();
+  const before = await request(handler, "GET", "/api/integrations/github");
+  expect(decodeGatewayUiGithub(before.body)).toEqual({
+    offered: true,
+    connected: false,
+  });
+  const check = (owner: string, repo: string) =>
+    request(handler, "POST", "/api/integrations/github/check", {
+      owner,
+      repo,
+    });
+  expect(await check("castlabs", "pandeck-gateway-s1")).toMatchObject({
+    status: 409,
+    body: { error: "integration_sign_in_required" },
+  });
+
+  const start = await request(
+    handler,
+    "POST",
+    "/api/integrations/github/connect",
+  );
+  const decoded = decodeGatewayUiGithubConnectStart(start.body);
+  expect(decoded).toBeDefined();
+  const went = await devGoTo(decoded!.authorizeUrl);
+  expect(went).toHaveLength(1);
+  expect(went[0]!.startsWith("/")).toBe(true);
+  const target = new URL(went[0]!, "http://localhost:5180");
+  expect(target.pathname).toBe("/auth/github/callback");
+  expect(target.searchParams.get("state")).toBe("FAKE_DEV_STATE");
+  expect(
+    await request(handler, "GET", `${target.pathname}${target.search}`),
+  ).toMatchObject({ status: 303, location: "/" });
+
+  const status = await request(handler, "GET", "/api/integrations/github");
+  expect(decodeGatewayUiGithub(status.body)).toEqual({
+    offered: true,
+    connected: true,
+    login: "dev-user",
+  });
+  const ok = await check("castlabs", "pandeck-gateway-s1");
+  expect(ok.status).toBe(200);
+  expect(decodeGatewayUiGithubCheck(ok.body)).toMatchObject({
+    repository: "castlabs/pandeck-gateway-s1",
+  });
+  expect(await check("castlabs", "pandeck-gateway-s1-noapp")).toMatchObject({
+    status: 403,
+    body: { error: "integration_denied" },
+  });
+
+  expect(
+    await request(handler, "POST", "/api/integrations/github/clear"),
+  ).toMatchObject({ status: 204 });
+  const after = await request(handler, "GET", "/api/integrations/github");
+  expect(decodeGatewayUiGithub(after.body)).toEqual({
+    offered: true,
+    connected: false,
+  });
+});
+
+test("a dev callback's ?github= code replays a failure; GATEWAY_DEV_NO_GITHUB hides GitHub", async () => {
+  const { handler } = devServer();
+  expect(
+    await request(
+      handler,
+      "GET",
+      "/auth/github/callback?github=not_configured",
+    ),
+  ).toMatchObject({ status: 303, location: "/?github=not_configured" });
+  // A replayed failure connects nothing.
+  const status = await request(handler, "GET", "/api/integrations/github");
+  expect(status.body).toMatchObject({ connected: false });
+  vi.stubEnv("GATEWAY_DEV_NO_GITHUB", "1");
+  expect(
+    (await request(handler, "GET", "/api/integrations/github")).body,
+  ).toEqual({ offered: false, connected: false });
+  for (const path of ["connect", "clear", "check"])
+    expect(
+      await request(handler, "POST", `/api/integrations/github/${path}`),
+    ).toMatchObject({ status: 404 });
 });

@@ -122,7 +122,7 @@ test("a 503 or a malformed answer shows the unavailable state", async () => {
   }
 });
 
-test("signed in: Accounts, Jira, Slack, Clients and Requests each load; signed out none is fetched", async () => {
+test("signed in: Accounts, Jira, Slack, GitHub, Clients and Requests each load; signed out none is fetched", async () => {
   const paths = () => fetchMock.mock.calls.map(([input]) => String(input));
   fetchMock.mockResolvedValueOnce(answer(401, { error: "signed_out" }));
   await render("/");
@@ -151,6 +151,10 @@ test("signed in: Accounts, Jira, Slack, Clients and Requests each load; signed o
         return Promise.resolve(
           answer(200, { offered: true, connected: true, teamName: "Fake" }),
         );
+      case "/api/integrations/github":
+        return Promise.resolve(
+          answer(200, { offered: true, connected: true, login: "fake-login" }),
+        );
       case "/api/clients":
         return Promise.resolve(
           answer(200, {
@@ -173,6 +177,7 @@ test("signed in: Accounts, Jira, Slack, Clients and Requests each load; signed o
     "/api/accounts",
     "/api/clients",
     "/api/integrations/atlassian",
+    "/api/integrations/github",
     "/api/integrations/slack",
     "/api/me",
     "/api/requests?after=0",
@@ -184,10 +189,12 @@ test("signed in: Accounts, Jira, Slack, Clients and Requests each load; signed o
     "Accounts",
     "Jira",
     "Slack",
+    "GitHub",
     "Clients",
     "Requests",
   ]);
   expect(host.textContent).toContain("Connected to Fake");
+  expect(host.textContent).toContain("Connected as fake-login");
   expect(host.textContent).toContain("x.atlassian.net");
   expect(host.textContent).toContain("Laptop");
 });
@@ -196,9 +203,13 @@ test("signed in: Accounts, Jira, Slack, Clients and Requests each load; signed o
 
 /**
  * Signed in with nothing stored on a gateway that signs in with Atlassian,
- * and answers `slack` for its Slack status (by default, Slack not offered).
+ * and answers `slack` and `github` for their statuses (by default, neither
+ * offered).
  */
-function signedInRoutes(slack: unknown = { offered: false, connected: false }) {
+function signedInRoutes(
+  slack: unknown = { offered: false, connected: false },
+  github: unknown = { offered: false, connected: false },
+) {
   fetchMock.mockImplementation((input) => {
     switch (String(input)) {
       case "/api/me":
@@ -217,6 +228,8 @@ function signedInRoutes(slack: unknown = { offered: false, connected: false }) {
         );
       case "/api/integrations/slack":
         return Promise.resolve(answer(200, slack));
+      case "/api/integrations/github":
+        return Promise.resolve(answer(200, github));
       case "/api/clients":
         return Promise.resolve(answer(200, { clients: [] }));
       case "/api/requests?after=0":
@@ -323,6 +336,78 @@ test("signed out, ?slack=signed_out shows the Slack text on the sign-in card; ot
 
   fetchMock.mockResolvedValueOnce(answer(401, { error: "signed_out" }));
   await render("/?slack=expired");
+  expect(window.location.pathname + window.location.search).toBe("/");
+  expect(host.querySelector('[role="alert"]')).toBeNull();
+});
+
+// --- the GitHub callback's code (Task-1445) -----------------------------------
+
+const githubSection = () => host.querySelector('section[aria-label="GitHub"]');
+const GITHUB_OFFERED = { offered: true, connected: false };
+
+test("without GitHub offered no GitHub section renders", async () => {
+  signedInRoutes();
+  await render("/");
+  expect(jiraSection()).not.toBeNull();
+  expect(githubSection()).toBeNull();
+});
+
+test("signed in, GitHub offered and not connected shows not connected and Connect GitHub", async () => {
+  signedInRoutes(undefined, GITHUB_OFFERED);
+  await render("/");
+  expect(githubSection()?.textContent).toContain("GitHub is not connected.");
+  expect(githubSection()?.textContent).toContain("Connect GitHub");
+  expect(githubSection()?.textContent).toContain("Check repository access");
+});
+
+test("signed in, ?github=not_configured shows its text in the GitHub section and leaves the address", async () => {
+  signedInRoutes(undefined, GITHUB_OFFERED);
+  await render("/?github=not_configured");
+  expect(window.location.pathname + window.location.search).toBe("/");
+  expect(githubSection()?.textContent).toContain(
+    "This gateway is not set up to finish GitHub connections.",
+  );
+  expect(jiraSection()?.querySelector('[role="alert"]')).toBeNull();
+});
+
+test("an unknown ?github= value is dropped unshown and leaves the address", async () => {
+  signedInRoutes(undefined, GITHUB_OFFERED);
+  await render("/?github=%3Cb%3Egithub%20says%20no%3C%2Fb%3E");
+  expect(window.location.pathname + window.location.search).toBe("/");
+  expect(githubSection()).not.toBeNull();
+  expect(host.textContent).not.toContain("github says no");
+  expect(host.querySelector('[role="alert"]')).toBeNull();
+});
+
+test("?slack=failed&github=denied keeps both codes, each in its own section, and the rest of the address", async () => {
+  signedInRoutes({ offered: true, connected: false }, GITHUB_OFFERED);
+  await render("/?slack=failed&keep=1&github=denied#x");
+  expect(
+    window.location.pathname + window.location.search + window.location.hash,
+  ).toBe("/?keep=1#x");
+  expect(githubSection()?.textContent).toContain(
+    "Access was not granted on GitHub's page",
+  );
+  expect(githubSection()?.textContent).not.toContain("Slack");
+  expect(slackSection()?.textContent).toContain(
+    "The sign-in with Slack did not finish.",
+  );
+  expect(slackSection()?.textContent).not.toContain("GitHub");
+});
+
+test("signed out, ?github=signed_out shows the GitHub text on the sign-in card; other codes do not", async () => {
+  fetchMock.mockResolvedValueOnce(answer(401, { error: "signed_out" }));
+  await render("/?github=signed_out");
+  expect(window.location.pathname + window.location.search).toBe("/");
+  expect(host.textContent).toContain(
+    "Your gateway session ended before GitHub answered. Sign in, then use Connect GitHub again.",
+  );
+  expect(host.textContent).not.toContain("Slack");
+  expect(host.querySelector("a")?.getAttribute("href")).toBe("/auth/login");
+  act(() => root?.unmount());
+
+  fetchMock.mockResolvedValueOnce(answer(401, { error: "signed_out" }));
+  await render("/?github=expired");
   expect(window.location.pathname + window.location.search).toBe("/");
   expect(host.querySelector('[role="alert"]')).toBeNull();
 });

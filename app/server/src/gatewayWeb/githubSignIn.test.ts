@@ -21,6 +21,11 @@ import {
   GITHUB_AUTHORIZE_URL,
   type GatewayUiGithub,
 } from "@assistant/shared/gatewayUi";
+import {
+  createGithubCheck,
+  UserOperationRefusal,
+} from "../gateway/userOperations.ts";
+import type { GithubToken } from "../gateway/vaultPort.ts";
 import { edgeTlsFor } from "../gateway/x509.ts";
 import { FAKE_CLIENT, FAKE_CODE } from "../test/atlassianFake.ts";
 import { FAKE_GITHUB_CLIENT, FAKE_GITHUB_CODE } from "../test/githubFake.ts";
@@ -1074,4 +1079,82 @@ test("a check runs under the connect bound and gets its answer past the integrat
   bounds.length = 0;
   assert.equal((await check(port, session)).status, 403);
   assert.deepEqual(raised(), [3_000, 300]);
+});
+
+test("a browser that leaves mid-check frees nothing early: the user's slot ends when the vault answers", async () => {
+  const { port, fake } = await startUi();
+  const session = await signIn(port);
+  // The edge's own check behind a vault call held open, refusals mapped as
+  // `gatewayEdge.ts` maps them.
+  let release!: (answer: GithubToken) => void;
+  let reached!: () => void;
+  const calledVault = new Promise<void>((resolve) => (reached = resolve));
+  let vaultCalls = 0;
+  const github = createGithubCheck({
+    vault: {
+      githubToken: () => {
+        vaultCalls += 1;
+        if (vaultCalls > 1)
+          return Promise.resolve({
+            ok: true,
+            token: "x",
+            expiresAt: EXPIRES_AT,
+          });
+        reached();
+        return new Promise<GithubToken>((resolve) => (release = resolve));
+      },
+    },
+  });
+  fake.integrations.checkGithub = (userId, request) =>
+    github.checkGithub(userId, request).then(
+      ({ expiresAt }) => ({ expiresAt }),
+      (err: unknown) => {
+        throw err instanceof UserOperationRefusal
+          ? new IntegrationsRefusal(err.code as IntegrationsRefusalCode)
+          : err;
+      },
+    );
+
+  // The browser sends the check and goes away before any answer.
+  const body = JSON.stringify({ owner: OWNER, repo: REPO });
+  const gone = https.request({
+    host: "127.0.0.1",
+    servername: "localhost",
+    port,
+    path: CHECK_PATH,
+    method: "POST",
+    headers: {
+      ...MUTATION,
+      cookie: session,
+      "content-type": "application/json",
+      "content-length": String(Buffer.byteLength(body)),
+    },
+    agent: new https.Agent({ ca: edgeTls.caCertPem }),
+  });
+  gone.on("error", () => {});
+  gone.end(body);
+  await calledVault;
+  gone.destroy();
+
+  const logged = logs.length;
+  // The vault call still runs, so the user's slot is still taken.
+  const busy = await check(port, session);
+  assert.equal(busy.status, 409);
+  assert.deepEqual(JSON.parse(busy.body), { error: "integration_busy" });
+
+  // The vault answers the abandoned check; the edge still drops the token
+  // and logs its fixed line, and the slot is free again.
+  release({ ok: true, token: INSTALL_SENTINEL, expiresAt: EXPIRES_AT });
+  await vi.waitFor(() =>
+    assert.ok(
+      logs.slice(logged).includes("ui integration github: check ok user=u1"),
+    ),
+  );
+  const next = await check(port, session);
+  assert.equal(next.status, 200);
+  assert.deepEqual(JSON.parse(next.body), {
+    repository: `${OWNER}/${REPO}`,
+    expiresAt: EXPIRES_AT,
+  });
+  assert.equal(vaultCalls, 2);
 });

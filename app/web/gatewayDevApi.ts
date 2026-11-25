@@ -9,14 +9,20 @@ const NAVIGATE = normalizePath(
 
 /**
  * What the dev server serves in its place: instead of a provider's authorize
- * URL (Atlassian's, or Slack's on `slack.com`), the browser goes to this
+ * URL (Atlassian's, Slack's on `slack.com` or GitHub's on `github.com`), the
+ * browser goes to this
  * server's callback for that provider with a fake code, as if the provider
  * had answered, and never leaves localhost.
  */
 export const DEV_NAVIGATE = `export const goTo = (url) => {
   const target = new URL(url);
   const state = target.searchParams.get("state") ?? "";
-  const provider = target.hostname === "slack.com" ? "slack" : "atlassian";
+  const provider =
+    target.hostname === "slack.com"
+      ? "slack"
+      : target.hostname === "github.com"
+        ? "github"
+        : "atlassian";
   window.location.assign(
     "/auth/" + provider + "/callback?" +
       new URLSearchParams({ code: "FAKE_DEV_CODE", state }),
@@ -66,6 +72,10 @@ export function gatewayDevApi(): Plugin {
   // "Sign in with Slack" (no section at all).
   const slackOffered = () => process.env.GATEWAY_DEV_NO_SLACK !== "1";
   let slack: Record<string, unknown> = { connected: false };
+  // Offered unless GATEWAY_DEV_NO_GITHUB=1, which shows a gateway without
+  // "Connect GitHub" (no section at all).
+  const githubOffered = () => process.env.GATEWAY_DEV_NO_GITHUB !== "1";
+  let github: Record<string, unknown> = { connected: false };
   let clients = [
     {
       id: "c_1",
@@ -173,6 +183,19 @@ export function gatewayDevApi(): Plugin {
           res.setHeader(
             "location",
             code === null ? "/" : `/?${new URLSearchParams({ slack: code })}`,
+          );
+          res.end();
+          return;
+        }
+        // The dev page's "Connect GitHub" lands here (`DEV_NAVIGATE`); open
+        // this path with `?github=<code>` to replay a failure instead.
+        if (path === "/auth/github/callback") {
+          const code = url.searchParams.get("github");
+          if (code === null) github = { connected: true, login: "dev-user" };
+          res.statusCode = 303;
+          res.setHeader(
+            "location",
+            code === null ? "/" : `/?${new URLSearchParams({ github: code })}`,
           );
           res.end();
           return;
@@ -325,6 +348,45 @@ export function gatewayDevApi(): Plugin {
             if (!slackOffered()) return json(res, 404, { error: "not_found" });
             slack = { connected: false };
             return json(res, 204);
+          case "/api/integrations/github":
+            return json(
+              res,
+              200,
+              githubOffered()
+                ? { offered: true, ...github }
+                : { offered: false, connected: false },
+            );
+          case "/api/integrations/github/connect":
+            if (!githubOffered()) return json(res, 404, { error: "not_found" });
+            return json(res, 200, {
+              authorizeUrl: `https://github.com/login/oauth/authorize?${new URLSearchParams(
+                {
+                  client_id: "FAKE_DEV_CLIENT",
+                  redirect_uri: "http://localhost/auth/github/callback",
+                  state: "FAKE_DEV_STATE",
+                },
+              )}`,
+            });
+          case "/api/integrations/github/clear":
+            if (!githubOffered()) return json(res, 404, { error: "not_found" });
+            github = { connected: false };
+            return json(res, 204);
+          // Read access works for any repository but the one the live
+          // acceptance checks without the App installed.
+          case "/api/integrations/github/check": {
+            if (!githubOffered()) return json(res, 404, { error: "not_found" });
+            const { owner, repo } = body;
+            if (typeof owner !== "string" || typeof repo !== "string")
+              return json(res, 400, { error: "bad_request" });
+            if (!github.connected)
+              return json(res, 409, { error: "integration_sign_in_required" });
+            if (`${owner}/${repo}` === "castlabs/pandeck-gateway-s1-noapp")
+              return json(res, 403, { error: "integration_denied" });
+            return json(res, 200, {
+              repository: `${owner}/${repo}`,
+              expiresAt: Date.now() + 3600e3,
+            });
+          }
           case "/api/clients":
             return json(res, 200, { clients });
           case "/api/clients/code":

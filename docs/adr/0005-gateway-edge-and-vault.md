@@ -148,7 +148,10 @@ on the edge"):
   proves both. A token that fails the proof is revoked; a call whose record
   changed meanwhile drops its token. R-ME: every GitHub write uses the user's
   own token on the gateway, never an installation token. GitHub does not enforce
-  this; the vault's lack of any write path and its proof of every token do.
+  this; the vault's lack of any write path and its proof of every token do. The
+  gateway page connects GitHub through the vault's connect (Task-1445), and its
+  "Check repository access" is the edge's first `github.token` caller: the edge
+  drops the token at once and answers only its expiry.
 - The gateway hands tools typed credential outcomes and never builds a tool
   error; only fixed, edge-owned tool texts reach a caller. Two exceptions, each
   sanitized and capped and reaching only that user's caller:

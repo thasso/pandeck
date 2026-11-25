@@ -3,23 +3,28 @@ import {
   decodeGatewayUiMe,
   GATEWAY_UI_ATLASSIAN_CONNECT_CODES,
   GATEWAY_UI_CSRF_HEADER,
+  GATEWAY_UI_GITHUB_CONNECT_CODES,
   GATEWAY_UI_SIGNIN_CODES,
   GATEWAY_UI_SLACK_CONNECT_CODES,
   type GatewayUiAtlassianConnectCode,
   type GatewayUiAtlassianSetRequest,
+  type GatewayUiGithubConnectCode,
   type GatewayUiMe,
   type GatewayUiSigninCode,
   type GatewayUiSlackConnectCode,
 } from "@assistant/shared/gatewayUi";
 import { useFetchState } from "../hooks/useFetchState.ts";
 import {
+  checkGithub,
   clearAtlassian,
+  clearGithub,
   clearSlack,
   createEnrollmentCode,
   decideEnrollment,
   fetchAccounts,
   fetchAtlassian,
   fetchClients,
+  fetchGithub,
   fetchRequests,
   fetchSlack,
   lookupEnrollment,
@@ -29,6 +34,7 @@ import {
   revokeMcpToken,
   setAtlassian,
   startAtlassianConnect,
+  startGithubConnect,
   startSlackConnect,
 } from "./gatewayApi.ts";
 import {
@@ -93,6 +99,18 @@ function slackCode(search: string): GatewayUiSlackConnectCode | undefined {
     : undefined;
 }
 
+/**
+ * The GitHub callback's `?github=` code (Task-1445), kept as `slackCode`
+ * keeps its own: only a fixed code, any other value dropped unread.
+ */
+function githubCode(search: string): GatewayUiGithubConnectCode | undefined {
+  const code = new URLSearchParams(search).get("github");
+  return code !== null &&
+    (GATEWAY_UI_GITHUB_CONNECT_CODES as readonly string[]).includes(code)
+    ? (code as GatewayUiGithubConnectCode)
+    : undefined;
+}
+
 /** Takes the query parameter `key` out of the address, keeping the rest. */
 function dropQueryKey(key: string): void {
   const { pathname, search, hash } = window.location;
@@ -127,9 +145,13 @@ export function GatewayApp({
   // kept code outlives the `/api/me` load that decides where it shows.
   const [connectCode] = useState(() => atlassianCode(window.location.search));
   const [slackConnectCode] = useState(() => slackCode(window.location.search));
+  const [githubConnectCode] = useState(() =>
+    githubCode(window.location.search),
+  );
   useEffect(() => {
     dropQueryKey("atlassian");
     dropQueryKey("slack");
+    dropQueryKey("github");
   }, []);
   const { state } = useFetchState("me", fetchMe);
   const [signingOut, setSigningOut] = useState(false);
@@ -147,6 +169,10 @@ export function GatewayApp({
   const { state: slack, reload: reloadSlack } = useFetchState(
     signedIn ? "slack" : null,
     fetchSlack,
+  );
+  const { state: github, reload: reloadGithub } = useFetchState(
+    signedIn ? "github" : null,
+    fetchGithub,
   );
   const { state: clients, reload: reloadClients } = useFetchState(
     signedIn ? "clients" : null,
@@ -169,6 +195,10 @@ export function GatewayApp({
     await clearSlack();
     reloadSlack();
   }, [reloadSlack]);
+  const removeGithub = useCallback(async () => {
+    await clearGithub();
+    reloadGithub();
+  }, [reloadGithub]);
   /** A client mutation, then the list again, whether or not it was done. */
   const thenReload = useCallback(
     <T,>(run: Promise<T>): Promise<T> => run.finally(reloadClients),
@@ -225,6 +255,9 @@ export function GatewayApp({
               ...(slackConnectCode === "signed_out"
                 ? { slackSignedOut: true }
                 : {}),
+              ...(githubConnectCode === "signed_out"
+                ? { githubSignedOut: true }
+                : {}),
               ...(enrollCode ? { enrollmentWaiting: true } : {}),
             }
         : { kind: "loading" };
@@ -248,6 +281,13 @@ export function GatewayApp({
           clear: removeSlack,
           connect: startSlackConnect,
           callback: slackConnectCode,
+        }}
+        github={{
+          status: github,
+          clear: removeGithub,
+          connect: startGithubConnect,
+          check: checkGithub,
+          callback: githubConnectCode,
         }}
         clients={clientsProps}
         requests={{ fetchRequests }}
