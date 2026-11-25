@@ -10,8 +10,9 @@ import {
   type ScheduleTiming,
 } from "@assistant/shared/schedules";
 import { afterEach, beforeEach, describe, it, vi } from "vitest";
+import { readStoredAppSettings } from "../appSettingsFile.ts";
 import { setStateChangeSink } from "../db/changeSet.ts";
-import { getDb } from "../db/index.ts";
+import { closeDb, getDb } from "../db/index.ts";
 import {
   SCHEDULE_RETENTION_MS,
   scheduleStore,
@@ -121,6 +122,15 @@ function harness(startMs: number, store?: Store) {
       Object.assign(settingsValue, patch);
       for (const listener of listeners) listener();
     },
+    /** Pause all as a settings save does it: the switch, then the notice. */
+    setPaused(paused: boolean) {
+      scheduleStore.setPaused(
+        paused,
+        nowMs,
+        settingsValue.graceWindowMinutes * MINUTE,
+      );
+      for (const listener of listeners) listener();
+    },
   };
 }
 
@@ -132,7 +142,10 @@ function started(h: ReturnType<typeof harness>) {
 }
 
 beforeEach(() => {
-  getDb().exec("DELETE FROM schedule_occurrences; DELETE FROM schedules;");
+  // Pause all starts with no row; no settings file holds `paused` to import.
+  getDb().exec(
+    "DELETE FROM schedule_occurrences; DELETE FROM schedules; DELETE FROM schedule_pause;",
+  );
 });
 afterEach(() => {
   for (const stop of stops) stop();
@@ -266,7 +279,7 @@ describe("Pause all", () => {
     const h = started(harness(DEC1 - HOUR));
     h.advanceTo(DEC1);
     const [owed] = scheduleStore.history(schedule.id);
-    h.setSettings({ paused: true });
+    h.setPaused(true);
     h.advanceTo(DEC1 + 2 * DAY + MINUTE);
     assert.deepEqual(states(schedule.id), [
       "2026-12-01T09:00:00.000Z claimed",
@@ -274,13 +287,11 @@ describe("Pause all", () => {
       "2026-12-03T09:00:00.000Z missed",
     ]);
     assert.equal(scheduleStore.getOccurrence(owed!.id)?.state, "claimed");
-    // Restarting while paused changes nothing.
+    // Restarting changes nothing: the pause is stored, not remembered.
     h.clock.stop();
-    const restarted = harness(DEC1 + 2 * DAY + 2 * MINUTE);
-    restarted.setSettings({ paused: true });
-    started(restarted);
+    const restarted = started(harness(DEC1 + 2 * DAY + 2 * MINUTE));
     // Resuming inside the old grace window claims nothing missed.
-    restarted.setSettings({ paused: false });
+    restarted.setPaused(false);
     restarted.advanceTo(DEC1 + 2 * DAY + 10 * MINUTE);
     assert.equal(h.claims.length + restarted.claims.length, 1);
     assert.deepEqual(states(schedule.id), [
@@ -296,16 +307,20 @@ describe("Pause all", () => {
       "2026-12-03T09:00:00.000Z missed",
       "2026-12-04T09:00:00.000Z claimed",
     ]);
+    assert.equal(restarted.claims.length, 1);
   });
 });
 
-describe("Pause all, resumed before the tick that would miss", () => {
+describe("Pause all across late ticks, back-off and restarts", () => {
   const DEC2 = DEC1 + DAY;
   const SECOND = 1000;
 
   /** A daily Schedule whose Dec 1 occurrence is claimed and still owed. */
-  function owedSchedule(): { id: string; owedId: string } {
-    const schedule = scheduleStore.create(input(), DEC1 - HOUR);
+  function owedSchedule(timing: ScheduleTiming = DAILY): {
+    id: string;
+    owedId: string;
+  } {
+    const schedule = scheduleStore.create(input({ timing }), DEC1 - HOUR);
     const h = started(harness(DEC1 - HOUR));
     h.advanceTo(DEC1);
     h.clock.stop();
@@ -329,21 +344,21 @@ describe("Pause all, resumed before the tick that would miss", () => {
     };
   }
 
-  /** A paused clock at Dec 2 08:59:30 whose boot sweep fails: retry 09:00:30. */
-  function pausedInBackOff(store: Store = failingSweeps(1)) {
+  /** A clock at Dec 2 08:59:30 whose boot sweep fails: retry 09:00:30. */
+  function inBackOff(paused: boolean, store: Store = failingSweeps(1)) {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const h = harness(DEC2 - 30 * SECOND, store);
-    h.setSettings({ paused: true });
+    if (paused) h.setPaused(true);
     started(h);
     assert.equal(h.firesAt(), DEC2 + 30 * SECOND);
     return h;
   }
 
-  it("misses the paused due time and keeps the owed claim (A-F002)", () => {
+  it("C1: misses the paused due time and keeps the owed claim (A-F002)", () => {
     const { id, owedId } = owedSchedule();
-    const h = pausedInBackOff();
+    const h = inBackOff(true);
     h.advanceTo(DEC2 + 15 * SECOND);
-    h.setSettings({ paused: false });
+    h.setPaused(false);
     h.advanceTo(DEC2 + 30 * SECOND);
     assert.deepEqual(states(id), [
       "2026-12-01T09:00:00.000Z claimed",
@@ -360,16 +375,168 @@ describe("Pause all, resumed before the tick that would miss", () => {
       "2026-12-02T09:00:00.000Z missed",
       "2026-12-03T09:00:00.000Z claimed",
     ]);
+    assert.equal(h.claims.length, 1);
+  });
+
+  it("C2: a restart during the back-off while still paused misses it", () => {
+    const { id, owedId } = owedSchedule();
+    const h = inBackOff(true);
+    h.advanceTo(DEC2 + 15 * SECOND);
+    h.clock.stop();
+    closeDb();
+    const restarted = started(harness(DEC2 + 40 * SECOND));
+    assert.deepEqual(states(id), [
+      "2026-12-01T09:00:00.000Z claimed",
+      "2026-12-02T09:00:00.000Z missed",
+    ]);
+    assert.equal(scheduleStore.getOccurrence(owedId)?.state, "claimed");
+    assert.deepEqual([...h.claims, ...restarted.claims], []);
+  });
+
+  it("C3: a restart after a resume during the back-off misses it and keeps the owed claim (A-F002)", () => {
+    const { id, owedId } = owedSchedule();
+    const h = inBackOff(true);
+    h.advanceTo(DEC2 + 15 * SECOND);
+    h.setPaused(false);
+    h.clock.stop();
+    closeDb();
+    const restarted = started(harness(DEC2 + 20 * SECOND));
+    assert.deepEqual(states(id), [
+      "2026-12-01T09:00:00.000Z claimed",
+      "2026-12-02T09:00:00.000Z missed",
+    ]);
+    assert.equal(scheduleStore.getOccurrence(owedId)?.state, "claimed");
+    assert.deepEqual([...h.claims, ...restarted.claims], []);
+    restarted.advanceTo(DEC2 + DAY);
+    assert.deepEqual(states(id), [
+      "2026-12-01T09:00:00.000Z superseded",
+      "2026-12-02T09:00:00.000Z missed",
+      "2026-12-03T09:00:00.000Z claimed",
+    ]);
+    assert.equal(restarted.claims.length, 1);
+  });
+
+  it("C4: a due time in the unpaused gap between two pauses is claimed by the second pause (A-F003)", () => {
+    const { id, owedId } = owedSchedule();
+    const h = inBackOff(true);
+    h.advanceTo(DEC2 - 10 * SECOND);
+    h.setPaused(false);
+    h.advanceTo(DEC2 + 5 * SECOND);
+    h.setPaused(true);
+    h.advanceTo(DEC2 + 15 * SECOND);
+    h.setPaused(false);
+    h.advanceTo(DEC2 + 30 * SECOND);
+    assert.deepEqual(states(id), [
+      "2026-12-01T09:00:00.000Z superseded",
+      "2026-12-02T09:00:00.000Z claimed",
+    ]);
+    const [claimed] = scheduleStore.history(id);
+    assert.equal(claimed!.claimedAtMs, DEC2 + 5 * SECOND, "at the pause");
+    assert.equal(scheduleStore.getOccurrence(owedId)?.state, "superseded");
+    assert.deepEqual(
+      h.claims.map((c) => c.occurrenceId),
+      [claimed!.id],
+    );
+    assert.equal(scheduleStore.paused(), false);
+  });
+
+  it("C4b: of two dailies, the one due in the unpaused gap is claimed and the one due while paused is missed", () => {
+    const b = owedSchedule();
+    const a = scheduleStore.create(
+      input({ timing: { ...DAILY, time: "08:45" } }),
+      DEC2 - 2 * HOUR,
+    ).id;
+    const h = started(harness(DEC2 - 2 * HOUR));
+    h.advanceTo(DEC2 - HOUR);
+    h.setPaused(true);
+    h.advanceTo(DEC2 - 30 * MINUTE);
+    h.setPaused(false);
+    // A's 08:45 falls unpaused, but its timer runs late.
+    h.stall(DEC2 - 10 * MINUTE);
+    h.setPaused(true);
+    // B's 09:00 falls while paused.
+    h.stall(DEC2 + 10 * MINUTE);
+    h.setPaused(false);
+    h.advanceTo(DEC2 + 11 * MINUTE);
+    assert.deepEqual(states(a), ["2026-12-02T08:45:00.000Z claimed"]);
+    assert.deepEqual(states(b.id), [
+      "2026-12-01T09:00:00.000Z claimed",
+      "2026-12-02T09:00:00.000Z missed",
+    ]);
+    assert.equal(scheduleStore.getOccurrence(b.owedId)?.state, "claimed");
+    const [aClaim] = scheduleStore.history(a);
+    assert.deepEqual(
+      h.claims.map((c) => c.occurrenceId),
+      [aClaim!.id],
+    );
+  });
+
+  it("C5: counts a due time at the resume instant as paused, one after it as not", () => {
+    const atResume = owedSchedule();
+    const h = inBackOff(true);
+    h.advanceTo(DEC2);
+    h.setPaused(false);
+    h.advanceTo(DEC2 + 30 * SECOND);
+    assert.deepEqual(states(atResume.id), [
+      "2026-12-01T09:00:00.000Z claimed",
+      "2026-12-02T09:00:00.000Z missed",
+    ]);
+    assert.deepEqual(h.claims, []);
+    h.clock.stop();
+
+    getDb().exec(
+      "DELETE FROM schedule_occurrences; DELETE FROM schedules; DELETE FROM schedule_pause;",
+    );
+    const afterResume = owedSchedule();
+    const g = inBackOff(true);
+    g.advanceTo(DEC2 - 1);
+    g.setPaused(false);
+    g.advanceTo(DEC2 + 30 * SECOND);
+    assert.deepEqual(states(afterResume.id), [
+      "2026-12-01T09:00:00.000Z superseded",
+      "2026-12-02T09:00:00.000Z claimed",
+    ]);
+    assert.equal(g.claims.length, 1);
+  });
+
+  it("C6: an unpaused due time crossed during the back-off is claimed by a pause within grace, missed beyond it", () => {
+    const within = owedSchedule();
+    const h = inBackOff(false);
+    h.advanceTo(DEC2 + 15 * SECOND);
+    h.setPaused(true);
+    assert.deepEqual(states(within.id), [
+      "2026-12-01T09:00:00.000Z superseded",
+      "2026-12-02T09:00:00.000Z claimed",
+    ]);
+    assert.equal(h.claims.length, 1);
+    h.advanceTo(DEC2 + 30 * SECOND);
+    assert.equal(h.claims.length, 1, "the retry claims nothing more");
+    h.clock.stop();
+
+    getDb().exec(
+      "DELETE FROM schedule_occurrences; DELETE FROM schedules; DELETE FROM schedule_pause;",
+    );
+    const beyond = owedSchedule();
+    const g = inBackOff(false);
+    g.setSettings({ graceWindowMinutes: 0 });
+    g.advanceTo(DEC2 + 15 * SECOND);
+    g.setPaused(true);
+    g.advanceTo(DEC2 + 30 * SECOND);
+    assert.deepEqual(states(beyond.id), [
+      "2026-12-01T09:00:00.000Z claimed",
+      "2026-12-02T09:00:00.000Z missed",
+    ]);
+    assert.deepEqual(g.claims, []);
   });
 
   it("misses it when the timer runs late across the resume, no failure", () => {
     const { id, owedId } = owedSchedule();
     const h = harness(DEC2 - HOUR);
-    h.setSettings({ paused: true });
+    h.setPaused(true);
     started(h);
     assert.equal(h.firesAt(), DEC2);
     h.stall(DEC2 + 10 * SECOND);
-    h.setSettings({ paused: false });
+    h.setPaused(false);
     h.advanceTo(DEC2 + 20 * SECOND);
     assert.deepEqual(states(id), [
       "2026-12-01T09:00:00.000Z claimed",
@@ -379,14 +546,14 @@ describe("Pause all, resumed before the tick that would miss", () => {
     assert.deepEqual(h.claims, []);
   });
 
-  it("misses it across several pause and resume switches and writes during the back-off", () => {
+  it("misses it across several switches and writes during the back-off", () => {
     const { id, owedId } = owedSchedule();
-    const h = pausedInBackOff();
+    const h = inBackOff(true);
     h.advanceTo(DEC2 + 5 * SECOND);
-    h.setSettings({ paused: false });
-    h.setSettings({ paused: true });
+    h.setPaused(false);
+    h.setPaused(true);
     scheduleStore.create(input(), DEC2 + 6 * SECOND);
-    h.setSettings({ paused: false });
+    h.setPaused(false);
     h.setSettings({ graceWindowMinutes: 90 });
     assert.equal(h.firesAt(), DEC2 + 30 * SECOND, "the back-off holds");
     h.advanceTo(DEC2 + 30 * SECOND);
@@ -398,9 +565,8 @@ describe("Pause all, resumed before the tick that would miss", () => {
     assert.deepEqual(h.claims, []);
   });
 
-  it("keeps the paused cutoff while the claim that applies it fails", () => {
+  it("a resume needs no successful tick: failing claims cannot turn a paused due time into a claim", () => {
     const { id, owedId } = owedSchedule();
-    vi.spyOn(console, "warn").mockImplementation(() => {});
     let claimFailures = 2;
     const store: Store = {
       ...failingSweeps(1),
@@ -412,82 +578,121 @@ describe("Pause all, resumed before the tick that would miss", () => {
         return scheduleStore.claimDue(...args);
       },
     };
-    const h = pausedInBackOff(store);
-    h.advanceTo(DEC2 + 15 * SECOND);
-    h.setSettings({ paused: false });
-    h.advanceTo(DEC2 + 90 * SECOND);
-    assert.equal(claimFailures, 0, "both retries failed");
+    const h = inBackOff(true, store);
+    // The paused retry at 09:00:30 fails to claim: retry at 09:01:30.
+    h.advanceTo(DEC2 + 45 * SECOND);
+    assert.equal(claimFailures, 1);
     assert.deepEqual(states(id), ["2026-12-01T09:00:00.000Z claimed"]);
-    h.advanceTo(DEC2 + 150 * SECOND);
+    h.setPaused(false);
     assert.deepEqual(states(id), [
       "2026-12-01T09:00:00.000Z claimed",
       "2026-12-02T09:00:00.000Z missed",
     ]);
+    h.advanceTo(DEC2 + 150 * SECOND);
     assert.equal(scheduleStore.getOccurrence(owedId)?.state, "claimed");
     assert.deepEqual(h.claims, []);
   });
 
-  it("hears the resume through a real settings write", async () => {
-    const { saveSettings } = await import("../settingsService.ts");
+  it("C8: a claim made while the clock is stopped stays owed, and start does not replay it", () => {
+    const schedule = scheduleStore.create(input(), DEC2 - DAY / 2);
+    const h = started(harness(DEC2 - HOUR));
+    h.clock.stop();
+    h.stall(DEC2 + MINUTE);
+    h.setPaused(true);
+    const [owed] = scheduleStore.history(schedule.id);
+    assert.equal(owed?.state, "claimed");
+    assert.deepEqual(h.claims, []);
+    h.clock.start();
+    h.advanceTo(DEC2 + 2 * MINUTE);
+    assert.deepEqual(h.claims, [], "not replayed, not duplicated");
+    closeDb();
+    assert.equal(scheduleStore.getOccurrence(owed!.id)?.state, "claimed");
+  });
+
+  it("C9: hands the hook exactly one call per claim, from a tick and from a switch", () => {
+    const ticked = scheduleStore.create(input(), DEC2 - DAY / 2).id;
+    const switched = scheduleStore.create(
+      input({ timing: { ...DAILY, time: "09:05" } }),
+      DEC2 - DAY / 2,
+    ).id;
+    const h = started(harness(DEC2 - HOUR));
+    h.advanceTo(DEC2);
+    h.stall(DEC2 + 6 * MINUTE);
+    h.setPaused(true);
+    h.advanceTo(DEC2 + 10 * MINUTE);
+    const ids = [ticked, switched].map(
+      (id) => scheduleStore.history(id)[0]!.id,
+    );
+    assert.deepEqual(
+      [ticked, switched].map((id) => states(id)),
+      [
+        ["2026-12-02T09:00:00.000Z claimed"],
+        ["2026-12-02T09:05:00.000Z claimed"],
+      ],
+    );
+    assert.deepEqual(
+      h.claims.map((c) => c.occurrenceId),
+      ids,
+    );
+  });
+
+  it("C7: a real settings save switches the stored pause; the file keeps no `paused`", async () => {
+    const { saveSettings, settingsPatchForWrites } =
+      await import("../settingsService.ts");
     const { getSettings } = await import("../settings.ts");
     const before = getSettings().schedules;
     const { id, owedId } = owedSchedule();
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    let nowMs = DEC2 - 30 * SECOND;
+    vi.useFakeTimers({ toFake: ["Date"] });
     let pending: { fire: () => void; at: number } | undefined;
+    const claims: string[] = [];
     const clock = createScheduleClock({
       store: failingSweeps(1),
-      now: () => nowMs,
+      now: () => Date.now(),
       timers: {
-        set: (fire, delayMs) => (pending = { fire, at: nowMs + delayMs }),
+        set: (fire, delayMs) => (pending = { fire, at: Date.now() + delayMs }),
         clear: (handle) => {
           if (pending === handle) pending = undefined;
         },
       },
+      claimed: (_target, occurrence) => claims.push(occurrence.id),
     });
+    const pause = (value: boolean) =>
+      saveSettings(
+        settingsPatchForWrites([{ path: "schedules.paused", value }]),
+      );
     try {
-      await saveSettings({ schedules: { ...before, paused: true } });
+      vi.setSystemTime(DEC2 - 30 * SECOND);
+      await pause(true);
+      assert.equal(getSettings().schedules.paused, true);
+      assert.equal(scheduleStore.paused(), true);
+      assert.equal(
+        "paused" in (readStoredAppSettings().schedules ?? {}),
+        false,
+      );
       clock.start();
       assert.equal(pending?.at, DEC2 + 30 * SECOND);
-      nowMs = DEC2 + 15 * SECOND;
-      await saveSettings({ schedules: { ...before, paused: true } });
-      await saveSettings({ schedules: { ...before, paused: false } });
-      nowMs = DEC2 + 30 * SECOND;
+      vi.setSystemTime(DEC2 + 15 * SECOND);
+      await pause(true);
+      await pause(false);
+      assert.equal(getSettings().schedules.paused, false);
+      assert.equal(
+        "paused" in (readStoredAppSettings().schedules ?? {}),
+        false,
+      );
+      vi.setSystemTime(DEC2 + 30 * SECOND);
       pending!.fire();
       assert.deepEqual(states(id), [
         "2026-12-01T09:00:00.000Z claimed",
         "2026-12-02T09:00:00.000Z missed",
       ]);
       assert.equal(scheduleStore.getOccurrence(owedId)?.state, "claimed");
+      assert.deepEqual(claims, []);
     } finally {
       clock.stop();
+      vi.useRealTimers();
       await saveSettings({ schedules: before });
     }
-  });
-
-  it("counts a due time at the resume instant as paused, one after it as not", () => {
-    const atResume = owedSchedule();
-    const h = pausedInBackOff();
-    h.advanceTo(DEC2);
-    h.setSettings({ paused: false });
-    h.advanceTo(DEC2 + 30 * SECOND);
-    assert.deepEqual(states(atResume.id), [
-      "2026-12-01T09:00:00.000Z claimed",
-      "2026-12-02T09:00:00.000Z missed",
-    ]);
-    h.clock.stop();
-
-    getDb().exec("DELETE FROM schedule_occurrences; DELETE FROM schedules;");
-    const afterResume = owedSchedule();
-    const g = pausedInBackOff();
-    g.advanceTo(DEC2 - 1);
-    g.setSettings({ paused: false });
-    g.advanceTo(DEC2 + 30 * SECOND);
-    assert.deepEqual(states(afterResume.id), [
-      "2026-12-01T09:00:00.000Z superseded",
-      "2026-12-02T09:00:00.000Z claimed",
-    ]);
-    assert.equal(g.claims.length, 1);
   });
 });
 
@@ -706,7 +911,8 @@ describe("failure", () => {
     h.clock.stop();
     const armed = h.delays.length;
     scheduleStore.create(input(), DEC1 - HOUR);
-    h.setSettings({ paused: true });
+    h.setPaused(true);
+    h.setSettings({ graceWindowMinutes: 30 });
     assert.equal(h.delays.length, armed);
     assert.equal(h.clock.maintenanceDueAtMs(), undefined);
   });

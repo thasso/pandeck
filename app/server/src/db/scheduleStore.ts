@@ -1,5 +1,6 @@
 /**
- * Schedules and their occurrences (`docs/schedules.md`, migration 0107).
+ * Schedules and their occurrences (`docs/schedules.md`, migrations 0107 and
+ * 0108), and Pause all.
  *
  * Every public write is ONE transaction that stamps each Schedule it touched
  * with one fresh revision from the `schedule_revision` sequence, so a write
@@ -10,6 +11,12 @@
  * and a call that finds it already terminal changes nothing and says so. That
  * makes settlement, supersession and withdrawal idempotent, and a late or
  * repeated settle can never overwrite a terminal state or move `done_at_ms`.
+ *
+ * Pause all is one row (`schedule_pause`), and every switch is a transaction
+ * that first settles each due Schedule under the state BEFORE the switch. So
+ * every due time between a Schedule's `next_due_at_ms` and now fell in the
+ * state the row holds now, and a claim only reads the row in its own
+ * transaction: no instant of a pause or resume is remembered anywhere else.
  *
  * Nothing in production creates a Schedule yet: the agent tools that will
  * arrive with the scheduled prompts lane ([Task-1503](pa://task/1503)).
@@ -25,8 +32,9 @@ import {
   type ScheduleTerminalState,
   type ScheduleTiming,
 } from "@assistant/shared/schedules";
+import { readStoredAppSettings } from "../appSettingsFile.ts";
 import { withChangeSet, type StateTopicWrites } from "./changeSet.ts";
-import { getDb } from "./index.ts";
+import { getDb, inDbTransaction } from "./index.ts";
 import { nextId } from "./sequences.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -107,21 +115,27 @@ export interface ScheduleUpdate {
   controlledBy?: ScheduleActor;
 }
 
-/** How the clock wants due times settled: its grace window and Pause all. */
+/**
+ * How the clock wants due times settled: its grace window. Pause all is not
+ * part of it; the store reads its own row in the claim's transaction.
+ */
 export interface ScheduleClaimPolicy {
   graceMs: number;
-  paused: boolean;
-  /**
-   * Due times at or before this instant were crossed while paused: they are
-   * recorded `missed` and never claimed, though the clock now runs unpaused.
-   */
-  missThroughMs?: number;
 }
 
 export interface ScheduleClaimOutcome {
   /** The occurrence claimed now, read back from its frozen row. */
   claimed?: ScheduleOccurrenceRecord;
   /** Due times recorded `missed` by this call. */
+  missed: number;
+}
+
+export interface SchedulePauseOutcome {
+  /** False when Pause all already had this state: nothing was written. */
+  changed: boolean;
+  /** Occurrences the switch claimed: due before it, unpaused, within grace. */
+  claimed: ScheduleOccurrenceRecord[];
+  /** Due times the switch recorded `missed`. */
   missed: number;
 }
 
@@ -249,6 +263,75 @@ const scheduleTopicWrites: StateTopicWrites = {
 };
 
 const writeListeners = new Set<() => void>();
+const claimListeners = new Set<
+  (occurrence: ScheduleOccurrenceRecord) => void
+>();
+
+function warnListener(what: string, err: unknown): void {
+  console.warn(
+    `[schedules] ${what} failed:`,
+    err instanceof Error ? err.message : String(err),
+  );
+}
+
+/** What one write did, filled in by `fn` inside its transaction. */
+interface WriteEffects {
+  /** Schedules written: stamped and reported to the topic. */
+  touched: Set<string>;
+  /** Occurrences claimed: each listener hears them once, after commit. */
+  claimed: string[];
+}
+
+/**
+ * Tell the listeners about a write that committed: each `onWrite` listener
+ * once, then each `onClaimed` listener once per occurrence claimed and still
+ * `claimed` now. A listener's throw is logged and the others still run.
+ */
+function afterCommit(effects: WriteEffects): void {
+  if (effects.touched.size === 0) return;
+  for (const listener of writeListeners)
+    try {
+      listener();
+    } catch (err) {
+      warnListener("write listener", err);
+    }
+  if (effects.claimed.length === 0 || claimListeners.size === 0) return;
+  let records: ScheduleOccurrenceRecord[] = [];
+  try {
+    records = effects.claimed
+      .map(occurrenceRow)
+      .filter((row) => row?.state === "claimed")
+      .map((row) => occurrenceRecordOf(row!));
+  } catch (err) {
+    warnListener("reading the committed claims", err);
+  }
+  for (const record of records)
+    for (const listener of claimListeners)
+      try {
+        listener(record);
+      } catch (err) {
+        warnListener(`claim listener for ${record.id}`, err);
+      }
+}
+
+/**
+ * True when the write whose transaction minted `revision` for `touched`
+ * committed, read back after it threw: a rollback restored every touched
+ * row's earlier revision (or removed the row).
+ */
+function committedAt(touched: Set<string>, revision: number): boolean {
+  try {
+    const read = getDb().prepare("SELECT revision FROM schedules WHERE id = ?");
+    return [...touched].some(
+      (id) =>
+        (read.get(id) as { revision: number } | undefined)?.revision ===
+        revision,
+    );
+  } catch (err) {
+    warnListener("reading back a failed write", err);
+    return false;
+  }
+}
 
 /**
  * One write transaction with a change set. Every Schedule id `fn` adds to
@@ -256,27 +339,29 @@ const writeListeners = new Set<() => void>();
  * statement and reported to the topic after commit, so a throw anywhere, the
  * stamp included, rolls back the whole write and announces nothing. A write
  * that touched a Schedule then tells each {@link scheduleStore.onWrite}
- * listener, after commit.
+ * listener, and each {@link scheduleStore.onClaimed} listener about every
+ * occurrence it claimed, after commit.
+ *
+ * When the call throws after its transaction committed (the topic hand-off
+ * threw), the write stands: a committed claim is never undone. The listeners
+ * still hear it, read back from what committed, and then the error throws.
  */
-function write<T>(fn: (touched: Set<string>) => T): T {
-  let wrote = false;
-  const value = withChangeSet((changes) => {
-    const touched = new Set<string>();
-    const value = fn(touched);
-    changes.touch(scheduleTopicWrites, [...touched]);
-    wrote = touched.size > 0;
-    return value;
-  });
-  if (wrote)
-    for (const listener of writeListeners)
-      try {
-        listener();
-      } catch (err) {
-        console.warn(
-          "[schedules] write listener failed:",
-          err instanceof Error ? err.message : String(err),
-        );
-      }
+function write<T>(fn: (touched: Set<string>, claimed: string[]) => T): T {
+  const effects: WriteEffects = { touched: new Set(), claimed: [] };
+  let revision: number | undefined;
+  let value: T;
+  try {
+    value = withChangeSet((changes) => {
+      const value = fn(effects.touched, effects.claimed);
+      revision = changes.touch(scheduleTopicWrites, [...effects.touched]);
+      return value;
+    });
+  } catch (err) {
+    if (revision !== undefined && committedAt(effects.touched, revision))
+      afterCommit(effects);
+    throw err;
+  }
+  afterCommit(effects);
   return value;
 }
 
@@ -416,6 +501,93 @@ function dueTimesThrough(
     if (batch.length < CATCH_UP_BATCH) return { due, nextDueMs: undefined };
     cursor = batch.at(-1)!;
   }
+}
+
+/**
+ * Pause all as stored, inside the caller's transaction. With no row yet, the
+ * row is created once from the pause intent the settings file used to keep
+ * (`schedules.paused: true`; any other or no value is not paused). A file that
+ * cannot be read throws and rolls the caller back: it never reads as false.
+ */
+function pausedIn(): boolean {
+  const db = getDb();
+  const row = db
+    .prepare("SELECT paused FROM schedule_pause WHERE id = 1")
+    .get() as { paused: number } | undefined;
+  if (row) return row.paused === 1;
+  const paused = readStoredAppSettings().schedules?.paused === true;
+  db.prepare("INSERT INTO schedule_pause (id, paused) VALUES (1, ?)").run(
+    paused ? 1 : 0,
+  );
+  return paused;
+}
+
+/**
+ * Settle every due time of one due Schedule up to `nowMs`: with a `claim`
+ * policy the latest is claimed when no older than the grace window, every
+ * other one is recorded `missed` (the newest {@link SCHEDULE_HISTORY_LIMIT}),
+ * and `next_due_at_ms` advances to the first occurrence after `nowMs`. A claim
+ * supersedes an earlier still-`claimed` occurrence. Without one (paused),
+ * nothing is claimed and an existing claim stays owed.
+ */
+function settleDue(
+  row: ScheduleRow,
+  nowMs: number,
+  claim: ScheduleClaimPolicy | null,
+  effects: { touched: Set<string>; claimed: string[] },
+): { claimedId?: string; missed: number } {
+  const timing = JSON.parse(row.timing_json) as ScheduleTiming;
+  const { due, nextDueMs } = dueTimesThrough(
+    timing,
+    row.next_due_at_ms!,
+    nowMs,
+  );
+  const latest = due.at(-1)!;
+  const claimable = claim !== null && nowMs - latest <= claim.graceMs;
+  let claimedId: string | undefined;
+  if (claimable) {
+    claimedId = insertOccurrence(row, latest, "claimed", nowMs);
+    if (claimedId) {
+      endClaimed(row.id, "superseded", nowMs, claimedId);
+      effects.claimed.push(claimedId);
+    }
+  }
+  let missed = 0;
+  for (const at of (claimable ? due.slice(0, -1) : due).slice(
+    -SCHEDULE_HISTORY_LIMIT,
+  ))
+    if (insertOccurrence(row, at, "missed", nowMs)) missed += 1;
+  getDb()
+    .prepare("UPDATE schedules SET next_due_at_ms = ? WHERE id = ?")
+    .run(nextDueMs ?? null, row.id);
+  refreshDone(row.id, nowMs);
+  prune(row.id);
+  effects.touched.add(row.id);
+  return { ...(claimedId ? { claimedId } : {}), missed };
+}
+
+/** An enabled Schedule due at or before `nowMs`, live. */
+function dueRow(id: string, nowMs: number): ScheduleRow | undefined {
+  const row = liveRow(id);
+  return row &&
+    row.enabled === 1 &&
+    row.next_due_at_ms !== null &&
+    row.next_due_at_ms <= nowMs
+    ? row
+    : undefined;
+}
+
+function dueIdsAt(nowMs: number): string[] {
+  return (
+    getDb()
+      .prepare(
+        `SELECT id FROM schedules
+         WHERE deleted_at_ms IS NULL AND enabled = 1
+           AND next_due_at_ms IS NOT NULL AND next_due_at_ms <= ?
+         ORDER BY next_due_at_ms, id`,
+      )
+      .all(nowMs) as Array<{ id: string }>
+  ).map((row) => row.id);
 }
 
 /* ---------------------------------- store --------------------------------- */
@@ -590,12 +762,12 @@ export const scheduleStore = {
 
   /**
    * Settle every due time of one Schedule up to `nowMs` in ONE transaction:
-   * the latest is claimed when not paused and no older than the grace window,
-   * every other one is recorded `missed` (the newest
-   * {@link SCHEDULE_HISTORY_LIMIT} of them), and `next_due_at_ms` advances to
-   * the first occurrence after `nowMs`. A claim supersedes an earlier
-   * still-`claimed` occurrence; while paused, and for a due time at or before
-   * `missThroughMs`, nothing is claimed and an existing claim stays owed.
+   * unless Pause all is on (read in this transaction), the latest is claimed
+   * when no older than the grace window; every other one is recorded `missed`
+   * (the newest {@link SCHEDULE_HISTORY_LIMIT} of them), and `next_due_at_ms`
+   * advances to the first occurrence after `nowMs`. A claim supersedes an
+   * earlier still-`claimed` occurrence; while paused nothing is claimed and an
+   * existing claim stays owed.
    *
    * A due time already recorded (the unique `(schedule_id, due_at_ms)`)
    * inserts nothing, so a claim happens at most once across restarts.
@@ -605,45 +777,56 @@ export const scheduleStore = {
     nowMs: number,
     policy: ScheduleClaimPolicy,
   ): ScheduleClaimOutcome {
-    return write((touched) => {
-      const row = liveRow(id);
-      if (
-        !row ||
-        row.enabled !== 1 ||
-        row.next_due_at_ms === null ||
-        row.next_due_at_ms > nowMs
-      )
-        return { missed: 0 };
-      const timing = JSON.parse(row.timing_json) as ScheduleTiming;
-      const { due, nextDueMs } = dueTimesThrough(
-        timing,
-        row.next_due_at_ms,
+    return write((touched, claimed) => {
+      const row = dueRow(id, nowMs);
+      if (!row) return { missed: 0 };
+      const { claimedId, missed } = settleDue(
+        row,
         nowMs,
+        pausedIn() ? null : policy,
+        { touched, claimed },
       );
-      const latest = due.at(-1)!;
-      const claimable =
-        !policy.paused &&
-        latest > (policy.missThroughMs ?? -Infinity) &&
-        nowMs - latest <= policy.graceMs;
-      let claimedId: string | undefined;
-      if (claimable) {
-        claimedId = insertOccurrence(row, latest, "claimed", nowMs);
-        if (claimedId) endClaimed(id, "superseded", nowMs, claimedId);
-      }
-      let missed = 0;
-      for (const at of (claimable ? due.slice(0, -1) : due).slice(
-        -SCHEDULE_HISTORY_LIMIT,
-      ))
-        if (insertOccurrence(row, at, "missed", nowMs)) missed += 1;
-      getDb()
-        .prepare("UPDATE schedules SET next_due_at_ms = ? WHERE id = ?")
-        .run(nextDueMs ?? null, id);
-      refreshDone(id, nowMs);
-      prune(id);
-      touched.add(id);
-      const claimed = claimedId ? occurrenceRow(claimedId) : undefined;
+      const claimedRow = claimedId ? occurrenceRow(claimedId) : undefined;
       return {
-        ...(claimed ? { claimed: occurrenceRecordOf(claimed) } : {}),
+        ...(claimedRow ? { claimed: occurrenceRecordOf(claimedRow) } : {}),
+        missed,
+      };
+    });
+  },
+
+  /**
+   * Pause all, or resume, at `nowMs` in ONE transaction. First every due
+   * Schedule is settled under the state before the switch: a due time at or
+   * before `nowMs` belongs to it. Pausing claims the latest within `graceMs`
+   * that fell unpaused and not yet ticked; resuming records the due times that
+   * fell while paused `missed`, with no catch-up and no supersession. Then the
+   * row flips. Setting the state it already has writes nothing.
+   */
+  setPaused(
+    paused: boolean,
+    nowMs: number,
+    graceMs: number,
+  ): SchedulePauseOutcome {
+    return write((touched, claimed) => {
+      const prior = pausedIn();
+      if (prior === paused) return { changed: false, claimed: [], missed: 0 };
+      const claimedIds: string[] = [];
+      let missed = 0;
+      for (const id of dueIdsAt(nowMs)) {
+        const row = dueRow(id, nowMs)!;
+        const settled = settleDue(row, nowMs, prior ? null : { graceMs }, {
+          touched,
+          claimed,
+        });
+        if (settled.claimedId) claimedIds.push(settled.claimedId);
+        missed += settled.missed;
+      }
+      getDb()
+        .prepare("UPDATE schedule_pause SET paused = ? WHERE id = 1")
+        .run(paused ? 1 : 0);
+      return {
+        changed: true,
+        claimed: claimedIds.map((id) => occurrenceRecordOf(occurrenceRow(id)!)),
         missed,
       };
     });
@@ -850,6 +1033,32 @@ export const scheduleStore = {
     return () => writeListeners.delete(listener);
   },
 
+  /**
+   * Hear about each occurrence claimed, by a tick or by a Pause all switch:
+   * once, after its claim committed, never for a rollback. A wake for whoever
+   * listens now, not a durable event: a claim committed with no listener
+   * stays owed and is not replayed to a later one. A listener's throw is
+   * logged; the others still run.
+   */
+  onClaimed(
+    listener: (occurrence: ScheduleOccurrenceRecord) => void,
+  ): () => void {
+    claimListeners.add(listener);
+    return () => claimListeners.delete(listener);
+  },
+
+  /**
+   * Pause all as stored. The first read creates the row from the settings
+   * file's former `schedules.paused` (its own transaction, or the caller's);
+   * a file that cannot be read then throws.
+   */
+  paused(): boolean {
+    const row = getDb()
+      .prepare("SELECT paused FROM schedule_pause WHERE id = 1")
+      .get() as { paused: number } | undefined;
+    return row ? row.paused === 1 : inDbTransaction(pausedIn);
+  },
+
   /** The earliest due time among enabled Schedules, for arming the clock. */
   earliestDueAtMs(): number | undefined {
     const row = getDb()
@@ -863,15 +1072,6 @@ export const scheduleStore = {
 
   /** Enabled Schedules due at or before `nowMs`, earliest first. */
   dueIds(nowMs: number): string[] {
-    return (
-      getDb()
-        .prepare(
-          `SELECT id FROM schedules
-           WHERE deleted_at_ms IS NULL AND enabled = 1
-             AND next_due_at_ms IS NOT NULL AND next_due_at_ms <= ?
-           ORDER BY next_due_at_ms, id`,
-        )
-        .all(nowMs) as Array<{ id: string }>
-    ).map((row) => row.id);
+    return dueIdsAt(nowMs);
   },
 };

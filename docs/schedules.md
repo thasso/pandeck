@@ -137,11 +137,21 @@ occurrence. An occurrence is therefore claimed at most once across restarts.
   resume; the grace window covers server downtime only. Pause stops NEW claims
   only: an occurrence claimed before the pause stays owed and may still be
   delivered, and a due time missed while paused does not supersede it. What
-  counts is when the due time fell, not when the clock got to it: the clock
-  remembers when it saw the pause lifted, and until it has settled every
-  Schedule through that instant, a due time at or before it is `missed` even if
-  the tick that records it runs after the resume (a late timer, a failure
-  back-off). A due time after the resume is claimed as usual.
+  counts is when the due time fell, not when the clock got to it (a late timer,
+  a failure back-off, a restart). So each switch is one transaction that first
+  settles every due Schedule under the state BEFORE the switch, then flips it:
+  - A due time at or before the switch instant belongs to the state before it.
+    Pausing claims one that fell unpaused and was not ticked yet (latest within
+    the grace window, superseding as usual); resuming records one that fell
+    while paused `missed`.
+  - A due time after the switch falls in the new state and is settled by its
+    tick: claimed after a resume, `missed` while paused.
+  - Every pause and resume settles its own interval, so a due time in an
+    unpaused gap between two pauses is claimed by the second pause.
+
+  The switch is stored in the database, never in memory, so a restart keeps it.
+  If the transaction throws before it commits, nothing of it stays. Once
+  committed it stands, even when the settings save then fails.
 
 ### States
 
@@ -343,9 +353,12 @@ History is a request/response read, outside the live projection. The web always
 subscribes; the inspector section and the header badge filter that state, so
 `SessionListItem` gets no new field.
 
-Tables `schedules` (definition, `next_due_at_ms`, `revision`) and
-`schedule_occurrences`. Settings, through the registry: grace window (60
-minutes), cardless limit (10), Pause all.
+Tables `schedules` (definition, `next_due_at_ms`, `revision`),
+`schedule_occurrences` and `schedule_pause` (Pause all, one row). Settings,
+through the registry: grace window (60 minutes), cardless limit (10), Pause all.
+Pause all is a registry field of the Schedules section, but the schedule store
+keeps its value: the settings file holds only the other two, and the section
+projects `paused` from the store.
 
 ### Implemented so far
 
@@ -354,6 +367,12 @@ Phase 1 lands in two pull requests ([Task-1502](pa://task/1502), then
 creates a Schedule yet.
 
 - `app/shared/schedules.ts`: the model and `nextOccurrencesAfter`.
+- Migration `0108_schedule_pause.sql`: Pause all as one row with no seed. The
+  first read creates it from the `schedules.paused` the settings file used to
+  hold (`true` imports as paused; absent as not paused; a file that cannot be
+  read throws and never reads as not paused). After that the file is never read
+  for it again, and a settings save drops the key from the file once the import
+  ran.
 - Migration `0107_schedules.sql`. A Schedule's target is an open union
   (`target_kind`, with `target_session_id` for an existing session), so the
   new-session target adds columns rather than a table rebuild. The zone lives in
@@ -362,25 +381,35 @@ creates a Schedule yet.
 - `app/server/src/db/scheduleStore.ts`. Every public write is one transaction
   that moves the revision of each Schedule it touched, occurrence changes
   included. `claimDue` settles one Schedule's due times up to now in one
-  transaction: it claims the latest when not paused and within the grace window,
-  records the others `missed`, supersedes an earlier claim and advances
-  `next_due_at_ms`; the unique `(schedule_id, due_at_ms)` makes a repeat insert
-  nothing. Settling, superseding and withdrawing move only a row still
-  `claimed`, so a repeated or late settle changes nothing. A delete removes the
-  history and leaves a tombstone with the delete's revision; the maintenance
-  sweep marks `done` a Schedule whose timing ran out while disabled, prunes
-  history, deletes Schedules 30 days after `done` and Schedules whose target
-  session was deleted, and purges tombstones after 30 days.
+  transaction: it claims the latest when the stored Pause all is off and it is
+  within the grace window, records the others `missed`, supersedes an earlier
+  claim and advances `next_due_at_ms`; the unique `(schedule_id, due_at_ms)`
+  makes a repeat insert nothing. `setPaused` is the Pause all switch (Late and
+  missed). `onClaimed` tells listeners about each claim, a switch's included,
+  once and only after it committed; when the topic hand-off throws after commit,
+  the listeners still hear the committed claims before the error throws.
+  Settling, superseding and withdrawing move only a row still `claimed`, so a
+  repeated or late settle changes nothing. A delete removes the history and
+  leaves a tombstone with the delete's revision; the maintenance sweep marks
+  `done` a Schedule whose timing ran out while disabled, prunes history, deletes
+  Schedules 30 days after `done` and Schedules whose target session was deleted,
+  and purges tombstones after 30 days.
 - The `schedules` topic (`app/server/src/schedules/scheduleTopic.ts`): every
   write stamps through a change set, a live Schedule (`done` included) is a
   member, a tombstone leaves as a delete at its delete's revision. Every web
   connection holds it and diffs a digest on resubscribe; nothing renders it.
-- The `schedules` Settings section, rendered from its three registry fields.
+- The `schedules` Settings section, rendered from its three registry fields. A
+  save with `paused` writes the file first, then switches Pause all through
+  `setPaused`; reading the settings opens the database, since `paused` comes
+  from it.
 - The schedule clock (`app/server/src/schedules/scheduleClock.ts`), started
   after the boot's delivery recoveries and stopped at shutdown. It claims due
-  occurrences with the grace window and Pause all from the settings, and runs
-  the maintenance sweep on its own deadline. Its `claimed` hook runs after each
-  claim commits, with the target from the occurrence's frozen copy; nothing is
+  occurrences with the grace window from the settings (the store applies Pause
+  all), and runs the maintenance sweep on its own deadline. While started it
+  hears every claim through `onClaimed`, its own and a Pause all switch's, and
+  runs its `claimed` hook once per claim with the target from the occurrence's
+  frozen copy. The hook is a wake, not a durable event: a claim committed while
+  the clock is stopped stays owed and is not replayed at start. Nothing is
   attached to it yet, so a claimed occurrence stays `claimed`.
 - Deleting a session deletes the Schedules that target it; the boot sweep
   catches those whose target was deleted while the server was down.

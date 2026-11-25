@@ -103,6 +103,19 @@ Listener failures are only logged. A save reads full settings only when it
 touches `permanentAssistant`, so one unreadable integration file never blocks
 saving an unrelated section.
 
+`schedules.paused` (Pause all) is the one app setting kept outside the settings
+file: the schedule store holds it in SQLite (`schedules.md`, Late and missed).
+`updateSettings` writes the file first, without `paused`, then switches the
+stored value in one database transaction that also settles the due Schedules. If
+that transaction throws before commit, the switch leaves nothing behind but the
+file write stands, so grace and limit values from the same patch are saved. Once
+it commits, a later failure (the final settings read, or a connection's reread)
+follows the rules above unchanged: the save can reject although the switch took
+effect, and the section is still announced, so every client rereads the
+committed state. `getSettings` projects `paused` from the store, so it opens and
+migrates the database on first use, also for a caller that otherwise reads only
+files.
+
 `announceSettingsWritten(sections)` covers settings a module persists on its
 own: the Google, Slack and Tempo OAuth callbacks store tokens. It runs the same
 effects and pushes the same per-connection update.

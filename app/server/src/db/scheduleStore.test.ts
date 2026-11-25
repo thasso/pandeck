@@ -1,19 +1,24 @@
 import assert from "node:assert/strict";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import type { ScheduleTiming } from "@assistant/shared/schedules";
-import { describe, it, vi } from "vitest";
-import { getDb } from "./index.ts";
+import { afterEach, beforeEach, describe, it, vi } from "vitest";
+import { APP_SETTINGS_PATH } from "../appSettingsFile.ts";
+import { setStateChangeSink } from "./changeSet.ts";
+import { closeDb, getDb } from "./index.ts";
 import {
   SCHEDULE_HISTORY_LIMIT,
   SCHEDULE_RETENTION_MS,
   scheduleStore,
   type ScheduleCreateInput,
 } from "./scheduleStore.ts";
+import { currentId } from "./sequences.ts";
 import { sessionStore } from "./sessionStore.ts";
 
 const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
 const at = (iso: string) => Date.parse(iso);
-const GRACE = { graceMs: 60 * MINUTE, paused: false };
+const GRACE = { graceMs: 60 * MINUTE };
 
 /** 09:00 UTC daily: due instants are fixed strings, no zone arithmetic. */
 const DAILY: ScheduleTiming = { kind: "daily", time: "09:00", timeZone: "UTC" };
@@ -37,6 +42,24 @@ function states(scheduleId: string): string[] {
   return scheduleStore
     .history(scheduleId)
     .map((o) => `${new Date(o.dueAtMs).toISOString()} ${o.state}`);
+}
+
+/** Pause all with no stored row and no settings file: the import comes next. */
+function resetPause(): void {
+  getDb().exec("DELETE FROM schedule_pause");
+  rmSync(APP_SETTINGS_PATH, { force: true });
+}
+
+function writeSettingsFile(text: string): void {
+  mkdirSync(dirname(APP_SETTINGS_PATH), { recursive: true });
+  writeFileSync(APP_SETTINGS_PATH, text);
+}
+
+function pauseRow(): number | undefined {
+  return (
+    getDb().prepare("SELECT paused FROM schedule_pause WHERE id = 1").get() as
+      { paused: number } | undefined
+  )?.paused;
 }
 
 /** Makes the revision stamp, the LAST statement of every write, throw. */
@@ -211,11 +234,11 @@ describe("scheduleStore", () => {
     assert.equal(scheduleStore.get(id)?.nextDueAtMs, DEC1 + 201 * DAY);
   });
 
-  it("while paused claims nothing, misses crossed due times and keeps an earlier claim owed", () => {
+  it("while paused claims nothing, misses crossed due times and keeps an earlier claim owed (S3)", () => {
     const { id } = scheduleStore.create(input(), DEC1 - DAY);
     const owed = scheduleStore.claimDue(id, DEC1, GRACE).claimed!;
-    const paused = { ...GRACE, paused: true };
-    const outcome = scheduleStore.claimDue(id, DEC1 + 2 * DAY, paused);
+    scheduleStore.setPaused(true, DEC1 + MINUTE, GRACE.graceMs);
+    const outcome = scheduleStore.claimDue(id, DEC1 + 2 * DAY, GRACE);
     assert.equal(outcome.claimed, undefined);
     assert.equal(outcome.missed, 2);
     assert.deepEqual(states(id), [
@@ -225,11 +248,13 @@ describe("scheduleStore", () => {
     ]);
     assert.equal(scheduleStore.getOccurrence(owed.id)?.state, "claimed");
     // Resume: nothing catches up before the next due time.
+    scheduleStore.setPaused(false, DEC1 + 2 * DAY + MINUTE, GRACE.graceMs);
     assert.deepEqual(
       scheduleStore.claimDue(id, DEC1 + 2 * DAY + MINUTE, GRACE),
       { missed: 0 },
     );
     assert.equal(scheduleStore.get(id)?.nextDueAtMs, DEC1 + 3 * DAY);
+    assert.equal(scheduleStore.getOccurrence(owed.id)?.state, "claimed");
   });
 
   it("disabling withdraws the claimed occurrence; enabling resumes from now without catch-up", () => {
@@ -649,7 +674,12 @@ describe("scheduleStore", () => {
       }),
       DEC1 - DAY,
     );
-    scheduleStore.claimDue(id, DEC1 + MINUTE, { ...GRACE, paused: true });
+    scheduleStore.setPaused(true, DEC1 - 1, GRACE.graceMs);
+    try {
+      scheduleStore.claimDue(id, DEC1 + MINUTE, GRACE);
+    } finally {
+      scheduleStore.setPaused(false, DEC1 + MINUTE, GRACE.graceMs);
+    }
     assert.equal(scheduleStore.get(id)?.doneAtMs, DEC1 + MINUTE);
   });
 
@@ -725,25 +755,373 @@ describe("scheduleStore.onWrite", () => {
   });
 });
 
-describe("scheduleStore.claimDue missThroughMs", () => {
-  it("misses a due time at or before the cutoff and keeps the owed claim", () => {
-    const created = scheduleStore.create(input(), DEC1 - 1);
-    const owed = scheduleStore.claimDue(created.id, DEC1, GRACE).claimed!;
-    const DEC2 = DEC1 + DAY;
-    const atCutoff = scheduleStore.claimDue(created.id, DEC2 + MINUTE, {
-      ...GRACE,
-      missThroughMs: DEC2,
+describe("scheduleStore Pause all", () => {
+  const DEC2 = DEC1 + DAY;
+  const SECOND = 1000;
+  const GRACE_MS = GRACE.graceMs;
+
+  beforeEach(() => {
+    getDb().exec("DELETE FROM schedule_occurrences; DELETE FROM schedules;");
+    resetPause();
+  });
+  afterEach(() => {
+    resetPause();
+    vi.restoreAllMocks();
+  });
+
+  /** A daily 09:00 Schedule whose Dec 1 occurrence is claimed and owed. */
+  function owedDaily(): { id: string; owedId: string } {
+    const { id } = scheduleStore.create(input(), DEC1 - DAY);
+    return { id, owedId: scheduleStore.claimDue(id, DEC1, GRACE).claimed!.id };
+  }
+
+  /** Everything a rolled-back write must leave as it was. */
+  function snapshot(ids: string[]) {
+    return {
+      rows: ids.map((id) => ({
+        states: states(id),
+        nextDueAtMs: scheduleStore.get(id)?.nextDueAtMs,
+        revision: scheduleStore.revision(id),
+      })),
+      occurrenceSequence: currentId("schedule_occurrence"),
+      revisionSequence: currentId("schedule_revision"),
+      flag: pauseRow(),
+    };
+  }
+
+  /** Records the schedules topic reports, onWrite and onClaimed calls. */
+  function listen() {
+    const heard = { reports: 0, writes: 0, claims: [] as string[] };
+    const previous = setStateChangeSink((topic, ids) => {
+      if (topic === "schedules" && ids.length) heard.reports += 1;
     });
-    assert.equal(atCutoff.claimed, undefined);
-    assert.equal(atCutoff.missed, 1);
-    assert.equal(scheduleStore.getOccurrence(owed.id)?.state, "claimed");
-    assert.equal(scheduleStore.get(created.id)?.nextDueAtMs, DEC2 + DAY);
-    // A due time after the cutoff is claimed as usual and supersedes.
-    const after = scheduleStore.claimDue(created.id, DEC2 + DAY, {
-      ...GRACE,
-      missThroughMs: DEC2 + DAY - 1,
+    const offWrite = scheduleStore.onWrite(() => (heard.writes += 1));
+    const offClaimed = scheduleStore.onClaimed((o) => heard.claims.push(o.id));
+    return {
+      heard,
+      off() {
+        setStateChangeSink(previous);
+        offWrite();
+        offClaimed();
+      },
+    };
+  }
+
+  it("pausing claims an unticked due time that fell unpaused, superseding the owed one (S1)", () => {
+    const { id, owedId } = owedDaily();
+    const outcome = scheduleStore.setPaused(true, DEC2 + 15 * SECOND, GRACE_MS);
+    assert.equal(outcome.changed, true);
+    assert.deepEqual(
+      outcome.claimed.map((o) => o.dueAtMs),
+      [DEC2],
+    );
+    assert.deepEqual(states(id), [
+      "2026-12-02T09:00:00.000Z claimed",
+      "2026-12-01T09:00:00.000Z superseded",
+    ]);
+    assert.equal(scheduleStore.getOccurrence(owedId)?.state, "superseded");
+    assert.equal(pauseRow(), 1);
+    assert.equal(scheduleStore.paused(), true);
+    assert.equal(scheduleStore.get(id)?.nextDueAtMs, DEC2 + DAY);
+  });
+
+  it("resuming misses a due time that fell while paused and keeps the owed claim (S2)", () => {
+    const { id, owedId } = owedDaily();
+    scheduleStore.setPaused(true, DEC2 - SECOND, GRACE_MS);
+    const outcome = scheduleStore.setPaused(
+      false,
+      DEC2 + 15 * SECOND,
+      GRACE_MS,
+    );
+    assert.deepEqual(outcome, { changed: true, claimed: [], missed: 1 });
+    assert.deepEqual(states(id), [
+      "2026-12-02T09:00:00.000Z missed",
+      "2026-12-01T09:00:00.000Z claimed",
+    ]);
+    assert.equal(scheduleStore.getOccurrence(owedId)?.state, "claimed");
+    assert.equal(pauseRow(), 0);
+    assert.equal(scheduleStore.get(id)?.nextDueAtMs, DEC2 + DAY);
+  });
+
+  it("rolls a multi-row switch back whole, both ways: rows, sequences, flag, reports and listeners (S4)", () => {
+    const a = scheduleStore.create(input(), DEC1 - DAY).id;
+    const b = scheduleStore.create(input(), DEC1 - DAY).id;
+    const { heard, off } = listen();
+    try {
+      // Pause, unpaused before: both Dec 1 due times would be claimed.
+      let before = snapshot([a, b]);
+      assert.equal(before.flag, undefined, "no row yet");
+      withFailingStamp(() =>
+        assert.throws(
+          () => scheduleStore.setPaused(true, DEC1 + MINUTE, GRACE_MS),
+          /stamp failed/,
+        ),
+      );
+      assert.deepEqual(snapshot([a, b]), before);
+      assert.deepEqual(heard, { reports: 0, writes: 0, claims: [] });
+
+      scheduleStore.setPaused(true, DEC1 + MINUTE, GRACE_MS);
+      assert.equal(heard.claims.length, 2);
+      assert.equal(heard.reports, 1);
+      heard.claims = [];
+      heard.reports = 0;
+      heard.writes = 0;
+
+      // Resume, paused before: both Dec 2 due times would be missed.
+      before = snapshot([a, b]);
+      assert.equal(before.flag, 1);
+      withFailingStamp(() =>
+        assert.throws(
+          () => scheduleStore.setPaused(false, DEC2 + MINUTE, GRACE_MS),
+          /stamp failed/,
+        ),
+      );
+      assert.deepEqual(snapshot([a, b]), before);
+      assert.deepEqual(heard, { reports: 0, writes: 0, claims: [] });
+      assert.equal(scheduleStore.paused(), true);
+    } finally {
+      off();
+    }
+  });
+
+  it("setting the state it already has writes nothing (S5)", () => {
+    const { id } = owedDaily();
+    scheduleStore.setPaused(true, DEC1 + MINUTE, GRACE_MS);
+    const before = snapshot([id]);
+    const { heard, off } = listen();
+    try {
+      // Dec 2 is due, but a no-op switch settles nothing.
+      assert.deepEqual(scheduleStore.setPaused(true, DEC2 + MINUTE, GRACE_MS), {
+        changed: false,
+        claimed: [],
+        missed: 0,
+      });
+      assert.deepEqual(snapshot([id]), before);
+      assert.deepEqual(heard, { reports: 0, writes: 0, claims: [] });
+      resetPause();
+      // Not paused with no row: the import writes the row, nothing else.
+      assert.equal(
+        scheduleStore.setPaused(false, DEC2 + MINUTE, GRACE_MS).changed,
+        false,
+      );
+      assert.equal(pauseRow(), 0);
+      assert.equal(scheduleStore.revision(id), before.rows[0]!.revision);
+      assert.deepEqual(heard, { reports: 0, writes: 0, claims: [] });
+    } finally {
+      off();
+    }
+  });
+
+  describe("onClaimed (S6)", () => {
+    it("hears each claim once after commit, from a tick and from a switch, never a rollback", () => {
+      const seen: Array<{
+        id: string;
+        inTransaction: boolean;
+        state: string | undefined;
+      }> = [];
+      const off = scheduleStore.onClaimed((o) =>
+        seen.push({
+          id: o.id,
+          inTransaction: getDb().isTransaction,
+          state: scheduleStore.getOccurrence(o.id)?.state,
+        }),
+      );
+      try {
+        const ticked = scheduleStore.create(input(), DEC1 - DAY).id;
+        const claim = scheduleStore.claimDue(ticked, DEC1, GRACE).claimed!;
+        assert.deepEqual(seen, [
+          { id: claim.id, inTransaction: false, state: "claimed" },
+        ]);
+        // A due time already recorded claims nothing and is not heard.
+        scheduleStore.claimDue(ticked, DEC1, GRACE);
+        assert.equal(seen.length, 1);
+
+        const x = scheduleStore.create(input(), DEC2 - DAY).id;
+        const y = scheduleStore.create(input(), DEC2 - DAY).id;
+        withFailingStamp(() =>
+          assert.throws(() =>
+            scheduleStore.setPaused(true, DEC2 + MINUTE, GRACE_MS),
+          ),
+        );
+        assert.equal(seen.length, 1, "a rollback is never heard");
+        const switched = scheduleStore.setPaused(true, DEC2 + MINUTE, GRACE_MS);
+        assert.equal(switched.claimed.length, 3, "x, y and the ticked one");
+        assert.deepEqual(
+          seen
+            .slice(1)
+            .map((s) => s.id)
+            .sort(),
+          switched.claimed.map((o) => o.id).sort(),
+        );
+        assert.ok(seen.every((s) => !s.inTransaction && s.state === "claimed"));
+        assert.deepEqual(
+          [x, y].map((id) => states(id)),
+          [
+            ["2026-12-02T09:00:00.000Z claimed"],
+            ["2026-12-02T09:00:00.000Z claimed"],
+          ],
+        );
+      } finally {
+        off();
+      }
     });
-    assert.ok(after.claimed);
-    assert.equal(scheduleStore.getOccurrence(owed.id)?.state, "superseded");
+
+    it("logs a throwing listener and still runs the next", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const heard: string[] = [];
+      const offBroken = scheduleStore.onClaimed(() => {
+        throw new Error("claim listener broke");
+      });
+      const offNext = scheduleStore.onClaimed((o) => heard.push(o.id));
+      try {
+        const { id } = scheduleStore.create(input(), DEC1 - DAY);
+        const claim = scheduleStore.claimDue(id, DEC1, GRACE).claimed!;
+        assert.deepEqual(heard, [claim.id]);
+        assert.equal(scheduleStore.getOccurrence(claim.id)?.state, "claimed");
+        assert.ok(
+          warn.mock.calls.some((call) =>
+            /claim listener broke/.test(String(call[1])),
+          ),
+        );
+      } finally {
+        offBroken();
+        offNext();
+      }
+    });
+
+    it("a hand-off that throws after commit keeps the claims, tells the listeners once, then throws", () => {
+      const { id, owedId } = owedDaily();
+      const other = scheduleStore.create(input(), DEC2 - DAY / 2).id;
+      const claims: string[] = [];
+      let writes = 0;
+      const offClaimed = scheduleStore.onClaimed((o) => claims.push(o.id));
+      const offWrite = scheduleStore.onWrite(() => (writes += 1));
+      const previous = setStateChangeSink(() => {
+        throw new Error("sink broke");
+      });
+      try {
+        assert.throws(
+          () => scheduleStore.claimDue(id, DEC2 + MINUTE, GRACE),
+          /sink broke/,
+        );
+        const [dec2] = scheduleStore.history(id);
+        assert.equal(dec2?.state, "claimed", "the claim committed");
+        assert.equal(scheduleStore.getOccurrence(owedId)?.state, "superseded");
+        assert.deepEqual(claims, [dec2!.id]);
+        assert.equal(writes, 1);
+
+        // A switch whose hand-off throws: committed, flag set, heard once.
+        assert.throws(
+          () => scheduleStore.setPaused(true, DEC2 + MINUTE, GRACE_MS),
+          /sink broke/,
+        );
+        assert.equal(pauseRow(), 1);
+        const [otherClaim] = scheduleStore.history(other);
+        assert.equal(otherClaim?.state, "claimed");
+        assert.deepEqual(claims, [dec2!.id, otherClaim!.id]);
+        assert.equal(writes, 2);
+
+        // A missed-only write whose hand-off throws still re-arms (onWrite).
+        assert.throws(
+          () => scheduleStore.claimDue(id, DEC2 + DAY + MINUTE, GRACE),
+          /sink broke/,
+        );
+        assert.equal(writes, 3);
+        assert.equal(claims.length, 2);
+      } finally {
+        setStateChangeSink(previous);
+        offClaimed();
+        offWrite();
+      }
+    });
+  });
+
+  describe("the one-time import from the settings file (S7)", () => {
+    it("imports true, and false for an absent key or no file", () => {
+      writeSettingsFile(JSON.stringify({ schedules: { paused: true } }));
+      assert.equal(scheduleStore.paused(), true);
+      assert.equal(pauseRow(), 1);
+
+      resetPause();
+      writeSettingsFile(
+        JSON.stringify({ schedules: { graceWindowMinutes: 30 } }),
+      );
+      assert.equal(scheduleStore.paused(), false);
+      assert.equal(pauseRow(), 0);
+
+      resetPause();
+      assert.equal(scheduleStore.paused(), false);
+      assert.equal(pauseRow(), 0);
+    });
+
+    it("an unreadable file with no row throws and claims nothing; it never reads as false", () => {
+      const { id } = scheduleStore.create(input(), DEC1 - DAY);
+      writeSettingsFile("{ not json");
+      assert.throws(
+        () => scheduleStore.paused(),
+        /Failed to read app settings/,
+      );
+      assert.equal(pauseRow(), undefined);
+      const revision = scheduleStore.revision(id);
+      assert.throws(
+        () => scheduleStore.claimDue(id, DEC1, GRACE),
+        /Failed to read app settings/,
+      );
+      assert.throws(
+        () => scheduleStore.setPaused(true, DEC1, GRACE_MS),
+        /Failed to read app settings/,
+      );
+      assert.deepEqual(states(id), []);
+      assert.equal(scheduleStore.get(id)?.nextDueAtMs, DEC1);
+      assert.equal(scheduleStore.revision(id), revision);
+      assert.equal(pauseRow(), undefined);
+    });
+
+    it("once the row exists the file is never read for it again, across a reopen", () => {
+      writeSettingsFile(JSON.stringify({ schedules: { paused: true } }));
+      assert.equal(scheduleStore.paused(), true);
+      writeSettingsFile(JSON.stringify({ schedules: { paused: false } }));
+      closeDb();
+      assert.equal(scheduleStore.paused(), true);
+      writeSettingsFile("{ not json");
+      assert.equal(scheduleStore.paused(), true, "an unreadable file too");
+    });
+  });
+
+  describe("a due time at the switch instant belongs to the state before it (S8, B1)", () => {
+    /** A daily 09:00 Schedule due at Dec 2 09:00 (D), not yet ticked. */
+    function dueAtD(): string {
+      getDb().exec("DELETE FROM schedule_occurrences; DELETE FROM schedules;");
+      resetPause();
+      return scheduleStore.create(input(), DEC2 - DAY / 2).id;
+    }
+    /** The tick that reaches D after the switch, inside the grace window. */
+    const tick = (id: string) =>
+      scheduleStore.claimDue(id, DEC2 + 30 * SECOND, GRACE);
+
+    for (const [offset, expected] of [
+      [-1, "missed"],
+      [0, "claimed"],
+      [1, "claimed"],
+    ] as const)
+      it(`pause at D${offset < 0 ? "-1" : offset > 0 ? "+1" : ""}: ${expected}`, () => {
+        const id = dueAtD();
+        scheduleStore.setPaused(true, DEC2 + offset, GRACE_MS);
+        tick(id);
+        assert.deepEqual(states(id), [`2026-12-02T09:00:00.000Z ${expected}`]);
+      });
+
+    for (const [offset, expected] of [
+      [-1, "claimed"],
+      [0, "missed"],
+      [1, "missed"],
+    ] as const)
+      it(`resume at D${offset < 0 ? "-1" : offset > 0 ? "+1" : ""}: ${expected}`, () => {
+        const id = dueAtD();
+        scheduleStore.setPaused(true, DEC2 - DAY / 4, GRACE_MS);
+        scheduleStore.setPaused(false, DEC2 + offset, GRACE_MS);
+        tick(id);
+        assert.deepEqual(states(id), [`2026-12-02T09:00:00.000Z ${expected}`]);
+      });
   });
 });

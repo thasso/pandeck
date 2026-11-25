@@ -119,7 +119,10 @@ export interface ScheduleSettings {
   graceWindowMinutes: number;
   /** Active Schedules one session may control that it created without a card. */
   cardlessLimit: number;
-  /** Pause all: the clock claims nothing; due times pass as `missed`. */
+  /**
+   * Pause all: the clock claims nothing; due times pass as `missed`. Stored by
+   * the schedule store; projected here.
+   */
   paused: boolean;
 }
 

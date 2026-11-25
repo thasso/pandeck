@@ -10,20 +10,19 @@
  *
  * A tick settles every due Schedule through `scheduleStore.claimDue` (one
  * transaction each: claim the latest within the grace window, record the
- * others `missed`, advance `next_due_at_ms`), runs the sweep when its deadline
- * has come, and then tells the `claimed` hook about each occurrence it claimed,
- * after that claim committed, with the target read from the frozen occurrence.
- * A tick that fails anywhere logs it and does not re-arm sooner than
- * {@link SCHEDULE_CLOCK_RETRY_MS}, so a persistent failure never spins.
+ * others `missed`, advance `next_due_at_ms`) and runs the sweep when its
+ * deadline has come. A tick that fails anywhere logs it and does not re-arm
+ * sooner than {@link SCHEDULE_CLOCK_RETRY_MS}, so a persistent failure never
+ * spins.
  *
- * Pause all is judged by when a due time fell, not by when a tick gets to it.
- * A tick can come late (a failed one waits out its back-off, a timer can run
- * late), and Pause all may be lifted in between. So the clock remembers the
- * instant it saw the pause lifted, and until a tick has settled every Schedule
- * through it, due times at or before it are recorded `missed` and never
- * claimed: they cannot catch up on resume or supersede an occurrence claimed
- * before the pause. A resume also ticks at once, outside a back-off, so those
- * due times are recorded while the cutoff is still known.
+ * The clock holds no Pause all state. The store keeps it, and each switch
+ * settles what fell due before it under the state before it, so a late tick
+ * (a back-off, a timer running late, a restart) finds only due times that fell
+ * in the current state. While paused a tick still records misses and advances.
+ *
+ * While started, the clock hears every claim through `scheduleStore.onClaimed`,
+ * the ticks' own and a Pause all switch's, and hands each to the `claimed`
+ * hook after it committed, with the target read from the frozen occurrence.
  */
 import { onSettingsChanged } from "../settingsService.ts";
 import { getSettings } from "../settings.ts";
@@ -44,7 +43,12 @@ export const SCHEDULE_CLOCK_RETRY_MS = MINUTE_MS;
 /** What the clock needs from the store; the real one in production. */
 type ScheduleClockStore = Pick<
   typeof scheduleStore,
-  "earliestDueAtMs" | "dueIds" | "claimDue" | "runMaintenance" | "onWrite"
+  | "earliestDueAtMs"
+  | "dueIds"
+  | "claimDue"
+  | "runMaintenance"
+  | "onWrite"
+  | "onClaimed"
 >;
 
 /** The `schedules` settings, and a way to hear that they changed. */
@@ -64,9 +68,11 @@ interface ScheduleClockOptions {
   now?: () => number;
   timers?: ScheduleClockTimers;
   /**
-   * Runs once per claimed occurrence, after its claim committed, with the
-   * target from the frozen occurrence row. PR-A wires nothing to it; the
-   * scheduled prompts lane wakes the target's delivery here.
+   * Runs once per occurrence claimed while the clock is started, by a tick or
+   * a Pause all switch, after its claim committed, with the target from the
+   * frozen occurrence row. A wake, not a durable event: a claim committed
+   * while stopped stays owed and is not replayed by `start`. PR-A wires
+   * nothing to it; the scheduled prompts lane wakes the target's delivery here.
    */
   claimed?: (
     targetSessionId: string,
@@ -119,38 +125,14 @@ export function createScheduleClock(
   let maintenanceDueAtMs = 0;
   /** Set by a failed tick: no timer fires before it. */
   let retryNotBeforeMs: number | undefined;
-  /** Pause all as last read. */
-  let paused = false;
-  /**
-   * The latest instant Pause all was seen lifted, until a tick settled every
-   * due Schedule through it: due times at or before it are missed.
-   */
-  let missThroughMs: number | undefined;
   let unsubscribe: Array<() => void> = [];
 
-  /** Record a pause read at `at`; a pause seen lifted moves the cutoff. */
-  function observePause(next: boolean, at: number): boolean {
-    const resumed = paused && !next;
-    if (resumed) missThroughMs = Math.max(missThroughMs ?? at, at);
-    paused = next;
-    return resumed;
-  }
-
-  /** A settings change: note a pause or resume now, then tick or re-arm. */
-  function settingsChanged(): void {
-    if (!running) return;
-    let resumed = false;
+  function claimedNow(occurrence: ScheduleOccurrenceRecord): void {
     try {
-      resumed = observePause(settings.read().paused, now());
+      claimed(occurrence.target.sessionId, occurrence);
     } catch (err) {
-      // The next tick reads the settings again and treats a resume it only
-      // sees then as lifted at that tick: never later than it was.
-      warn("reading the schedule settings failed", err);
+      warn(`the claimed hook for ${occurrence.id} failed`, err);
     }
-    const inBackOff =
-      retryNotBeforeMs !== undefined && now() < retryNotBeforeMs;
-    if (resumed && !inBackOff && !ticking) tick();
-    else arm();
   }
 
   function disarm(): void {
@@ -188,38 +170,25 @@ export function createScheduleClock(
     ticking = true;
     const at = now();
     let failed = false;
-    let claimsFailed = false;
     let policy: ScheduleClaimPolicy | undefined;
     try {
       try {
-        const current = settings.read();
-        observePause(current.paused, at);
         policy = {
-          graceMs: current.graceWindowMinutes * MINUTE_MS,
-          paused: current.paused,
-          ...(missThroughMs !== undefined ? { missThroughMs } : {}),
+          graceMs: settings.read().graceWindowMinutes * MINUTE_MS,
         };
       } catch (err) {
         failed = true;
         warn("reading the schedule settings failed", err);
       }
       if (policy)
-        for (const id of store.dueIds(at)) {
-          let occurrence: ScheduleOccurrenceRecord | undefined;
+        for (const id of store.dueIds(at))
           try {
-            occurrence = store.claimDue(id, at, policy).claimed;
+            // The claim reaches the hook through `onClaimed`, after commit.
+            store.claimDue(id, at, policy);
           } catch (err) {
             failed = true;
-            claimsFailed = true;
             warn(`claiming ${id} failed`, err);
           }
-          if (occurrence)
-            try {
-              claimed(occurrence.target.sessionId, occurrence);
-            } catch (err) {
-              warn(`the claimed hook for ${occurrence.id} failed`, err);
-            }
-        }
       if (at >= maintenanceDueAtMs) {
         try {
           store.runMaintenance(at);
@@ -239,15 +208,10 @@ export function createScheduleClock(
       }
     } catch (err) {
       failed = true;
-      claimsFailed = true;
       warn("the schedule clock tick failed", err);
     } finally {
       ticking = false;
     }
-    // Every due Schedule was settled through the cutoff this tick applied, so
-    // nothing at or before it is left to claim. A newer resume keeps its own.
-    if (policy && !claimsFailed && missThroughMs === policy.missThroughMs)
-      missThroughMs = undefined;
     retryNotBeforeMs = failed ? at + SCHEDULE_CLOCK_RETRY_MS : undefined;
     arm();
   }
@@ -258,7 +222,12 @@ export function createScheduleClock(
       running = true;
       maintenanceDueAtMs = now();
       retryNotBeforeMs = undefined;
-      unsubscribe = [store.onWrite(arm), settings.onChange(settingsChanged)];
+      // Subscribed before the boot tick, so its claims reach the hook too.
+      unsubscribe = [
+        store.onClaimed(claimedNow),
+        store.onWrite(arm),
+        settings.onChange(arm),
+      ];
       tick();
     },
     stop() {
