@@ -2148,30 +2148,31 @@ path above.
   the connection, the toggle and the listing, then sets E, the most bytes it
   takes: the listing's `maxBytes`, or the call's `maxBytes` (non-numbers mean
   `defaultBytes`; truncated and clamped to 1..100 MiB) if smaller. It sends
-  `tools.call` as a file call, bounded at 215 s (the edge's 150 s deadline, its
-  65 s drain bound, 5 s slack). The link reads the answer only with
-  `decodeFileAnswer` against E: a file over E, a digest that does not match or
-  any other shape is refused before anything is kept. On the answer the tool
-  checks the caller's abort, then the connection, toggle and listing again with
-  the same limits; then the adapter checks the edge's text exactly (status,
-  `pageId` and the six attachment fields with their bounds; `fileSize` and
-  `version` safe integers), stages the bytes once into the session's attachments
-  under the edge's name and MIME type, and answers the local tool's result byte
-  for byte (`test/confluenceDownloadOracle.ts`). A plain success is refused: the
-  local tool has none. Every refusal stages nothing. The edge's `tool_error`
-  texts (not found, too large, busy and the rest) reach the agent; Pandeck's own
-  texts are "The gateway sent a file this server can't accept; nothing was
-  saved." for a file it can't take, including a stream on any other call's
-  answer, "The file arrived damaged; nothing was saved. Try again." for a digest
-  mismatch, and "A gateway download is already running; try again when it
-  finishes." One file call runs per Pandeck process. Its slot is held until the
-  request retires: the answer arrived and was staged or refused, or the
-  connection ended. A local timeout or cancel answers the agent at once but
-  keeps the slot, and a late answer is dropped unread. If a request has not
-  retired 300 s after it was sent, the link logs
-  `tools.call: a file answer did not retire` and ends its connection; the redial
-  starts a new one. The link's connection takes a message of at most 102 MiB,
-  106 MiB buffered across partial messages; a bigger answer ends it.
+  `tools.call` as a file call, bounded at 215 s (`FILE_CALL_MS` in
+  `gatewayClientLink.ts`: the edge's 150 s deadline, 60 s for up to 102 MiB to
+  arrive, 5 s slack). The link reads the answer only with `decodeFileAnswer`
+  against E: a file over E, a digest that does not match or any other shape is
+  refused before anything is kept. On the answer the tool checks the caller's
+  abort, then the connection, toggle and listing again with the same limits;
+  then the adapter checks the edge's text exactly (status, `pageId` and the six
+  attachment fields with their bounds; `fileSize` and `version` safe integers),
+  stages the bytes once into the session's attachments under the edge's name and
+  MIME type, and answers the local tool's result byte for byte
+  (`test/confluenceDownloadOracle.ts`). A plain success is refused: the local
+  tool has none. Every refusal stages nothing. The edge's `tool_error` texts
+  (not found, too large, busy and the rest) reach the agent; Pandeck's own texts
+  are "The gateway sent a file this server can't accept; nothing was saved." for
+  a file it can't take, including a stream on any other call's answer, "The file
+  arrived damaged; nothing was saved. Try again." for a digest mismatch, and "A
+  gateway download is already running; try again when it finishes." One file
+  call runs per Pandeck process. Its slot is held until the request retires: the
+  answer arrived and was staged or refused, or the connection ended. A local
+  timeout or cancel answers the agent at once but keeps the slot, and a late
+  answer is dropped unread. If a request has not retired 300 s after it was
+  sent, the link logs `tools.call: a file answer did not retire` and ends its
+  connection; the redial starts a new one. The link's connection takes a message
+  of at most 102 MiB, 106 MiB buffered across partial messages; a bigger answer
+  ends it.
 - **Operator actions for file calls.** No action releases bytes still owned or
   calls for repeated retries.
   - The edge logs `file call not settled after abort: <tool> client <id>`: its
