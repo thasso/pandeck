@@ -47,6 +47,11 @@ beforeEach(async () => {
   answer = () => Promise.resolve({ ok: true, text: '{"key":"OPS-1"}' });
   uninstall = installRemoteToolPort({
     callFile: () => Promise.reject(new Error("unused")),
+    uploads: {
+      open: () => Promise.reject(new Error("unused")),
+      put: () => Promise.reject(new Error("unused")),
+      release: () => {},
+    },
     call: (name, args, signal) => {
       calls.push({ name, args, signal });
       return answer();

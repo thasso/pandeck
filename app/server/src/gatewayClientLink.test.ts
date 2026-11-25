@@ -1169,3 +1169,190 @@ test("a gateway card whose apply times out fails MAY_HAVE_WRITTEN; a late answer
   assert.equal(broadcasts, broadcastsAtFailure);
   assert.equal(remoteTools.remoteToolsConnected(), true);
 });
+
+test("an upload's apply timer is the edge's deadline plus 10 s, at most 155 s (Task-1441 P8a, AC9)", async () => {
+  const { uploadApplyCallMs } = await import("./gatewayClientLink.ts");
+  const { uploadApplyDeadlineMs } = await import("./gatewayTools/uploads.ts");
+  const MIB = 1024 * 1024;
+  const table = [
+    [1, 46_000, 56_000],
+    [MIB, 46_000, 56_000],
+    [MIB + 1, 47_000, 57_000],
+    [50 * MIB, 95_000, 105_000],
+    [100 * MIB, 145_000, 155_000],
+  ];
+  for (const [work, edge, pandeck] of table) {
+    assert.equal(uploadApplyDeadlineMs(work!), edge, `edge at ${work}`);
+    assert.equal(uploadApplyCallMs(work!), pandeck, `Pandeck at ${work}`);
+    assert.equal(
+      uploadApplyCallMs(work!),
+      uploadApplyDeadlineMs(work!) + 10_000,
+    );
+  }
+});
+
+test("an upload's apply carries its uploadId and is bounded by the upload timer, not 55 s (Task-1441 P8a, AC9)", async () => {
+  const payloads: unknown[] = [];
+  const seen: AbortSignal[] = [];
+  const edge = await stubEdge({
+    [CLIENT_METHODS.toolsList]: () =>
+      Promise.resolve(encodeClientMessage({ tools: [STUB_TOOL] })),
+    [CLIENT_METHODS.toolsApply]: (payload, signal) => {
+      payloads.push(payload.json);
+      seen.push(signal);
+      return new Promise(() => {});
+    },
+  });
+  const link = linkTo(edge.socketPath);
+  assert.equal(await link.ready, true);
+  const port = remoteTools.remoteToolPort()!;
+
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  open.push({ close: () => vi.useRealTimers() });
+  const uploadId = `upl-${"a".repeat(32)}`;
+  const silent = port.apply(
+    "confluence_mutate_page",
+    "acme.atlassian.net",
+    [{}],
+    {
+      uploadId,
+      work: 100 * 1024 * 1024,
+    },
+  );
+  while (seen.length < 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(payloads, [
+    {
+      name: "confluence_mutate_page",
+      site: "acme.atlassian.net",
+      items: [{}],
+      uploadId,
+    },
+  ]);
+  let settled = false;
+  void silent.then(() => (settled = true));
+  await vi.advanceTimersByTimeAsync(154_999);
+  assert.equal(settled, false);
+  await vi.advanceTimersByTimeAsync(1);
+  assert.deepEqual(await silent, { outcome: "timeout" });
+  await vi.waitFor(() => assert.ok(seen[0]!.aborted));
+});
+
+test("the upload methods: exact requests, the chunk as the one bytes stream, refusals as text, a bad answer and the 30 s bound (Task-1441 P8a)", async () => {
+  const requests: { method: string; json: unknown; bytes: string[] }[] = [];
+  const uploadId = `upl-${"b".repeat(32)}`;
+  let putAnswer: () => Promise<{ json?: unknown }> = () =>
+    Promise.resolve(
+      encodeClientMessage({
+        ok: true,
+        received: 3,
+        streamComplete: true,
+        sealed: true,
+      }),
+    );
+  let openAnswer: () => Promise<{ json?: unknown }> = () =>
+    Promise.resolve(encodeClientMessage({ ok: true, uploadId }));
+  const record =
+    (method: string, answer: () => Promise<{ json?: unknown }>): StubHandler =>
+    (payload) => {
+      const bytes = (payload as { bytes?: Record<string, Uint8Array> }).bytes;
+      requests.push({
+        method,
+        json: payload.json,
+        bytes: Object.entries(bytes ?? {}).map(
+          ([name, value]) => `${name}:${Buffer.from(value).toString()}`,
+        ),
+      });
+      return answer();
+    };
+  const released: unknown[] = [];
+  const edge = await stubEdge({
+    [CLIENT_METHODS.toolsList]: () =>
+      Promise.resolve(encodeClientMessage({ tools: [STUB_TOOL] })),
+    [CLIENT_METHODS.uploadsOpen]: record("open", () => openAnswer()),
+    [CLIENT_METHODS.uploadsPut]: record("put", () => putAnswer()),
+    [CLIENT_METHODS.uploadsRelease]: (payload) => {
+      released.push(payload.json);
+      return Promise.resolve(encodeClientMessage({ ok: true }));
+    },
+  });
+  const link = linkTo(edge.socketPath);
+  assert.equal(await link.ready, true);
+  const { uploads } = remoteTools.remoteToolPort()!;
+  const stream = {
+    stagedAttachmentId: "p8a-0123456789abcdef",
+    size: 3,
+    sha256: "c".repeat(64),
+  };
+
+  assert.deepEqual(await uploads.open([stream], 6), { ok: true, uploadId });
+  assert.deepEqual(
+    await uploads.put(
+      uploadId,
+      stream.stagedAttachmentId,
+      0,
+      Buffer.from("abc"),
+    ),
+    { ok: true, received: 3, streamComplete: true, sealed: true },
+  );
+  uploads.release(uploadId);
+  await vi.waitFor(() => assert.deepEqual(released, [{ uploadId }]));
+  assert.deepEqual(requests, [
+    { method: "open", json: { streams: [stream], work: 6 }, bytes: [] },
+    {
+      method: "put",
+      json: {
+        uploadId,
+        stagedAttachmentId: stream.stagedAttachmentId,
+        offset: 0,
+      },
+      bytes: ["chunk:abc"],
+    },
+  ]);
+
+  // The edge's fixed refusal is text; anything else is undecodable.
+  const BUSY =
+    "The gateway is already transferring a file; try again when it finishes. Nothing was uploaded.";
+  openAnswer = () =>
+    Promise.resolve(
+      encodeClientMessage({ ok: false, code: "tool_error", message: BUSY }),
+    );
+  assert.deepEqual(await uploads.open([stream], 3), {
+    ok: false,
+    message: BUSY,
+  });
+  putAnswer = () =>
+    Promise.resolve(
+      encodeClientMessage({
+        ok: true,
+        received: 3,
+        streamComplete: false,
+        sealed: true,
+      }),
+    );
+  await assert.rejects(
+    uploads.put(uploadId, stream.stagedAttachmentId, 0, Buffer.from("abc")),
+    (err: unknown) => err instanceof remoteTools.RemoteToolRefusal,
+  );
+
+  // A put the edge never answers fails at 30 s.
+  let heard = 0;
+  putAnswer = () => {
+    heard += 1;
+    return new Promise(() => {});
+  };
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  open.push({ close: () => vi.useRealTimers() });
+  const silent = uploads.put(
+    uploadId,
+    stream.stagedAttachmentId,
+    0,
+    Buffer.from("abc"),
+  );
+  let failed = false;
+  silent.catch(() => (failed = true));
+  while (heard < 1) await new Promise((resolve) => setImmediate(resolve));
+  await vi.advanceTimersByTimeAsync(29_999);
+  assert.equal(failed, false);
+  await vi.advanceTimersByTimeAsync(1);
+  await assert.rejects(silent);
+});

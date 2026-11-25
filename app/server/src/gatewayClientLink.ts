@@ -26,7 +26,11 @@
  * says whether the edge provably never saw it. A file tool's call (gateway
  * client 1.2, Task-1441 P7a) is `tools.call` bounded at 215 s and read only
  * as a file answer; one runs at a time, and its slot is held until the
- * request retires, so late 100 MiB answers never stack.
+ * request retires, so late 100 MiB answers never stack. A client-mode upload
+ * (gateway client 1.3, Task-1441 P8a) opens a reservation with
+ * `uploads.open` and sends the approved bytes as `uploads.put` chunks of at
+ * most 1 MiB, each bounded at 30 s; the apply that consumes it is bounded
+ * for its bytes, `uploadApplyCallMs(W)`, at most 155 s.
  */
 import {
   mirrorRemoteCredentialProfiles,
@@ -47,6 +51,9 @@ import {
   decodePrepareAnswer,
   decodeToolAnswer,
   decodeToolListing,
+  decodeUploadOpenAnswer,
+  decodeUploadPutAnswer,
+  decodeUploadReleaseAnswer,
   encodeClientMessage,
   UNKNOWN_LOGIN,
   type ClientAccount,
@@ -84,6 +91,7 @@ import {
   markDisconnected,
   type RemoteFileAnswer,
   type RemotePrepareAnswer,
+  type RemoteUploadPort,
   type RemoteToolAnswer,
   type RemoteToolDescriptor,
 } from "./remoteTools.ts";
@@ -123,6 +131,24 @@ const FILE_CALL_MS = 150_000 + 60_000 + 5_000;
  */
 const FILE_RETIRE_MS = 300_000;
 const MIB = 1024 * 1024;
+/**
+ * Bound `uploads.open` and each `uploads.put` (Task-1441 P8a, v09 P3): one
+ * put is at most 1 MiB, so 30 s is far past P7a's assumed 1.7 MB/s floor.
+ */
+const OPEN_CALL_MS = 30_000;
+const PUT_CALL_MS = 30_000;
+
+/**
+ * Bounds an apply that consumes an upload of `work` bytes (Task-1441 P8a,
+ * v09 P3): the edge's own upload deadline, 45 s plus 1 s per started MiB
+ * and at most 145 s (`uploadApplyDeadlineMs` in `gatewayTools/uploads.ts`,
+ * which this server may not import), plus 10 s, at most 155 s. A table test
+ * pins both copies.
+ */
+export function uploadApplyCallMs(work: number): number {
+  const edge = Math.min(145_000, 45_000 + 1_000 * Math.ceil(work / MIB));
+  return Math.min(155_000, edge + 10_000);
+}
 /**
  * What the edge may send this server (Task-1441 P7a, G4): one maximal file
  * answer, 100 MiB plus its 2 MiB headroom, beside 4 MiB of ordinary traffic.
@@ -535,6 +561,93 @@ export function startGatewayClientLink(
     );
   };
 
+  /**
+   * One bounded upload request (Task-1441 P8a): its decoded answer, the
+   * edge's refusal text included; the link's own failure, an answer it
+   * refused and the bound passing all throw {@link RemoteToolRefusal}. No
+   * log line holds the upload's id, a name or a byte.
+   */
+  const uploadRequest = async <A>(
+    method: string,
+    payload: Payload,
+    decode: (payload: Payload) => A,
+    ms: number,
+  ): Promise<A> => {
+    const opened = connection;
+    if (!opened) throw new RemoteToolRefusal("gateway_unavailable");
+    let answer: A | undefined;
+    try {
+      answer = await boundedToolRequest<A | undefined>(
+        opened,
+        method,
+        payload,
+        new AbortController().signal,
+        decode,
+        () => undefined,
+        ms,
+      );
+    } catch (err) {
+      if (err instanceof UndecodableAnswer) {
+        log(`${method}: ${failure(err.cause)}`);
+        throw new RemoteToolRefusal("undecodable");
+      }
+      throw toolRefusal(method, err);
+    }
+    if (answer === undefined) {
+      log(`${method}: no answer in time`);
+      throw new RemoteToolRefusal("gateway_unavailable");
+    }
+    return answer;
+  };
+  const uploads: RemoteUploadPort = {
+    async open(streams, work) {
+      const answer = await uploadRequest(
+        CLIENT_METHODS.uploadsOpen,
+        encodeClientMessage({
+          streams: streams.map(({ stagedAttachmentId, size, sha256 }) => ({
+            stagedAttachmentId,
+            size,
+            sha256,
+          })),
+          work,
+        }),
+        decodeUploadOpenAnswer,
+        OPEN_CALL_MS,
+      );
+      return answer.ok ? answer : { ok: false, message: answer.message };
+    },
+    async put(uploadId, stagedAttachmentId, offset, chunk) {
+      const answer = await uploadRequest(
+        CLIENT_METHODS.uploadsPut,
+        {
+          json: { uploadId, stagedAttachmentId, offset },
+          bytes: { chunk },
+        },
+        decodeUploadPutAnswer,
+        PUT_CALL_MS,
+      );
+      return answer.ok ? answer : { ok: false, message: answer.message };
+    },
+    release(uploadId) {
+      // Sent without waiting (v03 K3); the edge discards it on its own
+      // timers or the connection's end when this never arrives.
+      const opened = connection;
+      if (!opened || opened.isEnded) return;
+      opened
+        .request(
+          CLIENT_METHODS.uploadsRelease,
+          encodeClientMessage({ uploadId }),
+        )
+        .then((payload) => {
+          if (!decodeUploadReleaseAnswer(payload).ok)
+            log(`${CLIENT_METHODS.uploadsRelease}: refused`);
+        })
+        .catch((err: unknown) => {
+          log(`${CLIENT_METHODS.uploadsRelease}: ${failure(err)}`);
+        });
+    },
+  };
+
   /** The one file call this server runs at a time (Task-1441 P7a, G2). */
   let fileCall: object | undefined;
 
@@ -608,14 +721,20 @@ export function startGatewayClientLink(
         release();
       }
     },
-    async prepare(name, args, signal) {
+    async prepare(name, args, signal, declared) {
       const opened = connection;
       if (!opened) throw new RemoteToolRefusal("gateway_unavailable");
       try {
         return await boundedToolRequest<RemotePrepareAnswer>(
           opened,
           CLIENT_METHODS.toolsPrepare,
-          encodeClientMessage({ name, args }),
+          encodeClientMessage({
+            name,
+            args,
+            ...(declared
+              ? { uploads: declared.map((entry) => ({ ...entry })) }
+              : {}),
+          }),
           signal,
           decodePrepareAnswer,
           (code) => ({ ok: false, code, message: "" }),
@@ -628,7 +747,7 @@ export function startGatewayClientLink(
         throw toolRefusal(CLIENT_METHODS.toolsPrepare, err);
       }
     },
-    async apply(name, site, items) {
+    async apply(name, site, items, upload) {
       // Not sent is claimed only when the edge provably never saw the
       // request: no open connection right before it, or the connection's own
       // "not sent" error. Every other failure after the request may have
@@ -642,19 +761,27 @@ export function startGatewayClientLink(
       const controller = new AbortController();
       let timer: ReturnType<typeof setTimeout> | undefined;
       const expired = new Promise<"timeout">((resolve) => {
-        timer = setTimeout(() => {
-          // Asks the edge to start no further item; a late answer is
-          // dropped unread.
-          controller.abort();
-          resolve("timeout");
-        }, APPLY_CALL_MS);
+        timer = setTimeout(
+          () => {
+            // Asks the edge to start no further item; a late answer is
+            // dropped unread.
+            controller.abort();
+            resolve("timeout");
+          },
+          upload ? uploadApplyCallMs(upload.work) : APPLY_CALL_MS,
+        );
       });
       let payload: Payload;
       try {
         const sent = await Promise.race([
           opened.request(
             CLIENT_METHODS.toolsApply,
-            encodeClientMessage({ name, site, items }),
+            encodeClientMessage({
+              name,
+              site,
+              items,
+              ...(upload ? { uploadId: upload.uploadId } : {}),
+            }),
             controller.signal,
           ),
           expired,
@@ -679,6 +806,7 @@ export function startGatewayClientLink(
         return { outcome: "undecodable" };
       }
     },
+    uploads,
   });
   let uninstall: () => void = () => {};
   const link: GatewayLink = {

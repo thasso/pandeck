@@ -53,6 +53,56 @@ export class UploadOverLimitError extends Error {
   }
 }
 
+const NEEDS_ONE_SOURCE =
+  "uploadAttachment needs exactly one of sourceAttachmentId or sourcePath.";
+const noSessionAttachment = (ref: string): string =>
+  `No session attachment found for id "${ref}". Use list_attachments to see available attachments.`;
+const NOT_ABSOLUTE = "sourcePath must be an absolute path on this host.";
+const notAFile = (path: string): string => `"${path}" is not a file.`;
+const tooLarge = (name: string): string =>
+  `"${name}" is larger than ${MAX_ATTACHMENT_BYTES} bytes; attachments above that are not uploaded.`;
+const isEmpty = (name: string): string => `"${name}" is empty.`;
+
+/**
+ * An upload source's current size, without reading or copying it, refused
+ * with the local tool's texts when it would be (Task-1441 P8a, v02 AC1
+ * step 2): exactly one source, present, a file, not empty and not over
+ * `MAX_ATTACHMENT_BYTES`. `key` is what names the source within one
+ * proposal: the session record's id, or the resolved host path.
+ */
+export function statUploadSource(
+  sessionId: string,
+  request: Pick<AttachmentChangeRequest, "sourceAttachmentId" | "sourcePath">,
+): { size: number; key: string; kind: "attachment" | "path" } {
+  const attachmentRef = request.sourceAttachmentId?.trim();
+  const sourcePath = request.sourcePath?.trim();
+  if (Boolean(attachmentRef) === Boolean(sourcePath))
+    throw new Error(NEEDS_ONE_SOURCE);
+  let path: string;
+  let name: string;
+  let key: string;
+  if (attachmentRef) {
+    const record = resolveSessionAttachment(sessionId, attachmentRef);
+    if (!record) throw new Error(noSessionAttachment(attachmentRef));
+    path = record.path;
+    name = record.name;
+    key = record.id;
+  } else {
+    if (!isAbsolute(sourcePath ?? "")) throw new Error(NOT_ABSOLUTE);
+    path = resolve(sourcePath ?? "");
+    name = path;
+    key = path;
+  }
+  const stat = statSync(path, { throwIfNoEntry: false });
+  if (!stat?.isFile())
+    throw new Error(
+      attachmentRef ? noSessionAttachment(attachmentRef) : notAFile(path),
+    );
+  if (stat.size > MAX_ATTACHMENT_BYTES) throw new Error(tooLarge(name));
+  if (stat.size === 0) throw new Error(isEmpty(name));
+  return { size: stat.size, key, kind: attachmentRef ? "attachment" : "path" };
+}
+
 /** Optional freeze bounds; both default to the local tool's behaviour. */
 export interface FreezeUploadOptions {
   /** The most bytes this freeze may read; at most one chunk more is read. */
@@ -75,15 +125,10 @@ export async function freezeUploadSource(
   const attachmentRef = request.sourceAttachmentId?.trim();
   const sourcePath = request.sourcePath?.trim();
   if (Boolean(attachmentRef) === Boolean(sourcePath))
-    throw new Error(
-      "uploadAttachment needs exactly one of sourceAttachmentId or sourcePath.",
-    );
+    throw new Error(NEEDS_ONE_SOURCE);
   if (attachmentRef) {
     const record = resolveSessionAttachment(sessionId, attachmentRef);
-    if (!record)
-      throw new Error(
-        `No session attachment found for id "${attachmentRef}". Use list_attachments to see available attachments.`,
-      );
+    if (!record) throw new Error(noSessionAttachment(attachmentRef));
     const bytes = await readUploadBytes(record.path, record.name, limit);
     return {
       name: record.name,
@@ -94,11 +139,10 @@ export async function freezeUploadSource(
       stagedAttachmentId: record.id,
     };
   }
-  if (!isAbsolute(sourcePath ?? ""))
-    throw new Error("sourcePath must be an absolute path on this host.");
+  if (!isAbsolute(sourcePath ?? "")) throw new Error(NOT_ABSOLUTE);
   const path = resolve(sourcePath ?? "");
   if (!statSync(path, { throwIfNoEntry: false })?.isFile())
-    throw new Error(`"${path}" is not a file.`);
+    throw new Error(notAFile(path));
   const bytes = await readUploadBytes(path, path, limit);
   const record = stageSessionAttachment(sessionId, {
     name: basename(path),
@@ -137,17 +181,14 @@ async function readUploadBytes(
       const { bytesRead } = await handle.read(chunk, 0, chunk.byteLength);
       if (bytesRead === 0) break;
       total += bytesRead;
-      if (total > MAX_ATTACHMENT_BYTES)
-        throw new Error(
-          `"${name}" is larger than ${MAX_ATTACHMENT_BYTES} bytes; attachments above that are not uploaded.`,
-        );
+      if (total > MAX_ATTACHMENT_BYTES) throw new Error(tooLarge(name));
       if (total > limit) throw new UploadOverLimitError();
       chunks.push(chunk.subarray(0, bytesRead));
     }
   } finally {
     await handle.close();
   }
-  if (total === 0) throw new Error(`"${name}" is empty.`);
+  if (total === 0) throw new Error(isEmpty(name));
   return Buffer.concat(chunks, total);
 }
 

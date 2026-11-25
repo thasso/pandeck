@@ -48,6 +48,13 @@ export function edgeRemotePort<Caller>(
     call: () => Promise.reject(new Error("edgeRemotePort has no tools.call")),
     callFile: () =>
       Promise.reject(new Error("edgeRemotePort has no file calls")),
+    // Uploads run through the real link and listener
+    // (`gatewayClientUploadChain.test.ts`).
+    uploads: {
+      open: () => Promise.reject(new Error("edgeRemotePort has no uploads")),
+      put: () => Promise.reject(new Error("edgeRemotePort has no uploads")),
+      release: () => {},
+    },
     async prepare(name, args) {
       const payload = overTheWire(await host.prepare(name, args, caller()));
       try {

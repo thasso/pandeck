@@ -15,6 +15,12 @@
  * have been cut (P6a L-a). The tool's `sideEffects` is the catalog's
  * classification of its name (`classifiedByCatalog`).
  *
+ * A Confluence upload (Task-1441 P8a) freezes its sources here first, under
+ * one work budget (`remoteUploads.ts`), checking the call's signal and the
+ * route before each item and once more before `tools.prepare`. The prepared
+ * upload rows must be bound to what was frozen before the card persists;
+ * until then any refusal discards the copies this call made.
+ *
  * Imports no catalog, tool group or local tool module
  * (`architecture.test.ts`).
  */
@@ -30,6 +36,7 @@ import {
 import { checkJiraIssueItems } from "../../jiraMutationCheck.ts";
 import type { AgentTool, ToolCallContext, ToolResult } from "../../mcp/tool.ts";
 import { createApproval } from "../../pendingApprovals.ts";
+import type { ConfluencePageMutationItemDisplay } from "@assistant/shared";
 import {
   RemoteToolRefusal,
   remoteProductEnabled,
@@ -37,6 +44,7 @@ import {
   remoteToolPort,
   remoteToolsConnected,
   type RemotePrepareAnswer,
+  type RemoteToolPort,
   type RemoteWriteDescriptor,
   type RemoteWriteName,
 } from "../../remoteTools.ts";
@@ -61,6 +69,12 @@ import {
   NOT_OFFERED,
   withNothingWritten,
 } from "./remoteWriteRules.ts";
+import {
+  bindsFrozenUploads,
+  discardStaged,
+  freezeRemoteUploads,
+  type FrozenSources,
+} from "./remoteUploads.ts";
 
 const UNEXPECTED_ANSWER =
   "The gateway answered something this server can't show as a proposal; nothing was prepared.";
@@ -111,12 +125,18 @@ const WRITES: Record<
     description: string;
     searchHint?: string;
     parameters: Record<string, unknown>;
-    /** The proposal, or undefined when the items fail the closed check. */
+    /**
+     * The proposal, or undefined when the items fail the closed check or
+     * are not bound to the call's frozen upload sources.
+     */
     proposal(
       site: string,
       items: unknown,
       warnings: string[],
+      uploads: Uploads,
     ): Proposal | undefined;
+    /** Whether the call may upload (Confluence only). */
+    uploads?: true;
   }
 > = {
   jira_mutate_issue: {
@@ -138,8 +158,17 @@ const WRITES: Record<
     description: CONFLUENCE_MUTATE_PAGE_DESCRIPTION,
     searchHint: CONFLUENCE_MUTATE_PAGE_SEARCH_HINT,
     parameters: confluenceMutateParamsSchema,
-    proposal(site, items, warnings) {
-      if (!checkConfluencePageItems(items)) return undefined;
+    uploads: true,
+    proposal(site, items, warnings, uploads) {
+      if (
+        !checkConfluencePageItems(items) ||
+        !bindsFrozenUploads(
+          uploads.requested,
+          uploads.frozen,
+          items as ConfluencePageMutationItemDisplay[],
+        )
+      )
+        return undefined;
       return {
         title: confluenceMutationTitle(items),
         summary: confluenceProposalSummary(items, warnings),
@@ -149,6 +178,12 @@ const WRITES: Record<
     },
   },
 };
+
+/** The call's request items and what was frozen for them. */
+interface Uploads {
+  requested: readonly unknown[];
+  frozen: FrozenSources | undefined;
+}
 
 /** The remote write tool; its `sideEffects` comes from the catalog. */
 export type RemoteWriteAgentTool = AgentTool & { classifiedByCatalog: true };
@@ -168,47 +203,79 @@ export function remoteWriteTool(
     ...(write.searchHint ? { searchHint: write.searchHint } : {}),
     classifiedByCatalog: true,
     async execute(params, ctx: ToolCallContext): Promise<ToolResult> {
-      const port = remoteToolPort();
-      if (!port || !remoteToolsConnected()) throw new Error(UNREACHABLE);
-      if (!remoteProductEnabled(product)) throw new Error(DISABLED[product]);
-      if (!remoteToolDispatchable(name, "two-phase"))
-        throw new Error(NOT_OFFERED);
-      let answer: RemotePrepareAnswer;
+      const signal = ctx.signal ?? new AbortController().signal;
+      /** The route, and with a signal that fired, the call's own text. */
+      const fence = (): RemoteToolPort => {
+        if (signal.aborted) throw new Error(CANCELLED);
+        const port = remoteToolPort();
+        if (!port || !remoteToolsConnected()) throw new Error(UNREACHABLE);
+        if (!remoteProductEnabled(product)) throw new Error(DISABLED[product]);
+        if (!remoteToolDispatchable(name, "two-phase"))
+          throw new Error(NOT_OFFERED);
+        return port;
+      };
+      fence();
+      const requested = Array.isArray(params.items) ? params.items : [];
+      const frozen = write.uploads
+        ? await freezeRemoteUploads(ctx.session.sessionId, requested, fence)
+        : undefined;
       try {
-        answer = await port.prepare(
-          name,
-          params,
-          ctx.signal ?? new AbortController().signal,
+        return await propose(
+          frozen ? { ...params, items: frozen.items } : params,
+          { requested, frozen },
+          fence,
+          signal,
+          ctx,
         );
       } catch (err) {
-        if (err instanceof RemoteToolRefusal && err.code === "undecodable")
-          throw new Error(UNEXPECTED_ANSWER);
-        if (
-          err instanceof RemoteToolRefusal &&
-          err.code === "tools_unavailable"
-        )
-          throw new Error(NO_TOOLS);
-        throw new Error(UNREACHABLE);
+        // No card persisted: the copies this call made go (v03 K4).
+        if (frozen) discardStaged(ctx.session.sessionId, frozen.stageIds);
+        throw err;
       }
-      if (!answer.ok) throw new Error(prepareFailureText(name, answer));
-      const { site, items, warnings } = answer;
-      const built = ATLASSIAN_SITE_RE.test(site)
-        ? write.proposal(site, items, warnings)
-        : undefined;
-      if (!built) throw new Error(UNEXPECTED_ANSWER);
-      const card = createApproval({
-        sessionId: ctx.session.sessionId,
-        kind,
-        title: built.title,
-        ...(built.summary ? { summary: built.summary } : {}),
-        sourceToolCallId: ctx.toolCallId,
-        body: built.body,
-        context: { ...GATEWAY_CONTEXT },
-      });
-      return {
-        content: [{ type: "text", text: built.text(card) }],
-        terminate: true,
-      };
     },
   };
+
+  async function propose(
+    args: Record<string, unknown>,
+    uploads: Uploads,
+    fence: () => RemoteToolPort,
+    signal: AbortSignal,
+    ctx: ToolCallContext,
+  ): Promise<ToolResult> {
+    const port = fence();
+    let answer: RemotePrepareAnswer;
+    try {
+      answer = await port.prepare(
+        name,
+        args,
+        signal,
+        ...(uploads.frozen ? [uploads.frozen.uploads] : []),
+      );
+    } catch (err) {
+      if (err instanceof RemoteToolRefusal && err.code === "undecodable")
+        throw new Error(UNEXPECTED_ANSWER);
+      if (err instanceof RemoteToolRefusal && err.code === "tools_unavailable")
+        throw new Error(NO_TOOLS);
+      throw new Error(UNREACHABLE);
+    }
+    if (!answer.ok) throw new Error(prepareFailureText(name, answer));
+    const { site, items, warnings } = answer;
+    const built = ATLASSIAN_SITE_RE.test(site)
+      ? write.proposal(site, items, warnings, uploads)
+      : undefined;
+    if (!built) throw new Error(UNEXPECTED_ANSWER);
+    const card = createApproval({
+      sessionId: ctx.session.sessionId,
+      kind,
+      title: built.title,
+      ...(built.summary ? { summary: built.summary } : {}),
+      sourceToolCallId: ctx.toolCallId,
+      body: built.body,
+      context: { ...GATEWAY_CONTEXT },
+    });
+    return {
+      content: [{ type: "text", text: built.text(card) }],
+      terminate: true,
+    };
+  }
 }

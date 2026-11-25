@@ -1,7 +1,8 @@
 /**
  * Client mode's gateway tools (Task-1398): the edge's tools Pandeck's agents
  * call through the client link (`tools.list`, `tools.call`, and on gateway
- * client 1.1 `tools.prepare` and `tools.apply`, `gatewayClientLink.ts`). The
+ * client 1.1 `tools.prepare` and `tools.apply`, on 1.3 with the upload
+ * methods, `gatewayClientLink.ts`). The
  * catalog's remote group (`tools/gateway/remoteToolGroup.ts`) is built from
  * the set kept here.
  *
@@ -264,6 +265,56 @@ export class RemoteToolRefusal extends Error {
   }
 }
 
+/** An `uploads.*` refusal (Task-1441 P8a): the edge's fixed text. */
+type RemoteUploadRefusal = { ok: false; message: string };
+
+/** A frozen source a `tools.prepare` declares, as the card shows it. */
+export interface RemoteUploadSource {
+  stagedAttachmentId: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  sha256: string;
+  source: string;
+}
+
+/** One source an upload declares at `uploads.open`. */
+export interface RemoteUploadStream {
+  stagedAttachmentId: string;
+  size: number;
+  sha256: string;
+}
+
+/**
+ * Client-mode uploads (gateway client 1.3, Task-1441 P8a): the approved
+ * bytes go to the edge in chunks before the apply that names them. `open`
+ * and `put` are bounded at 30 s each and throw {@link RemoteToolRefusal}
+ * when the link can't ask, can't read the answer, or the bound passes;
+ * `release` is sent without waiting and never throws.
+ */
+export interface RemoteUploadPort {
+  open(
+    streams: readonly RemoteUploadStream[],
+    work: number,
+  ): Promise<{ ok: true; uploadId: string } | RemoteUploadRefusal>;
+  put(
+    uploadId: string,
+    stagedAttachmentId: string,
+    offset: number,
+    chunk: Uint8Array,
+  ): Promise<
+    | { ok: true; received: number; streamComplete: boolean; sealed: boolean }
+    | RemoteUploadRefusal
+  >;
+  release(uploadId: string): void;
+}
+
+/** An apply that consumes a sealed upload; `work` is the W it was opened with. */
+export interface RemoteApplyUpload {
+  uploadId: string;
+  work: number;
+}
+
 /** The gateway's tool calls, as the client link offers them. */
 export interface RemoteToolPort {
   call(
@@ -272,20 +323,29 @@ export interface RemoteToolPort {
     signal: AbortSignal,
   ): Promise<RemoteToolAnswer>;
   /**
-   * A write's proposal; nothing is written. Throws {@link RemoteToolRefusal}
-   * when the link can't ask or can't read the answer.
+   * A write's proposal; nothing is written. `uploads` declares the frozen
+   * sources the args' upload items name (1.3, Task-1441 P8a). Throws
+   * {@link RemoteToolRefusal} when the link can't ask or can't read the
+   * answer.
    */
   prepare(
     name: string,
     args: Record<string, unknown>,
     signal: AbortSignal,
+    uploads?: readonly RemoteUploadSource[],
   ): Promise<RemotePrepareAnswer>;
-  /** Applies approved items once; never throws and takes no caller signal. */
+  /**
+   * Applies approved items once; never throws and takes no caller signal.
+   * With `upload` it consumes that sealed upload and is bounded for its W
+   * (Task-1441 P8a, v09 P3).
+   */
   apply(
     name: string,
     site: string,
     items: unknown[],
+    upload?: RemoteApplyUpload,
   ): Promise<RemoteApplyOutcome>;
+  uploads: RemoteUploadPort;
   /**
    * A file tool's call (Task-1441 P7a, G1): bounded for a file's transfer,
    * decoded only as a file answer at most `expect.maxBytes`, and one at a
