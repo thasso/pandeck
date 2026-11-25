@@ -271,11 +271,12 @@ function hasClaimed(scheduleId: string): boolean {
 /**
  * Keep `done_at_ms` true to the Schedule as it now stands: `done` once it can
  * produce no further occurrence and none is still `claimed`, stamped at the
- * transition that made it so and kept while it stays done.
+ * transition that made it so and kept while it stays done. True when it
+ * changed `done_at_ms`.
  */
-function refreshDone(scheduleId: string, nowMs: number): void {
+function refreshDone(scheduleId: string, nowMs: number): boolean {
   const row = liveRow(scheduleId);
-  if (!row) return;
+  if (!row) return false;
   const remaining =
     row.enabled === 1
       ? row.next_due_at_ms !== null
@@ -293,6 +294,8 @@ function refreshDone(scheduleId: string, nowMs: number): void {
     getDb()
       .prepare("UPDATE schedules SET done_at_ms = NULL WHERE id = ?")
       .run(scheduleId);
+  else return false;
+  return true;
 }
 
 /** Drop terminal occurrences beyond the newest {@link SCHEDULE_HISTORY_LIMIT}. */
@@ -674,13 +677,23 @@ export const scheduleStore = {
   },
 
   /**
-   * The retention sweep: prune history, delete Schedules `done` for 30 days
-   * and Schedules whose target session was deleted (each leaving a
-   * tombstone), and purge tombstones older than 30 days.
+   * The retention sweep: mark done a Schedule whose timing expired with no
+   * write to notice it (a disabled finite one), prune history, delete
+   * Schedules `done` for 30 days and Schedules whose target session was
+   * deleted (each leaving a tombstone), and purge tombstones older than 30
+   * days.
    */
   runMaintenance(nowMs = Date.now()): ScheduleMaintenanceOutcome {
     return write((touched) => {
       const db = getDb();
+      // Only a not-yet-done row is looked at, so a sweep can stamp done_at
+      // at its own time but never move or clear one.
+      for (const { id } of db
+        .prepare(
+          "SELECT id FROM schedules WHERE deleted_at_ms IS NULL AND done_at_ms IS NULL",
+        )
+        .all() as Array<{ id: string }>)
+        if (refreshDone(id, nowMs)) touched.add(id);
       let pruned = 0;
       for (const { id } of db
         .prepare("SELECT id FROM schedules WHERE deleted_at_ms IS NULL")

@@ -11,7 +11,10 @@ import type {
   ServerMessage,
   StateEvent,
 } from "@assistant/shared";
-import type { ScheduleSummary } from "@assistant/shared/schedules";
+import type {
+  ScheduleSummary,
+  ScheduleTiming,
+} from "@assistant/shared/schedules";
 import { Connection } from "../connection.ts";
 import { scheduleStore } from "../db/scheduleStore.ts";
 import { hub } from "../hub.ts";
@@ -22,13 +25,16 @@ const DEC1 = Date.parse("2026-12-01T09:00:00Z");
 const GRACE = { graceMs: 60 * 60_000, paused: false };
 
 let seq = 0;
-function create(nowMs = DEC1 - 1): ScheduleSummary {
+function create(
+  nowMs = DEC1 - 1,
+  timing: ScheduleTiming = { kind: "daily", time: "09:00", timeZone: "UTC" },
+): ScheduleSummary {
   seq += 1;
   return scheduleStore.create(
     {
       name: `Topic ${seq}`,
       prompt: `Topic prompt ${seq}`,
-      timing: { kind: "daily", time: "09:00", timeZone: "UTC" },
+      timing,
       target: { kind: "session", sessionId: `topic-target-${seq}` },
       createdBy: { kind: "user" },
       cardless: false,
@@ -95,6 +101,57 @@ test("Schedule writes publish revisioned upserts, and a delete at its tombstone'
     const [deleted] = scheduleEvents(messages);
     assert.ok(deleted?.kind === "delete" && deleted.id === schedule.id);
     assert.ok(deleted.revision > claimed.revision);
+    assert.equal(deleted.revision, scheduleStore.revision(schedule.id));
+  } finally {
+    hub.unregister(viewer);
+  }
+});
+
+test("a sweep that finds a disabled Schedule expired publishes it done, and 30 days later its delete (A-F001)", async () => {
+  const DAY = 24 * 60 * 60_000;
+  const DEC3 = DEC1 + 2 * DAY;
+  const schedule = create(DEC1 - 1, {
+    kind: "daily",
+    time: "09:00",
+    timeZone: "UTC",
+    endsOn: "2026-12-02",
+  });
+  scheduleStore.claimDue(schedule.id, DEC1, GRACE);
+  scheduleStore.setEnabled(schedule.id, false, DEC1 + 1);
+  const messages: ServerMessage[] = [];
+  const viewer = {
+    send: (message: ServerMessage) => messages.push(message),
+    wantsTopic: (topic: string) => topic === "schedules",
+  };
+  hub.register(viewer);
+  try {
+    await hub.flushPendingBroadcastsForTests();
+    messages.length = 0;
+    const before = scheduleStore.revision(schedule.id)!;
+    scheduleStore.runMaintenance(DEC3);
+    await hub.flushPendingBroadcastsForTests();
+    const done = scheduleEvents(messages).find(
+      (event) => event.id === schedule.id,
+    );
+    assert.ok(done?.kind === "upsert");
+    assert.equal(done.item.doneAtMs, DEC3);
+    assert.ok(done.revision > before);
+
+    // A sweep that changes nothing for it publishes nothing for it.
+    messages.length = 0;
+    scheduleStore.runMaintenance(DEC3 + DAY);
+    await hub.flushPendingBroadcastsForTests();
+    assert.equal(
+      scheduleEvents(messages).some((event) => event.id === schedule.id),
+      false,
+    );
+
+    scheduleStore.runMaintenance(DEC3 + 30 * DAY);
+    await hub.flushPendingBroadcastsForTests();
+    const deleted = scheduleEvents(messages).find(
+      (event) => event.id === schedule.id,
+    );
+    assert.ok(deleted?.kind === "delete");
     assert.equal(deleted.revision, scheduleStore.revision(schedule.id));
   } finally {
     hub.unregister(viewer);

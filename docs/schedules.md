@@ -207,9 +207,11 @@ after the last occurrence before `endsOn`. A `done` Schedule leaves the default
 list for the Done filter and is deleted with its history 30 days after it became
 `done`, never counted from the due or claim time: `done_at` is stamped by the
 transition that leaves nothing owed and nothing due (the settle of the last
-`claimed` occurrence, not its claim). An edit that gives a `done` Schedule a
-future occurrence makes it active again. Deleting a Schedule deletes its
-history.
+`claimed` occurrence, not its claim). A disabled Schedule's timing can run out
+with no write to notice it; the maintenance sweep then stamps `done_at` at its
+own time, at most a day late, never backdated to the last due date. An edit that
+gives a `done` Schedule a future occurrence makes it active again. Deleting a
+Schedule deletes its history.
 
 ## Delivering into an existing session
 
@@ -353,8 +355,9 @@ creates a Schedule yet.
   nothing. Settling, superseding and withdrawing move only a row still
   `claimed`, so a repeated or late settle changes nothing. A delete removes the
   history and leaves a tombstone with the delete's revision; the maintenance
-  sweep prunes history, deletes Schedules 30 days after `done` and Schedules
-  whose target session was deleted, and purges tombstones after 30 days.
+  sweep marks `done` a Schedule whose timing ran out while disabled, prunes
+  history, deletes Schedules 30 days after `done` and Schedules whose target
+  session was deleted, and purges tombstones after 30 days.
 - The `schedules` topic (`app/server/src/schedules/scheduleTopic.ts`): every
   write stamps through a change set, a live Schedule (`done` included) is a
   member, a tombstone leaves as a delete at its delete's revision. Every web

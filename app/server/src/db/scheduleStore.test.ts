@@ -516,6 +516,101 @@ describe("scheduleStore", () => {
     assert.ok(scheduleStore.get(disabled));
   });
 
+  it("maintenance marks a disabled Schedule done once its timing has expired, at the sweep, then deletes it 30 days later (A-F001)", () => {
+    const DEC3 = DEC1 + 2 * DAY;
+    const { id } = scheduleStore.create(
+      input({ timing: { ...DAILY, endsOn: "2026-12-02" } }),
+      DEC1 - 1,
+    );
+    scheduleStore.claimDue(id, DEC1, GRACE);
+    scheduleStore.setEnabled(id, false, DEC1 + 1);
+    // Dec 2 is still ahead, so disabling does not make it done.
+    assert.equal(scheduleStore.get(id)?.doneAtMs, undefined);
+    assert.deepEqual(states(id), ["2026-12-01T09:00:00.000Z withdrawn"]);
+
+    // Before the last date's due time it can still produce one: not done.
+    scheduleStore.runMaintenance(DEC1 + DAY - 1);
+    assert.equal(scheduleStore.get(id)?.doneAtMs, undefined);
+
+    // The sweep that first sees it expired stamps done at its own time,
+    // never backdated to a due or claim time, and moves the revision.
+    const before = scheduleStore.revision(id)!;
+    let outcome = scheduleStore.runMaintenance(DEC3);
+    assert.equal(scheduleStore.get(id)?.doneAtMs, DEC3);
+    assert.ok(scheduleStore.revision(id)! > before);
+    assert.equal(outcome.deleted.includes(id), false);
+
+    // A later sweep keeps done_at and writes nothing for it.
+    const done = scheduleStore.revision(id)!;
+    outcome = scheduleStore.runMaintenance(DEC3 + SCHEDULE_RETENTION_MS - 1);
+    assert.equal(scheduleStore.get(id)?.doneAtMs, DEC3);
+    assert.equal(scheduleStore.revision(id), done);
+    assert.equal(outcome.deleted.includes(id), false);
+
+    outcome = scheduleStore.runMaintenance(DEC3 + SCHEDULE_RETENTION_MS);
+    assert.ok(outcome.deleted.includes(id));
+    assert.equal(scheduleStore.get(id), undefined);
+    assert.deepEqual(scheduleStore.history(id), []);
+    assert.ok(scheduleStore.revision(id)! > done);
+  });
+
+  it("maintenance marks a disabled once done after its date, and never an indefinite or still-owed one", () => {
+    const once = scheduleStore.create(
+      input({
+        timing: {
+          kind: "once",
+          date: "2026-12-01",
+          time: "09:00",
+          timeZone: "UTC",
+        },
+      }),
+      DEC1 - DAY,
+    ).id;
+    scheduleStore.setEnabled(once, false, DEC1 - DAY + 1);
+    const indefinite = scheduleStore.create(input(), DEC1 - DAY).id;
+    scheduleStore.setEnabled(indefinite, false, DEC1 - DAY + 1);
+    // Enabled, its last due time claimed and not settled: still owed.
+    const owed = scheduleStore.create(
+      input({
+        timing: {
+          kind: "once",
+          date: "2026-12-01",
+          time: "09:00",
+          timeZone: "UTC",
+        },
+      }),
+      DEC1 - DAY,
+    ).id;
+    assert.ok(scheduleStore.claimDue(owed, DEC1, GRACE).claimed);
+
+    scheduleStore.runMaintenance(DEC1 - 1);
+    assert.equal(scheduleStore.get(once)?.doneAtMs, undefined);
+
+    const later = DEC1 + 400 * DAY;
+    scheduleStore.runMaintenance(later);
+    assert.equal(scheduleStore.get(once)?.doneAtMs, later);
+    assert.equal(scheduleStore.get(indefinite)?.doneAtMs, undefined);
+    assert.equal(scheduleStore.get(owed)?.doneAtMs, undefined);
+    assert.equal(scheduleStore.owedForTarget(`target-${seq}`).length, 1);
+  });
+
+  it("rolls a maintenance done transition back when the stamp throws", () => {
+    const { id } = scheduleStore.create(
+      input({ timing: { ...DAILY, endsOn: "2026-12-01" } }),
+      DEC1 - DAY,
+    );
+    scheduleStore.setEnabled(id, false, DEC1 - DAY + 1);
+    const before = scheduleStore.revision(id);
+    withFailingStamp(() =>
+      assert.throws(
+        () => scheduleStore.runMaintenance(DEC1 + DAY),
+        /stamp failed/,
+      ),
+    );
+    assert.equal(scheduleStore.get(id)?.doneAtMs, undefined);
+    assert.equal(scheduleStore.revision(id), before);
+  });
+
   it("maintenance deletes Schedules whose target session was deleted", () => {
     sessionStore.upsert({
       id: "sched-gone",
