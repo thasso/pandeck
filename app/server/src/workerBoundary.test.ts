@@ -970,6 +970,18 @@ test("the gateway's Codex refresher imports only node, pi and proper-lockfile", 
   );
 });
 
+test("the test-only file tool is not imported by production modules (Task-1441 P7a, H3)", () => {
+  assert.deepEqual(
+    importersOf((target) => target === "gatewayTools/fileFixtureTool.ts"),
+    [],
+  ); // The scan sees it, and names its own imports the same way.
+  assert.ok(
+    importersOf((target) => target === "gatewayTools/descriptor.ts").includes(
+      "gatewayTools/fileFixtureTool.ts",
+    ),
+  );
+});
+
 test("the process fixture is not imported by production modules", () => {
   assert.deepEqual(
     importersOf((target) => target === "gateway/processFixture.ts"),

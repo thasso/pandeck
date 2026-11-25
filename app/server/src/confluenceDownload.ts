@@ -23,6 +23,10 @@ export const CONFLUENCE_ATTACHMENT_MAX_BYTES = 100 * 1024 * 1024;
 /** A download's limit when the call names none. */
 export const CONFLUENCE_DOWNLOAD_DEFAULT_BYTES = 50 * 1024 * 1024;
 
+/** The local tool's label and search hint, which client mode's tool shares. */
+export const CONFLUENCE_DOWNLOAD_LABEL = "Confluence: Download Attachment";
+export const CONFLUENCE_DOWNLOAD_SEARCH_HINT =
+  "confluence attachment download file image pdf spreadsheet fetch";
 export const CONFLUENCE_DOWNLOAD_DESCRIPTION =
   "Download one Confluence page attachment into this session's attachment store. The bytes never enter your context: the result names a session attachment id and its path on this host. Inspect it with read_attachment, convert_pdf or convert_xlsx, copy it into the KB with kb_write (sourceAttachmentId), or change the file and upload it back with confluence_mutate_page operation=uploadAttachment.";
 

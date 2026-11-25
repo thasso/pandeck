@@ -6,8 +6,14 @@
  */
 import assert from "node:assert/strict";
 import { afterEach, test, vi } from "vitest";
+import {
+  CONFLUENCE_ATTACHMENT_MAX_BYTES,
+  CONFLUENCE_DOWNLOAD_DEFAULT_BYTES,
+} from "./confluenceDownload.ts";
 import { updateConfluenceSettings } from "./confluenceSettings.ts";
 import { GatewayUnavailableError } from "./gatewayLink.ts";
+import { fixtureFileTool } from "./gatewayTools/fileFixtureTool.ts";
+import { createToolHost } from "./gatewayTools/host.ts";
 import { createEdgeTools } from "./gatewayTools/index.ts";
 import { subscribeIntegrationToolChanges } from "./integrationToolChanges.ts";
 import { updateJiraSettings } from "./jiraSettings.ts";
@@ -17,6 +23,7 @@ import {
   installRemoteToolPort,
   knownRemoteTools,
   markDisconnected,
+  remoteFileLimits,
   remoteToolDispatchable,
   remoteToolGate,
   remoteToolsConnected,
@@ -124,7 +131,7 @@ const CONFLUENCE_READS = [
   confluenceLookupTool,
 ].map((local) => confluenceListed(local));
 
-/** Valid in every respect but its name: Confluence admits only its reads. */
+/** The download without its `file` limits, as a pre-1.2 edge would list it. */
 const CONFLUENCE_DOWNLOAD = confluenceListed(confluenceDownloadAttachmentTool);
 
 const tool = (overrides: Record<string, unknown>) => ({
@@ -135,6 +142,7 @@ const tool = (overrides: Record<string, unknown>) => ({
 let uninstall: () => void = () => {};
 const install = () => {
   uninstall = installRemoteToolPort({
+    callFile: () => Promise.reject(new Error("unused")),
     call: () => Promise.reject(new Error("unused")),
     prepare: () => Promise.reject(new Error("unused")),
     apply: () => Promise.reject(new Error("unused")),
@@ -194,7 +202,7 @@ test("each product's tools follow its own Settings toggle", async () => {
   await updateJiraSettings({ enabled: false });
 });
 
-test("Confluence accepts only its three reads", () => {
+test("Confluence accepts only its three reads when the download carries no file limits", () => {
   install();
   const listing = [
     ...CONFLUENCE_READS,
@@ -218,7 +226,7 @@ test("Confluence accepts only its three reads", () => {
   );
 });
 
-test("the refused download entry is otherwise valid: under an admitted name it is accepted", () => {
+test("the download entry without limits is otherwise valid: under an admitted read name it is accepted", () => {
   // Its own listing, so the duplicate-name rule plays no part.
   const swapped = { ...CONFLUENCE_DOWNLOAD, name: "confluence_lookup" };
   assert.deepEqual(acceptRemoteTools([swapped]), [
@@ -376,7 +384,7 @@ test("listings grow the known set, replace the current one, and notify", () => {
     assert.deepEqual(
       knownRemoteTools("jira").map((t) => [
         t.name,
-        t.effect === "read" ? t.description : undefined,
+        "description" in t ? t.description : undefined,
       ]),
       [
         ["jira_get_issue", JIRA_GET_ISSUE.description],
@@ -627,4 +635,142 @@ test("dispatchable as two-phase only for a currently listed, accepted write of a
   } finally {
     await updateJiraSettings({ enabled: false });
   }
+});
+
+/** The edge's real download entry (Task-1441 P7a), as `tools.list` lists it. */
+const edgeDownload = (): Record<string, unknown> => {
+  const listed = createEdgeTools({ log: () => {} })
+    .host.list()
+    .find((entry) => entry.name === "confluence_download_attachment");
+  assert.ok(listed);
+  return JSON.parse(JSON.stringify(listed)) as Record<string, unknown>;
+};
+
+const LIMITS = {
+  limitParam: "maxBytes",
+  defaultBytes: CONFLUENCE_DOWNLOAD_DEFAULT_BYTES,
+  maxBytes: CONFLUENCE_ATTACHMENT_MAX_BYTES,
+};
+
+test("the edge's real download is accepted as a file tool: its name, Confluence read key and limits, nothing else (AC7)", () => {
+  const entry = edgeDownload();
+  assert.deepEqual(entry.file, LIMITS);
+  assert.deepEqual(acceptRemoteTools([entry]), [
+    {
+      name: "confluence_download_attachment",
+      effect: "read",
+      actionKey: "confluence:read",
+      product: "confluence",
+      file: LIMITS,
+    },
+  ]);
+});
+
+test("a file entry failing any one condition is dropped, never read as a read tool (AC7)", () => {
+  const entry = edgeDownload();
+  const variants: Array<[string, Record<string, unknown>]> = [
+    ["a write", { ...entry, effect: "write" }],
+    ["the write key", { ...entry, actionKey: "confluence:write" }],
+    ["another product's key", { ...entry, actionKey: "jira:read" }],
+    ["no file", { ...entry, file: undefined }],
+    ["file not an object", { ...entry, file: "maxBytes" }],
+    ["file an array", { ...entry, file: [] }],
+    [
+      "another limit argument",
+      { ...entry, file: { ...LIMITS, limitParam: "size" } },
+    ],
+    [
+      "maxBytes 0",
+      { ...entry, file: { ...LIMITS, maxBytes: 0, defaultBytes: 0 } },
+    ],
+    [
+      "maxBytes over the local cap",
+      {
+        ...entry,
+        file: { ...LIMITS, maxBytes: CONFLUENCE_ATTACHMENT_MAX_BYTES + 1 },
+      },
+    ],
+    [
+      "maxBytes fractional",
+      { ...entry, file: { ...LIMITS, maxBytes: 1024.5 } },
+    ],
+    ["maxBytes a string", { ...entry, file: { ...LIMITS, maxBytes: "1024" } }],
+    ["defaultBytes 0", { ...entry, file: { ...LIMITS, defaultBytes: 0 } }],
+    [
+      "defaultBytes over maxBytes",
+      { ...entry, file: { ...LIMITS, maxBytes: 10, defaultBytes: 11 } },
+    ],
+    [
+      "defaultBytes missing",
+      { ...entry, file: { limitParam: "maxBytes", maxBytes: 10 } },
+    ],
+  ];
+  for (const [label, variant] of variants)
+    assert.deepEqual(acceptRemoteTools([variant]), [], label);
+  // The bounds themselves are inside: the cap equals the local tool's.
+  assert.deepEqual(
+    acceptRemoteTools([
+      {
+        ...entry,
+        file: { limitParam: "maxBytes", maxBytes: 1, defaultBytes: 1 },
+      },
+    ]).map((tool) => "file" in tool && tool.file),
+    [{ limitParam: "maxBytes", maxBytes: 1, defaultBytes: 1 }],
+  );
+});
+
+test("an entry that is not a file tool but carries `file` is dropped (R4 fail-closed)", () => {
+  assert.deepEqual(acceptRemoteTools([tool({ file: LIMITS })]), []);
+  assert.deepEqual(acceptRemoteTools([tool({ file: undefined })]), []);
+  assert.deepEqual(
+    acceptRemoteTools([
+      confluenceListed(confluenceSearchTool, { file: LIMITS }),
+    ]),
+    [],
+  );
+  // Positive control: the same read without the key.
+  assert.equal(acceptRemoteTools([tool({})]).length, 1);
+});
+
+test("a file tool's limits are offered only while it is dispatchable", () => {
+  install();
+  applyListing(acceptRemoteTools([...CONFLUENCE_READS, edgeDownload()]));
+  try {
+    updateConfluenceSettings({ enabled: false });
+    assert.equal(remoteFileLimits("confluence_download_attachment"), undefined);
+    updateConfluenceSettings({ enabled: true });
+    assert.deepEqual(
+      remoteFileLimits("confluence_download_attachment"),
+      LIMITS,
+    );
+    // A read is never a file tool.
+    assert.equal(remoteFileLimits("confluence_search"), undefined);
+    // Relisted without it: known, but not offered.
+    applyListing(acceptRemoteTools(CONFLUENCE_READS));
+    assert.equal(remoteFileLimits("confluence_download_attachment"), undefined);
+    applyListing(acceptRemoteTools([...CONFLUENCE_READS, edgeDownload()]));
+    markDisconnected();
+    assert.equal(remoteFileLimits("confluence_download_attachment"), undefined);
+  } finally {
+    updateConfluenceSettings({ enabled: false });
+  }
+});
+
+test("the test-only file tool is never admitted, under its own key or a mapped product's (H3)", () => {
+  const [listed] = createToolHost([fixtureFileTool()], {
+    log: () => {},
+  }).list();
+  assert.ok(listed && "file" in listed);
+  const entry = JSON.parse(JSON.stringify(listed)) as Record<string, unknown>;
+  for (const actionKey of [
+    "fixture:read",
+    "confluence:read",
+    "jira:read",
+    "slack:read",
+  ])
+    assert.deepEqual(
+      acceptRemoteTools([{ ...entry, actionKey }]),
+      [],
+      actionKey,
+    );
 });

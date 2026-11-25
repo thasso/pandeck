@@ -46,6 +46,8 @@ export function edgeRemotePort<Caller>(
 ): RemoteToolPort {
   return {
     call: () => Promise.reject(new Error("edgeRemotePort has no tools.call")),
+    callFile: () =>
+      Promise.reject(new Error("edgeRemotePort has no file calls")),
     async prepare(name, args) {
       const payload = overTheWire(await host.prepare(name, args, caller()));
       try {

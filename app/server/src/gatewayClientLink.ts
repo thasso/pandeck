@@ -23,7 +23,10 @@
  * as `tools.call`, each bounded at 40 s. A gateway write (gateway client 1.1,
  * Task-1463 P6b) proposes with `tools.prepare`, bounded the same, and an
  * approved one applies with `tools.apply`, bounded at 55 s, whose outcome
- * says whether the edge provably never saw it.
+ * says whether the edge provably never saw it. A file tool's call (gateway
+ * client 1.2, Task-1441 P7a) is `tools.call` bounded at 215 s and read only
+ * as a file answer; one runs at a time, and its slot is held until the
+ * request retires, so late 100 MiB answers never stack.
  */
 import {
   mirrorRemoteCredentialProfiles,
@@ -33,8 +36,10 @@ import { errorText } from "./errors.ts";
 import {
   CLIENT_METHODS,
   GATEWAY_CLIENT_PROTOCOL,
+  FileAnswerRefusal,
   decodeAccounts,
   decodeClientIdentity,
+  decodeFileAnswer,
   decodeIntegrationStatus,
   decodeLoginEvent,
   decodeApplyAnswer,
@@ -77,6 +82,7 @@ import {
   applyListing,
   installRemoteToolPort,
   markDisconnected,
+  type RemoteFileAnswer,
   type RemotePrepareAnswer,
   type RemoteToolAnswer,
   type RemoteToolDescriptor,
@@ -85,6 +91,7 @@ import type { Payload } from "./workerProtocol/codec.ts";
 import {
   UNKNOWN_METHOD,
   WorkerConnection,
+  type ConnectionLimits,
   WorkerRequestError,
   WorkerRequestNotSentError,
 } from "./workerProtocol/connection.ts";
@@ -102,6 +109,31 @@ const TOOL_CALL_MS = 40_000;
  * (Task-1463 P6b); it has no caller signal.
  */
 const APPLY_CALL_MS = 55_000;
+/**
+ * Bounds a file tool's call (Task-1441 P7a, G1): the edge's own 150 s
+ * `FILE_DEADLINE_MS` (`gatewayTools/confluenceDownload.ts`, which this
+ * server may not import), 60 s for up to 102 MiB to arrive (about 1.7 MB/s),
+ * and a 5 s margin.
+ */
+const FILE_CALL_MS = 150_000 + 60_000 + 5_000;
+/**
+ * A file call stopped here (timeout or cancel) whose request has not retired
+ * this long after it was sent ends the link (Task-1441 P7a, H1): past the
+ * edge's longest legitimate path, 150 s deadline + 65 s output + 1 s grace.
+ */
+const FILE_RETIRE_MS = 300_000;
+const MIB = 1024 * 1024;
+/**
+ * What the edge may send this server (Task-1441 P7a, G4): one maximal file
+ * answer, 100 MiB plus its 2 MiB headroom, beside 4 MiB of ordinary traffic.
+ * The link serves only `accounts.changed` and `logins.event`.
+ */
+const LINK_LIMITS: ConnectionLimits = {
+  maxMessageBytes: 102 * MIB,
+  maxBufferedBytes: 106 * MIB,
+  maxPartialMessages: 8,
+  maxServing: 256,
+};
 
 /** An answer the link's decoder refused; `cause` is the decoder's error. */
 class UndecodableAnswer extends Error {}
@@ -179,6 +211,7 @@ export function startGatewayClientLink(
     const opened: WorkerConnection = new WorkerConnection(endpoint, {
       handshake: { role: "worker", workerId: "pandeck-server" },
       protocol: GATEWAY_CLIENT_PROTOCOL,
+      limits: LINK_LIMITS,
       handlers: {
         [CLIENT_METHODS.accountsChanged]: (payload) => {
           mirror(decodeAccounts(payload));
@@ -435,7 +468,9 @@ export function startGatewayClientLink(
    * One bounded tool request: the caller's abort and the local bound share
    * one controller, so either settles the call now with `stopped(code)` and
    * sends a cancel; the edge's late answer retires the request and is dropped
-   * unread. An answer `decode` refuses throws {@link UndecodableAnswer}.
+   * unread, never decoded. An answer `decode` refuses throws
+   * {@link UndecodableAnswer}. `sent` sees the request itself, which settles
+   * only when the edge answers or the connection ends.
    */
   const boundedToolRequest = async <A>(
     opened: WorkerConnection,
@@ -444,6 +479,8 @@ export function startGatewayClientLink(
     signal: AbortSignal,
     decode: (payload: Payload) => A,
     stopped: (code: "timeout" | "cancelled") => A,
+    ms = TOOL_CALL_MS,
+    sent?: (request: Promise<Payload>) => void,
   ): Promise<A> => {
     const controller = new AbortController();
     let timedOut = false;
@@ -458,12 +495,15 @@ export function startGatewayClientLink(
     const timer = setTimeout(() => {
       timedOut = true;
       controller.abort();
-    }, TOOL_CALL_MS);
+    }, ms);
+    const request = opened.request(method, payload, controller.signal);
+    sent?.(request);
     try {
       return await Promise.race([
-        opened
-          .request(method, payload, controller.signal)
-          .then((answer) => decodeOrThrow(decode, answer)),
+        request.then((answer) =>
+          // A late answer lost the race already; it is never decoded.
+          controller.signal.aborted ? settled : decodeOrThrow(decode, answer),
+        ),
         settled,
       ]);
     } catch (err) {
@@ -477,15 +517,26 @@ export function startGatewayClientLink(
     }
   };
 
-  /** A request the link could not make, as the tool groups' refusal. */
+  /**
+   * A request the link could not make, or an answer it refused, as the tool
+   * groups' refusal: a file it cannot take is its own (Task-1441 P7a).
+   */
   const toolRefusal = (method: string, err: unknown): RemoteToolRefusal => {
-    log(`${method}: ${failure(err)}`);
+    const cause = err instanceof UndecodableAnswer ? err.cause : err;
+    log(`${method}: ${failure(cause)}`);
+    if (cause instanceof FileAnswerRefusal)
+      return new RemoteToolRefusal(
+        cause.reason === "corrupted" ? "corrupted_file" : "unexpected_file",
+      );
     return new RemoteToolRefusal(
       err instanceof WorkerRequestError && err.code === "tools_unavailable"
         ? "tools_unavailable"
         : "gateway_unavailable",
     );
   };
+
+  /** The one file call this server runs at a time (Task-1441 P7a, G2). */
+  let fileCall: object | undefined;
 
   const uninstallTools = installRemoteToolPort({
     async call(name, args, signal) {
@@ -502,6 +553,59 @@ export function startGatewayClientLink(
         );
       } catch (err) {
         throw toolRefusal(CLIENT_METHODS.toolsCall, err);
+      }
+    },
+    async callFile(name, args, signal, expect, use) {
+      const opened = connection;
+      if (!opened) throw new RemoteToolRefusal("gateway_unavailable");
+      if (fileCall) throw new RemoteToolRefusal("file_busy");
+      // The slot is free again only when both are done: the request retired
+      // (answered or its connection ended) and `use` has finished with it.
+      const slot = {};
+      fileCall = slot;
+      let retired = false;
+      let used = false;
+      let retireTimer: ReturnType<typeof setTimeout> | undefined;
+      const release = (): void => {
+        if (!retired || !used || fileCall !== slot) return;
+        fileCall = undefined;
+        clearTimeout(retireTimer);
+      };
+      const watch = (request: Promise<Payload>): void => {
+        retireTimer = setTimeout(() => {
+          log(`${CLIENT_METHODS.toolsCall}: a file answer did not retire`);
+          opened.end("a file answer did not retire in time");
+        }, FILE_RETIRE_MS);
+        retireTimer.unref?.();
+        void request
+          .catch(() => undefined)
+          .then(() => {
+            retired = true;
+            release();
+          });
+      };
+      try {
+        let answer: RemoteFileAnswer;
+        try {
+          answer = await boundedToolRequest<RemoteFileAnswer>(
+            opened,
+            CLIENT_METHODS.toolsCall,
+            encodeClientMessage({ name, args }),
+            signal,
+            (payload) => decodeFileAnswer(payload, expect),
+            (code) => ({ kind: "failure", code, message: "" }),
+            FILE_CALL_MS,
+            watch,
+          );
+        } catch (err) {
+          throw toolRefusal(CLIENT_METHODS.toolsCall, err);
+        }
+        return await use(answer);
+      } finally {
+        // Withdrawn before it was sent: nothing will retire it.
+        if (!retireTimer) retired = true;
+        used = true;
+        release();
       }
     },
     async prepare(name, args, signal) {

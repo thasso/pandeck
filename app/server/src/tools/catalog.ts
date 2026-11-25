@@ -146,10 +146,11 @@ export interface ToolGroup {
 }
 
 type UnclassifiedToolGroup = Omit<ToolGroup, "tools"> & {
-  tools: Array<AgentTool & { remoteWrite?: true }>;
+  tools: Array<AgentTool & { classifiedByCatalog?: true }>;
   /**
    * The gateway's tools: a read carries its own classification; a write
-   * (`remoteWrite`, Task-1463 P6b) takes its name's entry here.
+   * (Task-1463 P6b) or a file tool (Task-1441 P7a) is `classifiedByCatalog`
+   * and takes its name's entry here.
    */
   remote?: true;
 };
@@ -351,7 +352,7 @@ function classifyToolGroups(groups: UnclassifiedToolGroup[]): ToolGroup[] {
       : group.tools
     ).map((tool) => {
       const sideEffects =
-        remote && !tool.remoteWrite
+        remote && !tool.classifiedByCatalog
           ? tool.sideEffects
           : TOOL_SIDE_EFFECTS[tool.name];
       if (!sideEffects)
@@ -642,8 +643,9 @@ function commonToolGroups(agentType: AgentType): UnclassifiedToolGroup[] {
           id: "gateway-confluence",
           label: "Confluence (gateway)",
           description:
-            "Confluence pages through the user's credential gateway with the user's own Atlassian account: CQL search, a page as Markdown, space/tree/label discovery, and approval-gated page writes.",
-          searchHint: "confluence wiki page space cql atlassian gateway",
+            "Confluence pages through the user's credential gateway with the user's own Atlassian account: CQL search, a page as Markdown, space/tree/label discovery, attachment downloads into the session, and approval-gated page writes.",
+          searchHint:
+            "confluence wiki page space cql attachment download atlassian gateway",
           loading: "deferred",
           family: "integration",
           gate: "gatewayConfluence",

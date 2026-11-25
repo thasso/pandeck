@@ -48,10 +48,7 @@ function refused(
     (err: unknown) =>
       err instanceof FileAnswerRefusal &&
       err.reason === reason &&
-      err.message ===
-        (reason === "unexpected"
-          ? "The gateway sent a file this server can't accept; nothing was saved."
-          : "The file arrived damaged; nothing was saved. Try again."),
+      err.message === `The gateway's file answer is ${reason}.`,
   );
 }
 
@@ -89,14 +86,14 @@ test("a plain success and a failure decode without streams", () => {
       { json: { ok: false, code: "tool_error", message: "busy" } },
       { maxBytes: 5 },
     ),
-    { kind: "failure", ok: false, code: "tool_error", message: "busy" },
+    { kind: "failure", code: "tool_error", message: "busy" },
   );
   assert.deepEqual(
     decodeFileAnswer(
       { json: { ok: false, code: "weird", message: "x".repeat(600) } },
       { maxBytes: 5 },
     ),
-    { kind: "failure", ok: false, code: "failed", message: "x".repeat(500) },
+    { kind: "failure", code: "failed", message: "x".repeat(500) },
   );
 });
 
@@ -178,15 +175,17 @@ test("5. name 1-1024 characters, MIME type 0-1024, text at most 60,000", () => {
   );
 });
 
-test("decodeToolAnswer refuses any stream, so a file answer never reads as text (G1)", () => {
-  assert.throws(() => decodeToolAnswer(fileAnswer()), /malformed/);
+test("decodeToolAnswer refuses any stream as an unexpected file, so a file answer never reads as text (G1)", () => {
+  const unexpectedFile = (err: unknown): boolean =>
+    err instanceof FileAnswerRefusal && err.reason === "unexpected";
+  assert.throws(() => decodeToolAnswer(fileAnswer()), unexpectedFile);
   assert.throws(
     () =>
       decodeToolAnswer({
         json: { ok: true, text: "{}" },
         bytes: { file: BYTES },
       }),
-    /malformed/,
+    unexpectedFile,
   );
   assert.throws(
     () =>
@@ -194,7 +193,7 @@ test("decodeToolAnswer refuses any stream, so a file answer never reads as text 
         json: { ok: false, code: "failed", message: "" },
         text: { x: "y" },
       }),
-    /malformed/,
+    unexpectedFile,
   );
   assert.deepEqual(decodeToolAnswer({ json: { ok: true, text: "{}" } }), {
     ok: true,

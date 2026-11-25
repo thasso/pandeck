@@ -44,7 +44,9 @@ import {
   CONFLUENCE_ATTACHMENT_MAX_BYTES,
   CONFLUENCE_DOWNLOAD_DEFAULT_BYTES,
   CONFLUENCE_DOWNLOAD_DESCRIPTION,
+  CONFLUENCE_DOWNLOAD_LABEL,
   CONFLUENCE_DOWNLOAD_SCHEMA,
+  CONFLUENCE_DOWNLOAD_SEARCH_HINT,
   type ConfluenceDownloadParams,
 } from "../../confluenceDownload.ts";
 import {
@@ -136,10 +138,9 @@ type DownloadParams = ConfluenceDownloadParams;
 export const confluenceDownloadAttachmentTool = defineAgentTool<DownloadParams>(
   {
     name: "confluence_download_attachment",
-    label: "Confluence: Download Attachment",
+    label: CONFLUENCE_DOWNLOAD_LABEL,
     description: CONFLUENCE_DOWNLOAD_DESCRIPTION,
-    searchHint:
-      "confluence attachment download file image pdf spreadsheet fetch",
+    searchHint: CONFLUENCE_DOWNLOAD_SEARCH_HINT,
     parameters: CONFLUENCE_DOWNLOAD_SCHEMA,
     async execute(params, ctx) {
       const config = getConfluenceToolConfig();

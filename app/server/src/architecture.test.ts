@@ -734,7 +734,7 @@ test("only tests and the probe set the gateway's Claude token endpoint", () => {
  * local executors reach `remoteApply` (M2), and both share only the leaves,
  * so no load order can meet a cycle.
  */
-test("the gateway write tool and the card leaves reach no catalog, tool group or local tool module", () => {
+test("the gateway write and file tools and the card leaves reach no catalog, tool group or local tool module", () => {
   const FORBIDDEN = [
     "tools/catalog.ts",
     "tools/gateway/remoteToolGroup.ts",
@@ -744,6 +744,7 @@ test("the gateway write tool and the card leaves reach no catalog, tool group or
   for (const entry of [
     "tools/gateway/remoteWrites.ts",
     "tools/gateway/remoteApply.ts",
+    "tools/gateway/remoteFiles.ts",
     "tools/jira/jiraProposalCard.ts",
     "tools/confluence/confluenceProposalCard.ts",
   ]) {
@@ -764,6 +765,10 @@ test("the gateway write tool and the card leaves reach no catalog, tool group or
   // The texts both share load nothing at all.
   assert.deepEqual(staticReach("tools/gateway/remoteWriteRules.ts").modules, [
     "tools/gateway/remoteWriteRules.ts",
+  ]);
+  // The read and file texts (Task-1441 P7a) load only remoteTools' types.
+  assert.deepEqual(staticReach("tools/gateway/remoteReadRules.ts").modules, [
+    "tools/gateway/remoteReadRules.ts",
   ]);
 });
 

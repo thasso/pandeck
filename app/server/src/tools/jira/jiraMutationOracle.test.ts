@@ -811,6 +811,7 @@ async function observeGateway(
     (request) => answer?.(request) ?? fakeJiraAnswer(request, oracle.options),
   );
   const uninstall = installRemoteToolPort({
+    callFile: () => Promise.reject(new Error("unused")),
     call: () => Promise.reject(new Error("unused")),
     // What the edge's `tools.prepare` answers: the shared prepare's proposal.
     prepare: async (_name, args) => ({

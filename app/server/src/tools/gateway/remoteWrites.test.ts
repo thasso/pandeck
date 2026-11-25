@@ -72,6 +72,7 @@ beforeEach(async () => {
       warnings: [],
     });
   uninstall = installRemoteToolPort({
+    callFile: () => Promise.reject(new Error("unused")),
     call: () => Promise.reject(new Error("unused")),
     prepare: (name, args, signal) => {
       prepared.push({ name, args, signal });
@@ -132,7 +133,10 @@ test("each remote write is the local tool by name, label, description, schema an
     );
     // The catalog classifies it; the tool carries no class of its own.
     assert.equal(tool.sideEffects, undefined);
-    assert.equal((tool as { remoteWrite?: true }).remoteWrite, true);
+    assert.equal(
+      (tool as { classifiedByCatalog?: true }).classifiedByCatalog,
+      true,
+    );
   }
 });
 

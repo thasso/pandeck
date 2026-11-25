@@ -61,6 +61,7 @@
  *   reads it only with `decodeFileAnswer`, chosen by the tool it called,
  *   never by the reply. One file call runs at a time per edge; another
  *   answers `tool_error` with a fixed busy text and sends nothing upstream.
+ *   A client refuses a stream on any other call's answer and keeps nothing.
  * - `tools.prepare {name, args}` (1.1) answers `{ok: true, site, items,
  *   warnings}`, the proposal the shared prepare built for the credential's
  *   site, or `{ok: false, code, message}`; nothing is written. At most
@@ -495,11 +496,12 @@ function hasStreams(payload: Payload): boolean {
 
 /**
  * A `tools.call` answer, on the client: an unknown code reads as `failed`.
- * A stream is malformed here: a file answer is read only by
- * `decodeFileAnswer` (Task-1441 P7a, G1).
+ * A stream is a {@link FileAnswerRefusal} `unexpected` here, whatever the
+ * JSON says: a file answer is read only by `decodeFileAnswer`, for a call
+ * made as a file call (Task-1441 P7a, G1).
  */
 export function decodeToolAnswer(payload: Payload): ToolAnswer {
-  if (hasStreams(payload)) malformed("tool answer");
+  if (hasStreams(payload)) throw new FileAnswerRefusal("unexpected");
   const answer = record(payload.json);
   if (answer?.ok === true && typeof answer.text === "string")
     return { ok: true, text: answer.text };
@@ -507,21 +509,16 @@ export function decodeToolAnswer(payload: Payload): ToolAnswer {
   return toolFailure(answer);
 }
 
-/** Why a file answer was refused; the message is the fixed text. */
-const FILE_ANSWER_REFUSALS = {
-  unexpected:
-    "The gateway sent a file this server can't accept; nothing was saved.",
-  corrupted: "The file arrived damaged; nothing was saved. Try again.",
-} as const;
-
 /**
- * A file tool's answer the client refuses (Task-1441 P7a, G4): `unexpected`
- * for its shape or size, `corrupted` for a digest that does not match.
- * Nothing of it may be kept.
+ * An answer the client refuses for carrying, or being, a file it cannot take
+ * (Task-1441 P7a, G4): `unexpected` for a stream on a plain call or a file
+ * answer's shape or size, `corrupted` for a digest that does not match.
+ * Nothing of it may be kept. The message names only the reason; the agent's
+ * fixed text is the caller's (`tools/gateway/remoteReadRules.ts`).
  */
 export class FileAnswerRefusal extends Error {
-  constructor(readonly reason: keyof typeof FILE_ANSWER_REFUSALS) {
-    super(FILE_ANSWER_REFUSALS[reason]);
+  constructor(readonly reason: "unexpected" | "corrupted") {
+    super(`The gateway's file answer is ${reason}.`);
   }
 }
 
@@ -566,7 +563,8 @@ export function decodeFileAnswer(
   const answer = record(payload.json) ?? unexpected();
   if (answer.ok === false) {
     if (hasStreams(payload)) unexpected();
-    return { kind: "failure", ...toolFailure(answer) };
+    const { code, message } = toolFailure(answer);
+    return { kind: "failure", code, message };
   }
   if (answer.ok !== true || typeof answer.text !== "string") unexpected();
   const text = answer.text as string;

@@ -13,7 +13,7 @@
  * refusal here says nothing was written, which holds because prepare never
  * writes: the claim is the client's own, never the edge's wording, which may
  * have been cut (P6a L-a). The tool's `sideEffects` is the catalog's
- * classification of its name (`remoteWrite`).
+ * classification of its name (`classifiedByCatalog`).
  *
  * Imports no catalog, tool group or local tool module
  * (`architecture.test.ts`).
@@ -151,7 +151,7 @@ const WRITES: Record<
 };
 
 /** The remote write tool; its `sideEffects` comes from the catalog. */
-export type RemoteWriteAgentTool = AgentTool & { remoteWrite: true };
+export type RemoteWriteAgentTool = AgentTool & { classifiedByCatalog: true };
 
 /** The agent tool for an accepted gateway write. */
 export function remoteWriteTool(
@@ -166,7 +166,7 @@ export function remoteWriteTool(
     description: write.description,
     parameters: write.parameters,
     ...(write.searchHint ? { searchHint: write.searchHint } : {}),
-    remoteWrite: true,
+    classifiedByCatalog: true,
     async execute(params, ctx: ToolCallContext): Promise<ToolResult> {
       const port = remoteToolPort();
       if (!port || !remoteToolsConnected()) throw new Error(UNREACHABLE);

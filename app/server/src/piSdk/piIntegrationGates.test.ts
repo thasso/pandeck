@@ -430,6 +430,7 @@ test("a normal Settings save of the raw browser MCP switch reaches a live develo
 test("client mode: the gateway's Jira, Slack and Confluence tools are in a pi universe, gated by connection and their toggles, and refused before dispatch once disconnected", async () => {
   const calls: string[] = [];
   const uninstall = remoteTools.installRemoteToolPort({
+    callFile: () => Promise.reject(new Error("unused")),
     call: (name) => {
       calls.push(name);
       return Promise.resolve({ ok: true, text: '{"key":"OPS-1"}' });
