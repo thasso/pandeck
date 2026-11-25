@@ -5,7 +5,12 @@
  * schedule clock arms with it, and the web and the agent tools preview with it.
  */
 import { clampInt } from "./memoryValidation.ts";
-import { addDaysToDate, localDateOf, localWallTimeMs } from "./zonedTime.ts";
+import {
+  addDaysToDate,
+  localDateOf,
+  localWallTimeMs,
+  wallClockMs,
+} from "./zonedTime.ts";
 
 const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const TIME_OF_DAY_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -358,4 +363,59 @@ export function nextOccurrencesAfter(
     date = addDaysToDate(date, 1);
   }
   return out;
+}
+
+const FORMAT_WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const FORMAT_MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
+const pad2 = (value: number) => String(value).padStart(2, "0");
+
+/**
+ * The local wall clock of `atMs` in `timeZone`, field by field. Fixed English
+ * names, so the text never depends on the host's locale data.
+ */
+function scheduleWallClock(atMs: number, timeZone: string) {
+  const wall = new Date(wallClockMs(atMs, timeZone));
+  return {
+    weekday: FORMAT_WEEKDAYS[wall.getUTCDay()]!,
+    day: wall.getUTCDate(),
+    month: FORMAT_MONTHS[wall.getUTCMonth()]!,
+    year: wall.getUTCFullYear(),
+    time: `${pad2(wall.getUTCHours())}:${pad2(wall.getUTCMinutes())}`,
+    offsetMinutes: Math.round((wall.getTime() - atMs) / 60_000),
+  };
+}
+
+/**
+ * A due time as the scheduled-prompt header shows it, in the occurrence's
+ * frozen zone, without the year: `Wed 25 Nov 15:45`.
+ */
+export function formatScheduleDue(dueAtMs: number, timeZone: string): string {
+  const wall = scheduleWallClock(dueAtMs, timeZone);
+  return `${wall.weekday} ${wall.day} ${wall.month} ${wall.time}`;
+}
+
+/**
+ * An absolute instant with its zone and UTC offset, so a repeated wall time
+ * of a fall-back night stays unambiguous:
+ * `Wed 25 Nov 2026 15:45 Europe/Berlin (UTC+01:00)`.
+ */
+export function formatScheduleInstant(atMs: number, timeZone: string): string {
+  const wall = scheduleWallClock(atMs, timeZone);
+  const offset = Math.abs(wall.offsetMinutes);
+  const sign = wall.offsetMinutes < 0 ? "-" : "+";
+  return `${wall.weekday} ${wall.day} ${wall.month} ${wall.year} ${wall.time} ${timeZone} (UTC${sign}${pad2(Math.floor(offset / 60))}:${pad2(offset % 60)})`;
 }

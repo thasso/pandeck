@@ -38,7 +38,7 @@ function partsFormatter(timeZone: string): Intl.DateTimeFormat {
 }
 
 /** The local wall clock at `atMs` (to the ms), expressed as if it were a UTC instant. */
-function wallClockMs(atMs: number, timeZone: string): number {
+export function wallClockMs(atMs: number, timeZone: string): number {
   const parts: Record<string, number> = {};
   for (const part of partsFormatter(timeZone).formatToParts(new Date(atMs)))
     if (part.type !== "literal") parts[part.type] = Number(part.value);

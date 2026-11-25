@@ -117,6 +117,22 @@ describe("projection shape", () => {
     });
   });
 
+  it("carries a scheduled prompt's origin and only its prompt text", () => {
+    const origin = {
+      kind: "schedule",
+      scheduleId: "sch_12",
+      occurrenceId: "occ_7",
+      dueAtMs: Date.UTC(2026, 10, 25, 14, 45),
+    } as const;
+    const messages = entriesToDisplayMessages([
+      user("u1", "Check PR CI", { origin }),
+    ]);
+    expect(messages[0]?.promptOrigin).toEqual(origin);
+    expect(messages[0]?.blocks).toEqual([
+      { kind: "text", text: "Check PR CI" },
+    ]);
+  });
+
   it("folds a tool result into the declaring assistant message", () => {
     const messages = entriesToDisplayMessages([
       user("u1", "go"),

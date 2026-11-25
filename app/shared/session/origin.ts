@@ -54,4 +54,11 @@ export type PromptOrigin =
       source?: string;
       /** Browser-only summary; model-only detail travels through contextBlock. */
       presentation?: SystemPromptPresentation;
-    }; // automation (cron, relay, command seed); optional label
+    } // automation (cron, relay, command seed); optional label
+  | {
+      kind: "schedule";
+      scheduleId: string;
+      occurrenceId: string;
+      /** The occurrence's scheduled instant, never the delivery time. */
+      dueAtMs: number;
+    }; // one occurrence of a Schedule (`docs/schedules.md`)
