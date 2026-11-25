@@ -2182,6 +2182,11 @@ path above.
     progress: a request has not retired. The link ends its connection by itself
     at 300 s (`tools.call: a file answer did not retire`); if the busy text
     persists after that, restart Pandeck.
+  - Both restarts, and the link's own end at 300 s, keep the write precautions:
+    freeing a file permit says nothing about a gateway write that was in flight.
+    A write whose apply is cut off this way reads as lost, and its card fails as
+    may have written (`docs/approvals.md` "Gateway-prepared cards"); check the
+    site before asking again.
 - **Known limitations of gateway tools.** A tool newly deployed on the gateway
   reaches a live pi session only at its next open, because pi registers its tool
   universe at open; Claude sessions get it once the next connection's listing is
