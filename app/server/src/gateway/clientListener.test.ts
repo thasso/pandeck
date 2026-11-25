@@ -32,9 +32,11 @@ import {
   APPLY_ANSWER_MAX_BYTES,
   CLIENT_METHODS,
   GATEWAY_CLIENT_PROTOCOL,
+  FileAnswerRefusal,
   PREPARE_ANSWER_MAX_BYTES,
   decodeAccounts,
   decodeApplyAnswer,
+  decodeFileAnswer,
   decodeIntegrationStatus,
   decodePrepareAnswer,
   encodeClientMessage,
@@ -75,6 +77,17 @@ import type {
   VaultPort,
 } from "./vaultPort.ts";
 import type { EdgeTools, IntegrationCheck, ToolAnswer } from "./edgeTools.ts";
+import {
+  FILE_BUSY,
+  createFileBudget,
+  createToolHost,
+  type FileBudget,
+} from "../gatewayTools/host.ts";
+import {
+  fixtureBytes,
+  fixtureFileText,
+  fixtureFileTool,
+} from "../gatewayTools/fileFixtureTool.ts";
 type LoginDriverEvents = Parameters<NonNullable<LoginDrivers["claude"]>>[1];
 
 /** What the helpers need: a gateway, or a listener started on its own. */
@@ -1169,6 +1182,7 @@ async function listenerWith(
   tools: EdgeTools | undefined,
   integrationCheckMs?: number,
   options: { atlassianSignIn?: boolean } = {},
+  fileOutputMs?: number,
 ): Promise<Edge> {
   const clients = await startClientListener(
     {
@@ -1185,6 +1199,7 @@ async function listenerWith(
       vault: vault.port,
       tools,
       ...(integrationCheckMs !== undefined ? { integrationCheckMs } : {}),
+      ...(fileOutputMs !== undefined ? { fileOutputMs } : {}),
     },
     options,
   );
@@ -3046,4 +3061,286 @@ test("P6a near-cap answers travel the codec and the client decoder unchanged; on
       kind,
     );
   }
+});
+
+// --- file answers over gateway client 1.2 (Task-1441 P7a) ----------------
+
+const FILE_CREDENTIAL = encodeAtlassianCredential({
+  site: "acme.atlassian.net",
+  email: "me@x.test",
+  token: "FAKE-P7A-TOKEN-0123456789",
+});
+
+/** A budget that counts what it was asked and released. */
+function countingFileBudget(): FileBudget & {
+  asked: number[];
+  releases: number;
+} {
+  const inner = createFileBudget();
+  const budget = {
+    asked: [] as number[],
+    releases: 0,
+    reserve(bytes: number) {
+      budget.asked.push(bytes);
+      const release = inner.reserve(bytes);
+      return release
+        ? () => {
+            budget.releases += 1;
+            release();
+          }
+        : undefined;
+    },
+    get reserved() {
+      return inner.reserved;
+    },
+  };
+  return budget;
+}
+
+/**
+ * The listener with the real host running the fixture file tool, over a
+ * stub vault holding u1's credential; two enrolled clients of u1.
+ */
+async function fileEdge(
+  options: {
+    fileOutputMs?: number;
+    tool?: Parameters<typeof fixtureFileTool>[0];
+  } = {},
+) {
+  const vault = stubVault();
+  vault.stored.set("u1", FILE_CREDENTIAL);
+  const budget = countingFileBudget();
+  const tool = fixtureFileTool(options.tool);
+  const lines: string[] = [];
+  const tools: EdgeTools = {
+    ...createEdgeTools({ log: () => {} }),
+    host: createToolHost([tool], {
+      log: (line) => lines.push(line),
+      fileBudget: budget,
+    }),
+  };
+  const edge = await listenerWith(
+    vault,
+    tools,
+    undefined,
+    {},
+    options.fileOutputMs,
+  );
+  return {
+    vault,
+    budget,
+    tool,
+    lines,
+    edge,
+    a: await enroll(edge),
+    b: await enroll(edge),
+    reads: () => vault.calls.filter((call) => call === "get u1").length,
+  };
+}
+
+const callFile = (connection: WorkerConnection, args: object) =>
+  connection.request(
+    CLIENT_METHODS.toolsCall,
+    encodeClientMessage({ name: "fixture_file_read", args }),
+  );
+
+async function waitFor(check: () => boolean, ms = 5_000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error("condition not met in time");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+test("P7a: tools.list carries the file tool's limits; a file answer reaches the client with its bytes (J1, H3 c1)", async () => {
+  const { edge, a, budget, reads } = await fileEdge();
+  const connection = await dialClient(edge, a);
+  const listing = (
+    await connection.request(CLIENT_METHODS.toolsList, encodeClientMessage({}))
+  ).json as { tools: { name: string; file?: object }[] };
+  assert.deepEqual(listing.tools[0]?.file, {
+    limitParam: "maxDownloadBytes",
+    defaultBytes: 10 * 1024 * 1024,
+    maxBytes: 20 * 1024 * 1024,
+  });
+  const payload = await callFile(connection, { id: "bin", size: 1234 });
+  assert.deepEqual(Object.keys(payload.bytes ?? {}), ["file"]);
+  const decoded = decodeFileAnswer(payload, { maxBytes: 10 * 1024 * 1024 });
+  assert.equal(decoded.kind, "file");
+  assert.ok(decoded.kind === "file");
+  assert.deepEqual(JSON.parse(decoded.text), fixtureFileText(1234));
+  assert.ok(Buffer.from(decoded.bytes).equals(Buffer.from(fixtureBytes(1234))));
+  assert.equal(decoded.file.name, "fixture.bin");
+  assert.equal(reads(), 1);
+  // The permit was reserved through callForClient's file path, then freed.
+  assert.deepEqual(budget.asked, [2 * 10 * 1024 * 1024 + 2 * 1024 * 1024]);
+  await waitFor(() => budget.releases === 1);
+});
+
+test("P7a: inline content and download_limit_reached round-trip as plain answers with no stream (H3 c2)", async () => {
+  const { edge, a, budget } = await fileEdge();
+  const connection = await dialClient(edge, a);
+  for (const id of ["inline", "limit"]) {
+    const payload = await callFile(connection, { id });
+    assert.deepEqual(Object.keys(payload.bytes ?? {}), []);
+    const decoded = decodeFileAnswer(payload, { maxBytes: 10 * 1024 * 1024 });
+    assert.equal(decoded.kind, "plain");
+    await waitFor(() => budget.reserved === 0);
+  }
+});
+
+test("P7a: maxDownloadBytes drives the fixture's limit; maxBytes does not, and the client refuses over its own E (H3 c3)", async () => {
+  const { edge, a, budget } = await fileEdge();
+  const connection = await dialClient(edge, a);
+  const over = await callFile(connection, {
+    id: "bin",
+    size: 8,
+    maxDownloadBytes: 4,
+    maxBytes: 100,
+  });
+  assert.deepEqual(over.json, {
+    ok: false,
+    code: "tool_error",
+    message:
+      "The file is larger than the 4-byte limit; nothing was saved. Raise maxDownloadBytes (at most 20971520) to fetch it.",
+  });
+  assert.deepEqual(Object.keys(over.bytes ?? {}), []);
+  await waitFor(() => budget.reserved === 0);
+  const within = await callFile(connection, {
+    id: "bin",
+    size: 8,
+    maxDownloadBytes: 8,
+    maxBytes: 1,
+  });
+  assert.equal(decodeFileAnswer(within, { maxBytes: 8 }).kind, "file");
+  // A client whose own E is smaller refuses it, valid digest and all.
+  assert.throws(
+    () => decodeFileAnswer(within, { maxBytes: 7 }),
+    (err: unknown) =>
+      err instanceof FileAnswerRefusal && err.reason === "unexpected",
+  );
+});
+
+test("P7a: a second client's file call while one runs is FILE_BUSY with no vault read; the permit frees after the first answer left", async () => {
+  const { edge, a, b, budget, tool, reads } = await fileEdge();
+  const first = await dialClient(edge, a);
+  const second = await dialClient(edge, b);
+  const pending = callFile(first, { id: "hold" });
+  await waitFor(() => tool.started === 1);
+  const readsBefore = reads();
+  assert.deepEqual((await callFile(second, { id: "bin" })).json, {
+    ok: false,
+    code: "tool_error",
+    message: FILE_BUSY,
+  });
+  assert.equal(reads(), readsBefore, "nothing read or sent for the busy call");
+  tool.release();
+  assert.equal(decodeFileAnswer(await pending, { maxBytes: 5 }).kind, "file");
+  await waitFor(() => budget.reserved === 0);
+  assert.equal(budget.releases, 1);
+  assert.equal(
+    decodeFileAnswer(await callFile(second, { id: "bin" }), { maxBytes: 5 })
+      .kind,
+    "file",
+  );
+});
+
+test("P7a: a revoked client's file call never reaches the host and takes no permit (J1)", async () => {
+  const { edge, a, budget, reads } = await fileEdge();
+  const connection = await dialClient(edge, a);
+  edge.clients!.registry.revoke(a.clientId);
+  // Refused `client_revoked`, or the connection already ended: either way
+  // before the body runs.
+  await assert.rejects(callFile(connection, { id: "bin" }));
+  assert.deepEqual(budget.asked, []);
+  assert.equal(reads(), 0);
+});
+
+test("P7a: a client message over 2 MiB ends that client's connection only; a 1 MiB one is served (G4)", async () => {
+  const { edge, a, b } = await fileEdge();
+  const big = await dialClient(edge, a);
+  const other = await dialClient(edge, b);
+  // About 1 MiB of approved items, as a P6 proposal's apply carries.
+  const items = [{ text: "x".repeat(1024 * 1024) }];
+  const served = await big.request(
+    CLIENT_METHODS.toolsApply,
+    encodeClientMessage({ name: "nope", site: "acme.atlassian.net", items }),
+  );
+  assert.equal((served.json as { code?: string }).code, "unknown_tool");
+  const oversized = big.request(
+    CLIENT_METHODS.toolsCall,
+    encodeClientMessage({
+      name: "fixture_file_read",
+      args: { id: "x".repeat(2 * 1024 * 1024 + 1) },
+    }),
+  );
+  await assert.rejects(oversized);
+  await big.ended;
+  assert.equal(other.isEnded, false);
+  const listing = await other.request(
+    CLIENT_METHODS.toolsList,
+    encodeClientMessage({}),
+  );
+  assert.ok(Array.isArray((listing.json as { tools: unknown[] }).tools));
+});
+
+test("P7a: a client that stops reading a file answer is ended after the drain bound; only then is the permit freed, and only its connection ends (H1 t1, t4)", async () => {
+  const MiB = 1024 * 1024;
+  const { edge, a, b, budget, tool, reads } = await fileEdge({
+    fileOutputMs: 300,
+    tool: {
+      file: {
+        limitParam: "maxDownloadBytes",
+        defaultBytes: 64 * MiB,
+        maxBytes: 100 * MiB,
+      },
+    },
+  });
+  // A raw client whose socket the test pauses.
+  const socket = tls.connect({
+    host: "127.0.0.1",
+    port: edge.clients!.clientPort,
+    ca: edge.clients!.caPem,
+    key: a.key,
+    cert: a.cert,
+  });
+  await new Promise<void>((resolve, reject) => {
+    socket.once("secureConnect", resolve);
+    socket.once("error", reject);
+  });
+  const stalled = new WorkerConnection(socketEndpoint(socket), {
+    handshake: { role: "worker", workerId: "stalled-client" },
+    protocol: GATEWAY_CLIENT_PROTOCOL,
+  });
+  open.push({ close: () => stalled.end("test done") });
+  const other = await dialClient(edge, b);
+  await stalled.request(CLIENT_METHODS.toolsList, encodeClientMessage({}));
+  socket.pause();
+  const pending = callFile(stalled, { id: "bin", size: 64 * MiB }).catch(
+    () => "ended",
+  );
+  await waitFor(() => tool.started === 1);
+  // The answer is written but cannot drain: the permit stays held.
+  const readsBefore = reads();
+  assert.deepEqual((await callFile(other, { id: "bin" })).json, {
+    ok: false,
+    code: "tool_error",
+    message: FILE_BUSY,
+  });
+  assert.equal(reads(), readsBefore);
+  assert.equal(budget.releases, 0);
+  // The drain bound ends the stalled connection; its socket closes, the
+  // pending writes settle, and the permit is released exactly once.
+  await waitFor(() => budget.releases === 1, 10_000);
+  assert.equal(budget.reserved, 0);
+  socket.resume();
+  assert.equal(await pending, "ended");
+  assert.equal(other.isEnded, false);
+  assert.equal(
+    decodeFileAnswer(await callFile(other, { id: "bin" }), {
+      maxBytes: 64 * MiB,
+    }).kind,
+    "file",
+  );
+  await waitFor(() => budget.releases === 2);
 });

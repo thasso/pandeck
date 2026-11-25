@@ -55,6 +55,8 @@ import type { Payload } from "../workerProtocol/codec.ts";
 import {
   WorkerConnection,
   WorkerMethodError,
+  type ConnectionLimits,
+  type MethodContext,
   type MethodHandler,
 } from "../workerProtocol/connection.ts";
 import { createPrivateJsonFile } from "../privateJsonFile.ts";
@@ -150,6 +152,22 @@ import {
   type EdgeTls,
 } from "./x509.ts";
 
+/**
+ * What a client may make the edge buffer or run (Task-1441 P7a, AC3): its
+ * messages are small (a tool call, an apply's approved items), so the 100
+ * MiB file answers only ever travel the other way.
+ */
+const CLIENT_LIMITS: ConnectionLimits = {
+  maxMessageBytes: 2 * 1024 * 1024,
+  maxBufferedBytes: 4 * 1024 * 1024,
+  maxPartialMessages: 8,
+  maxServing: 256,
+};
+/**
+ * How long a file answer's last frame may wait to flush before the edge ends
+ * that client's connection (H1): `FILE_TRANSFER_MS` 60 s plus a margin.
+ */
+const FILE_OUTPUT_MS = 65_000;
 const MAX_ENROLL_BYTES = 16 * 1024;
 const MAX_CONNECTIONS = 64;
 const HANDSHAKE_TIMEOUT_MS = 10_000;
@@ -288,6 +306,11 @@ interface ClientListenerDeps {
    * `INTEGRATION_CHECK_MS`; no entry passes it.
    */
   integrationCheckMs?: number | undefined;
+  /**
+   * Test seam: a shorter file-answer drain bound than `FILE_OUTPUT_MS`; no
+   * entry passes it.
+   */
+  fileOutputMs?: number | undefined;
   /** Test seam: shorter enrollment-port idle bounds; no entry passes it. */
   enrollIdle?: EnrollIdle | undefined;
 }
@@ -675,6 +698,8 @@ export async function startClientListener(
     client: GatewayClient,
     /** Aborts on the client's `cancel` or when its connection ends. */
     signal: AbortSignal,
+    /** When the answer has left (Task-1441 P7a, H1). */
+    context?: MethodContext,
   ) => Payload | Promise<Payload>;
 
   /** The user's integration credential, read from the vault on every call. */
@@ -844,15 +869,27 @@ export async function startClientListener(
     // The tool's own failure is an answer, not a failed call; the user is
     // the registry's, never a payload's.
     // A client never writes in one call: the host refuses a write tool here.
-    [CLIENT_METHODS.toolsCall]: async (payload, client, signal) => {
+    // A file tool runs only with the connection's `onSettled` (J1), and its
+    // answer is the JSON plus the bytes as the `file` stream.
+    [CLIENT_METHODS.toolsCall]: async (payload, client, signal, context) => {
       const { name, args } = decodeToolCall(payload);
-      return encodeClientMessage(
-        await toolHost().callForClient(name, args, {
-          clientId: client.id,
-          credential: vaultCredential(client),
-          signal,
-        }),
+      const answer = await toolHost().callForClient(name, args, {
+        clientId: client.id,
+        credential: vaultCredential(client),
+        signal,
+        ...(context ? { onSettled: (fn) => context.onSettled(fn) } : {}),
+      });
+      if (!answer.ok || !answer.file) return encodeClientMessage(answer);
+      const { bytes, ...file } = answer.file;
+      // A client that stops reading must not hold the file permit forever.
+      context?.drainWithin(
+        deps.fileOutputMs ?? FILE_OUTPUT_MS,
+        "a file answer did not drain",
       );
+      return {
+        json: { ok: true, text: answer.text, file },
+        bytes: { file: bytes },
+      };
     },
     [CLIENT_METHODS.toolsPrepare]: async (payload, client, signal) => {
       const { name, args } = decodeToolPrepare(payload);
@@ -887,7 +924,7 @@ export async function startClientListener(
     const identity = peerIdentity(socket)!;
     const handlers: Record<string, MethodHandler> = {};
     for (const [method, body] of Object.entries(methods))
-      handlers[method] = (payload, signal) => {
+      handlers[method] = (payload, signal, context) => {
         try {
           if (!registry.active(identity.clientId, identity.fingerprint)) {
             setImmediate(() => {
@@ -918,7 +955,7 @@ export async function startClientListener(
         }
         return (async () => {
           try {
-            const answer = await body(payload, client, signal);
+            const answer = await body(payload, client, signal, context);
             log(`client ${client.id} ${method}: ok`);
             return answer;
           } catch (err) {
@@ -946,6 +983,7 @@ export async function startClientListener(
               : `this endpoint speaks ${GATEWAY_CLIENT_VERSION} only`,
         },
         handlers,
+        limits: CLIENT_LIMITS,
         onEnd: () => connections.delete(connection),
       },
     );
