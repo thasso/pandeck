@@ -148,7 +148,10 @@ describe("atlassianDownload", () => {
       "Confluence",
       "/wiki/download/x",
       10,
-    ).catch((error: unknown) => error as Error);
+    ).then(
+      () => new Error("resolved"),
+      (error: unknown) => error as Error,
+    );
     expect(err.message).toBe(
       `Confluence download returned HTTP 500 for /wiki/download/x: ${body.slice(0, 400)}`,
     );

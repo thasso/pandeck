@@ -56,6 +56,8 @@ for (const entry of DOWNLOAD_ORACLE)
 // Characterization (G3): the local download's own refusals, exact.
 test("the local download's metadata size and missing-link messages", async () => {
   const { downloadAttachment } = await import("./confluenceAttachments.ts");
+  const { ConfluenceDownloadError } =
+    await import("../../confluenceDownload.ts");
   const config = {
     host: ORACLE_SITE,
     atlassianEmail: "a@b.c",
@@ -68,8 +70,10 @@ test("the local download's metadata size and missing-link messages", async () =>
       10,
     ),
     {
+      name: "Error",
       message:
         "big.bin is 11 bytes, above the 10-byte limit; raise maxBytes to fetch it.",
+      reason: "metadata_too_large",
     },
   );
   await assert.rejects(
@@ -81,8 +85,12 @@ test("the local download's metadata size and missing-link messages", async () =>
   );
   await assert.rejects(downloadAttachment(config, { id: "att9" }, 10), {
     message: "Confluence returned no download link for attachment att9.",
+    reason: "no_download_link",
   });
-  await assert.rejects(downloadAttachment(config, {}, 10), {
-    message: "Confluence returned no download link for attachment .",
-  });
+  await assert.rejects(
+    downloadAttachment(config, {}, 10),
+    (err: unknown) =>
+      err instanceof ConfluenceDownloadError &&
+      err.message === "Confluence returned no download link for attachment .",
+  );
 });

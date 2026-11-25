@@ -13,48 +13,24 @@ import { statSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { basename, isAbsolute, resolve } from "node:path";
 import type { ConfluenceAttachmentMutationDisplay } from "@assistant/shared";
-import { atlassianDownload } from "../../atlassian/atlassianFetch.ts";
-import type { ConfluenceApiConfig } from "../../atlassian/confluenceClient.ts";
 import type {
   AttachmentChangeRequest,
   FrozenUpload,
 } from "../../confluenceAttachmentChange.ts";
 import {
-  downloadPathOf,
-  type ConfluenceAttachmentResponse,
-} from "../../confluenceRead.ts";
+  CONFLUENCE_ATTACHMENT_MAX_BYTES,
+  downloadConfluenceAttachment,
+} from "../../confluenceDownload.ts";
 import {
   resolveSessionAttachment,
   stageSessionAttachment,
 } from "../../sessionAttachments.ts";
 
 /** Upper bound for one attachment moved in either direction. */
-export const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024;
+export const MAX_ATTACHMENT_BYTES = CONFLUENCE_ATTACHMENT_MAX_BYTES;
 
 /** Download one attachment's current bytes, refusing past `maxBytes`. */
-export async function downloadAttachment(
-  config: ConfluenceApiConfig,
-  raw: ConfluenceAttachmentResponse,
-  maxBytes: number,
-  signal?: AbortSignal,
-): Promise<{ bytes: Uint8Array; contentType: string | null }> {
-  if (typeof raw.fileSize === "number" && raw.fileSize > maxBytes)
-    throw new Error(
-      `${raw.title ?? raw.id} is ${raw.fileSize} bytes, above the ${maxBytes}-byte limit; raise maxBytes to fetch it.`,
-    );
-  const path = downloadPathOf(raw);
-  if (!path)
-    throw new Error(
-      `Confluence returned no download link for attachment ${raw.id ?? ""}.`,
-    );
-  return atlassianDownload(
-    config,
-    "Confluence",
-    path,
-    maxBytes,
-    signal ? { signal } : {},
-  );
-}
+export const downloadAttachment = downloadConfluenceAttachment;
 
 /**
  * Copy the upload's bytes into the session attachment store (a host path) or

@@ -41,6 +41,13 @@ import {
 } from "../../confluenceMutate.ts";
 import { applyConfluenceMutationItems } from "../../confluenceMutateApply.ts";
 import {
+  CONFLUENCE_ATTACHMENT_MAX_BYTES,
+  CONFLUENCE_DOWNLOAD_DEFAULT_BYTES,
+  CONFLUENCE_DOWNLOAD_DESCRIPTION,
+  CONFLUENCE_DOWNLOAD_SCHEMA,
+  type ConfluenceDownloadParams,
+} from "../../confluenceDownload.ts";
+import {
   CONFLUENCE_GET_PAGE_DESCRIPTION,
   CONFLUENCE_GET_PAGE_SCHEMA,
   CONFLUENCE_LOOKUP_DESCRIPTION,
@@ -63,7 +70,6 @@ import { applyOnGateway } from "../gateway/remoteApply.ts";
 import { GATEWAY_ROUTE } from "../gateway/remoteWriteRules.ts";
 import { stageSessionAttachment } from "../../sessionAttachments.ts";
 import {
-  MAX_ATTACHMENT_BYTES,
   downloadAttachment,
   freezeUploadSource,
   readStagedBytes,
@@ -125,54 +131,24 @@ export const confluenceLookupTool = defineAgentTool<ConfluenceLookupParams>({
 // confluence_download_attachment
 // --------------------------------------------------------------------------
 
-type DownloadParams = {
-  attachmentId?: string;
-  page?: string;
-  fileName?: string;
-  maxBytes?: number;
-};
-
-const DEFAULT_DOWNLOAD_BYTES = 50 * 1024 * 1024;
+type DownloadParams = ConfluenceDownloadParams;
 
 export const confluenceDownloadAttachmentTool = defineAgentTool<DownloadParams>(
   {
     name: "confluence_download_attachment",
     label: "Confluence: Download Attachment",
-    description:
-      "Download one Confluence page attachment into this session's attachment store. The bytes never enter your context: the result names a session attachment id and its path on this host. Inspect it with read_attachment, convert_pdf or convert_xlsx, copy it into the KB with kb_write (sourceAttachmentId), or change the file and upload it back with confluence_mutate_page operation=uploadAttachment.",
+    description: CONFLUENCE_DOWNLOAD_DESCRIPTION,
     searchHint:
       "confluence attachment download file image pdf spreadsheet fetch",
-    parameters: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        attachmentId: {
-          type: "string",
-          description:
-            "Attachment id from confluence_lookup kind=attachments, e.g. att123456.",
-        },
-        page: {
-          type: "string",
-          description: "Page id or URL, with fileName instead of attachmentId.",
-        },
-        fileName: {
-          type: "string",
-          description: "Exact attachment file name on page.",
-        },
-        maxBytes: {
-          type: "number",
-          description: `Largest file downloaded. Defaults to ${DEFAULT_DOWNLOAD_BYTES} bytes, at most ${MAX_ATTACHMENT_BYTES}.`,
-        },
-      },
-    },
+    parameters: CONFLUENCE_DOWNLOAD_SCHEMA,
     async execute(params, ctx) {
       const config = getConfluenceToolConfig();
       const raw = await resolveAttachmentInput(config, params, ctx.signal);
       const maxBytes = clamp(
         params.maxBytes,
-        DEFAULT_DOWNLOAD_BYTES,
+        CONFLUENCE_DOWNLOAD_DEFAULT_BYTES,
         1,
-        MAX_ATTACHMENT_BYTES,
+        CONFLUENCE_ATTACHMENT_MAX_BYTES,
       );
       const downloaded = await downloadAttachment(
         config,
