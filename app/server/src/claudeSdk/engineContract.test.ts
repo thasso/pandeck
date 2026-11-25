@@ -144,6 +144,8 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
     const profiles = await import("../credentialProfiles.ts");
     const { analyzeProviderError, isLoginDeath, loginEnded, runFailureFacts } =
       await import("../providerErrors.ts");
+    const { assistantProviderError, claudeModelNotFound, resultProviderError } =
+      await import("./messageMapper.ts");
     const {
       answerNextInProcessWorkerCallForTests,
       registerInProcessEngineFactory,
@@ -224,6 +226,9 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
       isLoginDeath,
       loginEnded,
       runFailureFacts,
+      assistantProviderError,
+      claudeModelNotFound,
+      resultProviderError,
       answerNextInProcessWorkerCallForTests,
       ENGINE_METHODS,
       decodeEngineOpen,
@@ -269,6 +274,8 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
    */
   async function turn(options: {
     credentialProfileId?: string;
+    /** The concrete id to run, as a session resolves it for its account. */
+    sdkModelId?: string;
     beforePrompt?: (sessionId: string) => Promise<void>;
   }) {
     serial += 1;
@@ -308,6 +315,9 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
           sessionId,
           cwd: env.work,
           modelId: "sonnet",
+          ...(options.sdkModelId !== undefined
+            ? { sdkModelId: options.sdkModelId }
+            : {}),
           thinkingLevel: "medium",
           mountToolServer: false,
           env: {
@@ -622,6 +632,82 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
         assertNoTokenLogged([ran.leaseToken]);
       } finally {
         env.setRenewal(undefined);
+      }
+    },
+    CASE_MS * 2,
+  );
+
+  test(
+    "Task-1483: an upstream 404 not_found_error yields the captured model-refusal shape, classified model_unavailable and never a dead login",
+    async () => {
+      env.upstream.reset();
+      // The API's answer to a model the account cannot run.
+      env.setResponder((_seen, res) => {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            type: "error",
+            error: { type: "not_found_error", message: "model: fixture" },
+          }),
+        );
+      });
+      const modelId = "claude-fable-5-2";
+      const before = identity(env.namedFile);
+      try {
+        const ran = await turn({
+          credentialProfileId: env.named,
+          sdkModelId: modelId,
+        });
+        assert.equal(ran.aborted, false, "the turn ended on its own");
+        assert.ok(env.upstream.anthropic.length >= 1, "the upstream was asked");
+        for (const seen of env.upstream.anthropic)
+          assert.equal(JSON.parse(seen.body.toString("utf8")).model, modelId);
+        // The captured shape: a synthetic assistant `model_not_found`, then a
+        // 404 `not_found_error` error result.
+        const assistants = ran.messages.filter((m) => m.type === "assistant");
+        const synthetic = assistants
+          .map((m) => env.assistantProviderError(m as never))
+          .find((failure) => failure !== undefined);
+        assert.ok(synthetic, JSON.stringify(assistants));
+        assert.equal(synthetic.kind, "model_not_found");
+        const result = resultOf(ran.messages) as Record<string, unknown>;
+        assert.equal(result.is_error, true);
+        assert.equal(result.api_error_status, 404);
+        assert.equal(result.api_error_type, "not_found_error");
+        const failed = env.resultProviderError(result as never);
+        assert.ok(failed);
+        assert.equal(failed.statusCode, 404);
+        assert.equal(failed.apiErrorType, "not_found_error");
+        // The CLI's wording names the model the query ran.
+        const text = errorText(ran);
+        assert.ok(text.includes(`(${modelId})`), text);
+        assert.equal(env.claudeModelNotFound({ reason: synthetic.kind }), true);
+        assert.equal(env.claudeModelNotFound(failed), true);
+        const facts = env.runFailureFacts(
+          env.analyzeProviderError(synthetic.text || text, {
+            provider: "claude-sdk",
+            statusCode: failed.statusCode,
+            modelUnavailable: true,
+          }),
+          { executingModelId: modelId },
+        );
+        assert.deepEqual(facts, {
+          kind: "model_unavailable",
+          unavailableModelId: modelId,
+        });
+        assert.equal(env.loginEnded(facts, true), false, text);
+        assert.equal(env.loginEnded(facts, false), false, text);
+        assert.equal(env.isLoginDeath(text), false, text);
+        assert.notEqual(
+          env.gateway.link.credentialStatus(env.named)?.needsLogin,
+          true,
+        );
+        assert.equal(env.upstream.platform.length, 0, "no renewal");
+        assert.deepEqual(identity(env.namedFile), before);
+        assert.deepEqual(env.egress.seen, []);
+        assertNoTokenLogged([ran.leaseToken]);
+      } finally {
+        env.setResponder(env.fakeClaudeStream(REPLY));
       }
     },
     CASE_MS * 2,

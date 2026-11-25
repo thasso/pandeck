@@ -14,6 +14,13 @@ import {
   runFailureFacts,
   shouldSuppressProviderRetry,
 } from "./providerErrors.ts";
+import {
+  CLAUDE_REFUSAL_TEXTS,
+  CLAUDE_REFUSAL_THROWN,
+  CODEX_REFUSAL_MESSAGES,
+  claudeRefusalText,
+  codexRefusalText,
+} from "./test/modelRefusalCaptures.ts";
 
 test.each([
   "invalid_encrypted_content",
@@ -442,5 +449,239 @@ describe("1368 AC9: a gateway-served login ends only on the gateway's needs-logi
   test("no facts end no login", () => {
     assert.equal(loginEnded(undefined, true), false);
     assert.equal(loginEnded(undefined, false), false);
+  });
+});
+
+describe("model unavailable on the account (Task-1483)", () => {
+  const CLAUDE = { provider: "anthropic" };
+  const CODEX_PROVIDER = { provider: "openai-codex" };
+  const MODEL_UNAVAILABLE = { modelUnavailable: true };
+
+  test("the Claude capture with its structured signal is model_unavailable, never login or limit evidence", () => {
+    for (const text of CLAUDE_REFUSAL_TEXTS) {
+      const info = analyzeProviderError(text, {
+        ...CLAUDE,
+        statusCode: 404,
+        ...MODEL_UNAVAILABLE,
+      });
+      assert.equal(info.kind, "model_unavailable");
+      assert.equal(info.retryable, false);
+      assert.equal(shouldSuppressProviderRetry(info), true);
+      const facts = runFailureFacts(info);
+      assert.equal(facts.loginDeath, undefined);
+      assert.equal(facts.gatewayNeedsLogin, undefined);
+      assert.equal(loginEnded(facts, true), false);
+      assert.equal(loginEnded(facts, false), false);
+    }
+  });
+
+  test("a status naming another fault keeps its kind, signal or not", () => {
+    const text = CLAUDE_REFUSAL_TEXTS[0];
+    for (const [statusCode, kind] of [
+      [401, "auth"],
+      [429, "rate_limit"],
+      [503, "server"],
+    ] as const)
+      assert.equal(
+        analyzeProviderError(text, {
+          ...CLAUDE,
+          statusCode,
+          ...MODEL_UNAVAILABLE,
+        }).kind,
+        kind,
+      );
+    assert.notEqual(
+      analyzeProviderError(text, {
+        ...CLAUDE,
+        statusCode: 403,
+        ...MODEL_UNAVAILABLE,
+      }).kind,
+      "model_unavailable",
+    );
+  });
+
+  test("the Claude wording alone is a fallback, whole and with only the SDK's rethrow wrapper", () => {
+    for (const text of [...CLAUDE_REFUSAL_TEXTS, ...CLAUDE_REFUSAL_THROWN])
+      for (const provider of ["anthropic", "claude-sdk"])
+        assert.equal(
+          analyzeProviderError(text, { provider }).kind,
+          "model_unavailable",
+          `${provider}: ${text}`,
+        );
+    for (const text of [
+      `API Error: ${CLAUDE_REFUSAL_TEXTS[0]}`,
+      `${CLAUDE_REFUSAL_TEXTS[0]} Try again.`,
+      claudeRefusalText(""),
+    ])
+      assert.notEqual(
+        analyzeProviderError(text, CLAUDE).kind,
+        "model_unavailable",
+        text,
+      );
+    // Another provider's failure never reads Claude's wording.
+    assert.notEqual(
+      analyzeProviderError(CLAUDE_REFUSAL_TEXTS[0], CODEX_PROVIDER).kind,
+      "model_unavailable",
+    );
+  });
+
+  test("both captured Codex refusals classify by their exact wording", () => {
+    for (const text of CODEX_REFUSAL_MESSAGES) {
+      const info = analyzeProviderError(text, {
+        ...CODEX_PROVIDER,
+        model: "gpt-4o",
+      });
+      assert.equal(info.kind, "model_unavailable", text);
+      assert.equal(info.retryable, false);
+      const facts = runFailureFacts(info);
+      assert.equal(facts.loginDeath, undefined);
+      assert.equal(loginEnded(facts, false), false);
+      assert.equal(loginEnded(facts, true), false);
+    }
+    // The sentence without pi's prefix is the same refusal.
+    assert.equal(
+      analyzeProviderError(
+        CODEX_REFUSAL_MESSAGES[0].replace(/^Codex error: /, ""),
+        CODEX_PROVIDER,
+      ).kind,
+      "model_unavailable",
+    );
+  });
+
+  test.each([
+    [
+      "a different trailing phrase",
+      "Codex error: The 'gpt-4o' model is not supported when using Codex with an API key.",
+    ],
+    [
+      "the sentence after other text",
+      `Tool output: ${CODEX_REFUSAL_MESSAGES[0]}`,
+    ],
+    [
+      "the sentence before other text",
+      `${CODEX_REFUSAL_MESSAGES[0]} (quoted from a log)`,
+    ],
+    ["an empty id", codexRefusalText("")],
+    [
+      "double quotes",
+      CODEX_REFUSAL_MESSAGES[0].replace("'gpt-4o'", '"gpt-4o"'),
+    ],
+    ["the rest cut off", "Codex error: The 'gpt-x' model is not supported."],
+    ["a generic Codex error", "Codex error: Something went wrong."],
+  ])("a near-miss Codex message is not model_unavailable: %s", (_, text) => {
+    const info = analyzeProviderError(text, CODEX_PROVIDER);
+    assert.notEqual(info.kind, "model_unavailable");
+    assert.equal(
+      info.kind,
+      analyzeProviderError(text, { provider: "openai" }).kind,
+      "today's classification",
+    );
+    assert.equal(
+      runFailureFacts(info, { executingModelId: "gpt-4o" }).unavailableModelId,
+      undefined,
+    );
+  });
+
+  test("the exact Codex sentence from another provider, or none, is not model_unavailable", () => {
+    for (const context of [{ provider: "github-copilot" }, {}])
+      assert.notEqual(
+        analyzeProviderError(CODEX_REFUSAL_MESSAGES[0], context).kind,
+        "model_unavailable",
+      );
+  });
+
+  test("a gateway refusal, a bare 404, a structured refusal and known statuses keep their kinds", () => {
+    const unknownPrefix = refusalText({ case: "unknown-prefix" });
+    assert.ok(unknownPrefix.includes(GATEWAY_REFUSAL_MARKER));
+    const body = refusalResponse({ case: "unknown-prefix" }, "claude").body;
+    for (const text of [unknownPrefix, `API Error: 404 ${body}`]) {
+      const info = analyzeProviderError(text, {
+        ...CLAUDE,
+        statusCode: 404,
+        ...MODEL_UNAVAILABLE,
+      });
+      assert.notEqual(info.kind, "model_unavailable", text);
+      assert.equal(
+        info.kind,
+        analyzeProviderError(text, { ...CLAUDE, statusCode: 404 }).kind,
+      );
+    }
+    const bare = analyzeProviderError("API Error: 404 Not Found", {
+      ...CLAUDE,
+      statusCode: 404,
+    });
+    assert.notEqual(bare.kind, "model_unavailable");
+    assert.equal(
+      analyzeProviderError(CLAUDE_REFUSAL_TEXTS[0], {
+        ...CLAUDE,
+        ...MODEL_UNAVAILABLE,
+        structuredRefusal: true,
+      }).kind,
+      "content_policy",
+    );
+    for (const [statusCode, kind] of [
+      [401, "auth"],
+      [403, "auth"],
+      [429, "rate_limit"],
+      [500, "server"],
+    ] as const)
+      assert.equal(
+        analyzeProviderError(`API Error: ${statusCode}`, {
+          ...CLAUDE,
+          statusCode,
+        }).kind,
+        kind,
+      );
+  });
+
+  test("the facts name the executing id only when the wording names it or none", () => {
+    const claude = analyzeProviderError(claudeRefusalText("claude-fable-5-2"), {
+      ...CLAUDE,
+      ...MODEL_UNAVAILABLE,
+    });
+    assert.deepEqual(
+      runFailureFacts(claude, { executingModelId: "claude-fable-5-2" }),
+      { kind: "model_unavailable", unavailableModelId: "claude-fable-5-2" },
+    );
+    // The structured signal without wording names nothing to disagree with.
+    const signalOnly = analyzeProviderError("Claude returned an error.", {
+      ...CLAUDE,
+      ...MODEL_UNAVAILABLE,
+    });
+    assert.equal(
+      runFailureFacts(signalOnly, { executingModelId: "claude-fable-5-2" })
+        .unavailableModelId,
+      "claude-fable-5-2",
+    );
+    assert.equal(runFailureFacts(claude).unavailableModelId, undefined);
+    assert.equal(
+      runFailureFacts(claude, { executingModelId: "  " }).unavailableModelId,
+      undefined,
+    );
+    assert.equal(
+      runFailureFacts(
+        analyzeProviderError("rate limit exceeded", { statusCode: 429 }),
+        { executingModelId: "claude-fable-5-2" },
+      ).unavailableModelId,
+      undefined,
+    );
+    // Claude's wording naming another id than the one executed marks nothing.
+    assert.equal(
+      runFailureFacts(claude, { executingModelId: "claude-fable-5-1" })
+        .unavailableModelId,
+      undefined,
+    );
+    const codex = analyzeProviderError(CODEX_REFUSAL_MESSAGES[0], {
+      ...CODEX_PROVIDER,
+      model: "gpt-4o",
+    });
+    assert.deepEqual(
+      runFailureFacts(codex, { executingModelId: "gpt-6.1-sol" }),
+      { kind: "model_unavailable" },
+    );
+    assert.deepEqual(runFailureFacts(codex, { executingModelId: "gpt-4o" }), {
+      kind: "model_unavailable",
+      unavailableModelId: "gpt-4o",
+    });
   });
 });

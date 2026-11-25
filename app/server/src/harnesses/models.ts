@@ -4,7 +4,9 @@
  * come from the curated list (offered only while the integration is enabled),
  * narrowed per account to the ids its subscription lists
  * (`claudeAccountModels.ts`); every other model comes from pi's registry.
- * Callers never branch on the engine.
+ * Either way an id the provider refused to run on the account
+ * (`modelUnavailability.ts`) is not offered there. Callers never branch on
+ * the engine.
  */
 import type {
   AppSettings,
@@ -12,7 +14,10 @@ import type {
   Harness,
   ModelOption,
 } from "@assistant/shared";
-import { harnessForModelProvider } from "@assistant/shared";
+import {
+  CLAUDE_SDK_PROVIDER,
+  harnessForModelProvider,
+} from "@assistant/shared";
 import {
   CLAUDE_SDK_MODELS,
   type CuratedClaudeModel,
@@ -32,6 +37,12 @@ import {
 } from "./claudeAccountModels.ts";
 import type { ClaudeModelPin } from "./claudeModelResolution.ts";
 import { claudeModelAlias, curatedModelOption } from "./curatedModels.ts";
+import {
+  clearAll as clearModelUnavailability,
+  modelMarkedUnavailable,
+  subscribeModelUnavailabilityChanged,
+  unavailableModelIds,
+} from "./modelUnavailability.ts";
 import {
   findModel,
   findModelForProfile,
@@ -53,16 +64,40 @@ function claudeOption({
 }
 
 /**
+ * What the resolution knows of one Claude account: its listing (undefined
+ * while unknown) and the ids the provider refused to run on it.
+ */
+interface ClaudeAccountView {
+  listed: ReadonlySet<string> | undefined;
+  refused: ReadonlySet<string>;
+}
+
+function claudeAccountView(profileId: string): ClaudeAccountView {
+  return {
+    listed: claudeAccountModelIds(profileId),
+    refused: unavailableModelIds(profileId, CLAUDE_SDK_PROVIDER),
+  };
+}
+
+/**
  * Whether a Claude account offers a curated model: the per-account resolution
  * (`claudeSdk/modelResolution.ts`) finds an id for it. A known account offers
  * what its listing names a candidate of; an unknown one every alias but the
- * entitlement-gated ones.
+ * entitlement-gated ones; neither an alias whose every candidate it refused.
  */
 function listedOn(
   model: CuratedClaudeModel,
-  listed: ReadonlySet<string> | undefined,
+  account: ClaudeAccountView | undefined,
 ): boolean {
-  return resolveClaudeSdkModel(model.id, listed) !== undefined;
+  return (
+    resolveClaudeSdkModel(
+      model.id,
+      account?.listed,
+      undefined,
+      undefined,
+      account?.refused,
+    ) !== undefined
+  );
 }
 
 /** The curated models one Claude account offers right now, without waiting. */
@@ -71,8 +106,8 @@ function claudeModelsFor(
   profileId: string,
 ): ModelOption[] {
   if (!settings.claudeSdk.enabled) return [];
-  const listed = claudeAccountModelIds(profileId);
-  return CLAUDE_SDK_MODELS.filter((model) => listedOn(model, listed)).map(
+  const account = claudeAccountView(profileId);
+  return CLAUDE_SDK_MODELS.filter((model) => listedOn(model, account)).map(
     claudeOption,
   );
 }
@@ -90,7 +125,7 @@ function claudePickerModels(settings: AppSettings): ModelOption[] {
     accounts.length === 0
       ? listedOn(model, undefined)
       : accounts.some((account) =>
-          listedOn(model, claudeAccountModelIds(account.id)),
+          listedOn(model, claudeAccountView(account.id)),
         ),
   ).map(claudeOption);
 }
@@ -117,13 +152,15 @@ export function pinnedModelIdsFor(
 ): Map<string, string[]> {
   const pins = new Map<string, string[]>();
   if (!settings.claudeSdk.enabled) return pins;
-  const listings = accounts
+  const views = accounts
     .filter((account) => account.provider === "claude")
-    .map((account) => claudeAccountModelIds(account.id));
+    .map((account) => claudeAccountView(account.id));
   for (const model of CLAUDE_SDK_MODELS) {
     const ids = model.sdkModelIds.filter((id) =>
-      listings.some(
-        (listed) => resolveClaudeSdkModel(model.id, listed, id) !== undefined,
+      views.some(
+        ({ listed, refused }) =>
+          resolveClaudeSdkModel(model.id, listed, id, undefined, refused) !==
+          undefined,
       ),
     );
     if (ids.length) pins.set(`${model.provider}:${model.id}`, ids);
@@ -139,7 +176,10 @@ export async function modelsForAccount(account: {
   id: string;
   provider: CredentialProfileProvider;
 }): Promise<ModelOption[]> {
-  if (account.provider !== "claude") return listModelsForProfile(account.id);
+  if (account.provider !== "claude")
+    return (await listModelsForProfile(account.id)).filter(
+      (model) => !modelMarkedUnavailable(account.id, model.provider, model.id),
+    );
   await ensureClaudeAccountModels(account.id);
   return claudeModelsFor(getSettings(), account.id);
 }
@@ -187,6 +227,7 @@ export async function accountOffersModel(
       return false;
     return claudeModelRuns(profileId, modelId, pin);
   }
+  if (modelMarkedUnavailable(profileId, provider, modelId)) return false;
   return !!(await findModelForProfile(profileId, provider, modelId));
 }
 
@@ -220,12 +261,14 @@ function claudeModelRuns(
   modelId: string,
   pin: ClaudeModelPin,
 ): boolean {
+  const { listed, refused } = claudeAccountView(profileId);
   return (
     resolveClaudeSdkModel(
       claudeModelAlias(modelId),
-      claudeAccountModelIds(profileId),
+      listed,
       pin.pinnedModelId,
       pin.persistedPinnedModelId,
+      refused,
     ) !== undefined
   );
 }
@@ -237,8 +280,10 @@ function claudeModelRuns(
  * list; an unknown account lacks an entitlement-gated model (mythos) and a pin
  * outside what D1 allows. Claude normalizes every id it accepts
  * (`claudeModelAlias`): another spelling runs that curated model and an
- * unknown id the default, so that is the model judged. Other providers are
- * never lacking. Routing and every start refuse such an account
+ * unknown id the default, so that is the model judged. A candidate the
+ * provider refused on the account never resolves. Any other provider lacks
+ * exactly the (provider, id) it refused on the account
+ * (`modelUnavailability.ts`). Routing and every start refuse such an account
  * (`docs/account-routing.md`).
  */
 export async function accountLacksModel(
@@ -247,7 +292,8 @@ export async function accountLacksModel(
   modelId: string,
   pin: ClaudeModelPin = {},
 ): Promise<boolean> {
-  if (harnessForModelProvider(provider) !== "claude-sdk") return false;
+  if (harnessForModelProvider(provider) !== "claude-sdk")
+    return modelMarkedUnavailable(profileId, provider, modelId);
   await ensureClaudeAccountModels(profileId);
   return !claudeModelRuns(profileId, modelId, pin);
 }
@@ -305,9 +351,11 @@ export function piModelForSlot(
  * and fetch every account's remote catalog) and every enabled Claude account's
  * listing, both forced. The error names the pi configuration, runtime or
  * catalog that failed; a failed Claude listing keeps the last one and is
- * logged.
+ * logged. It forgets every remembered model refusal first: the user asked to
+ * look again. Only this Refresh does; the background refreshes never do.
  */
 export async function refreshAllModels(): ReturnType<typeof refreshModels> {
+  clearModelUnavailability();
   const [pi] = await Promise.all([
     refreshModels(),
     refreshClaudeAccountModels(),
@@ -318,8 +366,9 @@ export async function refreshAllModels(): ReturnType<typeof refreshModels> {
 /**
  * Hear when what the pickers offer ({@link pickerModels}) or what one account
  * offers may have changed: a pi catalog the periodic refresh brought in, a
- * Claude account's listing, or a Claude account enabled, disabled, created or
- * deleted. Returns the unsubscribe.
+ * Claude account's listing, a model refusal remembered or forgotten, or a
+ * Claude account enabled, disabled, created or deleted. Returns the
+ * unsubscribe.
  */
 export function subscribePickerModelsChanged(listener: () => void): () => void {
   const notify = () => listener();
@@ -339,6 +388,7 @@ export function subscribePickerModelsChanged(listener: () => void): () => void {
   const unsubscribe = [
     subscribePiPickerModelsChanged(notify),
     subscribeClaudeAccountModelsChanged(notify),
+    subscribeModelUnavailabilityChanged(notify),
     subscribeCredentialProfileChanges(claudeAccountChanged),
     subscribeCredentialProfileDeleted(claudeAccountChanged),
   ];

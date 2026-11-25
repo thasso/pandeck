@@ -222,6 +222,7 @@ import {
   assistantText,
   assistantUsage,
   captureSessionId,
+  claudeModelNotFound,
   type ClaudeResultMessage,
   type ClaudeUsage,
   type CompactBoundary,
@@ -501,6 +502,8 @@ interface ProviderFailure {
   /** The wording the provider gave the user; may be empty. */
   text: string;
   statusCode?: number;
+  /** The result's `api_error_type` (`not_found_error`), when it names one. */
+  apiErrorType?: string;
   /**
    * The model refused (`stop_reason: "refusal"` or the CLI's
    * `model_refusal_no_fallback`), with the category the API named, if any.
@@ -794,6 +797,14 @@ export class ClaudeSdkSession implements LiveSession {
    * when a turn opens.
    */
   private pendingProviderError: ProviderFailure | undefined;
+  /**
+   * The concrete model id the session's current query runs: set when an
+   * opened query becomes the session's (turn and compaction opens) and after
+   * a retained process commits a model change. Only the next open overwrites
+   * it, so a turn's `finishTurn` (the fatal-error path included) still names
+   * the id that ran it; a `model_unavailable` failure records that id.
+   */
+  private queryModelId: string | undefined;
   private foreignProviderResultsToDiscard = 0;
   private providerResultBlocksCompact = false;
   private providerResultResetTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1396,6 +1407,7 @@ export class ClaudeSdkSession implements LiveSession {
         // new account never judged the model, so nothing changes.
         if (this.credentialProfileId !== account)
           throw new AccountChangedDuringModelChangeError();
+        this.queryModelId = sdkModelId;
       }
       // Model and clamped effort are stored TOGETHER, whatever the effort
       // control does next: a stored effort the model cannot run never exists.
@@ -2598,6 +2610,7 @@ export class ClaudeSdkSession implements LiveSession {
       },
     });
     this.activeQuery = query;
+    this.queryModelId = sdkModelId;
     this.compactionWindow.queryStarted(epochKey, start.compactionWindow);
     this.queryLoop = this.consumeQuery(query, epochKey);
     this.broadcastState();
@@ -3793,6 +3806,11 @@ export class ClaudeSdkSession implements LiveSession {
       result.stopReason === "error" ? result.errorMessage : undefined;
     // A refusal this turn saw decides the classification, not its prose.
     const refusal = this.pendingProviderError?.refusal;
+    // So does the API's model-not-found answer: this account cannot run the
+    // id the query executed.
+    const modelNotFound =
+      this.pendingProviderError !== undefined &&
+      claudeModelNotFound(this.pendingProviderError);
     // A local refusal is never classified from its text: it carries its own
     // facts and no provider error info.
     const localFailure =
@@ -3813,13 +3831,22 @@ export class ClaudeSdkSession implements LiveSession {
             ...(result.statusCode !== undefined
               ? { statusCode: result.statusCode }
               : {}),
+            ...(modelNotFound ? { modelUnavailable: true } : {}),
             // A credential profile is a CLI OAuth login with inherited
             // credential variables scrubbed; otherwise an API key may answer.
             authMode: this.credentialProfileId ? "subscription" : "unknown",
           })
         : undefined;
     const failure =
-      localFailure ?? (errorInfo ? runFailureFacts(errorInfo) : undefined);
+      localFailure ??
+      (errorInfo
+        ? runFailureFacts(
+            errorInfo,
+            this.queryModelId !== undefined
+              ? { executingModelId: this.queryModelId }
+              : {},
+          )
+        : undefined);
     // The runtime receives the structured failure before viewers see the end.
     if (errorMessage && failure)
       this.adapterEvents.runFailing(errorMessage, failure);
@@ -4114,6 +4141,7 @@ export class ClaudeSdkSession implements LiveSession {
           : {}),
       });
       this.activeQuery = query;
+      this.queryModelId = sdkModelId;
       for await (const message of query) {
         const sessionId = captureSessionId(message);
         if (sessionId) this.providerSessionId = sessionId;
@@ -4337,6 +4365,8 @@ export class ClaudeSdkSession implements LiveSession {
       // A result can supply the HTTP status omitted by its synthetic assistant.
       if (failure.statusCode !== undefined)
         pending.statusCode ??= failure.statusCode;
+      if (failure.apiErrorType !== undefined)
+        pending.apiErrorType ??= failure.apiErrorType;
       // The refusal's structured notice and its error frame arrive in either
       // order; the turn keeps the first wording and whichever names a category.
       if (failure.refusal) {

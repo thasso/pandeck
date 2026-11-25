@@ -11,12 +11,22 @@
  */
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import type { ClaudeResultMessage } from "./messageMapper.ts";
+import type {
+  ClaudeAssistantMessage,
+  ClaudeResultMessage,
+} from "./messageMapper.ts";
 import {
+  assistantProviderError,
+  claudeModelNotFound,
   mapResultEpochUsage,
   mapResultMeta,
   mapResultUsage,
+  resultProviderError,
 } from "./messageMapper.ts";
+import {
+  CLAUDE_REFUSAL_TEXTS,
+  claudeRefusalMessages,
+} from "../test/modelRefusalCaptures.ts";
 
 function resultMessage(fields: Record<string, unknown>): ClaudeResultMessage {
   return {
@@ -138,4 +148,40 @@ test("mapResultMeta takes the window from the selected model's entry, never the 
     300_000,
   );
   assert.deepEqual(mapResultMeta(message, "fable"), { cost: 1.1 });
+});
+
+test("the captured model refusal names its API error type and the model-not-found signal", () => {
+  const { assistant, result } = claudeRefusalMessages("claude-mythos-5-2", "s");
+  const failed = resultProviderError(result as ClaudeResultMessage);
+  assert.deepEqual(failed, {
+    reason: "HTTP 404",
+    text: CLAUDE_REFUSAL_TEXTS[0],
+    statusCode: 404,
+    apiErrorType: "not_found_error",
+  });
+  assert.equal(claudeModelNotFound(failed!), true);
+  const synthetic = assistantProviderError(assistant as ClaudeAssistantMessage);
+  assert.deepEqual(synthetic, {
+    kind: "model_not_found",
+    text: CLAUDE_REFUSAL_TEXTS[0],
+  });
+  assert.equal(claudeModelNotFound({ reason: synthetic!.kind }), true);
+});
+
+test("only model_not_found or a 404 not_found_error is the model-not-found signal", () => {
+  assert.equal(claudeModelNotFound({ reason: "model_not_found" }), true);
+  assert.equal(
+    claudeModelNotFound({ statusCode: 404, apiErrorType: "not_found_error" }),
+    true,
+  );
+  assert.equal(
+    claudeModelNotFound({ statusCode: 404, apiErrorType: "api_error" }),
+    false,
+  );
+  assert.equal(claudeModelNotFound({ statusCode: 404 }), false);
+  assert.equal(
+    claudeModelNotFound({ statusCode: 401, apiErrorType: "not_found_error" }),
+    false,
+  );
+  assert.equal(claudeModelNotFound({ reason: "rate_limit" }), false);
 });

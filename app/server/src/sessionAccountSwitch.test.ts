@@ -875,6 +875,8 @@ for (const harness of engines) {
     { kind: "server" },
     { kind: "unknown" },
     { kind: "content_policy" },
+    // Only the model is refused; routing skips the account for it instead.
+    { kind: "model_unavailable", unavailableModelId: "claude-fable-5-2" },
   ] as RunFailureFacts[])(
     `${harness} never switches for unrelated %j`,
     async (failure) => {

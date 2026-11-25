@@ -254,6 +254,14 @@ export interface RunFailureFacts {
    */
   cyberRefusal?: true;
   /**
+   * The concrete model id the provider refused to run on this account
+   * (`kind: "model_unavailable"`), only when the harness named the id it
+   * executed and the provider's wording names that same id or none
+   * (`providerErrors.ts` `runFailureFacts`). It marks that model unavailable
+   * for the account (`harnesses/modelUnavailability.ts`).
+   */
+  unavailableModelId?: string;
+  /**
    * PA refused the run before any provider call (an account not entitled to
    * the model): this is not provider evidence. Health, benches, switches and
    * retries ignore such a run's failure. Only a PA refusal made before the

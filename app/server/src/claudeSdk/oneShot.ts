@@ -25,6 +25,7 @@ import type { AgentTool } from "../mcp/tool.ts";
 import {
   assistantProviderError,
   type AssistantBlock,
+  claudeModelNotFound,
   mapAssistantBlocks,
   mapResultEpochUsage,
   resultProviderError,
@@ -102,6 +103,11 @@ export interface ClaudeSdkOneShotResult {
    */
   failure?: string;
   failureStatus?: number;
+  /**
+   * The failure is the API's model-not-found answer (`claudeModelNotFound`):
+   * this account cannot run the id the run executed.
+   */
+  failureModelUnavailable?: true;
 }
 
 /** Test seam override; defaults to the real installed SDK. */
@@ -243,6 +249,9 @@ export async function runClaudeSdkOneShot(
   let usage: ClaudeUsage = {};
   let resultError: string | undefined;
   let failureStatus: number | undefined;
+  // The structured signal of a model-not-found failure, from whichever of the
+  // synthetic assistant message and the result carries it.
+  let modelUnavailable = false;
 
   try {
     const query = seam.query({
@@ -259,6 +268,8 @@ export async function runClaudeSdkOneShot(
         if (providerError) {
           resultError ??=
             providerError.text || `Claude API error: ${providerError.kind}`;
+          if (claudeModelNotFound({ reason: providerError.kind }))
+            modelUnavailable = true;
           continue;
         }
         for (const block of mapAssistantBlocks(message) as AssistantBlock[]) {
@@ -275,6 +286,7 @@ export async function runClaudeSdkOneShot(
           resultError ??=
             failed.text || `Claude SDK run ended with: ${failed.reason}`;
           failureStatus ??= failed.statusCode;
+          if (claudeModelNotFound(failed)) modelUnavailable = true;
         }
       }
     }
@@ -284,6 +296,7 @@ export async function runClaudeSdkOneShot(
     if (resultError)
       throw Object.assign(new Error(resultError, { cause: err }), {
         status: failureStatus,
+        ...(modelUnavailable ? { modelUnavailable: true as const } : {}),
       });
     throw err instanceof Error ? err : new Error(String(err));
   } finally {
@@ -297,5 +310,8 @@ export async function runClaudeSdkOneShot(
     usage,
     ...(resultError ? { failure: resultError } : {}),
     ...(failureStatus !== undefined ? { failureStatus } : {}),
+    ...(resultError && modelUnavailable
+      ? { failureModelUnavailable: true as const }
+      : {}),
   };
 }

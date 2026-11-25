@@ -277,10 +277,23 @@ Four layers, each depending only on the ones below it:
      the open (a listing that changed in between) ends with `RunFailureFacts`
      `{kind: "unknown", localPolicy: true}`, carried by `runFailing`,
      `messageCompleted` and host-command turns alike, which health, benches,
-     switches and failure classification ignore. The account projection's models
-     come from `modelsByAccount`. `pickerModels` offers the union over enabled
-     Claude accounts (curated when none is enabled; `mythos` only where some
-     account lists it). The Claude-only curated options sit in
+     switches and failure classification ignore. A provider's own refusal of a
+     model on an account (`model_unavailable`) is remembered instead
+     (`harnesses/modelUnavailability.ts`, in memory, keyed by account, model
+     provider and concrete id; `docs/account-routing.md` has its evidence and
+     clearing rules): `resolveClaudeSdkModel` takes the account's refused ids
+     and skips them, so `fable` with a refused 5-2 runs the listed 5-1 and a
+     refused pin resolves to nothing; for every other provider
+     `accountLacksModel` is true for exactly the refused (provider, id), and
+     `modelsForAccount` and `accountOffersModel` leave it out. Every bound call
+     site passes the marks: picker and account lists, routing, pins, admission,
+     moves and the query open. A mark or clear that changes an account's marks
+     notifies `subscribePickerModelsChanged`. The user's Refresh
+     (`refreshAllModels`) forgets every mark first; the startup and hourly
+     refreshes never do. The account projection's models come from
+     `modelsByAccount`. `pickerModels` offers the union over enabled Claude
+     accounts (curated when none is enabled; `mythos` only where some account
+     lists it). The Claude-only curated options sit in
      `harnesses/curatedModels.ts`, which loads no engine SDK, so row projections
      and the Claude adapter stay cheap: an option by id, the alias a model id
      runs as (`claudeModelAlias`) and the curated ids. The usage port

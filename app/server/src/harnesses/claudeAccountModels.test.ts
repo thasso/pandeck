@@ -11,6 +11,11 @@ import {
   type ClaudeAccountModelCache,
   type ClaudeAccountModelsDeps,
 } from "./claudeAccountModels.ts";
+import {
+  markModelUnavailable,
+  modelMarkedUnavailable,
+  resetModelUnavailabilityForTests,
+} from "./modelUnavailability.ts";
 
 const ALL = [
   "claude-opus-5-5",
@@ -228,4 +233,66 @@ test("(e) a never-settling lease and fetch: ensure resolves at the bound and the
   calls[1]!.resolve(ALL);
   await flush();
   assert.ok(cache.ids("c1"));
+});
+
+test("a remembered refusal clears only at a successful listing naming it whose read started after the mark, unchanged or not", async () => {
+  const { cache, calls, clock, changes } = harness();
+  resetModelUnavailabilityForTests({ now: () => clock.now });
+  try {
+    const first = cache.refresh({ profileIds: ["c1"], force: false });
+    calls[0]!.resolve(ALL);
+    await first;
+    assert.deepEqual(changes, ["c1"]);
+
+    // A read already running when the refusal is marked predates it.
+    const predating = cache.refresh({ profileIds: ["c1"], force: false });
+    clock.now += 1;
+    markModelUnavailable("c1", "claude-sdk", "claude-fable-5-1");
+    calls[1]!.resolve(ALL);
+    await predating;
+    assert.equal(
+      modelMarkedUnavailable("c1", "claude-sdk", "claude-fable-5-1"),
+      true,
+    );
+
+    // A failed later read clears nothing.
+    clock.now += 1;
+    const failing = cache.refresh({ profileIds: ["c1"], force: true });
+    calls[2]!.reject(new Error("Claude model listing failed (HTTP 500)."));
+    await failing;
+    assert.equal(
+      modelMarkedUnavailable("c1", "claude-sdk", "claude-fable-5-1"),
+      true,
+    );
+
+    // A later background read with the very same listing clears it.
+    const later = cache.refresh({ profileIds: ["c1"], force: false });
+    calls[3]!.resolve([...ALL].reverse());
+    await later;
+    assert.equal(
+      modelMarkedUnavailable("c1", "claude-sdk", "claude-fable-5-1"),
+      false,
+    );
+    assert.deepEqual(changes, ["c1"], "the listing itself did not change");
+  } finally {
+    resetModelUnavailabilityForTests();
+  }
+});
+
+test("a later listing that lacks the refused id leaves it marked", async () => {
+  const { cache, calls, clock } = harness();
+  resetModelUnavailabilityForTests({ now: () => clock.now });
+  try {
+    markModelUnavailable("c1", "claude-sdk", "claude-haiku-5-5");
+    clock.now += 1;
+    const read = cache.refresh({ profileIds: ["c1"], force: false });
+    calls[0]!.resolve(NO_HAIKU);
+    await read;
+    assert.equal(
+      modelMarkedUnavailable("c1", "claude-sdk", "claude-haiku-5-5"),
+      true,
+    );
+  } finally {
+    resetModelUnavailabilityForTests();
+  }
 });

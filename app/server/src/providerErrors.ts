@@ -1,4 +1,8 @@
-import type { ProviderErrorInfo, ProviderErrorKind } from "@assistant/shared";
+import {
+  CLAUDE_SDK_PROVIDER,
+  type ProviderErrorInfo,
+  type ProviderErrorKind,
+} from "@assistant/shared";
 import {
   accountLimitModel,
   accountLimitMatches,
@@ -21,6 +25,12 @@ export interface ProviderErrorContext {
   structuredRefusal?: boolean;
   /** The structured refusal's category as the provider named it (`cyber`, …). */
   refusalCategory?: string;
+  /**
+   * The harness saw the provider's structured model-not-found signal (Claude:
+   * `claudeSdk/messageMapper.ts` `claudeModelNotFound`): this account cannot
+   * run the model, whatever its prose says.
+   */
+  modelUnavailable?: boolean;
 }
 
 function namedLimitModel(info: ProviderErrorInfo): string | undefined {
@@ -129,6 +139,39 @@ function responseStatus(message: string): number | undefined {
   );
 }
 
+/**
+ * OpenAI Codex refusing a model the account cannot use, exactly as pi-ai 1.6.0
+ * reports it (Task-1483 C1 capture): the WHOLE message, the id captured. A
+ * sentence quoted inside a longer message never matches.
+ */
+const CODEX_MODEL_UNAVAILABLE_RE =
+  /^(?:Codex error: )?The '([^'\s]{1,200})' model is not supported when using Codex with a ChatGPT account\.$/;
+/**
+ * The Claude CLI's wording for its `model_not_found` failure (Agent SDK
+ * 0.3.329 capture), whole, the id captured. Its only known wrapper is the SDK
+ * iterator's rethrow. A fallback: the Claude harness passes the structured
+ * signal (`modelUnavailable`).
+ */
+const CLAUDE_MODEL_UNAVAILABLE_RE =
+  /^(?:Claude Code returned an error result: )?There's an issue with the selected model \(([^()\s]{1,200})\)\. It may not exist or you may not have access to it\.$/;
+
+/**
+ * The model id a provider's own model-unavailable wording names, matched
+ * against the whole trimmed message and only for the provider that wrote it;
+ * undefined when the message is not that wording.
+ */
+function modelUnavailableNamedId(
+  raw: string,
+  provider: string | undefined,
+): string | undefined {
+  const text = raw.trim();
+  if (provider === "openai-codex")
+    return CODEX_MODEL_UNAVAILABLE_RE.exec(text)?.[1];
+  if (provider === "anthropic" || provider === CLAUDE_SDK_PROVIDER)
+    return CLAUDE_MODEL_UNAVAILABLE_RE.exec(text)?.[1];
+  return undefined;
+}
+
 /** OpenAI Codex's cybersecurity flag, by its wording or its error code. */
 const CYBER_REFUSAL_RE =
   /flagged for possible cybersecurity risk|cyber_policy/i;
@@ -221,7 +264,18 @@ export function localPolicyRunFailure(): RunFailureFacts {
   return { kind: "unknown", localPolicy: true };
 }
 
-export function runFailureFacts(info: ProviderErrorInfo): RunFailureFacts {
+export function runFailureFacts(
+  info: ProviderErrorInfo,
+  options: {
+    /**
+     * The concrete model id the harness actually ran (Claude: the query's
+     * resolved id, never the alias). Without it a `model_unavailable` failure
+     * records no model: nothing would say which one was refused.
+     */
+    executingModelId?: string;
+  } = {},
+): RunFailureFacts {
+  const unavailableModelId = refusedModelId(info, options.executingModelId);
   const limited = info.kind === "quota" || info.kind === "rate_limit";
   const resetAtMs =
     limited && typeof info.resetAt === "number"
@@ -246,6 +300,7 @@ export function runFailureFacts(info: ProviderErrorInfo): RunFailureFacts {
     ...(info.kind === "content_policy" && info.refusalCategory === "cyber"
       ? { cyberRefusal: true as const }
       : {}),
+    ...(unavailableModelId !== undefined ? { unavailableModelId } : {}),
     // Checked after the conversion: seconds that look fine can still overflow
     // into a number no `Date` represents.
     ...(resetAtMs !== undefined &&
@@ -255,6 +310,21 @@ export function runFailureFacts(info: ProviderErrorInfo): RunFailureFacts {
       ? { resetAtMs }
       : {}),
   };
+}
+
+/**
+ * The executing id of a `model_unavailable` failure, when the provider's
+ * wording names no id or exactly that one. A message naming another model
+ * (a quoted id the run never executed) marks nothing.
+ */
+function refusedModelId(
+  info: ProviderErrorInfo,
+  executingModelId: string | undefined,
+): string | undefined {
+  const executing = executingModelId?.trim();
+  if (info.kind !== "model_unavailable" || !executing) return undefined;
+  const named = modelUnavailableNamedId(info.rawMessage, info.provider);
+  return named === undefined || named === executing ? executing : undefined;
 }
 
 /**
@@ -319,6 +389,30 @@ function classify(
       context.provider === "anthropic") &&
     CLAUDE_USAGE_LIMIT_RE.test(raw) &&
     !/rate.?limit|too many requests/i.test(raw);
+  // The provider cannot run this model for this account. Only its structured
+  // signal or its exact wording says so, and never against a gateway refusal
+  // (its own 404 included), a content refusal, a status that names another
+  // fault, or dead-login wording.
+  if (
+    !gatewayRefusal &&
+    context.structuredRefusal !== true &&
+    !loginDeath &&
+    !serverStatus &&
+    status !== 401 &&
+    status !== 403 &&
+    status !== 429 &&
+    (context.modelUnavailable === true ||
+      modelUnavailableNamedId(raw, context.provider) !== undefined)
+  )
+    return {
+      kind: "model_unavailable",
+      title: "Model not available on this account",
+      summary:
+        "The provider says this account can't run this model: it may not exist, or the account isn't entitled to it.",
+      retryable: false,
+      detail:
+        "Pick another model, or run this one on an account that offers it.",
+    };
   const contentRefusal =
     context.structuredRefusal === true ||
     (!gatewayRefusal &&

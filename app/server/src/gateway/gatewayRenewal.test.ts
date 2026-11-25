@@ -60,7 +60,7 @@ import { processStartTime, type ProcessProbe } from "./processIdentity.ts";
 import type { GatewayProfile, LoginProfile } from "./profiles.ts";
 import { readCredential } from "./profileCredential.ts";
 import type { CodexRenewPort } from "./renewal.ts";
-import { refusalText } from "./refusals.ts";
+import { GATEWAY_REFUSAL_MARKER, refusalText } from "./refusals.ts";
 
 // Passes through; AC2 counts the reads.
 vi.mock("./profileCredential.ts", async (importOriginal) => {
@@ -448,6 +448,27 @@ test("AC8: an upstream 401 for the current token passes through and forces one r
   await settled();
   assert.equal(upstreams.platform.length, 1);
   assert.deepEqual(statuses, []);
+});
+
+test("Task-1483: an upstream 404 not_found_error on an engine lease passes through untouched, renews nothing and reports no login", async () => {
+  const gw = await gateway();
+  const a = await claudeProfile("claude-404", Date.now() + 60 * MIN);
+  const before = await readFile(a.tokenFile);
+  const token = await grant(await ready(gw, [a]), engine(a.id));
+  // The API's answer to a model the account cannot run.
+  const upstream404 =
+    '{"type":"error","error":{"type":"not_found_error","message":"model: claude-fable-5-2"},"request_id":"req_fixture"}';
+  claudeRespond = (_seen, res) => {
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(upstream404);
+  };
+  const reply = await forward(gw, a, token);
+  assert.deepEqual(reply, { status: 404, text: upstream404 });
+  assert.equal(reply.text.includes(GATEWAY_REFUSAL_MARKER), false);
+  await settled();
+  assert.equal(upstreams.platform.length, 0, "no renewal");
+  assert.deepEqual(statuses, [], "no needs-login report");
+  assert.deepEqual(await readFile(a.tokenFile), before);
 });
 
 test("AC8: a 401 on a Claude usage server lease forces a renewal; one for a replaced token or a held profile does not", async () => {

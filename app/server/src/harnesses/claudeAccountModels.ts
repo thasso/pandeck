@@ -15,6 +15,7 @@
  * current generation publishes, so a read that started before a login never
  * overwrites the one after it and a deleted account never reappears.
  */
+import { CLAUDE_SDK_PROVIDER } from "@assistant/shared";
 import { CLAUDE_SDK_MODELS } from "../claudeSdk/modelSettings.ts";
 import { fetchClaudeModelIdsViaGateway } from "../claudeSdk/modelsViaGateway.ts";
 import {
@@ -25,6 +26,10 @@ import {
 } from "../credentialProfiles.ts";
 import { errorText } from "../errors.ts";
 import { serverGatewayAccess } from "../gatewayLink.ts";
+import {
+  clearListedModels,
+  modelUnavailabilityNow,
+} from "./modelUnavailability.ts";
 
 /** One account's listing, or undefined when this server cannot read one. */
 type ClaudeModelsReader = (profileId: string) => Promise<string[] | undefined>;
@@ -126,6 +131,8 @@ export function createClaudeAccountModelCache(
     const generation = entry.generation;
     const current = (): boolean =>
       entries.get(profileId) === entry && entry.generation === generation;
+    // A refusal remembered before this read started is answered by it.
+    const readStartedAt = modelUnavailabilityNow();
     const read: Read = {
       generation,
       done: (async () => {
@@ -153,6 +160,14 @@ export function createClaudeAccountModelCache(
           return;
         }
         entry.failedAt = undefined;
+        // Every successful listing, forced or background, changed or not,
+        // clears the refusals of the ids it names (`modelUnavailability.ts`).
+        clearListedModels(
+          profileId,
+          CLAUDE_SDK_PROVIDER,
+          listed,
+          readStartedAt,
+        );
         if (sameIds(entry.ids, listed)) return;
         entry.ids = listed;
         publish(profileId);

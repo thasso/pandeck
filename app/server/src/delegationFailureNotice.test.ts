@@ -58,6 +58,7 @@ import { backgroundWorkStore } from "./db/backgroundWorkStore.ts";
 import { runFailureFacts } from "./providerErrors.ts";
 import type { PiDriver } from "./session/adapters/pi.ts";
 import type { ClaudeSdkMessage, ClaudeSdkSeam } from "./claudeSdk/sdkSeam.ts";
+import { codexRefusalText } from "./test/modelRefusalCaptures.ts";
 
 const { fakeDrivers, deadIds, acquired, duringAcquire, fakeHub } = vi.hoisted(
   () => {
@@ -2816,6 +2817,25 @@ describe("a journaled failure replays only what it was owed when it happened", (
       at: Date.now(),
     });
     assert.equal(row!.category, "provider_error");
+  });
+
+  it("a model refused on the account is a provider error, with no wording of the provider's", () => {
+    freshJournal();
+    const { id: parent } = coordinator("Model refusal parent");
+    const child = piChild(parent, "Model refusal child");
+    const [row] = recordRunFailureNotices({
+      sessionId: child.sessionId,
+      runId: "model-refusal",
+      origin: BACKGROUND,
+      errorMessage: codexRefusalText("gpt-4o"),
+      failure: { kind: "model_unavailable", unavailableModelId: "gpt-4o" },
+      at: Date.now(),
+    });
+    assert.equal(row!.category, "provider_error");
+    assert.doesNotMatch(
+      delegationFailureNoticeLines([row!]).join("\n"),
+      /gpt-4o|not supported/,
+    );
   });
 
   it("a cybersecurity refusal reported only in prose is still classified as one", () => {

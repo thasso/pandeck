@@ -35,6 +35,8 @@ const {
 } = await import("./settingsModelSlots.ts");
 const { resetClaudeAccountModelsForTests } =
   await import("./harnesses/claudeAccountModels.ts");
+const { markModelUnavailable, resetModelUnavailabilityForTests } =
+  await import("./harnesses/modelUnavailability.ts");
 const { clearProfilePins, credentialProfileUsage } =
   await import("./credentialProfileUsage.ts");
 
@@ -247,6 +249,35 @@ test("a pin whose account's known listing lacks the model refuses and never spen
     assert.equal(vi.mocked(pickAccount).mock.calls.length, 0);
   } finally {
     resetClaudeAccountModelsForTests();
+  }
+});
+
+test("a pinned pi slot on an account the provider refused the model on refuses and never spends another account", async () => {
+  const pinned = createCredentialProfile({
+    name: "Refused Codex",
+    provider: "openai-codex",
+  });
+  const slot = {
+    provider: "openai-codex",
+    modelId: "gpt-4o",
+    credentialProfileId: pinned.id,
+  };
+  try {
+    markModelUnavailable(pinned.id, "openai-codex", "gpt-4o");
+    await assert.rejects(resolveSlotAccount(slot), (err: Error) => {
+      assert.ok(err instanceof ModelUnavailableOnAccountError);
+      assert.match(err.message, /^Refused Codex can't run /);
+      return true;
+    });
+    await assert.rejects(accountForSlot(slot), ModelUnavailableOnAccountError);
+    assert.equal(vi.mocked(pickAccount).mock.calls.length, 0);
+    // Another model on the same pin is not refused.
+    assert.deepEqual(
+      await resolveSlotAccount({ ...slot, modelId: "gpt-6.1-sol" }),
+      { profileId: pinned.id },
+    );
+  } finally {
+    resetModelUnavailabilityForTests();
   }
 });
 

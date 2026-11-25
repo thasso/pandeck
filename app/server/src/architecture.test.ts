@@ -346,6 +346,42 @@ test("the bound Claude model resolver loads no engine SDK", () => {
 });
 
 /**
+ * The remembered model refusals (`harnesses/modelUnavailability.ts`) are read
+ * by the bound Claude resolver, so the store stays as light as it is.
+ */
+test("the model-refusal store loads no engine SDK", () => {
+  assert.deepEqual(
+    engineLoads(staticReach("harnesses/modelUnavailability.ts")),
+    [],
+  );
+});
+
+/**
+ * Remembered model refusals clear wholesale only on the user's Refresh
+ * (`refreshAllModels`) and an account's completed login or deletion
+ * (`accountHealth.ts`), never from a background refresh or a timer
+ * (`docs/account-routing.md`, Task-1483 D-2).
+ */
+test("only the user's Refresh and account health forget model refusals wholesale", () => {
+  const STORE_IMPORT =
+    /import\s*\{([^}]*)\}\s*from\s*"[./]*(?:harnesses\/)?modelUnavailability\.ts"/g;
+  const clearers = (name: string) =>
+    sourceFiles(SRC_ROOT)
+      .filter((path) =>
+        [...readFileSync(path, "utf8").matchAll(STORE_IMPORT)].some((match) =>
+          new RegExp(`\\b${name}\\b`).test(match[1] ?? ""),
+        ),
+      )
+      .map((path) => relative(SRC_ROOT, path))
+      .sort();
+  assert.deepEqual(clearers("clearAll"), ["harnesses/models.ts"]);
+  assert.deepEqual(clearers("clearAccount"), ["accountHealth.ts"]);
+  assert.deepEqual(clearers("clearListedModels"), [
+    "harnesses/claudeAccountModels.ts",
+  ]);
+});
+
+/**
  * Session creation sits below app code (`docs/agent-harnesses.md`): it reaches
  * the hub's behaviour only through what the hub hands the registry, never by
  * importing `hub.ts` or the connection.

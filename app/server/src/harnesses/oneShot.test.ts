@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterEach, beforeEach, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, test, vi } from "vitest";
 import {
   disableClaudeSdkForTests,
   enableClaudeSdkForTests,
@@ -43,6 +43,14 @@ import {
   Y,
 } from "../test/claudeListings.ts";
 import { isLoginDeath } from "../providerErrors.ts";
+import {
+  claudeRefusalText,
+  codexRefusalText,
+} from "../test/modelRefusalCaptures.ts";
+import {
+  modelMarkedUnavailable,
+  resetModelUnavailabilityForTests,
+} from "./modelUnavailability.ts";
 import {
   NoHelperModelError,
   OneShotError,
@@ -1613,3 +1621,169 @@ test.each([
     );
   },
 );
+
+// Task-1483: a one-shot the provider refused the model on marks its account
+// through account health, and an Automatic one retries once elsewhere.
+describe("model refused on the account", () => {
+  const rows = (
+    entries: ReadonlyArray<
+      readonly [string, CredentialProfileSummary["provider"]]
+    >,
+  ): CredentialProfileSummary[] =>
+    entries.map(([id, provider]) => ({
+      id,
+      name: id,
+      provider,
+      enabled: true,
+      enterprise: false,
+      status: "ready",
+      health: { state: "unknown", since: null },
+      createdAt: 1,
+      updatedAt: 1,
+    }));
+
+  /** Real account health over these accounts, behind the module's mocks. */
+  function realHealth(accounts: CredentialProfileSummary[]): void {
+    const dir = mkdtempSync(join(tmpdir(), "one-shot-model-refusal-"));
+    directories.push(dir);
+    const health: AccountHealthStore = new AccountHealthStore({
+      profiles: () => health.summaries(() => accounts),
+      hasCredential: () => true,
+      now: Date.now,
+      persistPath: join(dir, "health.json"),
+      push: async () => {},
+    });
+    health.summaries(() => accounts);
+    vi.mocked(observeAccountHealth).mockImplementation(
+      health.observe.bind(health),
+    );
+    vi.mocked(reportAccountRunWorking).mockImplementation(
+      health.runWorking.bind(health),
+    );
+    vi.mocked(reportAccountRunFailure).mockImplementation(
+      health.runFailure.bind(health),
+    );
+    vi.mocked(credentialProfileById).mockImplementation(
+      (id) => accounts.find((row) => row.id === id) as never,
+    );
+  }
+
+  const claudeRefusal = () =>
+    Object.assign(new Error(claudeRefusalText("claude-fable-5-2")), {
+      status: 404,
+      modelUnavailable: true as const,
+    });
+
+  afterEach(() => {
+    resetClaudeAccountModelsForTests();
+    resetModelUnavailabilityForTests();
+  });
+
+  test("an Automatic Claude one-shot marks the refused account and its one retry runs on another", async () => {
+    realHealth(
+      rows([
+        ["automatic-1", "claude"],
+        ["automatic-2", "claude"],
+      ]),
+    );
+    resetClaudeAccountModelsForTests({ read: async () => [...COMPANY] });
+    const engine = vi.mocked(runClaudeSdkOneShot);
+    engine.mockRejectedValueOnce(claudeRefusal());
+    engine.mockResolvedValueOnce({ text: "second", usage: {} });
+    const result = await runOneShot(
+      request({
+        credentialProfileId: undefined,
+        model: { provider: "claude-sdk", modelId: "fable" },
+      }),
+    );
+    assert.equal(result.text, "second");
+    assert.deepEqual(
+      engine.mock.calls.map(([input]) => [
+        input.credentialProfileId,
+        input.sdkModelId,
+      ]),
+      [
+        ["automatic-1", "claude-fable-5-2"],
+        ["automatic-2", "claude-fable-5-2"],
+      ],
+    );
+    assert.deepEqual(
+      vi.mocked(pickAccount).mock.calls[0]?.[0].excludeProfileIds,
+      ["automatic-1"],
+    );
+    assert.deepEqual(vi.mocked(reportAccountRunFailure).mock.calls[0]?.[1], {
+      kind: "model_unavailable",
+      unavailableModelId: "claude-fable-5-2",
+    });
+    assert.equal(
+      modelMarkedUnavailable("automatic-1", "claude-sdk", "claude-fable-5-2"),
+      true,
+    );
+    assert.equal(
+      modelMarkedUnavailable("automatic-2", "claude-sdk", "claude-fable-5-2"),
+      false,
+    );
+  });
+
+  test.each(["thrown", "returned"] as const)(
+    "a pinned Claude one-shot %s refusal runs once, fails with the provider's error and marks",
+    async (outcome) => {
+      realHealth(rows([["profile-1", "claude"]]));
+      resetClaudeAccountModelsForTests({ read: async () => [...COMPANY] });
+      const engine = vi.mocked(runClaudeSdkOneShot);
+      const error = claudeRefusal();
+      if (outcome === "thrown") engine.mockRejectedValueOnce(error);
+      else
+        engine.mockResolvedValueOnce({
+          text: "",
+          usage: {},
+          failure: error.message,
+          failureStatus: 404,
+          failureModelUnavailable: true,
+        });
+      await assert.rejects(
+        runOneShot(
+          request({ model: { provider: "claude-sdk", modelId: "fable" } }),
+        ),
+        (err: Error) => {
+          if (outcome === "thrown") assert.equal(err, error);
+          else assert.equal(err.message, error.message);
+          return true;
+        },
+      );
+      assert.equal(engine.mock.calls.length, 1);
+      assert.equal(vi.mocked(pickAccount).mock.calls.length, 0);
+      assert.equal(
+        modelMarkedUnavailable("profile-1", "claude-sdk", "claude-fable-5-2"),
+        true,
+      );
+    },
+  );
+
+  test("a pi one-shot the Codex refusal failed marks its concrete id", async () => {
+    realHealth(rows([["profile-1", "openai-codex"]]));
+    vi.mocked(selectPiModelWithFallback).mockResolvedValue({
+      id: "gpt-4o",
+      provider: "openai-codex",
+    } as never);
+    vi.mocked(runPiOneShot).mockResolvedValue({
+      text: "",
+      usage: {},
+      stopReason: "error",
+      errorMessage: codexRefusalText("gpt-4o"),
+    });
+    await assert.rejects(
+      runOneShot(
+        request({ model: { provider: "openai-codex", modelId: "gpt-4o" } }),
+      ),
+    );
+    assert.deepEqual(vi.mocked(reportAccountRunFailure).mock.calls[0]?.[1], {
+      kind: "model_unavailable",
+      unavailableModelId: "gpt-4o",
+    });
+    assert.equal(
+      modelMarkedUnavailable("profile-1", "openai-codex", "gpt-4o"),
+      true,
+    );
+  });
+});

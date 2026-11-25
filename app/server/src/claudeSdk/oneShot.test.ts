@@ -31,6 +31,11 @@ import {
 } from "./oneShot.ts";
 import { createCredentialProfile } from "../credentialProfiles.ts";
 import { analyzeProviderError, runFailureFacts } from "../providerErrors.ts";
+import {
+  claudeRefusalMessages,
+  claudeRefusalText,
+  claudeRefusalThrown,
+} from "../test/modelRefusalCaptures.ts";
 
 const account = createCredentialProfile({
   name: "One-shot fixture",
@@ -531,4 +536,77 @@ test("AC8: with a server lease the child's only credential is the lease at the g
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
   }
+});
+
+// Task-1483: the captured model refusal reaches the caller with its status and
+// the structured signal, so the harness classifies `model_unavailable`.
+test("a model refusal rejects with status 404 and the signal when the SDK throws after it", async () => {
+  const { assistant, result } = claudeRefusalMessages("claude-fable-5-2", "s1");
+  setClaudeSdkOneShotSeam(() =>
+    Promise.resolve({
+      query() {
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield assistant;
+            yield result;
+            throw new Error(claudeRefusalThrown("claude-fable-5-2"));
+          },
+        };
+      },
+    }),
+  );
+  await assert.rejects(
+    runClaudeSdkOneShot({
+      modelId: "fable",
+      sdkModelId: "claude-fable-5-2",
+      thinkingLevel: "off",
+      systemPrompt: "x",
+      prompt: "y",
+    }),
+    (err: Error & { status?: number; modelUnavailable?: boolean }) => {
+      assert.equal(err.message, claudeRefusalText("claude-fable-5-2"));
+      assert.equal(err.status, 404);
+      assert.equal(err.modelUnavailable, true);
+      return true;
+    },
+  );
+});
+
+test("a model refusal the SDK returns carries failureStatus 404 and the signal", async () => {
+  const { assistant, result } = claudeRefusalMessages("claude-fable-5-2", "s1");
+  setClaudeSdkOneShotSeam(() => Promise.resolve(fakeSeam([assistant, result])));
+  const run = await runClaudeSdkOneShot({
+    modelId: "fable",
+    sdkModelId: "claude-fable-5-2",
+    thinkingLevel: "off",
+    systemPrompt: "x",
+    prompt: "y",
+  });
+  assert.equal(run.text, "");
+  assert.equal(run.failure, claudeRefusalText("claude-fable-5-2"));
+  assert.equal(run.failureStatus, 404);
+  assert.equal(run.failureModelUnavailable, true);
+  // Another API failure carries no signal.
+  setClaudeSdkOneShotSeam(() =>
+    Promise.resolve(
+      fakeSeam([
+        {
+          type: "result",
+          subtype: "success",
+          is_error: true,
+          api_error_status: 404,
+          session_id: "s2",
+        } as unknown as ClaudeSdkMessage,
+      ]),
+    ),
+  );
+  const bare = await runClaudeSdkOneShot({
+    modelId: "fable",
+    sdkModelId: "claude-fable-5-2",
+    thinkingLevel: "off",
+    systemPrompt: "x",
+    prompt: "y",
+  });
+  assert.equal(bare.failureStatus, 404);
+  assert.equal(bare.failureModelUnavailable, undefined);
 });

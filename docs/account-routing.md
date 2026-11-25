@@ -172,6 +172,23 @@ Evidence rules (a gateway-served account's login evidence follows
   client. Read-only expiry and forbidden usage remain non-evidence. The same
   status-aware predicate sets the login-death fact; auth classification alone
   does not. Only the classifier sees provider wording, in memory.
+- A provider refusing the model itself is evidence about that model on that
+  account only, never about the login: `model_unavailable`. Claude's signal is
+  structured: the CLI's synthetic assistant `error: "model_not_found"`, or a
+  result with `api_error_status` 404 and `api_error_type` `not_found_error`
+  (`claudeModelNotFound`); its wording ("There's an issue with the selected
+  model (<id>). It may not exist or you may not have access to it.") is only the
+  text-only fallback. Codex has no structured field, so only the exact anchored
+  sentence counts, and only from `openai-codex`: "The '<id>' model is not
+  supported when using Codex with a ChatGPT account." A gateway refusal, a
+  structured content refusal, a login death, a 5xx and statuses 401, 403 and 429
+  always classify as before. The failure facts carry `unavailableModelId`, the
+  concrete id the run executed (Claude: the query's resolved id, never the
+  alias), only when the id the message names agrees with it or it names none. An
+  own-subscription run's refusal (session or one-shot), observed in the
+  account's current login generation, marks that (account, model provider, id);
+  it changes no health, bench, alert or switch, and `localPolicy` never marks.
+  The routing hard filter below reads the marks.
 - Sessions and one-shots count only when their actual model provider is the
   account's own subscription provider: `openai-codex` or `claude-sdk`. Copilot,
   compatible-key and other pi providers can share the account directory, but
@@ -425,8 +442,31 @@ degradation names the cause. Nothing runs. An entitlement refusal is a local
 policy decision, never health, bench or switch evidence: a run it ends carries
 `RunFailureFacts` `{kind: "unknown", localPolicy: true}`, which the health
 tracker, the switch's `recoverable` check and failure classification ignore.
-Only a PA refusal made before any provider call may set `localPolicy`. Ranking
-is:
+Only a PA refusal made before any provider call may set `localPolicy`.
+
+A remembered provider refusal (`model_unavailable`, see the evidence rules
+above; `harnesses/modelUnavailability.ts`) is the same hard filter for exactly
+that account and concrete id. A Claude account whose 5-2 was refused still
+offers `fable` through its listed 5-1, but never a 5-2 pin; a pi account lacks
+exactly the refused (provider, id). Automatic routing skips it, all refused is
+`model-unavailable`, and an explicit pin, move or next-turn admission on it is
+refused with the usual "<account> can't run <model>." before any provider call.
+An unpinned one-shot refused this way retries once on another account; a pinned
+one does not. The marks live in memory, are empty at boot, and never expire on a
+timer. Only these clear them:
+
+- a successful Claude listing naming the id whose read started after the mark
+  (one that started before it, failed, or lacks the id clears nothing);
+- a successful own-subscription run on that exact (provider, id);
+- the account's completed login (all its marks);
+- the user's model Refresh (every mark);
+- deleting the account.
+
+Usage snapshots, create, rename, enable, disable and the background refreshes
+(pi's catalog refresh, Claude's hourly unforced listing) never clear a mark by
+themselves; the hourly listing still clears under the first rule.
+
+Ranking is:
 
 1. Fresh usage with room in both plan windows. A window the provider proves
    absent (the card's "no 5h limit") is no cap, so it counts as room with 0%

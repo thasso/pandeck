@@ -4791,6 +4791,11 @@ export type ProviderErrorKind =
   | "server"
   | "network"
   | "content_policy"
+  /**
+   * The provider says the account cannot run the model: it may not exist, or
+   * the account is not entitled to it. Never login, quota or rate evidence.
+   */
+  | "model_unavailable"
   | "aborted"
   | "unknown";
 
