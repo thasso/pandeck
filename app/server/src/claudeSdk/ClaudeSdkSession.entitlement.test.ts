@@ -179,7 +179,8 @@ test("a mythos turn on an unknown account is a local-policy backstop; once liste
   mythos.addViewer({ send: (message) => envelopes.push(message) });
 
   const local = { kind: "unknown", localPolicy: true };
-  const text = "usage limit 401 account can't run Claude Mythos.";
+  const text =
+    "usage limit 401 account can't run Claude Mythos. Refresh the model list or sign in again to retry.";
   assert.deepEqual(await adapter.prompt("hello"), {
     stopReason: "error",
     errorMessage: text,
@@ -259,7 +260,8 @@ test("a model change resolves on the session's account before anything changes",
     onPrivate.session.setModel("mythos"),
     (err: Error) =>
       err.name === "ModelUnavailableOnAccountError" &&
-      err.message === "priv can't run Claude Mythos.",
+      err.message ===
+        "priv can't run Claude Mythos. Refresh the model list or sign in again to retry.",
   );
   assert.deepEqual(onPrivate.calls, []);
   assert.equal(onPrivate.session.toRecord().modelId, "opus");

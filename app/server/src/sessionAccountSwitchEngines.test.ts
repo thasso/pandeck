@@ -2049,7 +2049,8 @@ async function mythosFixture({ refuseQueries = false } = {}) {
   };
 }
 
-const MYTHOS_REFUSAL = "usage limit 401 account can't run Claude Mythos.";
+const MYTHOS_REFUSAL =
+  "usage limit 401 account can't run Claude Mythos. Refresh the model list or sign in again to retry.";
 
 test("a turn refused at the query open (listing changed after admission) is local policy end to end", async () => {
   const f = await mythosFixture();

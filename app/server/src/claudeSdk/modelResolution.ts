@@ -20,6 +20,10 @@ import {
  *   string, exactly as stored, passed only for an existing session. It lets an
  *   unknown account keep running a legacy pin of the session's own alias.
  *
+ * - `refused` holds the ids the provider refused to run on this account
+ *   (`harnesses/modelUnavailability.ts`). A refused id never runs: an alias
+ *   falls back to its next candidate, a refused pin is not offered.
+ *
  * A known account runs only what it lists. An unknown account runs a gated
  * alias (mythos) never; for the others it runs the newest candidate, a pin to
  * any candidate, or the session's own stored pin of that alias.
@@ -29,11 +33,16 @@ export function resolveClaudeSdkModel(
   listed: ReadonlySet<string> | undefined,
   pin?: string,
   persistedPin?: string,
+  refused?: ReadonlySet<string>,
 ): string | undefined {
   const model = claudeSdkModel(aliasOrId);
-  if (pin !== undefined) return resolvePin(model, listed, pin, persistedPin);
-  if (listed) return model.sdkModelIds.find((id) => listed.has(id));
-  return model.offeredWhenUnknown ? model.sdkModelIds[0] : undefined;
+  if (pin !== undefined)
+    return refused?.has(pin)
+      ? undefined
+      : resolvePin(model, listed, pin, persistedPin);
+  const runs = (id: string): boolean => !refused?.has(id);
+  if (listed) return model.sdkModelIds.find((id) => listed.has(id) && runs(id));
+  return model.offeredWhenUnknown ? model.sdkModelIds.find(runs) : undefined;
 }
 
 function resolvePin(

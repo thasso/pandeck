@@ -544,6 +544,16 @@ export class PiLiveSession implements LiveSession {
     return piProviderErrorInfo(this.engine.model, error, message);
   }
 
+  /**
+   * A classified failure's facts, naming the concrete model the run executed:
+   * the id the provider's error metadata reports, else the engine's own. A
+   * `model_unavailable` failure marks that id for the account.
+   */
+  private failureFacts(info: ProviderErrorInfo): RunFailureFacts {
+    const executingModelId = info.model ?? this.engine.model?.id;
+    return runFailureFacts(info, executingModelId ? { executingModelId } : {});
+  }
+
   private broadcastContextInfo(force = false): void {
     const now = Date.now();
     if (!force && now - this.lastContextBroadcastAt < 250) return;
@@ -723,7 +733,7 @@ export class PiLiveSession implements LiveSession {
           if (!this.explicitAbortRequested)
             this.adapterEvents.runFailing(
               providerErrorDisplayText(finalError),
-              runFailureFacts(finalError),
+              this.failureFacts(finalError),
             );
           this.providerNotice(
             "error",
@@ -888,7 +898,7 @@ export class PiLiveSession implements LiveSession {
         if (error && !abortRequested && (id || retryEndedBetweenAttempts))
           this.adapterEvents.runFailing(
             error,
-            errorInfo ? runFailureFacts(errorInfo) : undefined,
+            errorInfo ? this.failureFacts(errorInfo) : undefined,
           );
         if (id) {
           this.broadcast({
@@ -907,7 +917,7 @@ export class PiLiveSession implements LiveSession {
             ...(usage ? { usage } : {}),
             ...(error ? { errorMessage: error } : {}),
             ...(error && errorInfo
-              ? { failure: runFailureFacts(errorInfo) }
+              ? { failure: this.failureFacts(errorInfo) }
               : {}),
             ...(aborted ? { aborted: true } : {}),
             ...(abortRequested ? { abortRequested: true } : {}),
@@ -921,7 +931,7 @@ export class PiLiveSession implements LiveSession {
             aborted
               ? undefined
               : (error ?? "Pi retry ended before another attempt started."),
-            !aborted && errorInfo ? runFailureFacts(errorInfo) : undefined,
+            !aborted && errorInfo ? this.failureFacts(errorInfo) : undefined,
           );
         }
         this.broadcastState();
@@ -1452,7 +1462,7 @@ export class PiLiveSession implements LiveSession {
   private finishPromptError(err: unknown, wasRunning: boolean): void {
     const raw = errorText(err);
     const message = `Failed to send prompt: ${raw}`;
-    const failure = runFailureFacts(this.providerErrorInfo(raw));
+    const failure = this.failureFacts(this.providerErrorInfo(raw));
 
     // If this was a queued steer/follow-up while the agent is already running,
     // keep the active turn intact and only surface the banner.

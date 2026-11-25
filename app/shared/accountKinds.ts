@@ -19,6 +19,16 @@ import type { CredentialProfileProvider } from "./protocol.ts";
  */
 export const OPENAI_COMPATIBLE_PROVIDER_ID = "openai-compatible";
 
+/**
+ * The recovery hint every "<account> can't run <model>." / "No <kind> account
+ * can run <model>." refusal ends with. It holds whether the account's listing
+ * lacks the model or the provider refused it there (`docs/account-routing.md`):
+ * the user's model Refresh re-lists every account and forgets every
+ * remembered refusal, and a completed login does both for its account.
+ */
+export const ACCOUNT_MODEL_REFUSAL_HINT =
+  "Refresh the model list or sign in again to retry.";
+
 export interface AccountKindDescriptor {
   /** The harness every model of this kind runs on. */
   readonly harness: Harness;

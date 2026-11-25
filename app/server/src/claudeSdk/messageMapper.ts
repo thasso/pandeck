@@ -222,18 +222,29 @@ export function assistantRefused(message: ClaudeAssistantMessage): boolean {
  * `subtype`/`errors`, while an API failure keeps `subtype: "success"` and puts
  * the status in `api_error_status` with the wording in `result`.
  */
-export function resultProviderError(
-  message: ClaudeResultMessage,
-): { reason: string; text: string; statusCode?: number } | undefined {
+export function resultProviderError(message: ClaudeResultMessage):
+  | {
+      reason: string;
+      text: string;
+      statusCode?: number;
+      /** The API's error type (`api_error_type`, e.g. `not_found_error`). */
+      apiErrorType?: string;
+    }
+  | undefined {
   const m = message as {
     subtype?: unknown;
     is_error?: unknown;
     api_error_status?: unknown;
+    api_error_type?: unknown;
     result?: unknown;
     errors?: unknown;
   };
   const status =
     typeof m.api_error_status === "number" ? m.api_error_status : undefined;
+  const apiErrorType =
+    typeof m.api_error_type === "string" && m.api_error_type.trim()
+      ? m.api_error_type.trim()
+      : undefined;
   const failed =
     m.is_error === true ||
     status !== undefined ||
@@ -255,7 +266,27 @@ export function resultProviderError(
     reason,
     text: parts.join("\n"),
     ...(status !== undefined ? { statusCode: status } : {}),
+    ...(apiErrorType !== undefined ? { apiErrorType } : {}),
   };
+}
+
+/**
+ * Whether a Claude failure is the API's model-not-found answer: this account
+ * cannot run the requested model id (it may not exist, or the account is not
+ * entitled to it; the API does not tell them apart). Either the CLI's
+ * synthetic assistant `error: "model_not_found"` (as `reason`), or the
+ * result's 404 with `api_error_type: "not_found_error"`. The session, the
+ * one-shot and the engine contract all judge it here.
+ */
+export function claudeModelNotFound(failure: {
+  reason?: string | undefined;
+  statusCode?: number | undefined;
+  apiErrorType?: string | undefined;
+}): boolean {
+  return (
+    failure.reason === "model_not_found" ||
+    (failure.statusCode === 404 && failure.apiErrorType === "not_found_error")
+  );
 }
 
 /**

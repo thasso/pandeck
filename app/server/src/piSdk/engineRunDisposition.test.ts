@@ -15,8 +15,10 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, test } from "vitest";
+import { afterAll, describe, test } from "vitest";
 import type { ServerMessage } from "@assistant/shared";
+import type { AdapterEvent } from "../session/adapters/contract.ts";
+import { codexRefusalText } from "../test/modelRefusalCaptures.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "engine-run-disposition-test-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -59,6 +61,8 @@ function harness(
     continueFailedTurn?: PiEngineHandle["continueFailedTurn"];
     prompt?: (text: string) => Promise<void>;
     steer?: (text: string) => Promise<void>;
+    /** The model the fake session reports it runs. */
+    model?: unknown;
   },
 ) {
   let emit: ((event: unknown) => void) | undefined;
@@ -66,6 +70,12 @@ function harness(
     sessionId,
     sessionName: "Already named",
     isStreaming: options.streaming,
+    model: options.model,
+    // The engine suppresses pi's retry of a non-retryable provider failure.
+    settingsManager: {
+      getRetrySettings: () => ({ enabled: true, maxRetries: 3 }),
+      applyOverrides: () => {},
+    },
     messages: [],
     sessionManager: {
       getBranch: () => [],
@@ -388,4 +398,101 @@ test("a continuation the engine started marks the run once it reports", async ()
   );
   assert.equal(h.live.isRunning, false);
   h.live.dispose();
+});
+
+// Task-1483: a Codex model refusal names the engine's concrete model on every
+// failure event, so account health can remember it for the account.
+describe("model refused on the account", () => {
+  const CODEX_MODEL = {
+    provider: "openai-codex",
+    id: "gpt-4o",
+    api: "openai-codex-responses",
+  };
+
+  function refusalHarness(sessionId: string) {
+    const h = harness(sessionId, { streaming: false, model: CODEX_MODEL });
+    const events: AdapterEvent[] = [];
+    h.adapter.subscribe((event) => events.push(event));
+    return { ...h, events };
+  }
+
+  const failureOf = (events: AdapterEvent[], type: AdapterEvent["type"]) => {
+    const event = events.find((candidate) => candidate.type === type);
+    return event && "failure" in event ? event.failure : undefined;
+  };
+
+  test.each([
+    ["the captured Codex text", codexRefusalText("gpt-4o"), true],
+    [
+      "a near miss naming another surface",
+      "Codex error: The 'gpt-4o' model is not supported when using Codex with an API key.",
+      false,
+    ],
+  ] as const)(
+    "%s on runFailing, messageCompleted and runCompleted",
+    async (_case, errorMessage, refused) => {
+      const h = refusalHarness(`pi-refusal-${refused}`);
+      h.emit({ type: "agent_start" });
+      h.emit({
+        type: "message_start",
+        message: { role: "assistant", content: [] },
+      });
+      h.emit({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [],
+          stopReason: "error",
+          errorMessage,
+          provider: "openai-codex",
+          model: "gpt-4o",
+          api: "openai-codex-responses",
+        },
+      });
+      h.emit({ type: "agent_settled" });
+      const failing = failureOf(h.events, "runFailing");
+      const completed = failureOf(h.events, "messageCompleted");
+      const closed = failureOf(h.events, "runCompleted");
+      assert.ok(failing);
+      assert.deepEqual(completed, failing);
+      assert.deepEqual(closed, failing);
+      if (refused)
+        assert.deepEqual(failing, {
+          kind: "model_unavailable",
+          unavailableModelId: "gpt-4o",
+        });
+      else assert.notEqual(failing.kind, "model_unavailable");
+      h.live.dispose();
+    },
+  );
+
+  test("a retry that ends refused reports the facts on the run's first runFailing, the one the runtime records", () => {
+    const h = refusalHarness("pi-refusal-retry");
+    h.emit({ type: "agent_start" });
+    h.emit({
+      type: "message_start",
+      message: { role: "assistant", content: [] },
+    });
+    h.emit({ type: "agent_end", willRetry: true });
+    h.emit({
+      type: "auto_retry_end",
+      success: false,
+      finalError: codexRefusalText("gpt-4o"),
+    });
+    h.emit({ type: "agent_settled" });
+    const failures = h.events.filter((event) => event.type === "runFailing");
+    // The runtime keeps a run's FIRST failure (`reportRunFailure`); the
+    // settle's later report and the run's close add no other facts.
+    assert.deepEqual("failure" in failures[0]! && failures[0].failure, {
+      kind: "model_unavailable",
+      unavailableModelId: "gpt-4o",
+    });
+    for (const event of [
+      ...failures.slice(1),
+      ...h.events.filter((e) => e.type === "runCompleted"),
+    ])
+      assert.equal("failure" in event ? event.failure : undefined, undefined);
+    assert.ok(h.events.some((event) => event.type === "runCompleted"));
+    h.live.dispose();
+  });
 });

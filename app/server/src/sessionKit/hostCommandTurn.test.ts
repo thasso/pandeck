@@ -187,7 +187,7 @@ test("a tool error with failure facts completes the turn carrying them; none wit
     facts.target,
     facts.turn,
     "t1",
-    "usage limit 401 account can't run Claude Mythos.",
+    "usage limit 401 account can't run Claude Mythos. Refresh the model list or sign in again to retry.",
     true,
     local,
   );
@@ -196,7 +196,7 @@ test("a tool error with failure facts completes the turn carrying them; none wit
   assert.deepEqual(withFacts.failure, local);
   assert.equal(
     withFacts.error,
-    "usage limit 401 account can't run Claude Mythos.",
+    "usage limit 401 account can't run Claude Mythos. Refresh the model list or sign in again to retry.",
   );
 
   const plain = openTurn();

@@ -11,6 +11,7 @@
  * (`docs/account-routing.md`).
  */
 import {
+  ACCOUNT_MODEL_REFUSAL_HINT,
   accountServesModel,
   harnessForModelProvider,
   isSubscriptionAccountKind,
@@ -201,7 +202,7 @@ function lacksModelText(
   const pin = sessionClaudePin(sessionId, model.provider, model.id);
   if (pin.pinnedModelId !== undefined)
     return `${target.name} can't run ${pin.pinnedModelId}, the version this session is pinned to.`;
-  return `${target.name} can't run ${modelName(model)}.`;
+  return `${target.name} can't run ${modelName(model)}. ${ACCOUNT_MODEL_REFUSAL_HINT}`;
 }
 
 function modelName(model: { provider: string; id: string }): string {

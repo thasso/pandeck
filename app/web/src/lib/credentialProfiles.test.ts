@@ -325,6 +325,16 @@ describe("Automatic preview hint", () => {
         "openai-codex",
       )?.text,
     ).toBe("No enabled enterprise OpenAI account.");
+    expect(
+      automaticPreviewHint(
+        { profileId: null, degraded: "model-unavailable" },
+        profiles,
+        "claude-sdk",
+      ),
+    ).toEqual({
+      text: "No Claude account can run this model. Refresh the model list or sign in again to retry.",
+      warning: true,
+    });
   });
 });
 

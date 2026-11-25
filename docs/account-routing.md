@@ -172,6 +172,32 @@ Evidence rules (a gateway-served account's login evidence follows
   client. Read-only expiry and forbidden usage remain non-evidence. The same
   status-aware predicate sets the login-death fact; auth classification alone
   does not. Only the classifier sees provider wording, in memory.
+- A provider refusing the model itself is evidence about that model on that
+  account only, never about the login: `model_unavailable`. Claude's signal is
+  structured: the CLI's synthetic assistant `error: "model_not_found"`, or a
+  result with `api_error_status` 404 and `api_error_type` `not_found_error`
+  (`claudeModelNotFound`); its wording ("There's an issue with the selected
+  model (<id>). It may not exist or you may not have access to it.") is only the
+  text-only fallback. Codex has no structured field, so only the exact anchored
+  sentence counts, and only from `openai-codex`: "The '<id>' model is not
+  supported when using Codex with a ChatGPT account." A gateway refusal, a
+  structured content refusal, a login death, a 5xx and statuses 401, 403 and 429
+  always classify as before. The failure facts carry `unavailableModelId`, the
+  concrete id the run executed (Claude: the query's resolved id, never the
+  alias), only when the id the message names agrees with it or it names none. An
+  own-subscription run's refusal (session or one-shot), observed in the
+  account's current login generation, marks that (account, model provider, id);
+  it changes no health, bench, alert or switch, and `localPolicy` never marks.
+  The routing hard filter below reads the marks.
+- Accepted residual (Task-1512, `pa://task/1512`): the Claude CLI reports EVERY
+  404 as `model_not_found` and drops the response body, so the gateway's own
+  `unknown-prefix` 404 (a Claude base path Pandeck misconfigured) reaches the
+  turn without its marker and classifies, and marks, as a model refusal on the
+  account. The gateway path carries no `api_error_origin` to tell them apart.
+  Pandeck sets that path itself, so this would be an install-wide fault; the
+  mark is in memory and clears on Refresh, login or restart. The engine contract
+  case "Task-1483 residual (Task-1512)" pins today's behaviour, and Task-1512's
+  hardening is expected to flip it.
 - Sessions and one-shots count only when their actual model provider is the
   account's own subscription provider: `openai-codex` or `claude-sdk`. Copilot,
   compatible-key and other pi providers can share the account directory, but
@@ -425,8 +451,31 @@ degradation names the cause. Nothing runs. An entitlement refusal is a local
 policy decision, never health, bench or switch evidence: a run it ends carries
 `RunFailureFacts` `{kind: "unknown", localPolicy: true}`, which the health
 tracker, the switch's `recoverable` check and failure classification ignore.
-Only a PA refusal made before any provider call may set `localPolicy`. Ranking
-is:
+Only a PA refusal made before any provider call may set `localPolicy`.
+
+A remembered provider refusal (`model_unavailable`, see the evidence rules
+above; `harnesses/modelUnavailability.ts`) is the same hard filter for exactly
+that account and concrete id. A Claude account whose 5-2 was refused still
+offers `fable` through its listed 5-1, but never a 5-2 pin; a pi account lacks
+exactly the refused (provider, id). Automatic routing skips it, all refused is
+`model-unavailable`, and an explicit pin, move or next-turn admission on it is
+refused with the usual "<account> can't run <model>." before any provider call.
+An unpinned one-shot refused this way retries once on another account; a pinned
+one does not. The marks live in memory, are empty at boot, and never expire on a
+timer. Only these clear them:
+
+- a successful Claude listing naming the id whose read started after the mark
+  (one that started before it, failed, or lacks the id clears nothing);
+- a successful own-subscription run on that exact (provider, id);
+- the account's completed login (all its marks);
+- the user's model Refresh (every mark);
+- deleting the account.
+
+Usage snapshots, create, rename, enable, disable and the background refreshes
+(pi's catalog refresh, Claude's hourly unforced listing) never clear a mark by
+themselves; the hourly listing still clears under the first rule.
+
+Ranking is:
 
 1. Fresh usage with room in both plan windows. A window the provider proves
    absent (the card's "no 5h limit") is no cap, so it counts as room with 0%
@@ -491,14 +540,18 @@ missing or disabled, and the run refuses. An enabled pin on an account serving
 the model remains explicit despite login health or model/effort availability;
 failures alert on that account, not a different one. A pin, slot or explicit
 session pick, on an account whose known listing lacks the model is refused
-before any run: "<account> can't run <model>." A first send answers that as the
-send's refusal, a one-shot or memory processor run rejects, and the memory
-status reports the processor unavailable. An inherited parent pin that lacks the
-model is dropped, and the child routes Automatic instead.
-`automaticProfileIdFor` remains only a first-enabled hint for non-routing
-login/usage UI, not a routing function. When the saved model has no Automatic
-option, a Settings slot offers **Use Automatic** to clear its pin without
-changing the model or effort.
+before any run: "<account> can't run <model>." That refusal and "No <kind>
+account can run <model>." end with "Refresh the model list or sign in again to
+retry." (`ACCOUNT_MODEL_REFUSAL_HINT`), true whether the listing lacks the model
+or the provider refused it there: Refresh re-lists every account and forgets
+every remembered refusal, and a completed login does both for its account. A
+first send answers that as the send's refusal, a one-shot or memory processor
+run rejects, and the memory status reports the processor unavailable. An
+inherited parent pin that lacks the model is dropped, and the child routes
+Automatic instead. `automaticProfileIdFor` remains only a first-enabled hint for
+non-routing login/usage UI, not a routing function. When the saved model has no
+Automatic option, a Settings slot offers **Use Automatic** to clear its pin
+without changing the model or effort.
 
 The new-session picker names only accounts with something of their own to run
 (`pickerCredentialProfiles`): an unconnected OpenAI login, or a Claude account

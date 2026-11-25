@@ -16,11 +16,17 @@ import {
   findModelForProfile,
   listModels,
   listModelsForProfile,
+  refreshModels,
   subscribePickerModelsChanged as subscribePiPickerModelsChanged,
   toModelOption,
 } from "../piSdk/models.ts";
 import { CLAUDE_SDK_MODELS } from "../claudeSdk/modelSettings.ts";
 import { resetClaudeAccountModelsForTests } from "./claudeAccountModels.ts";
+import {
+  markModelUnavailable,
+  modelMarkedUnavailable,
+  resetModelUnavailabilityForTests,
+} from "./modelUnavailability.ts";
 import { COMPANY, PRIVATE } from "../test/claudeListings.ts";
 import { curatedModelOption } from "./curatedModels.ts";
 import {
@@ -28,6 +34,7 @@ import {
   accountOffersModel,
   modelsForAccount,
   pickerModels,
+  refreshAllModels,
   storedSessionModelOption,
   subscribePickerModelsChanged,
 } from "./models.ts";
@@ -39,6 +46,7 @@ vi.mock("../piSdk/models.ts", () => ({
   findModelForProfile: vi.fn(),
   listModels: vi.fn(),
   listModelsForProfile: vi.fn(),
+  refreshModels: vi.fn(),
   subscribePickerModelsChanged: vi.fn(),
   toModelOption: vi.fn(),
 }));
@@ -122,6 +130,7 @@ beforeEach(() => {
     piPickerChanged = fn;
     return () => true;
   });
+  resetModelUnavailabilityForTests();
   // Every account unknown, and nothing read: no gateway.
   resetClaudeAccountModelsForTests({
     read: async () => undefined,
@@ -518,4 +527,131 @@ test("picker change notification: a listing change with an unchanged union, and 
   for (const fn of profileChanged) fn("c4");
   assert.equal(pushes, 6, "a new enabled Claude account pushes");
   stop();
+});
+
+const codexModel: ModelOption = {
+  provider: "openai-codex",
+  id: "gpt-4o",
+  name: "GPT-4o",
+  reasoning: false,
+  contextWindow: 128_000,
+};
+
+test("a refused pi model is lacking and unoffered on that account only", async () => {
+  vi.mocked(listModelsForProfile).mockResolvedValue([piModel, codexModel]);
+  vi.mocked(findModelForProfile).mockResolvedValue(codexModel as never);
+  markModelUnavailable("o1", "openai-codex", "gpt-4o");
+  assert.equal(await accountLacksModel("o1", "openai-codex", "gpt-4o"), true);
+  assert.equal(await accountLacksModel("o2", "openai-codex", "gpt-4o"), false);
+  assert.equal(
+    await accountLacksModel("o1", "github-copilot", "gpt-4o"),
+    false,
+    "another provider's id is not the refused one",
+  );
+  assert.equal(await accountOffersModel("o1", "openai-codex", "gpt-4o"), false);
+  assert.equal(await accountOffersModel("o2", "openai-codex", "gpt-4o"), true);
+  assert.deepEqual(
+    await modelsForAccount({ id: "o1", provider: "openai-codex" }),
+    [piModel],
+  );
+  assert.deepEqual(
+    await modelsForAccount({ id: "o2", provider: "openai-codex" }),
+    [piModel, codexModel],
+  );
+});
+
+test("a refused Claude candidate falls back to the next; a refused pin lacks; all refused is not offered", async () => {
+  profiles = [claudeAccount("c1")];
+  await listings({ c1: [...COMPANY] });
+  markModelUnavailable("c1", "claude-sdk", "claude-fable-5-2");
+  assert.equal(await accountLacksModel("c1", "claude-sdk", "fable"), false);
+  assert.equal(await accountOffersModel("c1", "claude-sdk", "fable"), true);
+  const pin52 = { pinnedModelId: "claude-fable-5-2" };
+  assert.equal(
+    await accountLacksModel("c1", "claude-sdk", "fable", pin52),
+    true,
+  );
+  assert.equal(
+    await accountOffersModel("c1", "claude-sdk", "fable", pin52),
+    false,
+  );
+  assert.ok(
+    claudeIds(
+      await modelsForAccount({ id: "c1", provider: "claude" }),
+    ).includes("fable"),
+  );
+
+  markModelUnavailable("c1", "claude-sdk", "claude-fable-5-1");
+  assert.equal(await accountLacksModel("c1", "claude-sdk", "fable"), true);
+  assert.equal(await accountOffersModel("c1", "claude-sdk", "fable"), false);
+  assert.ok(
+    !claudeIds(
+      await modelsForAccount({ id: "c1", provider: "claude" }),
+    ).includes("fable"),
+  );
+  assert.ok(!claudeIds(pickerModels()).includes("fable"));
+});
+
+test("a refused Claude candidate on an unknown account falls back too", async () => {
+  markModelUnavailable("u1", "claude-sdk", "claude-fable-5-2");
+  assert.equal(await accountLacksModel("u1", "claude-sdk", "fable"), false);
+  assert.equal(
+    await accountLacksModel("u1", "claude-sdk", "fable", {
+      pinnedModelId: "claude-fable-5-2",
+    }),
+    true,
+  );
+  assert.equal(
+    await accountLacksModel("u1", "claude-sdk", "fable", {
+      pinnedModelId: "claude-fable-5-1",
+    }),
+    false,
+  );
+});
+
+test("a remembered refusal notifies the pickers once per actual change", async () => {
+  let pushes = 0;
+  const stop = subscribePickerModelsChanged(() => {
+    pushes += 1;
+  });
+  markModelUnavailable("o1", "openai-codex", "gpt-4o");
+  assert.equal(pushes, 1);
+  markModelUnavailable("o1", "openai-codex", "gpt-4o");
+  assert.equal(pushes, 1, "a repeated mark pushes nothing");
+  vi.mocked(refreshModels).mockResolvedValue(undefined as never);
+  await refreshAllModels();
+  assert.equal(pushes, 2, "forgetting it pushes once");
+  stop();
+  markModelUnavailable("o1", "openai-codex", "gpt-4o");
+  assert.equal(pushes, 2, "an unsubscribed listener hears nothing");
+});
+
+test("D-2: marks survive the background refreshes and clear on the user's Refresh", async () => {
+  profiles = [claudeAccount("c1")];
+  const cache = resetClaudeAccountModelsForTests({
+    read: async () => [...PRIVATE],
+    readable: () => true,
+  });
+  await cache.refresh({ profileIds: ["c1"], force: true });
+  markModelUnavailable("o1", "openai-codex", "gpt-4o");
+  // An id the account's listing lacks: only a listing naming it would clear.
+  markModelUnavailable("c1", "claude-sdk", "claude-mythos-5-2");
+
+  // pi's periodic catalog refresh, as the pickers hear it, and Claude's
+  // hourly background read.
+  piPickerChanged?.();
+  await cache.refresh({ force: false });
+  assert.equal(modelMarkedUnavailable("o1", "openai-codex", "gpt-4o"), true);
+  assert.equal(
+    modelMarkedUnavailable("c1", "claude-sdk", "claude-mythos-5-2"),
+    true,
+  );
+
+  vi.mocked(refreshModels).mockResolvedValue(undefined as never);
+  await refreshAllModels();
+  assert.equal(modelMarkedUnavailable("o1", "openai-codex", "gpt-4o"), false);
+  assert.equal(
+    modelMarkedUnavailable("c1", "claude-sdk", "claude-mythos-5-2"),
+    false,
+  );
 });

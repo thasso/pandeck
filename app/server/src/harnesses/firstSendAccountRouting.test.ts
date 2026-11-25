@@ -174,13 +174,19 @@ test("an explicit Claude pin whose listing lacks the model refuses without a ses
       credentialProfileId: privateId,
     });
     assert.ok("refusal" in admission);
-    assert.equal(admission.refusal.message, "Private can't run Claude Haiku.");
+    assert.equal(
+      admission.refusal.message,
+      "Private can't run Claude Haiku. Refresh the model list or sign in again to retry.",
+    );
     assert.equal(vi.mocked(pickAccount).mock.calls.length, 0);
     // The model the session would be created with is checked again on the
     // resolved account before any worktree or session exists.
     const prepared = await engine.prepare(entitledSend, privateId);
     assert.ok("refusal" in prepared && !("create" in prepared));
-    assert.equal(prepared.refusal.message, "Private can't run Claude Haiku.");
+    assert.equal(
+      prepared.refusal.message,
+      "Private can't run Claude Haiku. Refresh the model list or sign in again to retry.",
+    );
     assert.deepEqual(
       await engine.account({ ...entitledSend, credentialProfileId: teamId }),
       { profileId: teamId },
@@ -214,7 +220,7 @@ test("another spelling or an older id of an unlisted model refuses the same way,
       assert.ok("refusal" in admission, `${modelId} pinned to Private`);
       assert.equal(
         admission.refusal.message,
-        "Private can't run Claude Haiku.",
+        "Private can't run Claude Haiku. Refresh the model list or sign in again to retry.",
       );
       const prepared = await engine.prepare(send, privateId);
       assert.ok(
@@ -280,7 +286,7 @@ test("Automatic with every Claude account lacking the model names the model", as
   assert.ok("refusal" in admission);
   assert.equal(
     admission.refusal.message,
-    "No Claude account can run Claude Haiku.",
+    "No Claude account can run Claude Haiku. Refresh the model list or sign in again to retry.",
   );
 });
 
@@ -303,13 +309,13 @@ test.each(MYTHOS_LESS_READS)(
       assert.ok("refusal" in admission);
       assert.equal(
         admission.refusal.message,
-        "Mythos-less can't run Claude Mythos.",
+        "Mythos-less can't run Claude Mythos. Refresh the model list or sign in again to retry.",
       );
       const prepared = await engine.prepare(mythos, only.id);
       assert.ok("refusal" in prepared && !("create" in prepared));
       assert.equal(
         prepared.refusal.message,
-        "Mythos-less can't run Claude Mythos.",
+        "Mythos-less can't run Claude Mythos. Refresh the model list or sign in again to retry.",
       );
       for (const modelId of ["opus", "sonnet", "haiku", "fable"])
         assert.deepEqual(
@@ -337,7 +343,7 @@ test("an Automatic mythos first send no account can run names Claude Mythos", as
   assert.ok("refusal" in admission);
   assert.equal(
     admission.refusal.message,
-    "No Claude account can run Claude Mythos.",
+    "No Claude account can run Claude Mythos. Refresh the model list or sign in again to retry.",
   );
 });
 

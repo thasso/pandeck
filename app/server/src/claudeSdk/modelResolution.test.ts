@@ -3,7 +3,7 @@
  * which concrete Claude id an alias, pin and stored pin run on one listing.
  */
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { describe, test } from "vitest";
 import { COMPANY, PRIVATE, Y, Z } from "../test/claudeListings.ts";
 import { resolveClaudeSdkModel } from "./modelResolution.ts";
 
@@ -98,4 +98,127 @@ test("a stored pair whose pin is mythos or another family is refused on an unkno
     resolveClaudeSdkModel("fable", undefined, "claude-opus-5", "claude-opus-5"),
     undefined,
   );
+});
+
+describe("refused ids (Task-1483)", () => {
+  const refused = (...ids: string[]) => new Set(ids);
+
+  test("an alias skips a refused candidate on a known and an unknown account", () => {
+    assert.equal(
+      resolveClaudeSdkModel(
+        "fable",
+        set(COMPANY),
+        undefined,
+        undefined,
+        refused("claude-fable-5-2"),
+      ),
+      "claude-fable-5-1",
+    );
+    assert.equal(
+      resolveClaudeSdkModel(
+        "fable",
+        undefined,
+        undefined,
+        undefined,
+        refused("claude-fable-5-2"),
+      ),
+      "claude-fable-5-1",
+    );
+    // A refusal of an id the alias does not run changes nothing.
+    assert.equal(
+      resolveClaudeSdkModel(
+        "fable",
+        set(COMPANY),
+        undefined,
+        undefined,
+        refused("claude-sonnet-5-5"),
+      ),
+      "claude-fable-5-2",
+    );
+  });
+
+  test("every candidate refused: the alias is not offered", () => {
+    const all = refused("claude-fable-5-2", "claude-fable-5-1");
+    assert.equal(
+      resolveClaudeSdkModel("fable", set(COMPANY), undefined, undefined, all),
+      undefined,
+    );
+    assert.equal(
+      resolveClaudeSdkModel("fable", undefined, undefined, undefined, all),
+      undefined,
+    );
+  });
+
+  test.each([
+    ["known", set(COMPANY)],
+    ["unknown", undefined],
+  ] as const)("a refused pin is never repointed (%s account)", (_, listed) => {
+    const marks = refused("claude-fable-5-2");
+    assert.equal(
+      resolveClaudeSdkModel(
+        "fable",
+        listed,
+        "claude-fable-5-2",
+        undefined,
+        marks,
+      ),
+      undefined,
+    );
+    assert.equal(
+      resolveClaudeSdkModel(
+        "fable",
+        listed,
+        "claude-fable-5-1",
+        undefined,
+        marks,
+      ),
+      "claude-fable-5-1",
+    );
+  });
+
+  test("a refused legacy persisted pin lacks; unrefused it still runs (D1-legacy)", () => {
+    assert.equal(
+      resolveClaudeSdkModel(
+        "opus",
+        undefined,
+        "claude-opus-5",
+        "claude-opus-5",
+        refused("claude-opus-5"),
+      ),
+      undefined,
+    );
+    assert.equal(
+      resolveClaudeSdkModel(
+        "opus",
+        undefined,
+        "claude-opus-5",
+        "claude-opus-5",
+        refused("claude-opus-5-5"),
+      ),
+      "claude-opus-5",
+    );
+  });
+
+  test("mythos stays not offered on an unknown account", () => {
+    assert.equal(
+      resolveClaudeSdkModel(
+        "mythos",
+        undefined,
+        undefined,
+        undefined,
+        refused("claude-mythos-5-2"),
+      ),
+      undefined,
+    );
+    assert.equal(
+      resolveClaudeSdkModel(
+        "mythos",
+        set(COMPANY),
+        undefined,
+        undefined,
+        refused("claude-mythos-5-2"),
+      ),
+      "claude-mythos-5-1",
+    );
+  });
 });

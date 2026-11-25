@@ -101,7 +101,8 @@ test("a mythos pick on an account that cannot run it is a targeted error; nothin
         {
           type: "error",
           target: { type: "session", id: sessionId },
-          message: "Private can't run Claude Mythos.",
+          message:
+            "Private can't run Claude Mythos. Refresh the model list or sign in again to retry.",
         },
       ],
     );

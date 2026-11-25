@@ -209,7 +209,7 @@ const owners: Record<string, Owner> = {
       ),
       group(
         "read",
-        "providerErrorInfo compactionWindowStatus modelSelection snapshot branchToolCalls nativeFacts cumulativeTotals turnUsage contextInfo safeProjectContextInfo listInfo",
+        "providerErrorInfo failureFacts compactionWindowStatus modelSelection snapshot branchToolCalls nativeFacts cumulativeTotals turnUsage contextInfo safeProjectContextInfo listInfo",
         "Build error/context/native/public snapshots without owning any listed write.",
       ),
     ],

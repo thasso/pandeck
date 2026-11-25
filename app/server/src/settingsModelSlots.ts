@@ -12,6 +12,7 @@
  */
 import {
   ACCOUNT_KINDS,
+  ACCOUNT_MODEL_REFUSAL_HINT,
   accountKindForModelProvider,
   accountPinForModel,
   accountServesModel,
@@ -159,7 +160,7 @@ export async function assertAccountCanRunModel(
   if (!(await accountLacksModel(profileId, provider, modelId, pin))) return;
   const account = credentialProfileById(profileId)?.name ?? "This account";
   throw new ModelUnavailableOnAccountError(
-    `${account} can't run ${await modelName(provider, modelId)}.`,
+    `${account} can't run ${await modelName(provider, modelId)}. ${ACCOUNT_MODEL_REFUSAL_HINT}`,
   );
 }
 
@@ -170,7 +171,7 @@ export async function noAccountCanRunModelError(
 ): Promise<ModelUnavailableOnAccountError> {
   const label = ACCOUNT_KINDS[accountKindForModelProvider(provider)].label;
   return new ModelUnavailableOnAccountError(
-    `No ${label} account can run ${await modelName(provider, modelId)}.`,
+    `No ${label} account can run ${await modelName(provider, modelId)}. ${ACCOUNT_MODEL_REFUSAL_HINT}`,
   );
 }
 

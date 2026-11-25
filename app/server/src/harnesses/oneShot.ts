@@ -118,6 +118,8 @@ export class NoHelperModelError extends Error {
 
 interface EngineRun extends OneShotResult {
   failureStatus?: number;
+  /** The engine saw the provider's structured model-not-found signal. */
+  failureModelUnavailable?: true;
   harness: Harness;
   /** Provider and model to record the run under. */
   recordedProvider: string;
@@ -130,7 +132,10 @@ type AttemptResult =
   | { run: EngineRun; failure?: RunFailureFacts }
   | { error: unknown; failure?: RunFailureFacts; policyRejection?: true };
 
-/** Run one helper prompt, retrying an automatic account once after a limit or dead login. */
+/**
+ * Run one helper prompt, retrying an automatic account once after a limit, a
+ * dead login or a model the account cannot run.
+ */
 export async function runOneShot(
   request: OneShotRequest,
 ): Promise<OneShotResult> {
@@ -164,6 +169,8 @@ export async function runOneShot(
     !request.credentialProfileId?.trim() &&
     (failure?.kind === "quota" ||
       failure?.kind === "rate_limit" ||
+      // The refused account is marked by now, so the pick skips it.
+      failure?.kind === "model_unavailable" ||
       (failure !== undefined &&
         loginEnded(failure, await gatewayServes(profileId))))
   ) {
@@ -233,6 +240,12 @@ async function runAttempt(
   const observation = observeAccountHealth(request.credentialProfileId);
   let healthModelProvider = request.model.provider;
   let healthModelId = request.model.modelId;
+  // The concrete id the provider was asked to run: Claude's resolved id, pi's
+  // model id. A model-unavailable failure marks exactly this one.
+  const executing = (): { executingModelId?: string } => {
+    const id = sdkModelId ?? healthModelId;
+    return id ? { executingModelId: id } : {};
+  };
   let run: EngineRun;
   try {
     assertCurrentEnterpriseAccount(request);
@@ -252,12 +265,19 @@ async function runAttempt(
       typeof err.status === "number"
         ? err.status
         : undefined;
+    const modelUnavailable =
+      typeof err === "object" &&
+      err !== null &&
+      "modelUnavailable" in err &&
+      err.modelUnavailable === true;
     const failure = runFailureFacts(
       analyzeProviderError(message, {
         provider: healthModelProvider,
         ...(healthModelId ? { model: healthModelId } : {}),
         ...(statusCode !== undefined ? { statusCode } : {}),
+        ...(modelUnavailable ? { modelUnavailable: true } : {}),
       }),
+      executing(),
     );
     if (err instanceof EnterpriseAccountRequiredError)
       return { error: err, failure, policyRejection: true };
@@ -279,7 +299,9 @@ async function runAttempt(
             ...(run.failureStatus !== undefined
               ? { statusCode: run.failureStatus }
               : {}),
+            ...(run.failureModelUnavailable ? { modelUnavailable: true } : {}),
           }),
+          executing(),
         )
       : undefined;
   if (failure)
@@ -343,6 +365,9 @@ async function runOnClaude(
     ...(result.failure !== undefined ? { failure: result.failure } : {}),
     ...(result.failureStatus !== undefined
       ? { failureStatus: result.failureStatus }
+      : {}),
+    ...(result.failureModelUnavailable
+      ? { failureModelUnavailable: true as const }
       : {}),
   };
 }

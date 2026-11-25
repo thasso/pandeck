@@ -19,6 +19,11 @@ import type {
 import type { AgentStopReason } from "@assistant/shared/session";
 import { DATA_DIR } from "./config.ts";
 import { AccountBenchStore } from "./accountBench.ts";
+import {
+  clearAccount as clearModelUnavailabilityOf,
+  clearModelUnavailable,
+  markModelUnavailable,
+} from "./harnesses/modelUnavailability.ts";
 import { createPrivateJsonFile } from "./privateJsonFile.ts";
 import { analyzeProviderError, runFailureFacts } from "./providerErrors.ts";
 import type { RunFailureFacts } from "./session/adapters/contract.ts";
@@ -258,6 +263,9 @@ export class AccountHealthStore {
     this.recordEvidence(() => {
       this.replayed.delete(id);
       if (this.profiles.has(id)) this.clock(id).generation++;
+      // A new login may run what the old one was refused, whatever this
+      // store knows of the account.
+      clearModelUnavailabilityOf(id);
       this.update(id, "ok");
     });
   }
@@ -324,6 +332,22 @@ export class AccountHealthStore {
       if (
         profile &&
         isSubscriptionAccountModel(profile.provider, modelProvider) &&
+        modelProvider !== undefined &&
+        failure?.kind === "model_unavailable" &&
+        failure.unavailableModelId
+      ) {
+        // Only the model is refused: the login, its limits and its health
+        // stay as they are. A refusal seen before a completed login is the
+        // old login's and marks nothing.
+        if (
+          (observation?.generation ?? this.clock(id).generation) ===
+          this.clock(id).generation
+        )
+          markModelUnavailable(id, modelProvider, failure.unavailableModelId);
+      }
+      if (
+        profile &&
+        isSubscriptionAccountModel(profile.provider, modelProvider) &&
         failure?.kind === "auth" &&
         failure.loginDeath &&
         !this.gatewayServed(id)
@@ -352,6 +376,10 @@ export class AccountHealthStore {
         const ticket = observation ?? this.observe(id);
         if (ticket.generation === this.clock(id).generation)
           this.benches.working(id, modelId, ticket.order);
+        // The exact (provider, id) ran: a pi model id. Claude reports its
+        // alias here, which names no concrete id, so it clears nothing.
+        if (modelProvider !== undefined && modelId !== undefined)
+          clearModelUnavailable(id, modelProvider, modelId);
         this.update(id, "ok", ticket);
       } else this.deps.profiles();
     });
@@ -412,6 +440,7 @@ export class AccountHealthStore {
 
   forget(id: string): void {
     this.recordEvidence(() => {
+      clearModelUnavailabilityOf(id);
       this.remove(id);
       this.deps.profiles();
     });

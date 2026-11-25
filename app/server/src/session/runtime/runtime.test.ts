@@ -868,7 +868,8 @@ test.each(["runCompleted", "messageCompleted", "prompt result"] as const)(
   async (path) => {
     const { runtime, adapter } = makeRuntime();
     const local = { kind: "unknown", localPolicy: true } as const;
-    const text = "usage limit 401 account can't run Claude Mythos.";
+    const text =
+      "usage limit 401 account can't run Claude Mythos. Refresh the model list or sign in again to retry.";
     const reports: import("./liveSession.ts").RunFailureReport[] = [];
     const off = subscribeSessionRunFailed((report) => reports.push(report));
     try {

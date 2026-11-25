@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { afterAll, test, vi } from "vitest";
 import type { Harness } from "@assistant/shared";
 import type { PromptableAdapter } from "./session/adapters/contract.ts";
-import { MYTHOS_LESS_READS, Y } from "./test/claudeListings.ts";
+import { MYTHOS_LESS_READS, PRIVATE, Y } from "./test/claudeListings.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "account-router-sdk-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -39,9 +39,11 @@ const { SessionRuntime } = await import("./session/runtime/runtime.ts");
 const { SessionLogStore } = await import("./session/log/store.ts");
 const { promptRuntimeSessionWithRuntime, beginRuntimeProviderTurn } =
   await import("./session/runtimePrompt.ts");
-const { resetClaudeAccountModelsForTests } =
+const { ensureClaudeAccountModels, resetClaudeAccountModelsForTests } =
   await import("./harnesses/claudeAccountModels.ts");
 const { getSettings, updateSettings } = await import("./settings.ts");
+const { markModelUnavailable, resetModelUnavailabilityForTests } =
+  await import("./harnesses/modelUnavailability.ts");
 await import("./hub.ts");
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
@@ -612,3 +614,171 @@ test("real port: a healthy account listing a session's exact legacy pin is a ful
       resetClaudeAccountModelsForTests();
     }
   }));
+
+// Task-1483: a provider's model refusal is a hard filter for that account and
+// that concrete id only. Both registry orders, so neither result is the
+// tie-break's.
+const BOTH_ORDERS = [
+  ["first", false],
+  ["second", true],
+] as const;
+
+test.each(BOTH_ORDERS)(
+  "real port: a 5-2 pin skips the account refused it (refused account %s); both refused is model-unavailable",
+  (_where, refusedSecond) =>
+    withClaudeSdk(async () => {
+      const [a, b] = [healthyClaude("Refusal A"), healthyClaude("Refusal B")];
+      const [refused, other] = refusedSecond ? [b, a] : [a, b];
+      // Both list 5-2: only the remembered refusal tells them apart.
+      resetClaudeAccountModelsForTests({ read: async () => [...PRIVATE] });
+      const pinned = {
+        model: { provider: "claude-sdk", modelId: "fable" },
+        pinnedModelId: "claude-fable-5-2",
+      };
+      try {
+        // Read before the refusal: a listing naming the id that started
+        // after it would clear it (rule i).
+        await Promise.all([a, b].map((id) => ensureClaudeAccountModels(id)));
+        markModelUnavailable(refused, "claude-sdk", "claude-fable-5-2");
+        assert.deepEqual(await pickAccount(pinned), { profileId: other });
+        const profile = listCredentialProfiles().find(
+          ({ id }) => id === refused,
+        )!;
+        const candidate = await gatherAccountCandidate(profile, pinned);
+        assert.equal(candidate.offersModel, false);
+        assert.ok(candidate.lacksModel);
+        markModelUnavailable(other, "claude-sdk", "claude-fable-5-2");
+        assert.deepEqual(await pickAccount(pinned), {
+          profileId: null,
+          degraded: "model-unavailable",
+        });
+      } finally {
+        setCredentialProfileEnabled(a, false);
+        setCredentialProfileEnabled(b, false);
+        resetClaudeAccountModelsForTests();
+        resetModelUnavailabilityForTests();
+      }
+    }),
+);
+
+test("real port: unpinned, a refused 5-2 falls back to the listed 5-1 and the account stays a full candidate", () =>
+  withClaudeSdk(async () => {
+    const x = healthyClaude("Refused newest fable");
+    resetClaudeAccountModelsForTests({ read: async () => [...PRIVATE] });
+    const fable = { model: { provider: "claude-sdk", modelId: "fable" } };
+    try {
+      await ensureClaudeAccountModels(x);
+      markModelUnavailable(x, "claude-sdk", "claude-fable-5-2");
+      const profile = listCredentialProfiles().find(({ id }) => id === x)!;
+      const candidate = await gatherAccountCandidate(profile, fable);
+      assert.equal(candidate.offersModel, true);
+      assert.equal(candidate.lacksModel, undefined);
+      assert.deepEqual(await pickAccount(fable), { profileId: x });
+    } finally {
+      setCredentialProfileEnabled(x, false);
+      resetClaudeAccountModelsForTests();
+      resetModelUnavailabilityForTests();
+    }
+  }));
+
+/** Only the pi accounts a test creates take part. */
+function disableOtherCodexAccounts(): void {
+  for (const profile of listCredentialProfiles())
+    if (profile.provider === "openai-codex" && profile.enabled)
+      setCredentialProfileEnabled(profile.id, false);
+}
+
+test.each(BOTH_ORDERS)(
+  "real port: a pi model refused on one account (%s) routes to the other; both refused is model-unavailable",
+  async (_where, refusedSecond) => {
+    disableOtherCodexAccounts();
+    const a = createCredentialProfile({
+      name: "Refusal pi A",
+      provider: "openai-codex",
+    });
+    const b = createCredentialProfile({
+      name: "Refusal pi B",
+      provider: "openai-codex",
+    });
+    provision(a.id, "refusal-model");
+    provision(b.id, "refusal-model");
+    const [refused, other] = refusedSecond ? [b, a] : [a, b];
+    const wanted = {
+      model: { provider: "router-test", modelId: "refusal-model" },
+      thinkingLevel: "off" as const,
+    };
+    try {
+      markModelUnavailable(refused.id, "router-test", "refusal-model");
+      assert.ok(
+        !(await modelsForAccount(refused)).some(
+          (model) => model.id === "refusal-model",
+        ),
+      );
+      assert.deepEqual(await pickAccount(wanted), { profileId: other.id });
+      markModelUnavailable(other.id, "router-test", "refusal-model");
+      assert.deepEqual(await pickAccount(wanted), {
+        profileId: null,
+        degraded: "model-unavailable",
+      });
+    } finally {
+      setCredentialProfileEnabled(a.id, false);
+      setCredentialProfileEnabled(b.id, false);
+      resetModelUnavailabilityForTests();
+    }
+  },
+);
+
+test("a pi turn on an account the provider refused the model on is refused before any run", async () => {
+  const profile = createCredentialProfile({
+    name: "Refused admission",
+    provider: "openai-codex",
+  });
+  provision(profile.id, "refused-admission-model");
+  const live = await createSession({
+    harness: "pi",
+    agentType: "assistant",
+    credentialProfileId: profile.id,
+    thinkingLevel: "off",
+    model: await piModelForAccount(
+      profile.id,
+      "router-test",
+      "refused-admission-model",
+    ),
+  });
+  const runtime = new SessionRuntime(new SessionLogStore(true));
+  const prompt = vi.fn(async () => ({ stopReason: "end" as const }));
+  const adapter: PromptableAdapter = {
+    provider: "scripted",
+    capabilities: {
+      fork: "none",
+      compact: false,
+      steer: false,
+      attachments: true,
+    },
+    subscribe: () => () => {},
+    getBinding: () => ({ provider: "scripted", nativeId: live.sessionId }),
+    prompt,
+    abort: () => {},
+    setModel: () => {},
+    setReasoning: () => {},
+    dispose: () => {},
+  };
+  const bind = vi.spyOn(live, "createRuntimeAdapter").mockReturnValue(adapter);
+  try {
+    markModelUnavailable(profile.id, "router-test", "refused-admission-model");
+    await assert.rejects(
+      promptRuntimeSessionWithRuntime(runtime, live, "refused", {
+        hidden: true,
+      }),
+      /can't run/,
+    );
+    assert.equal(prompt.mock.calls.length, 0);
+    assert.equal(bind.mock.calls.length, 0);
+  } finally {
+    bind.mockRestore();
+    resetModelUnavailabilityForTests();
+    setCredentialProfileEnabled(profile.id, false);
+    await runtime.disposeSession(live.id);
+    releaseTestSession("pi", live.sessionId);
+  }
+});
