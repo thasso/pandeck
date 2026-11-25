@@ -2004,14 +2004,14 @@ path above.
   base64url characters, so it never starts with `-`. Ids enrolled before the
   prefix keep their shape; one that starts with `-` goes after `--` on the admin
   command line (`clients revoke -- <id>`), where any option comes before `--`.
-- **`gateway-client/1.1`** (`gateway/clientMethods.ts`; 1.1 adds the two-phase
-  tool methods below, Task-1463, and a peer of any 1.x connects), on the worker
-  protocol's framing: `client.hello`, `accounts.list` and the gateway's
-  `accounts.changed`, `leases.grant`, `leases.client` (the server's own
-  requests, one lease per account and client), `leases.bindSession`,
-  `leases.revoke` and `leases.reconcileWorker`, all on the calling client's
-  leases and its user's accounts only; `accounts.remove`; and the login API
-  below.
+- **`gateway-client/1.2`** (`gateway/clientMethods.ts`; 1.1 adds the two-phase
+  tool methods below, Task-1463, 1.2 a file tool's file answer, Task-1441, and a
+  peer of any 1.x connects), on the worker protocol's framing: `client.hello`,
+  `accounts.list` and the gateway's `accounts.changed`, `leases.grant`,
+  `leases.client` (the server's own requests, one lease per account and client),
+  `leases.bindSession`, `leases.revoke` and `leases.reconcileWorker`, all on the
+  calling client's leases and its user's accounts only; `accounts.remove`; and
+  the login API below.
 - **Logins** (Task-1385, M11; the edge's `gateway/logins.ts`, the vault's
   `gateway/vaultLogins.ts` behind `VaultPort.login`):
   `logins.start {kind, accountId?, name?}` answers `{loginId, accountId}`; the
@@ -2095,14 +2095,15 @@ path above.
   listing. Pandeck accepts at most 64 entries, each a read tool
   (`effect: "read"`) whose `actionKey` prefix names a mapped product, within the
   bounds the edge's `gatewayTools/tools.test.ts` checks (name, 1,024-character
-  description, 4,096-character object schema), or a write named in `WRITE_TOOLS`
-  (below); a name listed twice is dropped. One table in `remoteTools.ts` maps
-  the products, `jira`, `slack` and `confluence`, each to its Settings toggle
-  (`jira.enabled`, `slack.enabled`, `confluence.enabled`); any other prefix is
-  dropped. A product with a read-name list (`PRODUCT_READS`) accepts only those
-  names: Confluence accepts `confluence_search`, `confluence_get_page` and
-  `confluence_lookup`, so the edge's attachment download and any later
-  Confluence tool stay out until a change admits them. Jira and Slack have no
+  description, 4,096-character object schema), a write named in `WRITE_TOOLS` or
+  a file tool named in `FILE_TOOLS` (both below); a name listed twice is
+  dropped, and so is any other entry that carries a `file` key. One table in
+  `remoteTools.ts` maps the products, `jira`, `slack` and `confluence`, each to
+  its Settings toggle (`jira.enabled`, `slack.enabled`, `confluence.enabled`);
+  any other prefix is dropped. A product with a read-name list (`PRODUCT_READS`)
+  accepts only those names: Confluence accepts `confluence_search`,
+  `confluence_get_page` and `confluence_lookup` as reads, so any later
+  Confluence tool stays out until a change admits it. Jira and Slack have no
   list. Every name accepted in a boot stays in the catalog for that boot. Each
   product has a deferred catalog group that replaces its local group:
   `gateway-jira` replaces `jira` and is gated by `gatewayJira` (connected and
@@ -2135,6 +2136,52 @@ path above.
   never with local credentials and never locally as a fallback. Its guards,
   outcome table, texts and rollback are in `docs/approvals.md` "Gateway-prepared
   cards".
+- **Gateway file tools** (Task-1441 P7a, `FILE_TOOLS` in `remoteTools.ts`,
+  `tools/gateway/remoteFiles.ts`). `confluence_download_attachment`, listed with
+  `effect: "read"`, `actionKey: "confluence:read"` and
+  `file: {limitParam: "maxBytes", defaultBytes, maxBytes}`, joins
+  `gateway-confluence` under the local tool's name, label, description, schema,
+  search hint and `sideEffects` class (`local`), so Plan leaves it out. The
+  entry is accepted only when `limitParam` is the tool's own, `maxBytes` a safe
+  integer from 1 to the local cap (100 MiB) and `defaultBytes` from 1 to
+  `maxBytes`; otherwise it is dropped, never read as a read tool. A call checks
+  the connection, the toggle and the listing, then sets E, the most bytes it
+  takes: the listing's `maxBytes`, or the call's `maxBytes` (non-numbers mean
+  `defaultBytes`; truncated and clamped to 1..100 MiB) if smaller. It sends
+  `tools.call` as a file call, bounded at 215 s (the edge's 150 s deadline, its
+  65 s drain bound, 5 s slack). The link reads the answer only with
+  `decodeFileAnswer` against E: a file over E, a digest that does not match or
+  any other shape is refused before anything is kept. On the answer the tool
+  checks the caller's abort, then the connection, toggle and listing again with
+  the same limits; then the adapter checks the edge's text exactly (status,
+  `pageId` and the six attachment fields with their bounds; `fileSize` and
+  `version` safe integers), stages the bytes once into the session's attachments
+  under the edge's name and MIME type, and answers the local tool's result byte
+  for byte (`test/confluenceDownloadOracle.ts`). A plain success is refused: the
+  local tool has none. Every refusal stages nothing. The edge's `tool_error`
+  texts (not found, too large, busy and the rest) reach the agent; Pandeck's own
+  texts are "The gateway sent a file this server can't accept; nothing was
+  saved." for a file it can't take, including a stream on any other call's
+  answer, "The file arrived damaged; nothing was saved. Try again." for a digest
+  mismatch, and "A gateway download is already running; try again when it
+  finishes." One file call runs per Pandeck process. Its slot is held until the
+  request retires: the answer arrived and was staged or refused, or the
+  connection ended. A local timeout or cancel answers the agent at once but
+  keeps the slot, and a late answer is dropped unread. If a request has not
+  retired 300 s after it was sent, the link logs
+  `tools.call: a file answer did not retire` and ends its connection; the redial
+  starts a new one. The link's connection takes a message of at most 102 MiB,
+  106 MiB buffered across partial messages; a bigger answer ends it.
+- **Operator actions for file calls.** No action releases bytes still owned or
+  calls for repeated retries.
+  - The edge logs `file call not settled after abort: <tool> client <id>`: its
+    executor has not stopped 30 s after a timeout or cancel, and the edge's one
+    file permit stays held, so every download answers the busy text. Restart the
+    edge.
+  - Pandeck answers "A gateway download is already running" with no download in
+    progress: a request has not retired. The link ends its connection by itself
+    at 300 s (`tools.call: a file answer did not retire`); if the busy text
+    persists after that, restart Pandeck.
 - **Known limitations of gateway tools.** A tool newly deployed on the gateway
   reaches a live pi session only at its next open, because pi registers its tool
   universe at open; Claude sessions get it once the next connection's listing is
@@ -2144,17 +2191,17 @@ path above.
   next open too; the edge checks arguments either way. Only Jira, Slack and
   Confluence are mapped: a gateway tool of another product needs a Pandeck
   change (table row, disabled text, gate and catalog group) before it appears.
-  Confluence offers its three reads and `confluence_mutate_page`, which the edge
-  lists ("Tools on the edge"): `confluence_download_attachment` waits for
-  Task-1441. Settings → Confluence answers `credentialStore: "gateway"` and
-  `credentialsAvailable` from the gateway's last Atlassian status (stored, not
-  verified); its connection test makes no call and points to Settings → Jira,
-  which tests the shared Atlassian connection. `slack_file_read` is not offered
-  in client mode until the edge runs it (Task-1441). Settings → Slack shows no
-  gateway Slack connection status (Task-1464); a Slack tool called without a
-  Slack connection on the gateway answers the edge's fixed text, which says to
-  connect it on the gateway's page. Pandeck's local Jira and Confluence tools
-  are not offered in client mode; their gateway groups replace them.
+  Confluence offers its three reads, `confluence_download_attachment` and
+  `confluence_mutate_page`, which the edge lists ("Tools on the edge"). Settings
+  → Confluence answers `credentialStore: "gateway"` and `credentialsAvailable`
+  from the gateway's last Atlassian status (stored, not verified); its
+  connection test makes no call and points to Settings → Jira, which tests the
+  shared Atlassian connection. `slack_file_read` is not offered in client mode
+  until the edge runs it with its own adapter. Settings → Slack shows no gateway
+  Slack connection status (Task-1464); a Slack tool called without a Slack
+  connection on the gateway answers the edge's fixed text, which says to connect
+  it on the gateway's page. Pandeck's local Jira and Confluence tools are not
+  offered in client mode; their gateway groups replace them.
 - **Local live test.**
   `pnpm --filter @assistant/server gateway:dev --state-dir <dir>`
   (`gatewayDevMain.ts`) runs the edge's composition (`gatewayEdge.ts`) with the
@@ -2767,7 +2814,8 @@ The edge runs integration tools for its clients' users (Task-1397, M22): a tool
 host and a standalone MCP endpoint, three Jira read tools: `jira_get_issue`,
 plus `jira_search_issues` and `jira_lookup` (Task-1439), three Confluence read
 tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
-(Task-1439), four Slack read tools: `slack_search`, `slack_conversation_read`,
+(Task-1439), one Confluence file tool, `confluence_download_attachment`
+(Task-1441), four Slack read tools: `slack_search`, `slack_conversation_read`,
 `slack_thread_read` and `slack_unread` (Task-1454), and one Jira write tool,
 `jira_mutate_issue` (Task-1463).
 
@@ -3297,6 +3345,44 @@ tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
   `decodeApplyAnswer`) refuse an answer over either cap, and an apply answer
   whose root says `none` beside a `possible` record or item; they read a
   failure's effects as `possible` unless it says `none`.
+- **File answers** (`gateway-client/1.2`, Task-1441 P7a). A file tool's
+  descriptor declares `file: {limitParam, defaultBytes, maxBytes}`, which
+  `tools.list` carries; today only `confluence_download_attachment` (`maxBytes`,
+  50 MiB default, 100 MiB cap, a 150 s deadline). Its `tools.call` answers one
+  of three shapes: a file,
+  `{ok: true, text, file: {name, mimeType, size, sha256}}` with exactly one byte
+  stream `file` (`size` its length, `sha256` its lowercase hex digest); a plain
+  success, `{ok: true, text}` with no stream; or a failure. A client reads a
+  file only with `decodeFileAnswer`, chosen by the tool it called and never by
+  the reply, and refuses any stream on another call's answer. File tools never
+  run on `/mcp`: they are left out of its listing and a call answers "No such
+  tool." before any vault read. The host's file path, in order:
+  - a caller that cannot report when its answer has left (no `onSettled`) is
+    answered `failed` before anything else;
+  - the call's E is the descriptor's `maxBytes`, or the limit argument,
+    truncated and clamped, if smaller; the tool sees it as `ctx.maxFileBytes`;
+  - one permit of `2E + 2 MiB` within a 210 MiB budget, one file call at a time
+    per edge process; another answers `tool_error` "The gateway is already
+    downloading a file; try again when it finishes. Nothing was downloaded."
+    before any vault read or request;
+  - then the credential read and the tool.
+
+  The permit is released exactly once, after both holds have settled: the
+  execution hold (the tool's own promise, not the raced answer) and the output
+  hold (`onSettled`). A timeout or cancel answers at once and keeps the permit
+  until the tool really stops; 30 s later the edge logs
+  `file call not settled after abort: <tool> client <id>` (see "Operator actions
+  for file calls"). `onSettled` is the connection's `MethodContext.onSettled`:
+  it runs once every frame of the response has flushed, or the connection has
+  ended. It rests on each byte endpoint's `write(bytes, onFlushed)`, whose
+  `onFlushed` is called exactly once after delivery or on loss; a connection
+  keeps a request in `serving` past its handler only when the handler registered
+  `onSettled`. The listener drains a file answer within 65 s and otherwise ends
+  that client's connection, and a client connection takes messages of at most 2
+  MiB (4 MiB buffered, 8 partial, 256 served). Download failures are fixed texts
+  chosen by error type, HTTP status or reason, never by a message
+  (`gatewayTools/confluenceDownload.ts`).
+
 - **Pandeck in client mode** (`remoteIntegrations.ts`, installed by
   `gatewayClientLink.ts`): Settings → Jira sends a newly entered token with the
   email and `JIRA_HOST` through `integrations.set`, a clear through
