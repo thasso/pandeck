@@ -4899,9 +4899,21 @@ export type NoticeSeverity = "info" | "warning" | "error";
  * by something the client renders (the pane), so it needs a target for the same
  * reason a single object's does; what it does not have is a member to name.
  */
-export interface MessageTarget {
+export type MessageTarget = ObjectMessageTarget | ScheduleCollectionTarget;
+
+/** One app object, or (without `id`) its collection. */
+export interface ObjectMessageTarget {
   type: import("./objectLinks.ts").PaObjectType;
   id?: string;
+}
+
+/**
+ * The Schedules collection, as the home of a list failure only. It has no
+ * member id and is NOT a `pa://` object type: Schedule links are Task-1500.
+ */
+export interface ScheduleCollectionTarget {
+  type: "schedule";
+  id?: undefined;
 }
 
 export interface SessionForkOrigin {

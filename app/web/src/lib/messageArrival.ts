@@ -225,8 +225,9 @@ function failureOnObject(
 /**
  * Collections whose load failure the client keeps as a CONDITION on the
  * collection itself (`projectListError`, `worktreeListError`, `taskListError`,
- * `initiativeListError`),
- * rendered by the pane whenever the user goes there.
+ * `initiativeListError`, `scheduleListError`),
+ * rendered by the pane whenever the user goes there. The Schedules condition is
+ * only held until its page renders it (Task-1500), and is still never announced.
  *
  * Listed once, and read by both the reducer that stores the condition and the
  * announcer that therefore says nothing: two lists would drift into a failure
@@ -237,6 +238,7 @@ const CONDITION_COLLECTIONS: readonly MessageTarget["type"][] = [
   "task",
   "worktree",
   "initiative",
+  "schedule",
 ];
 
 /** Whether this target names one of those collections rather than a member. */

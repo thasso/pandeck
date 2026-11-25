@@ -373,6 +373,84 @@ describe("useAssistant message arrivals on their object", () => {
     expect(untargeted.projectListError).toBeNull();
   });
 
+  // The Schedules collection is not an object type, only the home of its own
+  // list failure: held as a condition, never the viewed chat's error, and a
+  // running chat keeps its streams.
+  it("keeps a Schedules load failure apart from the chat until an answer clears it", () => {
+    const running: UIState = {
+      ...createInitialState(),
+      error: "earlier chat error",
+      liveStreams: [
+        {
+          streamId: "stream-1",
+          kind: "message",
+          role: "assistant",
+          content: [],
+        },
+      ],
+      runState: "running",
+      streaming: true,
+    };
+    const failed = apply(
+      {
+        type: "error",
+        message: "Failed to list Schedules: disk full",
+        target: { type: "schedule" },
+      },
+      running,
+    );
+    expect(failed.scheduleListError).toBe(
+      "Failed to list Schedules: disk full",
+    );
+    expect(failed.error).toBe(running.error);
+    expect(failed.liveStreams).toBe(running.liveStreams);
+    expect(failed.runState).toBe("running");
+    expect(failed.streaming).toBe(true);
+    expect(failed.messages).toBe(running.messages);
+    expect([failed.taskListError, failed.initiativeListError]).toEqual([
+      null,
+      null,
+    ]);
+
+    const snapshotted = apply(
+      { type: "scheduleList", items: [], seq: 1, revisions: [] },
+      failed,
+    );
+    expect(snapshotted.scheduleListError).toBeNull();
+
+    // A digest with nothing changed answers the subscribe as fully as a
+    // snapshot; one with changes waits for its catch-up.
+    const baseline = { ...failed, stateEventRevisions: { schedules: {} } };
+    const unchanged = apply(
+      { type: "stateDigest", topic: "schedules", seq: 2, entries: [] },
+      baseline,
+    );
+    expect(unchanged.scheduleListError).toBeNull();
+    const changed = apply(
+      {
+        type: "stateDigest",
+        topic: "schedules",
+        seq: 2,
+        entries: [{ id: "sch_1", revision: 1 }],
+      },
+      baseline,
+    );
+    expect(changed.scheduleListError).toBe(
+      "Failed to list Schedules: disk full",
+    );
+    const caughtUp = reduceAssistantState(changed, {
+      kind: "replicaItems",
+      purpose: "catchUp",
+      msg: {
+        type: "stateItems",
+        topic: "schedules",
+        requestId: "r",
+        events: [],
+      },
+    });
+    expect(caughtUp.scheduleListError).toBeNull();
+  });
+
   // Nothing about a message is kept for someone to announce later: what the
   // user is told is decided at the arrival (`lib/messageArrival.ts`). Only the
   // viewed chat's OUTCOME survives, and only for an error.

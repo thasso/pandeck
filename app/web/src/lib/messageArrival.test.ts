@@ -338,6 +338,26 @@ it("keeps an Initiative list failure as its condition, and only the list", () =>
   ).toBe(false);
 });
 
+// The Schedules collection is a condition collection too, though no pane
+// renders it yet (Task-1500): its load failure is held, never announced. It is
+// not an object type, so it has no member to fail.
+it("keeps a Schedule list failure as its condition", () => {
+  expect(
+    arrivalHasHome({
+      severity: "error",
+      message: "Failed to list Schedules: database is locked",
+      target: { type: "schedule" },
+    }),
+  ).toBe(true);
+  expect(
+    objectFailureFrom({
+      type: "error",
+      message: "Failed to list Schedules: database is locked",
+      target: { type: "schedule" },
+    }),
+  ).toBeNull();
+});
+
 // A project or Task answers the same first question as a
 // session, and the answer is per OBJECT: one open Task says nothing about the
 // rest of the list.
