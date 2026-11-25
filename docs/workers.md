@@ -2170,15 +2170,16 @@ path above.
     copy still has its approved size and digest. Then the P6-O4 fence runs with
     nothing awaited before `tools.apply {…, uploadId}`, on the port that sent
     the bytes, bounded at `uploadApplyCallMs(W)` (`gatewayClientLink.ts`): the
-    edge's `uploadApplyDeadlineMs(W)` plus 10 s, at most 155 s. An open refusal
-    shows the edge's fixed text with "Nothing was written." (P8A-V10-O1); a put
-    refusal or a changed copy reads "The approved file is no longer the same on
-    this server; nothing was written. Ask for the upload again."; an open or put
-    the link can't ask or that is not answered is unreachable. Every failure
-    before `tools.apply` is sent releases the upload and claims nothing was
-    written. After it, the outcome table applies with the upload text
-    (`docs/approvals.md`) and Pandeck releases nothing: the edge releases an
-    upload an apply took itself.
+    edge's `uploadApplyDeadlineMs(W)` plus 10 s, at most 155 s. An open or put
+    refusal shows the edge's fixed text with "Nothing was written." (P8A-V10-O1;
+    an expired upload is not a changed file); a changed copy, or a put answer
+    whose `received`, `streamComplete` or `sealed` is not what that put should
+    give, reads "The approved file is no longer the same on this server; nothing
+    was written. Ask for the upload again."; an open or put the link can't ask
+    or that is not answered is unreachable. Every failure before `tools.apply`
+    is sent releases the upload and claims nothing was written. After it, the
+    outcome table applies with the upload text (`docs/approvals.md`) and Pandeck
+    releases nothing: the edge releases an upload an apply took itself.
 - **Gateway file tools** (Task-1441 P7a, `FILE_TOOLS` in `remoteTools.ts`,
   `tools/gateway/remoteFiles.ts`). `confluence_download_attachment`, listed with
   `effect: "read"`, `actionKey: "confluence:read"` and

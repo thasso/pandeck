@@ -35,12 +35,10 @@ const { createFileBudget, createToolHost } =
 const { edgeTools } = await import("./gatewayTools/tools.ts");
 const { confluenceDeleteSwitchFor } =
   await import("./gatewayTools/confluenceMutatePage.ts");
-const { createUploadStore, UPLOAD_BUSY } =
+const { createUploadStore, UPLOAD_BUSY, UPLOAD_MISMATCH } =
   await import("./gatewayTools/uploads.ts");
 const { BODY_NOT_COMPLETED } = await import("./confluenceAttachmentChange.ts");
 const { remoteToolsFor } = await import("./tools/gateway/remoteToolGroup.ts");
-const { UPLOAD_SOURCE_CHANGED_NOTHING_WRITTEN } =
-  await import("./tools/gateway/remoteUploads.ts");
 const { approvalForId, approvalsForSession, resolveApproval } =
   await import("./pendingApprovals.ts");
 const { setApprovalBroadcastForTests, setAutoApprovalDrainForTests } =
@@ -647,7 +645,7 @@ test("a busy edge refuses the open with its own text; nothing is uploaded, and t
   assert.deepEqual(writes(), []);
 });
 
-test("a staged copy changed after approval: the edge refuses the put, the upload is released, nothing is written", async () => {
+test("a staged copy changed after approval: the edge refuses the put with its own text, the upload is released, nothing is written", async () => {
   const card = await propose([
     {
       operation: "uploadAttachment",
@@ -663,7 +661,9 @@ test("a staged copy changed after approval: the edge refuses the put, the upload
   writeFileSync(staged!.path, "bbbb");
   const decided = await approve(card);
   assert.equal(decided.status, "failed");
-  assert.equal(decided.error, UPLOAD_SOURCE_CHANGED_NOTHING_WRITTEN);
+  // The edge's fixed text (requester ruling k1dz2xl1 #2): it already says
+  // nothing was written, so it is shown as is.
+  assert.equal(decided.error, UPLOAD_MISMATCH);
   assert.deepEqual(writes(), []);
   await vi.waitFor(() => assert.equal(fileBudget.reserved, 0));
 });

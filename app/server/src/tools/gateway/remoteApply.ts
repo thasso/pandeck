@@ -300,7 +300,9 @@ class UploadStopped extends Error {}
 /**
  * One source's chunks, each put awaited before the next is read; then its
  * length and digest against the approved ones, and the edge's account of
- * the stream: complete, and sealed exactly when it is the last.
+ * the stream: complete, and sealed exactly when it is the last. A refused
+ * put shows the edge's text; an answer that disagrees with the put, or a
+ * staged copy that changed, is a changed source.
  */
 async function sendSource(
   uploads: RemoteUploadPort,
@@ -328,9 +330,12 @@ async function sendSource(
       } catch {
         throw new UploadStopped(UNREACHABLE);
       }
+      // The edge's fixed text, as for open (requester ruling k1dz2xl1 #2):
+      // an expired or invalid upload is not a changed file.
+      if (!answer.ok)
+        throw new UploadStopped(withNothingWritten(answer.message));
       const received = offset + chunk.byteLength;
       if (
-        !answer.ok ||
         answer.received !== received ||
         answer.streamComplete !== (received === stream.size) ||
         (answer.sealed && !(last && received === stream.size))

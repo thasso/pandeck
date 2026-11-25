@@ -136,17 +136,17 @@ attachments before the proposal. Approved, the executor sends those bytes to the
 gateway (`uploads.open`, then 1 MiB `uploads.put`s) after the wait for the first
 listing and before the rechecks, which then also require the connection that
 took the bytes. A failure up to the send fails the card with nothing written:
-the gateway's own text for a refused open (busy, for one), "The approved file is
-no longer the same on this server; nothing was written. Ask for the upload
-again." for a copy that changed or a refused put, and unreachable for a lost
-one. The apply is bounded at `uploadApplyCallMs(W)`: the gateway's upload
-deadline (45 s plus 1 s per started MiB of the items' bytes, at most 145 s) plus
-10 s, at most 155 s. Wherever the table says "may have written", an upload card
-reads instead: "The gateway did not confirm the result. Changes may have been
-written, and an upload already sent can still finish within about three minutes.
-Wait three minutes, then check the page; ask again only for what is missing.
-Don't approve the same upload again unchecked." Three minutes exceeds the
-gateway's 145 s plus margin.
+the gateway's own text for a refused open or put (busy, or an expired upload),
+"The approved file is no longer the same on this server; nothing was written.
+Ask for the upload again." for a copy that changed or a put answer that
+disagrees with what was sent, and unreachable for a lost one. The apply is
+bounded at `uploadApplyCallMs(W)`: the gateway's upload deadline (45 s plus 1 s
+per started MiB of the items' bytes, at most 145 s) plus 10 s, at most 155 s.
+Wherever the table says "may have written", an upload card reads instead: "The
+gateway did not confirm the result. Changes may have been written, and an upload
+already sent can still finish within about three minutes. Wait three minutes,
+then check the page; ask again only for what is missing. Don't approve the same
+upload again unchecked." Three minutes exceeds the gateway's 145 s plus margin.
 
 Items apply in order. An item that started finishes; once the connection drops
 or the bound expires the edge starts no further item, and the card says it may

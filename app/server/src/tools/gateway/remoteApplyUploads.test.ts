@@ -60,6 +60,10 @@ const MAY_HAVE_WRITTEN_UPLOAD =
 // The edge's fixed text (gatewayTools/uploads.ts), shown as is (P8A-V10-O1).
 const UPLOAD_BUSY =
   "The gateway is already transferring a file; try again when it finishes. Nothing was uploaded.";
+const UPLOAD_EXPIRED =
+  "The gateway no longer holds the file for this upload; nothing was written. Ask for the upload again.";
+const UPLOAD_INVALID =
+  "The upload request is not valid; the gateway discarded the upload and nothing was written.";
 
 const LISTING = [
   {
@@ -390,6 +394,36 @@ test("an open that never answers is unreachable, nothing written", async () => {
   assert.deepEqual(calls(), ["open"]);
 });
 
+test("an edge UPLOAD_EXPIRED put refusal shows the edge's text with nothing written, released, never applied (requester ruling k1dz2xl1 #2)", async () => {
+  const source = staged("a.bin", bytesOf(2 * MIB, 5));
+  onPut = (n) =>
+    n === 2
+      ? Promise.resolve({ ok: false, message: UPLOAD_EXPIRED })
+      : undefined;
+  const text = await fails(card([uploadItem(0, source)]));
+  assert.equal(text, UPLOAD_EXPIRED);
+  assert.notEqual(text, UPLOAD_SOURCE_CHANGED_NOTHING_WRITTEN);
+  assert.deepEqual(calls(), ["open", "put", "put", "release"]);
+});
+
+test("a put answer whose sealed flag mismatches the stream shows source-changed, released, never applied (requester ruling k1dz2xl1 #2)", async () => {
+  const source = staged("a.bin", bytesOf(2 * MIB, 5));
+  onPut = (n) =>
+    n === 2
+      ? Promise.resolve({
+          ok: true,
+          received: 2 * MIB,
+          streamComplete: true,
+          sealed: false,
+        })
+      : undefined;
+  assert.equal(
+    await fails(card([uploadItem(0, source)])),
+    UPLOAD_SOURCE_CHANGED_NOTHING_WRITTEN,
+  );
+  assert.deepEqual(calls(), ["open", "put", "put", "release"]);
+});
+
 test("a refused, lost or inconsistent put releases the upload and never applies (K3)", async () => {
   const source = staged("a.bin", bytesOf(2 * MIB, 5));
   const cases: [
@@ -401,12 +435,20 @@ test("a refused, lost or inconsistent put releases the upload and never applies 
       "refused",
       (n) =>
         n === 2
+          ? Promise.resolve({ ok: false, message: UPLOAD_INVALID })
+          : undefined,
+      UPLOAD_INVALID,
+    ],
+    [
+      "refused, the edge's text without the nothing-written clause",
+      (n) =>
+        n === 1
           ? Promise.resolve({
               ok: false,
               message: "The upload does not match.",
             })
           : undefined,
-      UPLOAD_SOURCE_CHANGED_NOTHING_WRITTEN,
+      "The upload does not match. Nothing was written.",
     ],
     [
       "lost",
