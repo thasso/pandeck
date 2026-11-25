@@ -156,6 +156,37 @@ describe("session attachment store", () => {
     );
   });
 
+  test("discarding matches only the staged naming rule: another attachment whose name holds the segment survives", () => {
+    const sessionId = "s-discard-anchored";
+    const stageId = "p8a-0123456789abcdef";
+    const owned = stageSessionAttachment(sessionId, {
+      name: "a.bin",
+      mimeType: "",
+      bytes: Buffer.from("owned"),
+      source: "agent",
+      id: stageId,
+    });
+    // Pre-existing: an indexed attachment whose name carries `-<stageId>-`,
+    // and an unindexed file with the segment after another id.
+    const named = stageSessionAttachment(sessionId, {
+      name: `report-${stageId}-final.pdf`,
+      mimeType: "",
+      bytes: Buffer.from("named"),
+      source: "agent",
+      id: "att-other",
+    });
+    const dir = sessionAttachmentsDir(sessionId);
+    const orphan = join(dir, `3-att-x-${stageId}-copy.bin`);
+    writeFileSync(orphan, "orphan");
+
+    discardStagedAttachment(sessionId, stageId);
+
+    assert.equal(existsSync(owned.path), false);
+    assert.equal(existsSync(named.path), true);
+    assert.equal(existsSync(orphan), true);
+    assert.equal(resolveSessionAttachment(sessionId, named.id)?.size, 5);
+  });
+
   test("discarding refuses an id that is not its own safe file name, and tolerates a session with nothing staged", () => {
     for (const id of ["", "a/b", "../x", "with space"])
       assert.throws(
