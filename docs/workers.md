@@ -2206,7 +2206,12 @@ path above.
   Slack connection status (Task-1464); a Slack tool called without a Slack
   connection on the gateway answers the edge's fixed text, which says to connect
   it on the gateway's page. Pandeck's local Jira and Confluence tools are not
-  offered in client mode; their gateway groups replace them.
+  offered in client mode; their gateway groups replace them. The edge lists its
+  file tools, and sends file answers, to every `gateway-client/1.x` peer
+  whatever version it announced: a peer before 1.2 sees
+  `confluence_download_attachment` but cannot take its answer. A Pandeck from
+  before P7a drops the entry at admission (it is not a mapped read), so only
+  other pre-1.2 clients see a tool they cannot use.
 - **Local live test.**
   `pnpm --filter @assistant/server gateway:dev --state-dir <dir>`
   (`gatewayDevMain.ts`) runs the edge's composition (`gatewayEdge.ts`) with the
