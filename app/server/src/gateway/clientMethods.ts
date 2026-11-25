@@ -562,7 +562,8 @@ export function decodeFileAnswer(
   };
   const answer = record(payload.json) ?? unexpected();
   if (answer.ok === false) {
-    if (hasStreams(payload)) unexpected();
+    if (hasStreams(payload) || !exactKeys(answer, ["ok", "code", "message"]))
+      unexpected();
     const { code, message } = toolFailure(answer);
     return { kind: "failure", code, message };
   }

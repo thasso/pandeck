@@ -102,6 +102,13 @@ test("1. keys: anything but the exact shapes is unexpected", () => {
   refused({ json: [] }, "unexpected");
   refused({ json: { ok: "yes", text: "{}" } }, "unexpected");
   refused({ json: { ok: true, text: 7 } }, "unexpected");
+  // A failure is exactly {ok: false, code, message} (O3).
+  refused(
+    { json: { ok: false, code: "failed", message: "", extra: 1 } },
+    "unexpected",
+  );
+  refused({ json: { ok: false, code: "failed" } }, "unexpected");
+  refused({ json: { ok: false, message: "" } }, "unexpected");
   refused(fileAnswer({ extra: 1 }), "unexpected");
   refused(fileAnswer({ file: null }), "unexpected");
   refused(fileAnswer({}, { extra: 1 }), "unexpected");
