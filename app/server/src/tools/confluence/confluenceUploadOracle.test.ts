@@ -700,3 +700,162 @@ test.each(CASES.map((oracle) => [oracle.name, oracle] as const))(
     expect(await observe(oracle)).toEqual(oracle.expected);
   },
 );
+
+// ---------------------------------------------------------------------------
+// The same cases in client mode (Task-1441 P8a, AC4, F003): Pandeck's remote
+// `confluence_mutate_page` freezes the sources, the edge's own tool host
+// prepares the card, and approved, the executor sends the bytes into the
+// edge's real upload store and applies through the wire's decoders, against
+// the same fake site. The card, the tool text, the executor's result and
+// every multipart upload are the literals above. The only further
+// normalization is the gateway's own staging id (`p8a-` and 16 hex digits),
+// the same kind of random id as the local one; any edge text that differs
+// from the local one is pinned below, by case and item.
+
+const { createFileBudget, createToolHost } =
+  await import("../../gatewayTools/host.ts");
+const { edgeTools } = await import("../../gatewayTools/tools.ts");
+const { createUploadStore } = await import("../../gatewayTools/uploads.ts");
+const { encodeAtlassianCredential } =
+  await import("../../gatewayTools/atlassian.ts");
+const { edgeRemotePort } = await import("../../test/edgeRemotePort.ts");
+const linkDecoders = await import("../../gateway/clientMethods.ts");
+const { updateConfluenceSettings } =
+  await import("../../confluenceSettings.ts");
+const { acceptRemoteTools, applyListing, installRemoteToolPort } =
+  await import("../../remoteTools.ts");
+const { remoteToolsFor } = await import("../gateway/remoteToolGroup.ts");
+
+/** What the gateway shows instead of a local text, by case. */
+interface GatewayTexts {
+  /** The all-failed error. */
+  error?: string;
+  /** Each item's error, where the edge's differs. */
+  items?: (string | undefined)[];
+}
+
+const PARTIAL_EFFECTS =
+  "Some failed changes may have been partly written before they failed; the card shows each item's outcome. Check the site and ask again only for what is missing. Don't approve the same change again unchecked.";
+
+/**
+ * The edge never passes an upstream body on (P6a vetting), and a refused
+ * write that reached Confluence may have written: the same two rules
+ * `confluenceMutationOracle.test.ts` pins for its all-failed edit.
+ */
+const GATEWAY_TEXTS: Record<string, GatewayTexts> = {
+  "all failed: the upload is refused": {
+    error: `All 1 Confluence change(s) failed: Confluence refused the change (HTTP 400). ${PARTIAL_EFFECTS}`,
+    items: ["Confluence refused the change (HTTP 400)."],
+  },
+};
+
+/** The gateway's staging ids, as the local ones are, replaced by name. */
+function gatewayNormalized<T>(value: T): T {
+  const staged = new Map<string, string>();
+  const text = JSON.stringify(value)
+    .replaceAll(HOST, "/HOST")
+    .replace(/appr_\d+_[0-9a-f]{8}/g, "appr_ID")
+    .replace(/p8a-[0-9a-f]{16}|\d{13}-[0-9a-z]{1,10}/g, (id) => {
+      if (!staged.has(id)) staged.set(id, `STAGED_${staged.size + 1}`);
+      return staged.get(id)!;
+    });
+  return text === undefined ? value : (JSON.parse(text) as T);
+}
+
+async function observeGateway(oracle: UploadCase): Promise<Observed> {
+  const seen = stubConfluenceWriteFetch(oracle.answer?.());
+  const credential = encodeAtlassianCredential({
+    site: "acme.atlassian.net",
+    email: "oracle@example.com",
+    token: "oracle-token",
+  });
+  const fileBudget = createFileBudget();
+  const host = createToolHost(
+    edgeTools({ confluenceDeletes: { page: true, attachment: true } }),
+    { log: () => {}, fileBudget },
+  );
+  const scope = createUploadStore({ fileBudget }).scope("oracle-user");
+  const uninstall = installRemoteToolPort(
+    edgeRemotePort(
+      host,
+      () => ({
+        clientId: "oracle-client",
+        credential: () => Promise.resolve({ ok: true as const, credential }),
+      }),
+      linkDecoders,
+      scope,
+    ),
+  );
+  updateConfluenceSettings({ enabled: true });
+  try {
+    applyListing(acceptRemoteTools(host.list()));
+    const tool = remoteToolsFor("confluence").find(
+      (candidate) => candidate.name === "confluence_mutate_page",
+    )!;
+    const sessionId = `confluence-upload-oracle-gateway-${(session += 1)}`;
+    const result = await tool.execute({ items: oracle.items(sessionId) }, {
+      session: { sessionId },
+      toolCallId: "call-1",
+    } as never);
+    const part = result.content[0];
+    const proposed = approvalsForSession(sessionId).at(-1)!;
+    const body = structuredClone(proposed.body);
+    const before = seen.length;
+    const { card } = await resolveApproval(proposed.id, "approved");
+    const applied = approvalForId(proposed.id)?.body as unknown as {
+      items: Item[];
+    };
+    const split = applied.items.map(outcomeOf);
+    expect(split.map((part) => part.rest)).toEqual(
+      (body as { items: unknown[] }).items,
+    );
+    // Every reservation the upload took is back once the card settles.
+    expect(fileBudget.reserved).toBe(0);
+    const uploads = seen
+      .slice(before)
+      .filter((request) => request.upload !== undefined)
+      .map((request) => ({ path: request.path, ...request.upload! }));
+    return gatewayNormalized({
+      title: proposed.title,
+      summary: proposed.summary,
+      text: part?.type === "text" ? part.text : "",
+      body,
+      status: card.status,
+      resultSummary: card.resultSummary,
+      resultUrl: card.resultUrl,
+      error: card.error,
+      outcomes: split.map((part) => part.outcome),
+      uploads,
+    });
+  } finally {
+    uninstall();
+    updateConfluenceSettings({ enabled: false });
+  }
+}
+
+/** A case's literal with the gateway's pinned texts in place. */
+function gatewayExpected(oracle: UploadCase): Observed {
+  const texts = GATEWAY_TEXTS[oracle.name];
+  // Every local item error has its edge text pinned, and no other item.
+  expect(
+    oracle.expected.outcomes.map((outcome) => outcome.error !== undefined),
+  ).toEqual(
+    oracle.expected.outcomes.map(
+      (_outcome, index) => texts?.items?.[index] !== undefined,
+    ),
+  );
+  if (!texts) return oracle.expected;
+  const expected = structuredClone(oracle.expected);
+  if (texts.error !== undefined) expected.error = texts.error;
+  texts.items?.forEach((error, index) => {
+    if (error !== undefined) expected.outcomes[index]!.error = error;
+  });
+  return expected;
+}
+
+test.each(CASES.map((oracle) => [oracle.name, oracle] as const))(
+  "client-mode confluence_mutate_page upload oracle: %s",
+  async (_name, oracle) => {
+    expect(await observeGateway(oracle)).toEqual(gatewayExpected(oracle));
+  },
+);
