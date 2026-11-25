@@ -16,7 +16,19 @@ export interface SeenConfluenceWrite {
   query: Record<string, string>;
   /** The JSON body, or `null` when the request sent none. */
   body: unknown;
+  /** A multipart upload's parts, read whole before the site answers. */
+  upload?: SeenUpload;
   signal: AbortSignal | undefined;
+}
+
+/** What one multipart attachment upload carried. */
+export interface SeenUpload {
+  fileName: string;
+  mediaType: string;
+  /** The file part's bytes, as UTF-8 text. */
+  text: string;
+  /** Every other part, in order, by name. */
+  fields: [string, string][];
 }
 
 export type ConfluenceWriteResponder = (
@@ -121,6 +133,18 @@ export function fakeConfluenceAnswer(
       },
     });
   }
+  // Uploads (v1): creating answers a listing, a new version the attachment.
+  if (
+    method === "POST" &&
+    /^\/wiki\/rest\/api\/content\/\d+\/child\/attachment$/.test(path)
+  )
+    return json({ results: [{ id: "att9", version: { number: 1 } }] });
+  const dataMatch =
+    /^\/wiki\/rest\/api\/content\/\d+\/child\/attachment\/(att\d+)\/data$/.exec(
+      path,
+    );
+  if (method === "POST" && dataMatch)
+    return json({ id: dataMatch[1], version: { number: 3 } });
   if (method === "POST" && path === "/wiki/api/v2/footer-comments")
     return json({ id: "c1", _links: { webui: "/spaces/ENG/pages/123?c1" } });
   if (method === "DELETE") return new Response(null, { status: 204 });
@@ -132,6 +156,26 @@ export function fakeConfluenceAnswer(
 /** Whether a request changes the site. */
 export const isWrite = (request: SeenConfluenceWrite): boolean =>
   request.method !== "GET";
+
+/** The parts of a multipart body, read whole; `undefined` for any other body. */
+async function uploadOf(
+  init: RequestInit | undefined,
+): Promise<SeenUpload | undefined> {
+  if (!(init?.body instanceof FormData)) return undefined;
+  const fields: [string, string][] = [];
+  let file: File | undefined;
+  for (const [name, value] of init.body.entries()) {
+    if (typeof value === "string") fields.push([name, value]);
+    else if (name === "file") file = value;
+  }
+  if (!file) return undefined;
+  return {
+    fileName: file.name,
+    mediaType: file.type,
+    text: await file.text(),
+    fields,
+  };
+}
 
 /**
  * Stubs `fetch`; `answer` goes first, the fake site answers what it leaves
@@ -154,6 +198,8 @@ export function stubConfluenceWriteFetch(
         body: typeof init?.body === "string" ? JSON.parse(init.body) : null,
         signal: init?.signal ?? undefined,
       };
+      const upload = await uploadOf(init);
+      if (upload) request.upload = upload;
       seen.push(request);
       return (
         (await answer?.(request)) ?? fakeConfluenceAnswer(request, options)
