@@ -1,7 +1,9 @@
 /**
  * What the edge takes from its tools (Task-1397, ADR-0005): the MCP handler
  * behind the `/mcp` gate, the tool host gateway client 1.x's `tools.*` call
- * (Task-1398; `tools.prepare` and `tools.apply` in 1.1, Task-1463 P6a), and the integrations' credential checks. The edge's entry
+ * (Task-1398; `tools.prepare` and `tools.apply` in 1.1, Task-1463 P6a;
+ * file answers in 1.2, Task-1441 P7a), and the integrations' credential
+ * checks. The edge's entry
  * injects them (`gatewayTools/index.ts`); `gateway/` holds no tool code or
  * package. The gateway hands tools typed credential outcomes and never
  * builds a tool error. Types only (`workerBoundary.test.ts`).
@@ -28,6 +30,11 @@ interface McpCaller {
 type ToolCaller = McpCaller & {
   /** Aborts when the client cancels the call or its connection ends. */
   signal?: AbortSignal;
+  /**
+   * Runs `fn` once the call's answer has left the edge or can no longer be
+   * written (Task-1441 P7a, H1); a file tool runs only with it.
+   */
+  onSettled?: (fn: () => void) => void;
 };
 
 /** One tool as the host lists it. */
@@ -39,6 +46,8 @@ interface ListedTool {
   actionKey: string;
   /** Runs as `tools.prepare` and `tools.apply` on a client connection. */
   twoPhase?: true;
+  /** File-capable (Task-1441 P7a): its limit argument, default and cap. */
+  file?: { limitParam: string; defaultBytes: number; maxBytes: number };
 }
 
 export type ToolFailureCode =
@@ -52,8 +61,23 @@ export type ToolFailureCode =
 
 type ToolFailure = { ok: false; code: ToolFailureCode; message: string };
 
-/** The host's answer to one call; it never throws. */
-export type ToolAnswer = { ok: true; text: string } | ToolFailure;
+/**
+ * The host's answer to one call; it never throws. A file tool's answer may
+ * carry one file with its size and SHA-256 (Task-1441 P7a).
+ */
+export type ToolAnswer =
+  | {
+      ok: true;
+      text: string;
+      file?: {
+        name: string;
+        mimeType: string;
+        size: number;
+        sha256: string;
+        bytes: Uint8Array;
+      };
+    }
+  | ToolFailure;
 
 /** Whether any write request left the edge. */
 export type Effects = "none" | "possible";
