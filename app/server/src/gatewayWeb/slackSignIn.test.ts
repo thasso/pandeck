@@ -281,6 +281,10 @@ function fakeIntegrations() {
       calls.push({ op: "clearSlack", userId });
       fail();
     },
+    githubStatus: () => Promise.reject(new Error("unused")),
+    connectGithub: () => Promise.reject(new Error("unused")),
+    clearGithub: () => Promise.reject(new Error("unused")),
+    checkGithub: () => Promise.reject(new Error("unused")),
   };
   return {
     integrations,

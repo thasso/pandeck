@@ -7,7 +7,10 @@
  * with an Atlassian OAuth client, "Sign in with Atlassian": a POST start
  * answering the authorize URL and `/auth/atlassian/callback`, Task-1411), the
  * Slack record (with `slack.clientId`, "Sign in with Slack" the same way,
- * `/auth/slack/callback`, its status and clear; Task-1453),
+ * `/auth/slack/callback`, its status and clear; Task-1453), the GitHub record
+ * (with `github.clientId`, "Connect GitHub" the same way,
+ * `/auth/github/callback`, its status, clear and a repository check that
+ * answers a read token's expiry, never the token; Task-1445),
  * clients and MCP tokens (`/api/clients*`, `GatewayWebClients`), the user's
  * clients' requests (`GET /api/requests`, `GatewayWebRequests`), machines'
  * enrollment requests (`/api/enrollments/*`, Task-1410: looked up and decided
@@ -25,7 +28,8 @@
  * lines are fixed: no email, code, state, nonce, verifier, token, cookie,
  * secret, provider text, workspace name or query reaches either, nor a
  * redirect the gateway sends back to itself. An integration connect's state
- * appears only in the `authorizeUrl` of its start's answer.
+ * appears only in the `authorizeUrl` of its start's answer; a checked
+ * repository's names only in the check's own successful answer.
  */
 import { randomBytes } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
@@ -43,6 +47,9 @@ import {
   type GatewayUiEnrollmentCode,
   type GatewayUiEnrollmentRequest,
   type GatewayUiError,
+  type GatewayUiGithub,
+  type GatewayUiGithubCheck,
+  type GatewayUiGithubConnectCode,
   type GatewayUiLogin,
   type GatewayUiLoginStart,
   type GatewayUiMcpToken,
@@ -51,7 +58,9 @@ import {
   type GatewayUiSigninCode,
   type GatewayUiSlack,
   type GatewayUiSlackConnectCode,
+  decodeGatewayUiGithubCheckRequest,
   isGatewayUiDisplayText,
+  isGatewayUiGithubLogin,
 } from "@assistant/shared/gatewayUi";
 import { contentTypeFor } from "../webStatic.ts";
 import {
@@ -80,6 +89,7 @@ import { admittedEmail, type GatewayWebConfig } from "./config.ts";
 import {
   atlassianAuthorizeUrl,
   decodeAtlassianSet,
+  githubAuthorizeUrl,
   IntegrationsRefusal,
   slackAuthorizeUrl,
   type GatewayWebIntegrations,
@@ -110,6 +120,11 @@ const ATLASSIAN_CALLBACK_PATH = "/auth/atlassian/callback";
 const SLACK_COOKIE = "__Host-pgw_slack";
 const SLACK_CONNECT_PATH = "/api/integrations/slack/connect";
 const SLACK_CALLBACK_PATH = "/auth/slack/callback";
+/** Binds a "Connect GitHub" start to its browser (Task-1445). */
+const GITHUB_COOKIE = "__Host-pgw_github";
+const GITHUB_CONNECT_PATH = "/api/integrations/github/connect";
+const GITHUB_CALLBACK_PATH = "/auth/github/callback";
+const GITHUB_CHECK_PATH = "/api/integrations/github/check";
 /**
  * A provider's authorization code, printable ASCII only. Atlassian's grows with
  * the scopes granted (2,581 characters for the 29-scope list), so the bound is
@@ -133,9 +148,9 @@ const IDLE_MS = 10_000;
  */
 const INTEGRATION_IDLE_MS = 30_000;
 /**
- * The idle bound while the Atlassian callback's connect runs: above the
- * remote vault's 30 s connect bound (`gateway/remoteVault.ts`), so the edge
- * answers before the socket is cut.
+ * The idle bound while an integration callback's connect, or the GitHub
+ * check's `github.token`, runs: above the remote vault's 30 s bound on each
+ * (`gateway/remoteVault.ts`), so the edge answers before the socket is cut.
  */
 const CONNECT_IDLE_MS = 40_000;
 
@@ -152,6 +167,7 @@ const INTEGRATION_STATUS: Record<IntegrationsRefusalCode, number> = {
   integration_site_ambiguous: 422,
   integration_not_configured: 503,
   integration_team_mismatch: 422,
+  integration_denied: 403,
 };
 
 /** A connect refusal as the callback's `?atlassian=` code. */
@@ -183,20 +199,32 @@ const SLACK_CONNECT_CODE: Partial<
   tools_unavailable: "tools_unavailable",
 };
 
+/** A connect refusal as the callback's `?github=` code. */
+const GITHUB_CONNECT_CODE: Partial<
+  Record<IntegrationsRefusalCode, GatewayUiGithubConnectCode>
+> = {
+  integration_rejected: "rejected",
+  integration_unreachable: "unreachable",
+  integration_not_configured: "not_configured",
+  vault_locked: "vault_locked",
+  vault_unavailable: "vault_unavailable",
+  integration_busy: "busy",
+};
+
 /** The callback codes every provider's sign-in answers itself. */
 type SignInCode = "signed_out" | "expired" | "failed" | "denied";
 
 /**
- * One provider's "Sign in with …" (Task-1411, Task-1453): its pending cookie,
+ * One provider's "Sign in with …" (Task-1411, Task-1453, Task-1445): its pending cookie,
  * callback path and `?<queryKey>=` codes, the authorize URL for a state, and
  * the connect the callback's code goes to. Each gets its own pending table.
  */
 interface OAuthSignIn<Code extends string> {
   /** As log lines name it: `ui <name> connect: …`. */
-  name: "atlassian" | "slack";
+  name: "atlassian" | "slack" | "github";
   cookie: string;
   callbackPath: string;
-  queryKey: "atlassian" | "slack";
+  queryKey: "atlassian" | "slack" | "github";
   /** A connect refusal as a callback code; anything else is `failed`. */
   codes: Partial<Record<IntegrationsRefusalCode, Code>>;
   authorizeUrl(state: string, redirectUri: string): string;
@@ -359,7 +387,9 @@ export async function startGatewayWeb(
       | GatewayUiEnrollmentRequest
       | GatewayUiMcpToken
       | GatewayUiRequests
-      | GatewayUiSlack,
+      | GatewayUiSlack
+      | GatewayUiGithub
+      | GatewayUiGithubCheck,
     headers: Record<string, string> = {},
   ): void =>
     send(
@@ -609,6 +639,31 @@ export async function startGatewayWeb(
             }),
         });
 
+  const githubClientId = config.github?.clientId;
+  /**
+   * "Connect GitHub" (Task-1445): with `github.clientId`. The App's secret
+   * and key are the vault's; the authorize URL carries the id, the callback
+   * and the state only.
+   */
+  const githubSignIn =
+    githubClientId === undefined
+      ? undefined
+      : oauthSignIn({
+          name: "github",
+          cookie: GITHUB_COOKIE,
+          callbackPath: GITHUB_CALLBACK_PATH,
+          queryKey: "github",
+          codes: GITHUB_CONNECT_CODE,
+          authorizeUrl: (state, redirectUri) =>
+            githubAuthorizeUrl({
+              clientId: githubClientId,
+              redirectUri,
+              state,
+            }),
+          connect: (userId, code, redirectUri) =>
+            integrations.connectGithub(userId, { code, redirectUri }),
+        });
+
   const me = (req: IncomingMessage, res: ServerResponse): void => {
     const userId = sessions.lookup(cookieOf(req, SESSION_COOKIE))?.userId;
     if (userId === undefined) return json(res, 401, { error: "signed_out" });
@@ -730,6 +785,44 @@ export async function startGatewayWeb(
   };
 
   /**
+   * `POST /api/integrations/github/check`: exactly `{owner, repo}`, else
+   * `bad_request` with no vault call. The vault's `github.token` runs under
+   * the connect bound; the answer is the checked repository, built from the
+   * request, and the token's expiry. A refusal is logged by its fixed code
+   * and rethrown to `settingsApi`'s catch; no log line holds the names, the
+   * expiry or any error text.
+   */
+  const githubCheck = async (
+    req: IncomingMessage,
+    body: Buffer,
+    userId: string,
+    res: ServerResponse,
+  ): Promise<void> => {
+    const request = decodeGatewayUiGithubCheckRequest(parseJson(body));
+    if (!request) return json(res, 400, { error: "bad_request" });
+    req.socket.setTimeout(connectIdleMs);
+    let expiresAt: number;
+    try {
+      ({ expiresAt } = await integrations.checkGithub(userId, request));
+    } catch (err) {
+      log(
+        err instanceof IntegrationsRefusal
+          ? `ui integration github: check refused (${err.code}) user=${userId}`
+          : `ui integration github: check failed user=${userId}`,
+      );
+      throw err;
+    } finally {
+      req.socket.setTimeout(idleMs);
+    }
+    log(`ui integration github: check ok user=${userId}`);
+    const answer: GatewayUiGithubCheck = {
+      repository: `${request.owner}/${request.repo}`,
+      expiresAt,
+    };
+    return json(res, 200, answer);
+  };
+
+  /**
    * `/api/integrations/*` and `/api/clients*`, behind the session; the user
    * comes only from it. Log lines name the user and client ids only.
    */
@@ -753,6 +846,11 @@ export async function startGatewayWeb(
           if (method !== "POST" || slackSignIn === undefined)
             return text(res, 404, "not found");
           return slackSignIn.start(userId, res);
+        }
+        if (path === GITHUB_CONNECT_PATH) {
+          if (method !== "POST" || githubSignIn === undefined)
+            return text(res, 404, "not found");
+          return githubSignIn.start(userId, res);
         }
         // Atlassian and the vault may take longer than the idle bound: the
         // socket has the longer one while the adapter runs, and the baseline
@@ -791,6 +889,39 @@ export async function startGatewayWeb(
         if (
           path === "/api/integrations/slack" ||
           path.startsWith("/api/integrations/slack/")
+        )
+          return text(res, 404, "not found");
+        if (path === "/api/integrations/github" && method === "GET") {
+          // Answered without a vault call where GitHub is not offered.
+          if (githubSignIn === undefined)
+            return json(res, 200, { offered: false, connected: false });
+          const status = await held(() => integrations.githubStatus(userId));
+          // A login the page could not show safely is dropped.
+          const answer: GatewayUiGithub = {
+            offered: true,
+            connected: status.connected,
+            ...(isGatewayUiGithubLogin(status.login)
+              ? { login: status.login }
+              : {}),
+            ...(status.problem !== undefined
+              ? { problem: status.problem }
+              : {}),
+          };
+          return json(res, 200, answer);
+        }
+        if (path === "/api/integrations/github/clear" && method === "POST") {
+          if (githubSignIn === undefined) return text(res, 404, "not found");
+          await held(() => integrations.clearGithub(userId));
+          log(`ui integration github: cleared user=${userId}`);
+          return noContent(res);
+        }
+        if (path === GITHUB_CHECK_PATH && method === "POST") {
+          if (githubSignIn === undefined) return text(res, 404, "not found");
+          return await githubCheck(req, body, userId, res);
+        }
+        if (
+          path === "/api/integrations/github" ||
+          path.startsWith("/api/integrations/github/")
         )
           return text(res, 404, "not found");
         // The deployment's fixed site and sign-in email win over the request.
@@ -959,6 +1090,10 @@ export async function startGatewayWeb(
     if (method === "GET" && path === SLACK_CALLBACK_PATH) {
       if (slackSignIn === undefined) return text(res, 404, "not found");
       return slackSignIn.callback(req, url, res);
+    }
+    if (method === "GET" && path === GITHUB_CALLBACK_PATH) {
+      if (githubSignIn === undefined) return text(res, 404, "not found");
+      return githubSignIn.callback(req, url, res);
     }
     if (method === "GET" && path === "/api/me") return me(req, res);
     if (

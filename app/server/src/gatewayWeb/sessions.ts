@@ -29,9 +29,12 @@ export type PendingTake<T> =
 /**
  * Redirects waiting for their callback, keyed by their state and bound to the
  * browser by a `__Host-` cookie's id: sign-ins between `/auth/login` and
- * `/auth/callback` (`__Host-pgw_signin`), Atlassian connects between their
- * start and `/auth/atlassian/callback` (`__Host-pgw_atlassian`). Each is used
- * once: any callback naming its state removes it.
+ * `/auth/callback` (`__Host-pgw_signin`), and each provider's connects
+ * between their start and its callback: Atlassian's
+ * (`/auth/atlassian/callback`, `__Host-pgw_atlassian`), Slack's
+ * (`__Host-pgw_slack`) and GitHub's (`/auth/github/callback`,
+ * `__Host-pgw_github`). Each is used once: any callback naming its state
+ * removes it.
  */
 export class PendingRedirects<T> {
   private readonly entries = new Map<string, Pending<T>>();

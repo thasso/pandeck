@@ -38,7 +38,10 @@ import {
   type LoginProfile,
   type ProfileRegistry,
 } from "./profiles.ts";
+import { isGithubLogin } from "./vaultMethods.ts";
 import type {
+  GithubToken,
+  GithubTokenRequest,
   Integration,
   IntegrationConnect,
   IntegrationWrite,
@@ -55,6 +58,8 @@ export class UserOperationRefusal extends Error {
       | IntegrationFailure
       | AtlassianConnectFailure
       | SlackConnectFailure
+      | GithubConnectFailure
+      | GithubCheckFailure
       | "unknown_client"
       | "limit_reached"
       | "unknown_request",
@@ -106,6 +111,18 @@ type AtlassianConnectFailure =
  */
 type SlackConnectFailure =
   "integration_team_mismatch" | "integration_not_configured";
+
+/**
+ * A GitHub connect's refusal that only the page's callback sees (Task-1445):
+ * a vault without the GitHub App's client.
+ */
+type GithubConnectFailure = "integration_not_configured";
+
+/**
+ * The page's repository check's own refusal (Task-1445): GitHub does not
+ * grant this user, or the App, read access to that repository.
+ */
+type GithubCheckFailure = "integration_denied";
 
 /** How an Atlassian credential was made, or how a new one is made. */
 type AtlassianKind = "token" | "oauth";
@@ -181,6 +198,18 @@ type SlackProblem =
 export type SlackStatus =
   | { connected: true; teamName?: string }
   | { connected: false; problem?: SlackProblem };
+
+/** Why a stored GitHub record is not usable now. */
+type GithubProblem =
+  "vault_locked" | "vault_unavailable" | "invalid" | "rejected";
+
+/**
+ * The user's GitHub record (Task-1445): connected with the GitHub login the
+ * vault holds, or not, with why a stored one cannot be used.
+ */
+export type GithubStatus =
+  | { connected: true; login: string }
+  | { connected: false; problem?: GithubProblem };
 
 interface UserOperationsDeps {
   vault: Pick<
@@ -299,6 +328,25 @@ export interface UserOperations {
     request: { code: string; redirectUri: string; team?: string },
   ): Promise<{ connected: true; teamName?: string }>;
   clearSlack(userId: string): Promise<void>;
+  /**
+   * The user's GitHub record as the vault reads it (a read may refresh it
+   * there): the login only, never a token.
+   */
+  githubStatus(userId: string): Promise<GithubStatus>;
+  /**
+   * Hands an authorization code from the page's GitHub callback to the
+   * vault, which exchanges it with the App's client and stores the user's
+   * record; one at a time with the user's GitHub clear. Answers the login.
+   */
+  connectGithub(
+    userId: string,
+    request: { code: string; redirectUri: string },
+  ): Promise<{ connected: true; login: string }>;
+  /**
+   * Deletes the user's GitHub record in the vault. The App stays authorized
+   * at GitHub until the user revokes it there.
+   */
+  clearGithub(userId: string): Promise<void>;
   /** The user's clients that are not revoked. */
   clients(userId: string): UserClient[];
   /**
@@ -452,6 +500,21 @@ export function createUserOperations(deps: UserOperationsDeps): UserOperations {
               : "locked" in outcome
                 ? "vault_locked"
                 : "vault_unavailable",
+    );
+  /** A GitHub connect's refusal as its fixed code, every outcome named. */
+  const githubConnectRefusal = (
+    outcome: Exclude<IntegrationConnect<"github">, { ok: true }>,
+  ): UserOperationRefusal =>
+    new UserOperationRefusal(
+      "rejected" in outcome
+        ? "integration_rejected"
+        : "unreachable" in outcome
+          ? "integration_unreachable"
+          : "notConfigured" in outcome
+            ? "integration_not_configured"
+            : "locked" in outcome
+              ? "vault_locked"
+              : "vault_unavailable",
     );
   const wrote = (outcome: IntegrationWrite): void => {
     if (outcome.ok) return;
@@ -635,6 +698,39 @@ export function createUserOperations(deps: UserOperationsDeps): UserOperations {
         wrote(await deps.vault.integrationClear(userId, "slack")),
       );
     },
+    async githubStatus(userId) {
+      const record = await deps.vault.integrationGet(userId, "github", {});
+      if (!record.ok) {
+        if ("absent" in record) return { connected: false };
+        // The vault's refresh was refused: connect GitHub again.
+        if ("rejected" in record)
+          return { connected: false, problem: "rejected" };
+        return {
+          connected: false,
+          problem: "locked" in record ? "vault_locked" : "vault_unavailable",
+        };
+      }
+      // Only the login leaves this function; the view's token is dropped.
+      const login = githubViewLogin(record.credential);
+      return login === undefined
+        ? { connected: false, problem: "invalid" }
+        : { connected: true, login };
+    },
+    async connectGithub(userId, { code, redirectUri }) {
+      return alone("github", userId, async () => {
+        const outcome = await deps.vault.integrationConnect(userId, "github", {
+          code,
+          redirectUri,
+        });
+        if (!outcome.ok) throw githubConnectRefusal(outcome);
+        return { connected: true as const, login: outcome.login };
+      });
+    },
+    async clearGithub(userId) {
+      await alone("github", userId, async () =>
+        wrote(await deps.vault.integrationClear(userId, "github")),
+      );
+    },
     clients: (userId) =>
       deps.registry
         .clients()
@@ -684,5 +780,84 @@ export function createUserOperations(deps: UserOperationsDeps): UserOperations {
       deps.registry.clearMcpToken(ownedClient(userId, clientId).id);
     },
     close: () => logins.close(),
+  };
+}
+
+/**
+ * The login of a GitHub access view (`{kind: "github-oauth", login, …}`), or
+ * undefined for anything else: not JSON, another kind, or a login that is
+ * not a GitHub name. Nothing else of the view is read.
+ */
+function githubViewLogin(credential: string): string | undefined {
+  let view: unknown;
+  try {
+    view = JSON.parse(credential);
+  } catch {
+    return undefined;
+  }
+  if (typeof view !== "object" || view === null || Array.isArray(view))
+    return undefined;
+  const { kind, login } = view as Record<string, unknown>;
+  return kind === "github-oauth" && isGithubLogin(login) ? login : undefined;
+}
+
+/** The page's repository check (Task-1445), over the vault's `github.token`. */
+export interface GithubCheck {
+  /**
+   * Whether the vault hands the user a read installation token for
+   * `owner/repo`: its expiry (epoch milliseconds) and nothing else, the
+   * token dropped here; otherwise a `UserOperationRefusal`. One check per
+   * user at a time (`integration_busy`). Deliberately not one at a time with
+   * the user's GitHub connect and clear: a disconnect during a check must
+   * reach the vault, whose generation fence then drops the token.
+   */
+  checkGithub(
+    userId: string,
+    request: GithubTokenRequest,
+  ): Promise<{ expiresAt: number }>;
+}
+
+/** A `githubToken` refusal as the page's fixed code, every outcome named. */
+const githubTokenRefusal = (
+  outcome: Exclude<GithubToken, { ok: true }>,
+): UserOperationRefusal =>
+  new UserOperationRefusal(
+    "absent" in outcome
+      ? "integration_sign_in_required"
+      : "denied" in outcome
+        ? "integration_denied"
+        : "rejected" in outcome
+          ? "integration_rejected"
+          : "invalid" in outcome
+            ? "integration_invalid"
+            : "locked" in outcome
+              ? "vault_locked"
+              : "vault_unavailable",
+  );
+
+/**
+ * The page's repository check. Its own factory, beside `createUserOperations`
+ * rather than in it, because the vault's `githubToken` reaches the edge's
+ * composition (`gatewayEdge.ts`) through the running gateway, not through the
+ * client listener that builds the user operations. It logs nothing.
+ */
+export function createGithubCheck(deps: {
+  vault: Pick<VaultPort, "githubToken">;
+}): GithubCheck {
+  const checking = new Set<string>();
+  return {
+    async checkGithub(userId, { owner, repo }) {
+      if (checking.has(userId))
+        throw new UserOperationRefusal("integration_busy");
+      checking.add(userId);
+      try {
+        const outcome = await deps.vault.githubToken(userId, { owner, repo });
+        if (!outcome.ok) throw githubTokenRefusal(outcome);
+        // Built fresh: the token never leaves this function.
+        return { expiresAt: outcome.expiresAt };
+      } finally {
+        checking.delete(userId);
+      }
+    },
   };
 }

@@ -6,16 +6,27 @@ import {
   decodeGatewayUiClients,
   decodeGatewayUiEnrollmentCode,
   decodeGatewayUiEnrollmentRequest,
+  decodeGatewayUiGithub,
+  decodeGatewayUiGithubCheck,
+  decodeGatewayUiGithubCheckRequest,
+  decodeGatewayUiGithubConnectStart,
   decodeGatewayUiMcpToken,
   decodeGatewayUiMe,
   decodeGatewayUiSlack,
   decodeGatewayUiSlackConnectStart,
   GATEWAY_UI_ATLASSIAN_CONNECT_CODES,
+  GATEWAY_UI_GITHUB_CONNECT_CODES,
   GATEWAY_UI_SIGNIN_CODES,
   GATEWAY_UI_SLACK_CONNECT_CODES,
+  GITHUB_AUTHORIZE_URL,
   isGatewayUiDisplayText,
+  isGatewayUiGithubLogin,
+  isGatewayUiGithubRepoName,
   SLACK_AUTHORIZE_URL,
 } from "./gatewayUi.ts";
+
+/** A value no decoded GitHub answer may carry onward. */
+const LEAK_SENTINEL = "fake-t1445-leak-sentinel";
 
 describe("gateway UI wire model", () => {
   test("decodes a well-formed signed-in user and drops extra fields", () => {
@@ -397,5 +408,150 @@ describe("gateway UI wire model", () => {
       "failed",
       "denied",
     ]);
+  });
+
+  test("a GitHub status needs both booleans; an unknown problem, a bad login and any token drop", () => {
+    expect(
+      decodeGatewayUiGithub({
+        offered: true,
+        connected: true,
+        login: "fake-user",
+        token: LEAK_SENTINEL,
+        accessToken: LEAK_SENTINEL,
+      }),
+    ).toEqual({ offered: true, connected: true, login: "fake-user" });
+    expect(decodeGatewayUiGithub({ offered: false, connected: false })).toEqual(
+      { offered: false, connected: false },
+    );
+    for (const problem of [
+      "vault_locked",
+      "vault_unavailable",
+      "invalid",
+      "rejected",
+    ])
+      expect(
+        decodeGatewayUiGithub({ offered: true, connected: false, problem }),
+      ).toEqual({ offered: true, connected: false, problem });
+    expect(
+      decodeGatewayUiGithub({ offered: true, connected: false, problem: "x" }),
+    ).toEqual({ offered: true, connected: false });
+    for (const login of ["a".repeat(40), "a b", "a\u0007", "", 7])
+      expect(
+        decodeGatewayUiGithub({ offered: true, connected: true, login }),
+      ).toEqual({ offered: true, connected: true });
+    for (const value of [
+      null,
+      "x",
+      { offered: true },
+      { connected: true },
+      { offered: "true", connected: true },
+    ])
+      expect(decodeGatewayUiGithub(value)).toBeUndefined();
+  });
+
+  test("a GitHub connect start decodes only with GitHub's authorization endpoint", () => {
+    expect(GITHUB_AUTHORIZE_URL).toBe(
+      "https://github.com/login/oauth/authorize",
+    );
+    const ok =
+      "https://github.com/login/oauth/authorize?client_id=FAKE_ID&redirect_uri=https%3A%2F%2Fgw.example%2Fauth%2Fgithub%2Fcallback&state=FAKE_STATE";
+    expect(
+      decodeGatewayUiGithubConnectStart({ authorizeUrl: ok, token: "x" }),
+    ).toEqual({ authorizeUrl: ok });
+    for (const authorizeUrl of [
+      "http://github.com/login/oauth/authorize?x=1",
+      "https://github.com.evil.example/login/oauth/authorize?x=1",
+      "https://u:p@github.com/login/oauth/authorize?x=1",
+      "https://github.com/login/oauth/authorize#x",
+      "https://github.com/login/oauth/authorize/x?x=1",
+      "https://github.com:8443/login/oauth/authorize?x=1",
+      "https://api.github.com/login/oauth/authorize?x=1",
+      "https://slack.com/oauth/v2/authorize?x=1",
+      "not a url",
+      7,
+    ])
+      expect(
+        decodeGatewayUiGithubConnectStart({ authorizeUrl }),
+        String(authorizeUrl),
+      ).toBeUndefined();
+    expect(decodeGatewayUiGithubConnectStart(null)).toBeUndefined();
+  });
+
+  test("the GitHub connect codes are fixed", () => {
+    expect([...GATEWAY_UI_GITHUB_CONNECT_CODES]).toEqual([
+      "rejected",
+      "unreachable",
+      "not_configured",
+      "vault_locked",
+      "vault_unavailable",
+      "busy",
+      "signed_out",
+      "expired",
+      "failed",
+      "denied",
+    ]);
+  });
+
+  test("GitHub names follow the vault's rules", () => {
+    for (const login of ["a", "fake-user", "A-1", "a".repeat(39)])
+      expect(isGatewayUiGithubLogin(login), login).toBe(true);
+    for (const login of ["", "a".repeat(40), "a_b", "a.b", "a/b", " a", 7])
+      expect(isGatewayUiGithubLogin(login), String(login)).toBe(false);
+    for (const repo of ["r", "a.b", "a_b-c", ".github", "...", "r".repeat(100)])
+      expect(isGatewayUiGithubRepoName("owner", repo), repo).toBe(true);
+    for (const repo of [".", "..", "", "a/b", "r".repeat(101), "a b", 7])
+      expect(isGatewayUiGithubRepoName("owner", repo), String(repo)).toBe(
+        false,
+      );
+    expect(isGatewayUiGithubRepoName("a_b", "repo")).toBe(false);
+  });
+
+  test("a GitHub check request is exactly owner and repo", () => {
+    expect(
+      decodeGatewayUiGithubCheckRequest({ owner: "castlabs", repo: "r" }),
+    ).toEqual({ owner: "castlabs", repo: "r" });
+    for (const value of [
+      null,
+      [],
+      "castlabs/r",
+      { owner: "castlabs" },
+      { repo: "r" },
+      { owner: "castlabs", repo: "r", access: "write" },
+      { owner: "castlabs", repo: "r", token: "x" },
+      { owner: "castlabs", repo: "r", userId: "u2" },
+      { owner: "castlabs", repo: 7 },
+      { owner: "castlabs", repo: ".." },
+      { owner: "a".repeat(40), repo: "r" },
+      { owner: "castlabs", repo: "a/b" },
+    ])
+      expect(
+        decodeGatewayUiGithubCheckRequest(value),
+        JSON.stringify(value),
+      ).toBeUndefined();
+  });
+
+  test("a GitHub check answer keeps the repository and expiry, never a token", () => {
+    expect(
+      decodeGatewayUiGithubCheck({
+        repository: "castlabs/r",
+        expiresAt: 1_800_000_000_000,
+        token: LEAK_SENTINEL,
+      }),
+    ).toEqual({ repository: "castlabs/r", expiresAt: 1_800_000_000_000 });
+    for (const value of [
+      null,
+      { repository: "castlabs/r" },
+      { repository: "castlabs/r", expiresAt: "1" },
+      { repository: "castlabs/r", expiresAt: Number.NaN },
+      { repository: "castlabs/r", expiresAt: 0 },
+      { repository: "castlabs", expiresAt: 1 },
+      { repository: "castlabs/a/b", expiresAt: 1 },
+      { repository: "castlabs/..", expiresAt: 1 },
+      { repository: 7, expiresAt: 1 },
+    ])
+      expect(
+        decodeGatewayUiGithubCheck(value),
+        JSON.stringify(value),
+      ).toBeUndefined();
   });
 });

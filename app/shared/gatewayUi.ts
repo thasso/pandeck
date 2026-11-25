@@ -36,6 +36,7 @@ export interface GatewayUiError {
     | "integration_site_ambiguous"
     | "integration_not_configured"
     | "integration_team_mismatch"
+    | "integration_denied"
     | "unknown_request"
     | "rate_limited";
 }
@@ -264,6 +265,114 @@ export const GATEWAY_UI_SLACK_CONNECT_CODES = [
 ] as const;
 export type GatewayUiSlackConnectCode =
   (typeof GATEWAY_UI_SLACK_CONNECT_CODES)[number];
+
+/**
+ * Why a stored GitHub record cannot be used now; `rejected` is GitHub
+ * refusing the vault's refresh (Task-1445).
+ */
+export const GATEWAY_UI_GITHUB_PROBLEMS = [
+  "vault_locked",
+  "vault_unavailable",
+  "invalid",
+  "rejected",
+] as const;
+export type GatewayUiGithubProblem =
+  (typeof GATEWAY_UI_GITHUB_PROBLEMS)[number];
+
+/**
+ * `GET /api/integrations/github`: whether this gateway offers "Connect
+ * GitHub" (its UI config names `github.clientId`) and whether the user's
+ * GitHub record is stored, with the GitHub login when it passes
+ * `isGatewayUiGithubLogin`. Never a token.
+ */
+export interface GatewayUiGithub {
+  offered: boolean;
+  connected: boolean;
+  login?: string;
+  problem?: GatewayUiGithubProblem;
+}
+
+/**
+ * `POST /api/integrations/github/connect`: where the browser goes to
+ * authorize the gateway's GitHub App. The URL carries this start's state,
+ * and only it does.
+ */
+export interface GatewayUiGithubConnectStart {
+  authorizeUrl: string;
+}
+
+/** GitHub's authorization endpoint, the only place a start sends to. */
+export const GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize";
+
+/**
+ * Why "Connect GitHub" did not connect, as `/?github=<code>` after
+ * `/auth/github/callback` (a success goes to `/` with no code). The page
+ * shows only these and ignores any other value.
+ */
+export const GATEWAY_UI_GITHUB_CONNECT_CODES = [
+  "rejected",
+  "unreachable",
+  "not_configured",
+  "vault_locked",
+  "vault_unavailable",
+  "busy",
+  "signed_out",
+  "expired",
+  "failed",
+  "denied",
+] as const;
+export type GatewayUiGithubConnectCode =
+  (typeof GATEWAY_UI_GITHUB_CONNECT_CODES)[number];
+
+/**
+ * `POST /api/integrations/github/check`: the repository whose read access
+ * the user checks, both names passing `isGatewayUiGithubRepoName`, and no
+ * other member.
+ */
+export interface GatewayUiGithubCheckRequest {
+  owner: string;
+  repo: string;
+}
+
+/**
+ * The check's answer: the repository as checked (`owner/repo`) and when the
+ * read token the vault would hand out expires, epoch milliseconds. Never the
+ * token. A refusal is a `GatewayUiError`.
+ */
+export interface GatewayUiGithubCheck {
+  repository: string;
+  expiresAt: number;
+}
+
+/**
+ * The gateway's GitHub name rules, the same as the vault's (`isGithubLogin`
+ * and `isGithubTokenRequest` in the server's `gateway/vaultMethods.ts`,
+ * which the page cannot import; a server test runs both over one table).
+ */
+const GITHUB_LOGIN_RE = /^[A-Za-z0-9-]{1,39}$/;
+const GITHUB_REPO_RE = /^[A-Za-z0-9._-]{1,100}$/;
+
+/** A GitHub user or organization name: a login, or a repository's owner. */
+export function isGatewayUiGithubLogin(value: unknown): value is string {
+  return typeof value === "string" && GITHUB_LOGIN_RE.test(value);
+}
+
+/**
+ * A repository a check may name: `owner` a GitHub login and `repo` 1-100 of
+ * `A-Za-z0-9._-`, never `.` or `..`.
+ */
+export function isGatewayUiGithubRepoName(
+  owner: unknown,
+  repo: unknown,
+): boolean {
+  return (
+    isGatewayUiGithubLogin(owner) &&
+    typeof repo === "string" &&
+    GITHUB_REPO_RE.test(repo) &&
+    repo !== "." &&
+    repo !== ".."
+  );
+}
 
 const MAX_DISPLAY_TEXT_UNITS = 256;
 /** Unicode category C (Cc, Cf, Cs, Co, Cn) and the line/paragraph separators. */
@@ -636,6 +745,96 @@ export function decodeGatewayUiSlackConnectStart(
     url.password === "" &&
     url.hash === ""
     ? { authorizeUrl: url.href }
+    : undefined;
+}
+
+/**
+ * A well-formed `GatewayUiGithub`, or undefined: both booleans required, an
+ * unknown problem and a `login` failing `isGatewayUiGithubLogin` dropped, and
+ * any other member (a `token`) never kept.
+ */
+export function decodeGatewayUiGithub(
+  value: unknown,
+): GatewayUiGithub | undefined {
+  if (!isRecord(value)) return undefined;
+  const { offered, connected, login, problem } = value;
+  if (typeof offered !== "boolean" || typeof connected !== "boolean")
+    return undefined;
+  return {
+    offered,
+    connected,
+    ...(isGatewayUiGithubLogin(login) ? { login } : {}),
+    ...((GATEWAY_UI_GITHUB_PROBLEMS as readonly unknown[]).includes(problem)
+      ? { problem: problem as GatewayUiGithubProblem }
+      : {}),
+  };
+}
+
+/**
+ * A well-formed `GatewayUiGithubConnectStart`, or undefined: the URL must be
+ * GitHub's authorization endpoint, so the page never navigates anywhere else.
+ */
+export function decodeGatewayUiGithubConnectStart(
+  value: unknown,
+): GatewayUiGithubConnectStart | undefined {
+  if (!isRecord(value) || typeof value.authorizeUrl !== "string")
+    return undefined;
+  let url: URL;
+  try {
+    url = new URL(value.authorizeUrl);
+  } catch {
+    return undefined;
+  }
+  return `${url.origin}${url.pathname}` === GITHUB_AUTHORIZE_URL &&
+    url.username === "" &&
+    url.password === "" &&
+    url.hash === ""
+    ? { authorizeUrl: url.href }
+    : undefined;
+}
+
+/**
+ * A check request: exactly `owner` and `repo` passing
+ * `isGatewayUiGithubRepoName`, or undefined, so a request carrying any other
+ * member (an `access`, `token` or `userId`) is refused whole.
+ */
+export function decodeGatewayUiGithubCheckRequest(
+  value: unknown,
+): GatewayUiGithubCheckRequest | undefined {
+  if (!isRecord(value)) return undefined;
+  const keys = Object.keys(value);
+  if (keys.length !== 2 || !keys.includes("owner") || !keys.includes("repo"))
+    return undefined;
+  const { owner, repo } = value;
+  return isGatewayUiGithubRepoName(owner, repo)
+    ? { owner: owner as string, repo: repo as string }
+    : undefined;
+}
+
+/**
+ * A well-formed `GatewayUiGithubCheck`, or undefined: the repository as
+ * `owner/repo` GitHub names and a finite, positive `expiresAt`; any other
+ * member (a `token`) never kept.
+ */
+export function decodeGatewayUiGithubCheck(
+  value: unknown,
+): GatewayUiGithubCheck | undefined {
+  if (!isRecord(value)) return undefined;
+  const { repository, expiresAt } = value;
+  if (typeof repository !== "string") return undefined;
+  const slash = repository.indexOf("/");
+  if (
+    slash < 0 ||
+    !isGatewayUiGithubRepoName(
+      repository.slice(0, slash),
+      repository.slice(slash + 1),
+    )
+  )
+    return undefined;
+  return typeof expiresAt === "number" &&
+    Number.isFinite(expiresAt) &&
+    expiresAt > 0
+    ? { repository, expiresAt }
     : undefined;
 }
 
