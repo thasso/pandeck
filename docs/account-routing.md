@@ -189,6 +189,15 @@ Evidence rules (a gateway-served account's login evidence follows
   account's current login generation, marks that (account, model provider, id);
   it changes no health, bench, alert or switch, and `localPolicy` never marks.
   The routing hard filter below reads the marks.
+- Accepted residual (Task-1512, `pa://task/1512`): the Claude CLI reports EVERY
+  404 as `model_not_found` and drops the response body, so the gateway's own
+  `unknown-prefix` 404 (a Claude base path Pandeck misconfigured) reaches the
+  turn without its marker and classifies, and marks, as a model refusal on the
+  account. The gateway path carries no `api_error_origin` to tell them apart.
+  Pandeck sets that path itself, so this would be an install-wide fault; the
+  mark is in memory and clears on Refresh, login or restart. The engine contract
+  case "Task-1483 residual (Task-1512)" pins today's behaviour, and Task-1512's
+  hardening is expected to flip it.
 - Sessions and one-shots count only when their actual model provider is the
   account's own subscription provider: `openai-codex` or `claude-sdk`. Copilot,
   compatible-key and other pi providers can share the account directory, but
@@ -531,14 +540,18 @@ missing or disabled, and the run refuses. An enabled pin on an account serving
 the model remains explicit despite login health or model/effort availability;
 failures alert on that account, not a different one. A pin, slot or explicit
 session pick, on an account whose known listing lacks the model is refused
-before any run: "<account> can't run <model>." A first send answers that as the
-send's refusal, a one-shot or memory processor run rejects, and the memory
-status reports the processor unavailable. An inherited parent pin that lacks the
-model is dropped, and the child routes Automatic instead.
-`automaticProfileIdFor` remains only a first-enabled hint for non-routing
-login/usage UI, not a routing function. When the saved model has no Automatic
-option, a Settings slot offers **Use Automatic** to clear its pin without
-changing the model or effort.
+before any run: "<account> can't run <model>." That refusal and "No <kind>
+account can run <model>." end with "Refresh the model list or sign in again to
+retry." (`ACCOUNT_MODEL_REFUSAL_HINT`), true whether the listing lacks the model
+or the provider refused it there: Refresh re-lists every account and forgets
+every remembered refusal, and a completed login does both for its account. A
+first send answers that as the send's refusal, a one-shot or memory processor
+run rejects, and the memory status reports the processor unavailable. An
+inherited parent pin that lacks the model is dropped, and the child routes
+Automatic instead. `automaticProfileIdFor` remains only a first-enabled hint for
+non-routing login/usage UI, not a routing function. When the saved model has no
+Automatic option, a Settings slot offers **Use Automatic** to clear its pin
+without changing the model or effort.
 
 The new-session picker names only accounts with something of their own to run
 (`pickerCredentialProfiles`): an unconnected OpenAI login, or a Claude account

@@ -383,7 +383,8 @@ test("a Claude account whose listing lacks the session's model is no target and 
       type: "pendingRuntimeAnswer",
       requestId: "claude-move",
       sessionId: id,
-      error: "Claude Private can't run Claude Haiku.",
+      error:
+        "Claude Private can't run Claude Haiku. Refresh the model list or sign in again to retry.",
     });
     assert.equal(sessionStore.get(id)?.credentialProfileId, from);
     assert.equal(sessionStore.get(id)?.pendingRuntime, undefined);

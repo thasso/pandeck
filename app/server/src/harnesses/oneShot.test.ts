@@ -333,7 +333,10 @@ test("a pinned Claude one-shot on an account whose listing lacks the model never
     });
     await assert.rejects(runOneShot(haiku), (err: Error) => {
       assert.equal(err.name, "ModelUnavailableOnAccountError");
-      assert.equal(err.message, "Private can't run Claude Haiku.");
+      assert.equal(
+        err.message,
+        "Private can't run Claude Haiku. Refresh the model list or sign in again to retry.",
+      );
       return true;
     });
     assert.equal(vi.mocked(runClaudeSdkOneShot).mock.calls.length, 0);
@@ -408,7 +411,10 @@ test.each(MYTHOS_LESS_READS)(
         ),
         (err: Error) => {
           assert.equal(err.name, "ModelUnavailableOnAccountError");
-          assert.equal(err.message, "Private can't run Claude Mythos.");
+          assert.equal(
+            err.message,
+            "Private can't run Claude Mythos. Refresh the model list or sign in again to retry.",
+          );
           return true;
         },
       );

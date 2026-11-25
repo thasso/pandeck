@@ -227,7 +227,10 @@ test("a pin whose account's known listing lacks the model refuses and never spen
     });
     await assert.rejects(resolveSlotAccount(slot), (err: Error) => {
       assert.ok(err instanceof ModelUnavailableOnAccountError);
-      assert.equal(err.message, "Private can't run Claude Haiku.");
+      assert.equal(
+        err.message,
+        "Private can't run Claude Haiku. Refresh the model list or sign in again to retry.",
+      );
       return true;
     });
     await assert.rejects(accountForSlot(slot), ModelUnavailableOnAccountError);
@@ -266,7 +269,10 @@ test("a pinned pi slot on an account the provider refused the model on refuses a
     markModelUnavailable(pinned.id, "openai-codex", "gpt-4o");
     await assert.rejects(resolveSlotAccount(slot), (err: Error) => {
       assert.ok(err instanceof ModelUnavailableOnAccountError);
-      assert.match(err.message, /^Refused Codex can't run /);
+      assert.match(
+        err.message,
+        /^Refused Codex can't run .+\. Refresh the model list or sign in again to retry\.$/,
+      );
       return true;
     });
     await assert.rejects(accountForSlot(slot), ModelUnavailableOnAccountError);
@@ -297,7 +303,10 @@ test.each(MYTHOS_LESS_READS)(
     try {
       await assert.rejects(resolveSlotAccount(slot), (err: Error) => {
         assert.ok(err instanceof ModelUnavailableOnAccountError);
-        assert.equal(err.message, "Mythos-less can't run Claude Mythos.");
+        assert.equal(
+          err.message,
+          "Mythos-less can't run Claude Mythos. Refresh the model list or sign in again to retry.",
+        );
         return true;
       });
       for (const modelId of ["opus", "sonnet", "haiku", "fable"])
@@ -322,7 +331,10 @@ test("an unpinned mythos slot with no Claude account able to run it says so", as
     resolveSlotAccount({ provider: CLAUDE_SDK_PROVIDER, modelId: "mythos" }),
     (err: Error) => {
       assert.ok(err instanceof ModelUnavailableOnAccountError);
-      assert.equal(err.message, "No Claude account can run Claude Mythos.");
+      assert.equal(
+        err.message,
+        "No Claude account can run Claude Mythos. Refresh the model list or sign in again to retry.",
+      );
       return true;
     },
   );
@@ -337,7 +349,10 @@ test("an unpinned slot whose every account lacks the model says so", async () =>
     resolveSlotAccount({ provider: CLAUDE_SDK_PROVIDER, modelId: "haiku" }),
     (err: Error) => {
       assert.ok(err instanceof ModelUnavailableOnAccountError);
-      assert.equal(err.message, "No Claude account can run Claude Haiku.");
+      assert.equal(
+        err.message,
+        "No Claude account can run Claude Haiku. Refresh the model list or sign in again to retry.",
+      );
       return true;
     },
   );

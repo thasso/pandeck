@@ -713,6 +713,88 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
     CASE_MS * 2,
   );
 
+  // ACCEPTED RESIDUAL (plan v03 Risks; hardening is Task-1512). This case pins
+  // what the installed CLI does TODAY with the gateway's own `unknown-prefix`
+  // 404 body: it reports every 404 as `model_not_found` and drops the body, so
+  // the marker never reaches the turn and the failure classifies as a model
+  // refusal. Task-1512 is expected to flip these expectations.
+  test(
+    "Task-1483 residual (Task-1512): the gateway's unknown-prefix 404 body reaches the turn as model_not_found without its marker",
+    async () => {
+      const { GATEWAY_REFUSAL_MARKER, refusalResponse, refusalText } =
+        await import("../gateway/refusals.ts");
+      const refusal = refusalResponse({ case: "unknown-prefix" }, "claude");
+      assert.equal(refusal.status, 404);
+      assert.ok(refusal.body.includes(GATEWAY_REFUSAL_MARKER));
+      env.upstream.reset();
+      env.setResponder((_seen, res) => {
+        res.writeHead(refusal.status, { "content-type": "application/json" });
+        res.end(refusal.body);
+      });
+      const modelId = "claude-fable-5-2";
+      const before = identity(env.namedFile);
+      try {
+        const ran = await turn({
+          credentialProfileId: env.named,
+          sdkModelId: modelId,
+        });
+        assert.equal(ran.aborted, false, "the turn ended on its own");
+        assert.ok(env.upstream.anthropic.length >= 1, "the upstream was asked");
+        const assistants = ran.messages.filter((m) => m.type === "assistant");
+        const synthetic = assistants
+          .map((m) => env.assistantProviderError(m as never))
+          .find((failure) => failure !== undefined);
+        assert.ok(synthetic, JSON.stringify(assistants));
+        assert.equal(synthetic.kind, "model_not_found");
+        const result = resultOf(ran.messages) as Record<string, unknown>;
+        assert.equal(result.is_error, true);
+        assert.equal(result.api_error_status, 404);
+        assert.equal(result.api_error_type, "not_found_error");
+        const failed = env.resultProviderError(result as never);
+        assert.ok(failed);
+        assert.equal(failed.statusCode, 404);
+        assert.equal(env.claudeModelNotFound(failed), true);
+        // The marker and the gateway's wording are gone from everything the
+        // turn produced.
+        const text = errorText(ran);
+        const produced = JSON.stringify(ran.messages) + text;
+        assert.equal(produced.includes(GATEWAY_REFUSAL_MARKER), false, text);
+        assert.equal(
+          produced.includes(refusalText({ case: "unknown-prefix" })),
+          false,
+          text,
+        );
+        // So today the turn reads as a model refusal on the account.
+        const facts = env.runFailureFacts(
+          env.analyzeProviderError(synthetic.text || text, {
+            provider: "claude-sdk",
+            statusCode: failed.statusCode,
+            modelUnavailable: true,
+          }),
+          { executingModelId: modelId },
+        );
+        assert.deepEqual(facts, {
+          kind: "model_unavailable",
+          unavailableModelId: modelId,
+        });
+        // Never a dead login, a renewal or a credential change.
+        assert.equal(env.loginEnded(facts, true), false, text);
+        assert.equal(env.loginEnded(facts, false), false, text);
+        assert.notEqual(
+          env.gateway.link.credentialStatus(env.named)?.needsLogin,
+          true,
+        );
+        assert.equal(env.upstream.platform.length, 0, "no renewal");
+        assert.deepEqual(identity(env.namedFile), before);
+        assert.deepEqual(env.egress.seen, []);
+        assertNoTokenLogged([ran.leaseToken]);
+      } finally {
+        env.setResponder(env.fakeClaudeStream(REPLY));
+      }
+    },
+    CASE_MS * 2,
+  );
+
   test(
     "a gateway refusal reaches the turn's error with its marker and is not a dead login",
     async () => {

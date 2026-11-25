@@ -2812,7 +2812,8 @@ describe("a journaled failure replays only what it was owed when it happened", (
       sessionId: child.sessionId,
       runId: "local-refusal",
       origin: BACKGROUND,
-      errorMessage: "usage limit 401 account can't run Claude Mythos.",
+      errorMessage:
+        "usage limit 401 account can't run Claude Mythos. Refresh the model list or sign in again to retry.",
       failure: { kind: "unknown", localPolicy: true },
       at: Date.now(),
     });

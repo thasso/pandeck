@@ -6,6 +6,7 @@
  * light: it reaches no pi SDK (`architecture.test.ts`).
  */
 import {
+  ACCOUNT_MODEL_REFUSAL_HINT,
   CLAUDE_SDK_PROVIDER,
   harnessForModelProvider,
 } from "@assistant/shared";
@@ -85,6 +86,6 @@ export async function resolveClaudeAccountModel(
       ? credentialProfileById(profileId)?.name
       : undefined) ?? "This account";
   throw new ModelUnavailableOnAccountError(
-    `${account} can't run ${claudeSdkModelOption(aliasOrId).name}.`,
+    `${account} can't run ${claudeSdkModelOption(aliasOrId).name}. ${ACCOUNT_MODEL_REFUSAL_HINT}`,
   );
 }

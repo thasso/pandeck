@@ -438,7 +438,7 @@ test("a driver's local-policy run completion resolves the prompt with those fact
       native.messageStarted("local");
       native.runCompleted(
         "error",
-        "usage limit 401 account can't run Claude Mythos.",
+        "usage limit 401 account can't run Claude Mythos. Refresh the model list or sign in again to retry.",
         local,
       );
     },
@@ -446,7 +446,8 @@ test("a driver's local-policy run completion resolves the prompt with those fact
   try {
     assert.deepEqual(await adapter.prompt("go"), {
       stopReason: "error",
-      errorMessage: "usage limit 401 account can't run Claude Mythos.",
+      errorMessage:
+        "usage limit 401 account can't run Claude Mythos. Refresh the model list or sign in again to retry.",
       failure: local,
     });
   } finally {

@@ -12,6 +12,7 @@ import type {
 } from "@assistant/shared";
 import {
   ACCOUNT_KINDS,
+  ACCOUNT_MODEL_REFUSAL_HINT,
   accountKindForModelProvider,
   isOpenAiCompatibleModelProvider,
   isSubscriptionAccountKind,
@@ -330,7 +331,7 @@ export function automaticPreviewHint(
       };
     case "model-unavailable":
       return {
-        text: `No ${provider} account can run this model.`,
+        text: `No ${provider} account can run this model. ${ACCOUNT_MODEL_REFUSAL_HINT}`,
         warning: true,
       };
   }

@@ -33,6 +33,8 @@ import {
   modelMarkedUnavailable,
   markModelUnavailable,
   resetModelUnavailabilityForTests,
+  subscribeModelUnavailabilityChanged,
+  unavailableModelIds,
 } from "./harnesses/modelUnavailability.ts";
 import {
   CODEX_REFUSAL_MESSAGES,
@@ -652,7 +654,8 @@ it("a local-policy refusal is never health evidence, whatever its kind or text",
       sessionId: "s1",
       runId,
       failure,
-      errorMessage: "usage limit 401 account can't run Claude Mythos.",
+      errorMessage:
+        "usage limit 401 account can't run Claude Mythos. Refresh the model list or sign in again to retry.",
       origin: undefined,
       at: 1,
     });
@@ -1417,30 +1420,90 @@ describe("model refusals (Task-1483)", () => {
     }
   });
 
-  it("marks nothing without a concrete id, from another model provider, or from an old login", () => {
+  /**
+   * Counts every change to the store, whatever account, provider or id it
+   * names, so a mark under an unexpected key cannot pass unnoticed.
+   */
+  function storeChanges(): { count: () => number; stop: () => void } {
+    let changes = 0;
+    const stop = subscribeModelUnavailabilityChanged(() => {
+      changes += 1;
+    });
+    return { count: () => changes, stop };
+  }
+
+  // Each case has its own fixture and is asserted before anything could
+  // clear a mark; each ends with the same fixture marking once the guarded
+  // condition holds, so the case cannot pass for another reason.
+  it("marks nothing without a concrete id", () => {
     const f = fixture("ready", "openai-codex");
-    // No executing id: nothing says which model was refused.
-    f.store.runFailure(
-      "acct",
-      runFailureFacts(
-        analyzeProviderError(CODEX_REFUSAL_MESSAGES[0], {
-          provider: "openai-codex",
-        }),
-      ),
-      "openai-codex",
-    );
-    // A Copilot run on a Codex account is not this account's subscription.
-    f.store.runFailure("acct", codexRefusal(), "github-copilot");
-    // An observation from before a completed login is the old login's.
+    const changes = storeChanges();
+    try {
+      f.store.runFailure(
+        "acct",
+        runFailureFacts(
+          analyzeProviderError(CODEX_REFUSAL_MESSAGES[0], {
+            provider: "openai-codex",
+          }),
+        ),
+        "openai-codex",
+      );
+      expect(changes.count()).toBe(0);
+      expect(unavailableModelIds("acct", "openai-codex").size).toBe(0);
+      f.store.runFailure("acct", codexRefusal(), "openai-codex");
+      expect(modelMarkedUnavailable("acct", "openai-codex", "gpt-4o")).toBe(
+        true,
+      );
+    } finally {
+      changes.stop();
+    }
+  });
+
+  it("marks nothing for a model provider that is not the account's own subscription", () => {
+    const f = fixture("ready", "openai-codex");
+    const changes = storeChanges();
+    try {
+      // A Copilot run on a Codex account is not this account's subscription.
+      f.store.runFailure("acct", codexRefusal(), "github-copilot");
+      expect(changes.count()).toBe(0);
+      expect(modelMarkedUnavailable("acct", "github-copilot", "gpt-4o")).toBe(
+        false,
+      );
+      expect(modelMarkedUnavailable("acct", "openai-codex", "gpt-4o")).toBe(
+        false,
+      );
+      f.store.runFailure("acct", codexRefusal(), "openai-codex");
+      expect(modelMarkedUnavailable("acct", "openai-codex", "gpt-4o")).toBe(
+        true,
+      );
+    } finally {
+      changes.stop();
+    }
+  });
+
+  it("marks nothing from an observation that predates a completed login", () => {
+    const f = fixture("ready", "openai-codex");
     const old = f.store.observe("acct");
     f.store.loginCompleted("acct");
-    f.store.runFailure("acct", codexRefusal(), "openai-codex", old);
-    expect(modelMarkedUnavailable("acct", "openai-codex", "gpt-4o")).toBe(
-      false,
-    );
-    expect(modelMarkedUnavailable("acct", "github-copilot", "gpt-4o")).toBe(
-      false,
-    );
+    const changes = storeChanges();
+    try {
+      f.store.runFailure("acct", codexRefusal(), "openai-codex", old);
+      expect(changes.count()).toBe(0);
+      expect(modelMarkedUnavailable("acct", "openai-codex", "gpt-4o")).toBe(
+        false,
+      );
+      f.store.runFailure(
+        "acct",
+        codexRefusal(),
+        "openai-codex",
+        f.store.observe("acct"),
+      );
+      expect(modelMarkedUnavailable("acct", "openai-codex", "gpt-4o")).toBe(
+        true,
+      );
+    } finally {
+      changes.stop();
+    }
   });
 
   it("a local-policy refusal never marks through the session tracker", () => {
