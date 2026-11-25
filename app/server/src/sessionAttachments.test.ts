@@ -56,6 +56,24 @@ describe("session attachment store", () => {
     assert.equal(read!.bytes.toString("utf8"), "%PDF-1");
   });
 
+  test("stages exactly the bytes of a view into a larger buffer, and a later change to them does not reach the file", () => {
+    // A pooled Buffer or a subarray: only its own window is written.
+    const backing = new Uint8Array(64).fill(0x2a);
+    backing.set(Buffer.from("inside"), 10);
+    const view = backing.subarray(10, 16);
+    const record = stageSessionAttachment("s-stage-view", {
+      name: "view.bin",
+      mimeType: "application/octet-stream",
+      bytes: view,
+      source: "confluence",
+    });
+    assert.equal(record.size, 6);
+    view.fill(0);
+    backing.fill(0);
+    const read = readSessionAttachmentBytes("s-stage-view", record.id);
+    assert.equal(read!.bytes.toString("utf8"), "inside");
+  });
+
   test("lists indexed attachments and orphan files written without an index", () => {
     const sessionId = "s-list";
     persistUploadedAttachment(sessionId, {

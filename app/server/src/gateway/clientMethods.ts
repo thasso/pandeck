@@ -47,12 +47,21 @@
  *
  * - `tools.list {}` answers `{tools}`: each `{name, description,
  *   inputSchema, effect, actionKey}`, and `twoPhase: true` on a write tool
- *   that runs as `tools.prepare` and `tools.apply` (1.1, Task-1463 P6a).
+ *   that runs as `tools.prepare` and `tools.apply` (1.1, Task-1463 P6a), or
+ *   `file: {limitParam, defaultBytes, maxBytes}` on a file tool (1.2,
+ *   Task-1441 P7a).
  * - `tools.call {name, args}` answers the tool's outcome, `{ok: true, text}`
- *   or `{ok: false, code, message}`; only a malformed request fails the call.
- *   A `cancel` aborts it. A write tool is refused `invalid_params` before any
- *   credential read: a client connection writes only in two phases (1.1;
- *   a 1.0 client gets the same refusal).
+ *   or `{ok: false, code, message}`, with no stream; only a malformed request
+ *   fails the call. A `cancel` aborts it. A write tool is refused
+ *   `invalid_params` before any credential read: a client connection writes
+ *   only in two phases (1.1; a 1.0 client gets the same refusal).
+ * - A file tool's `tools.call` (1.2) may instead answer `{ok: true, text,
+ *   file: {name, mimeType, size, sha256}}` with exactly one byte stream,
+ *   `file`: `size` its length, `sha256` its lowercase hex digest. A client
+ *   reads it only with `decodeFileAnswer`, chosen by the tool it called,
+ *   never by the reply. One file call runs at a time per edge; another
+ *   answers `tool_error` with a fixed busy text and sends nothing upstream.
+ *   A client refuses a stream on any other call's answer and keeps nothing.
  * - `tools.prepare {name, args}` (1.1) answers `{ok: true, site, items,
  *   warnings}`, the proposal the shared prepare built for the credential's
  *   site, or `{ok: false, code, message}`; nothing is written. At most
@@ -72,6 +81,7 @@
  * Gateway → client: `accounts.changed {accounts}`, the full list after any
  * change, and `logins.event {loginId, accountId, event}`, each answered `{}`.
  */
+import { createHash } from "node:crypto";
 import type { Payload } from "../workerProtocol/codec.ts";
 import {
   WorkerMethodError,
@@ -91,8 +101,11 @@ import type {
   ToolFailureCode,
 } from "./edgeTools.ts";
 
-/** 1.1 (Task-1463 P6a) adds `tools.prepare` and `tools.apply`; a 1.0 peer still connects. */
-export const GATEWAY_CLIENT_VERSION = "gateway-client/1.1";
+/**
+ * 1.1 (Task-1463 P6a) adds `tools.prepare` and `tools.apply`, 1.2 (Task-1441
+ * P7a) file answers; a 1.0 or 1.1 peer still connects.
+ */
+export const GATEWAY_CLIENT_VERSION = "gateway-client/1.2";
 
 const CLIENT_VERSION_RE =
   /^gateway-client\/(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/;
@@ -473,13 +486,146 @@ function toolFailure(answer: Record<string, unknown>): {
   };
 }
 
-/** A `tools.call` answer, on the client: an unknown code reads as `failed`. */
+/** Whether `payload` carries any named text or byte stream. */
+function hasStreams(payload: Payload): boolean {
+  return (
+    Object.keys(payload.text ?? {}).length > 0 ||
+    Object.keys(payload.bytes ?? {}).length > 0
+  );
+}
+
+/**
+ * A `tools.call` answer, on the client: an unknown code reads as `failed`.
+ * A stream is a {@link FileAnswerRefusal} `unexpected` here, whatever the
+ * JSON says: a file answer is read only by `decodeFileAnswer`, for a call
+ * made as a file call (Task-1441 P7a, G1).
+ */
 export function decodeToolAnswer(payload: Payload): ToolAnswer {
+  if (hasStreams(payload)) throw new FileAnswerRefusal("unexpected");
   const answer = record(payload.json);
   if (answer?.ok === true && typeof answer.text === "string")
     return { ok: true, text: answer.text };
   if (answer?.ok !== false) malformed("tool answer");
   return toolFailure(answer);
+}
+
+/**
+ * An answer the client refuses for carrying, or being, a file it cannot take
+ * (Task-1441 P7a, G4): `unexpected` for a stream on a plain call or a file
+ * answer's shape or size, `corrupted` for a digest that does not match.
+ * Nothing of it may be kept. The message names only the reason; the agent's
+ * fixed text is the caller's (`tools/gateway/remoteReadRules.ts`).
+ */
+export class FileAnswerRefusal extends Error {
+  constructor(readonly reason: "unexpected" | "corrupted") {
+    super(`The gateway's file answer is ${reason}.`);
+  }
+}
+
+/** A decoded file tool answer: a file, a plain success, or the failure. */
+export type FileAnswer =
+  | {
+      kind: "file";
+      text: string;
+      file: { name: string; mimeType: string; size: number; sha256: string };
+      bytes: Uint8Array;
+    }
+  | { kind: "plain"; text: string }
+  | { kind: "failure"; code: ToolFailureCode; message: string };
+
+/** The longest result text a tool answers (the edge's 60k budget). */
+const FILE_TEXT_MAX = 60_000;
+const FILE_NAME_MAX = 1024;
+const FILE_MIME_MAX = 1024;
+const SHA256_RE = /^[0-9a-f]{64}$/;
+
+const exactKeys = (value: Record<string, unknown>, keys: string[]) => {
+  const own = Object.keys(value);
+  return (
+    own.length === keys.length && keys.every((key) => Object.hasOwn(value, key))
+  );
+};
+
+/**
+ * A file tool's `tools.call` answer (Task-1441 P7a, G4 and H3), at most
+ * `maxBytes` (the call's effective limit), checked in order: exact keys, the
+ * one `file` stream, its size, its digest, then the name and MIME bounds and
+ * the text. Tool-neutral: the tool's own adapter checks the text's fields.
+ * Throws `FileAnswerRefusal`.
+ */
+export function decodeFileAnswer(
+  payload: Payload,
+  expect: { maxBytes: number },
+): FileAnswer {
+  const unexpected = (): never => {
+    throw new FileAnswerRefusal("unexpected");
+  };
+  const answer = record(payload.json) ?? unexpected();
+  if (answer.ok === false) {
+    if (hasStreams(payload) || !exactKeys(answer, ["ok", "code", "message"]))
+      unexpected();
+    const { code, message } = toolFailure(answer);
+    return { kind: "failure", code, message };
+  }
+  if (answer.ok !== true || typeof answer.text !== "string") unexpected();
+  const text = answer.text as string;
+  if (exactKeys(answer, ["ok", "text"])) {
+    if (hasStreams(payload) || text.length > FILE_TEXT_MAX) unexpected();
+    return { kind: "plain", text };
+  }
+  // 1. Exact keys.
+  const file = record(answer.file);
+  if (
+    !exactKeys(answer, ["ok", "text", "file"]) ||
+    !file ||
+    !exactKeys(file, ["name", "mimeType", "size", "sha256"])
+  )
+    unexpected();
+  // 2. Exactly one byte stream, `file`, and no text stream.
+  const streams = Object.keys(payload.bytes ?? {});
+  const bytes = payload.bytes?.file;
+  if (
+    Object.keys(payload.text ?? {}).length > 0 ||
+    streams.length !== 1 ||
+    !(bytes instanceof Uint8Array)
+  )
+    unexpected();
+  // 3. Its size, within the call's limit.
+  const { name, mimeType, size, sha256 } = file!;
+  if (
+    !Number.isSafeInteger(size) ||
+    size !== bytes!.byteLength ||
+    (size as number) > expect.maxBytes
+  )
+    unexpected();
+  // 4. Its digest.
+  if (
+    typeof sha256 !== "string" ||
+    !SHA256_RE.test(sha256) ||
+    createHash("sha256").update(bytes!).digest("hex") !== sha256
+  )
+    throw new FileAnswerRefusal("corrupted");
+  // 5. Name, MIME type and text bounds.
+  if (
+    typeof name !== "string" ||
+    name.length < 1 ||
+    name.length > FILE_NAME_MAX ||
+    typeof mimeType !== "string" ||
+    mimeType.length > FILE_MIME_MAX ||
+    text.length > FILE_TEXT_MAX
+  )
+    unexpected();
+  return {
+    kind: "file",
+    text,
+    file: {
+      name: name as string,
+      mimeType: mimeType as string,
+      size: size as number,
+      sha256,
+    },
+    bytes: bytes!,
+  };
 }
 
 /** `tools.prepare`: as `tools.call`. */

@@ -139,6 +139,58 @@ describe("atlassianDownload", () => {
     ).rejects.toThrow(/exceeds the 3-byte limit/);
   });
 
+  // Characterization (Task-1441 P7a, G3): the local tool's messages, exact.
+  test("an HTTP failure's message quotes 400 characters of the body", async () => {
+    const body = "\u00e9\u4e2d\ud83d\ude00".repeat(1500);
+    stubFetch(() => new Response(body, { status: 500 }));
+    const err = await atlassianDownload(
+      CONFIG,
+      "Confluence",
+      "/wiki/download/x",
+      10,
+    ).then(
+      () => new Error("resolved"),
+      (error: unknown) => error as Error,
+    );
+    expect(err.message).toBe(
+      `Confluence download returned HTTP 500 for /wiki/download/x: ${body.slice(0, 400)}`,
+    );
+  });
+
+  test("the size refusals' messages, declared and streamed", async () => {
+    stubFetch(
+      () => new Response("abcdef", { headers: { "content-length": "6" } }),
+    );
+    await expect(
+      atlassianDownload(CONFIG, "Confluence", "/wiki/download/x", 3),
+    ).rejects.toThrow(
+      /^Confluence download exceeds the 3-byte limit; raise maxBytes to fetch it\.$/,
+    );
+    stubFetch(
+      () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode("abcdef"));
+              controller.close();
+            },
+          }),
+        ),
+    );
+    await expect(
+      atlassianDownload(CONFIG, "Confluence", "/wiki/download/x", 3),
+    ).rejects.toThrow(
+      /^Confluence download exceeds the 3-byte limit; raise maxBytes to fetch it\.$/,
+    );
+  });
+
+  test("the path refusal's message", async () => {
+    stubFetch(() => new Response("x"));
+    await expect(
+      atlassianDownload(CONFIG, "Confluence", "x", 10),
+    ).rejects.toThrow(/^Confluence download path must be site-relative: x$/);
+  });
+
   test("never sends the credential off the site", async () => {
     const fetchMock = stubFetch(() => new Response("x"));
     for (const path of ["https://evil.test/x", "//evil.test/x", "x"])

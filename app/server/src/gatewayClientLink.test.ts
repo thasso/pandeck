@@ -584,7 +584,7 @@ function linkTo(socketPath: string) {
   return link;
 }
 
-test("the real edge listing gives client mode exactly the three Confluence reads and the two writes (Task-1463 P6b)", async () => {
+test("the real edge listing gives client mode exactly the three Confluence reads, the download and the two writes (Task-1463 P6b, Task-1441 P7a)", async () => {
   // The edge's own listing, as its `tools.list` answers it (Task-1439 P2).
   const { createEdgeTools } = await import("./gatewayTools/index.ts");
   const { host } = createEdgeTools({ log: () => {} });
@@ -602,9 +602,19 @@ test("the real edge listing gives client mode exactly the three Confluence reads
       ["confluence_search", "confluence:read"],
       ["confluence_get_page", "confluence:read"],
       ["confluence_lookup", "confluence:read"],
+      ["confluence_download_attachment", "confluence:read"],
       ["confluence_mutate_page", "confluence:write"],
     ],
   );
+  // The file tool keeps the edge's limits, which FILE_TOOLS admits.
+  const download = remoteTools
+    .knownRemoteTools("confluence")
+    .find((tool) => tool.name === "confluence_download_attachment");
+  assert.deepEqual(download && "file" in download && download.file, {
+    limitParam: "maxBytes",
+    defaultBytes: 50 * 1024 * 1024,
+    maxBytes: 100 * 1024 * 1024,
+  });
   assert.deepEqual(
     remoteTools
       .knownRemoteTools("jira")

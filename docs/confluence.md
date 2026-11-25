@@ -48,8 +48,11 @@ Atlassian connection. The edge's `confluence_mutate_page` (below) is offered
 too, in two phases: it prepares on the gateway and raises the local
 `confluencePage` approval card, which the gateway applies once approved, never
 locally (`docs/approvals.md` "Gateway-prepared cards", `docs/workers.md`
-"Gateway writes"). `remoteTools.ts` accepts no other Confluence name, so
-`confluence_download_attachment` waits for Task-1441. With Confluence off a call
+"Gateway writes"). So is `confluence_download_attachment` (Task-1441): the edge
+downloads with the gateway's connection and sends the file back, and Pandeck
+checks its size and digest, stages it into the session's attachments and answers
+the local tool's result (`docs/workers.md` "Gateway file tools").
+`remoteTools.ts` accepts no other Confluence name. With Confluence off a call
 answers the local tools' text, "Confluence tools are disabled. Enable them in
 Settings → Confluence."
 
@@ -212,6 +215,12 @@ enrolled machines with the user's own Atlassian credential. The edge answers the
 same payload compact, with fixed error texts and a 60,000-character result
 ceiling: `docs/workers.md` "Tools on the edge". All three schemas refuse unknown
 arguments.
+
+`confluence_download_attachment` shares its schema, description and download
+core with the edge too (`app/server/src/confluenceDownload.ts`, Task-1441). The
+edge's tool (`gatewayTools/confluenceDownload.ts`) answers fixed texts and the
+file's bytes, runs only for an enrolled machine's connection, never on `/mcp`,
+and one download at a time per edge: `docs/workers.md` "File answers".
 
 `confluence_mutate_page`'s prepare and apply live beside `tools/confluence/` in
 modules the local tool and the edge share: `confluenceMutate.ts` (schema,

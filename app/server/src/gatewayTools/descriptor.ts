@@ -179,6 +179,40 @@ export interface ToolContext<C> {
    * armed, before the credential read.
    */
   deadlineAt: number;
+  /**
+   * A file-capable tool's effective limit in bytes for this call, from its
+   * `file` spec and the call's limit argument; absent for every other tool.
+   */
+  maxFileBytes?: number;
+}
+
+/**
+ * A file-capable tool's limit (Task-1441 P7a, H3): the name of its own limit
+ * argument, the limit when the call names none, and its cap.
+ */
+export interface FileSpec {
+  limitParam: string;
+  defaultBytes: number;
+  maxBytes: number;
+}
+
+/** One file as a tool answers it, beside its JSON. */
+export interface ResultFile {
+  name: string;
+  mimeType: string;
+  bytes: Uint8Array;
+}
+
+/**
+ * A file-capable tool's answer with a file: its JSON and the file. Only a
+ * descriptor with `file` may answer one; the host frames the bytes and adds
+ * their size and SHA-256. A plain value from the same tool is a plain answer.
+ */
+export class FileResult {
+  constructor(
+    readonly json: unknown,
+    readonly file: ResultFile,
+  ) {}
 }
 
 interface ToolDescriptorBase {
@@ -192,6 +226,13 @@ interface ToolDescriptorBase {
   maxResultChars?: number;
   /** The call's own deadline; the host's (30 s by default) unless given. */
   deadlineMs?: number;
+  /**
+   * Makes the tool file-capable (Task-1441 P7a): a read with no `phases`,
+   * run only for a caller that reports when its answer has left
+   * (`ToolCaller.onSettled`), one at a time per edge process, never on
+   * `/mcp`.
+   */
+  file?: FileSpec;
 }
 
 /** A tool run with the user's Atlassian credential. */

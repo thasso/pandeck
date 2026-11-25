@@ -1,5 +1,6 @@
 /**
- * Gateway client 1.1 (Task-1463 P6a): the version and its compatibility,
+ * Gateway client 1.1 (Task-1463 P6a) and 1.2 (Task-1441 P7a, file answers in
+ * `clientMethodsFiles.test.ts`): the version and its compatibility,
  * the edge's `tools.prepare`/`tools.apply` request decoders and the client's
  * shallow answer decoders with their byte caps. The caps mirror the edge's
  * own; this pins them equal. Every value is fake.
@@ -34,11 +35,12 @@ function invalidParams(run: () => unknown): void {
 }
 
 describe("the version", () => {
-  test("is 1.1; a 1.0 and a 1.1 peer are compatible, another major is not", () => {
-    expect(GATEWAY_CLIENT_VERSION).toBe("gateway-client/1.1");
+  test("is 1.2; a 1.0, 1.1 and 1.2 peer are compatible, another major is not", () => {
+    expect(GATEWAY_CLIENT_VERSION).toBe("gateway-client/1.2");
     const { compatible } = GATEWAY_CLIENT_PROTOCOL;
     expect(compatible("gateway-client/1.0")).toBe(true);
     expect(compatible("gateway-client/1.1")).toBe(true);
+    expect(compatible("gateway-client/1.2")).toBe(true);
     expect(compatible("gateway-client/1.7")).toBe(true);
     expect(compatible("gateway-client/2.0")).toBe(false);
     expect(compatible("gateway-client/0.9")).toBe(false);

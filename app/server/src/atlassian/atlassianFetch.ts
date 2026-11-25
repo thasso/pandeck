@@ -161,6 +161,31 @@ export async function atlassianFetch<T>(
   return text ? (JSON.parse(text) as T) : ({} as T);
 }
 
+/** Why a download failed, for a caller that must not repeat its message. */
+export type AtlassianDownloadReason =
+  "http" | "declared_too_large" | "streamed_too_large";
+
+/**
+ * A download refusal (Task-1441 P7a, G3). The message is the one the local
+ * tool always showed and may quote the product's body; the edge decides by
+ * `reason` and `status` alone.
+ */
+export class AtlassianDownloadError extends Error {
+  constructor(
+    message: string,
+    readonly reason: AtlassianDownloadReason,
+    readonly status?: number,
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * The most of a non-OK download body read for its message: the message
+ * quotes 400 UTF-16 code units, which take at most 1,200 UTF-8 bytes.
+ */
+const ERROR_BODY_MAX_BYTES = 2048;
+
 /**
  * GET a binary resource from the site, holding at most `maxBytes` in memory.
  * A file that turns out larger is an error rather than a truncated copy: a
@@ -171,7 +196,12 @@ export async function atlassianFetch<T>(
  * configured host (with Bearer, the fixed API base). Attachment downloads
  * answer with a redirect to Atlassian's media host; fetch drops
  * `Authorization` on that cross-origin hop and the signed URL it lands on
- * needs none.
+ * needs none. Node 24 and the packaged Bun 1.4.2 both do
+ * (`atlassianDownload.test.ts`, Task-1441 P7A-R1).
+ *
+ * Every exit but success cancels the body and drops what was read, so a
+ * failed or aborted download holds no bytes once this settles (P7a, H1). A
+ * retryable answer's body and a failure's body are read at most 2 KiB deep.
  */
 export async function atlassianDownload(
   config: AtlassianConfig,
@@ -193,43 +223,68 @@ export async function atlassianDownload(
   const res = await fetchWithRetry(
     url,
     { method: "GET", headers: { Authorization: authorization(config) } },
-    options.signal ? { signal: options.signal } : {},
+    {
+      retryBodyLimitBytes: ERROR_BODY_MAX_BYTES,
+      ...(options.signal ? { signal: options.signal } : {}),
+    },
   );
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(
-      `${product} download returned HTTP ${res.status} for ${url.pathname}: ${text.slice(0, 400)}`,
-    );
-  }
-  const tooLarge = () =>
-    new Error(
-      `${product} download exceeds the ${maxBytes}-byte limit; raise maxBytes to fetch it.`,
-    );
-  const declared = Number(res.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > maxBytes) {
-    await res.body?.cancel();
-    throw tooLarge();
-  }
-  const chunks: Uint8Array[] = [];
-  let total = 0;
   const reader = res.body?.getReader();
-  while (reader) {
+  let chunks: Uint8Array[] = [];
+  let done = false;
+  try {
+    if (!res.ok) {
+      const text = await boundedText(reader, ERROR_BODY_MAX_BYTES);
+      throw new AtlassianDownloadError(
+        `${product} download returned HTTP ${res.status} for ${url.pathname}: ${text.slice(0, 400)}`,
+        "http",
+        res.status,
+      );
+    }
+    const tooLarge = (reason: AtlassianDownloadReason) =>
+      new AtlassianDownloadError(
+        `${product} download exceeds the ${maxBytes}-byte limit; raise maxBytes to fetch it.`,
+        reason,
+      );
+    const declared = Number(res.headers.get("content-length"));
+    if (Number.isFinite(declared) && declared > maxBytes)
+      throw tooLarge("declared_too_large");
+    let total = 0;
+    while (reader) {
+      const next = await reader.read();
+      if (next.done) break;
+      total += next.value.byteLength;
+      if (total > maxBytes) throw tooLarge("streamed_too_large");
+      chunks.push(next.value);
+    }
+    done = true;
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return { bytes, contentType: res.headers.get("content-type") };
+  } finally {
+    chunks = [];
+    if (!done) await reader?.cancel().catch(() => undefined);
+  }
+}
+
+/** Up to about `max` bytes of a body as text, the rest left unread. */
+async function boundedText(
+  reader: ReadableStreamDefaultReader<Uint8Array> | undefined,
+  max: number,
+): Promise<string> {
+  if (!reader) return "";
+  const parts: Uint8Array[] = [];
+  let read = 0;
+  while (read < max) {
     const next = await reader.read();
     if (next.done) break;
-    total += next.value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel();
-      throw tooLarge();
-    }
-    chunks.push(next.value);
+    parts.push(next.value);
+    read += next.value.byteLength;
   }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return { bytes, contentType: res.headers.get("content-type") };
+  return new TextDecoder().decode(Buffer.concat(parts).subarray(0, max));
 }
 
 /**

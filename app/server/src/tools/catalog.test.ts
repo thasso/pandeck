@@ -685,6 +685,7 @@ describe("client mode: the gateway's Jira tools (Task-1398)", () => {
 
   const clientMode = (names: string[]) => {
     uninstall = installRemoteToolPort({
+      callFile: () => Promise.reject(new Error("unused")),
       call: () => Promise.reject(new Error("unused")),
       prepare: () => Promise.reject(new Error("unused")),
       apply: () => Promise.reject(new Error("unused")),
@@ -789,6 +790,7 @@ describe("client mode: the gateway's Slack tools (Task-1455)", () => {
 
   const clientMode = (names: string[]) => {
     uninstall = installRemoteToolPort({
+      callFile: () => Promise.reject(new Error("unused")),
       call: () => Promise.reject(new Error("unused")),
       prepare: () => Promise.reject(new Error("unused")),
       apply: () => Promise.reject(new Error("unused")),
@@ -903,6 +905,7 @@ describe("client mode: the gateway's Confluence reads (Task-1439)", () => {
 
   const clientMode = (listing: unknown[]) => {
     uninstall = installRemoteToolPort({
+      callFile: () => Promise.reject(new Error("unused")),
       call: (name) => {
         calls.push(name);
         return Promise.resolve({ ok: true, text: "from the gateway" });
@@ -989,6 +992,50 @@ describe("client mode: the gateway's Confluence reads (Task-1439)", () => {
       );
   });
 
+  test("a download listed with its file limits joins the group as the local tool, classified by the catalog and kept out of Plan (Task-1441 P7a, AC8)", () => {
+    clientMode([
+      ...LISTING.filter(
+        (entry) => entry.name !== "confluence_download_attachment",
+      ),
+      listed("confluence_download_attachment", {
+        file: {
+          limitParam: "maxBytes",
+          defaultBytes: 50 * 1024 * 1024,
+          maxBytes: 100 * 1024 * 1024,
+        },
+      }),
+    ]);
+    for (const persona of PERSONAS) {
+      const group = toolGroupsFor(persona).find(
+        (g) => g.id === "gateway-confluence",
+      );
+      assert.ok(group, persona);
+      assert.deepEqual(
+        group.tools.map((t) => [t.name, t.sideEffects]),
+        [
+          ...CONFLUENCE_READS.map((name) => [name, "none"]),
+          ["confluence_download_attachment", "local"],
+        ],
+        persona,
+      );
+      const download = group.tools.find(
+        (t) => t.name === "confluence_download_attachment",
+      )!;
+      assert.equal(download.label, "Confluence: Download Attachment");
+      assert.notEqual(
+        download.description,
+        "confluence_download_attachment on the gateway.",
+      );
+      const names = agentToolsFor(persona).map((t) => t.name);
+      const plan = modeGatedActiveToolNames(
+        "plan",
+        agentToolsFor(persona),
+        new Set(names),
+      );
+      assert.ok(!plan.has("confluence_download_attachment"), persona);
+    }
+  });
+
   test("connection and the Confluence toggle gate the group; the Jira toggle does not", async () => {
     clientMode([...LISTING, listed("jira_get_issue")]);
     await updateJiraSettings({ enabled: true });
@@ -1061,6 +1108,7 @@ describe("client mode: reserved gateway writes in the catalog and Plan (Task-146
   /** Each case gets its own port and listing, connected with both products on. */
   const clientMode = async (listing: unknown[]) => {
     uninstall = installRemoteToolPort({
+      callFile: () => Promise.reject(new Error("unused")),
       call: () => Promise.reject(new Error("unused")),
       prepare: () => Promise.reject(new Error("unused")),
       apply: () => Promise.reject(new Error("unused")),

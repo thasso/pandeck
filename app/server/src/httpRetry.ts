@@ -13,6 +13,12 @@ export interface FetchRetryOptions {
   /** Total attempts including the first; defaults to 5. */
   attempts?: number;
   signal?: AbortSignal;
+  /**
+   * Reads at most about this many bytes of a retryable response's body before
+   * cancelling it (Task-1441 P7a, H2), so a large retry body is never held;
+   * unset, the body is drained whole as before. It is never parsed either way.
+   */
+  retryBodyLimitBytes?: number;
   /** Called before each wait so a long export can surface "rate limited, retrying". */
   onRetry?: (info: {
     attempt: number;
@@ -106,11 +112,41 @@ export async function fetchWithRetry(
       response?.headers.get("retry-after") ?? null,
     );
     options.onRetry?.({ attempt, delayMs, status: response?.status ?? 0 });
-    // Drain the body so the connection can be reused before we wait.
-    await response?.text().catch(() => undefined);
+    if (response) await discardRetryBody(response, options);
     await sleepImpl(delayMs, options.signal);
   }
   throw lastError ?? new Error("fetchWithRetry exhausted attempts.");
+}
+
+/**
+ * A retryable response's body, discarded before the wait. Unbounded, it is
+ * drained so the connection can be reused. Bounded, it is read until the
+ * limit or its end, then cancelled. A read failure is ignored either way; an
+ * abort during the bounded read cancels it and throws the abort.
+ */
+async function discardRetryBody(
+  response: Response,
+  options: FetchRetryOptions,
+): Promise<void> {
+  const limit = options.retryBodyLimitBytes;
+  if (limit === undefined) {
+    await response.text().catch(() => undefined);
+    return;
+  }
+  const reader = response.body?.getReader();
+  if (!reader) return;
+  try {
+    let read = 0;
+    while (read < limit) {
+      const next = await reader.read();
+      if (next.done) break;
+      read += next.value.byteLength;
+    }
+  } catch {
+    if (options.signal?.aborted) throw abortError();
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
 }
 
 /** A request deadline that also ends when the caller's `signal` aborts. */

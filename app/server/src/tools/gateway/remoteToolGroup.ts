@@ -4,13 +4,15 @@
  * listed this boot (`remoteTools.ts`). A call goes from this server to the gateway as
  * `tools.call`; the gateway runs it with the user's own credential. An
  * accepted gateway write is the local write tool behind the approval card
- * (`remoteWrites.ts`, Task-1463 P6b).
+ * (`remoteWrites.ts`, Task-1463 P6b), and an accepted file tool the local
+ * tool whose answer this server stages (`remoteFiles.ts`, Task-1441 P7a).
  *
  * A name stays for the boot, so a pi engine that registered it keeps a
  * binding; before any call `execute` checks the connection, the product's
  * toggle and that the latest listing still offers it as a read tool. Only the
  * gateway's `tool_error` and `invalid_params` texts reach the agent; every
- * other failure is fixed text here.
+ * other failure is fixed text (`remoteReadRules.ts`). A byte stream on a
+ * read's answer is refused as an unexpected file: nothing is kept.
  */
 import type { AgentTool } from "../../mcp/tool.ts";
 import {
@@ -25,44 +27,20 @@ import {
   type RemoteReadDescriptor,
   type RemoteToolDescriptor,
 } from "../../remoteTools.ts";
+import { remoteFileTool, type RemoteFileAgentTool } from "./remoteFiles.ts";
+import {
+  DISABLED,
+  NO_TOOLS,
+  UNEXPECTED_FILE_ANSWER,
+  UNREACHABLE,
+  failureText,
+  noLongerOffered,
+} from "./remoteReadRules.ts";
 import { remoteWriteTool, type RemoteWriteAgentTool } from "./remoteWrites.ts";
 
-const UNREACHABLE = "The credential gateway is unreachable; try again shortly.";
-/** A product's toggle is off; every mapped product needs its text. */
-const DISABLED: Record<RemoteProduct, string> = {
-  jira: "Jira tools are disabled. Enable them in Settings → Jira.",
-  slack: "Slack tools are disabled. Enable them in Settings → Slack.",
-  confluence:
-    "Confluence tools are disabled. Enable them in Settings → Confluence.",
-};
-const MESSAGE_MAX = 500;
-
 type RemoteReadAgentTool = AgentTool & { sideEffects: "none" };
-type RemoteAgentTool = RemoteReadAgentTool | RemoteWriteAgentTool;
-
-const noLongerOffered = (name: string): string =>
-  `The gateway no longer offers ${name}.`;
-
-function failureText(
-  name: string,
-  failure: Extract<RemoteToolAnswer, { ok: false }>,
-): string {
-  switch (failure.code) {
-    case "tool_error":
-    case "invalid_params":
-      return failure.message.slice(0, MESSAGE_MAX);
-    case "unknown_tool":
-      return noLongerOffered(name);
-    case "result_too_large":
-      return "The gateway tool's result is too large.";
-    case "timeout":
-      return "The gateway tool timed out.";
-    case "cancelled":
-      return "The call was cancelled.";
-    case "failed":
-      return `${name} failed on the gateway.`;
-  }
-}
+type RemoteAgentTool =
+  RemoteReadAgentTool | RemoteWriteAgentTool | RemoteFileAgentTool;
 
 function remoteTool(descriptor: RemoteReadDescriptor): RemoteReadAgentTool {
   // The name from the accepted listing, never from an answer.
@@ -86,11 +64,11 @@ function remoteTool(descriptor: RemoteReadDescriptor): RemoteReadAgentTool {
           ctx.signal ?? new AbortController().signal,
         );
       } catch (err) {
-        if (
-          err instanceof RemoteToolRefusal &&
-          err.code === "tools_unavailable"
-        )
-          throw new Error("The credential gateway runs no tools.");
+        if (err instanceof RemoteToolRefusal) {
+          if (err.code === "tools_unavailable") throw new Error(NO_TOOLS);
+          if (err.code === "unexpected_file")
+            throw new Error(UNEXPECTED_FILE_ANSWER);
+        }
         throw new Error(UNREACHABLE);
       }
       if (!answer.ok) throw new Error(failureText(name, answer));
@@ -115,7 +93,9 @@ export function remoteToolsFor(product: RemoteProduct): RemoteAgentTool[] {
     const tool =
       descriptor.effect === "write"
         ? remoteWriteTool(descriptor)
-        : remoteTool(descriptor);
+        : "file" in descriptor
+          ? remoteFileTool(descriptor)
+          : remoteTool(descriptor);
     built.set(descriptor.name, { descriptor, tool });
     return tool;
   });

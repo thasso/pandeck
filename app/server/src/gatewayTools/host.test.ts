@@ -76,6 +76,7 @@ test("the registry lists Jira's, Confluence's and Slack's read tools with their 
       ["confluence_search", "read", "confluence:read"],
       ["confluence_get_page", "read", "confluence:read"],
       ["confluence_lookup", "read", "confluence:read"],
+      ["confluence_download_attachment", "read", "confluence:read"],
       ["slack_search", "read", "slack:read"],
       ["slack_conversation_read", "read", "slack:read"],
       ["slack_thread_read", "read", "slack:read"],
@@ -564,6 +565,11 @@ test("the effective and longest deadlines", () => {
     ),
     45_000,
   );
-  assert.equal(longestDeadlineMs(EDGE_TOOLS), 45_000);
-  assert.equal(longestDeadlineMs(EDGE_TOOLS, 60_000), 60_000);
+  // The file download's 150 s (Task-1441 P7a); `/mcp` leaves it out.
+  assert.equal(longestDeadlineMs(EDGE_TOOLS), 150_000);
+  assert.equal(longestDeadlineMs(EDGE_TOOLS, 60_000), 150_000);
+  assert.equal(
+    longestDeadlineMs(EDGE_TOOLS.filter((tool) => !tool.file)),
+    45_000,
+  );
 });

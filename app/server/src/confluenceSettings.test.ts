@@ -159,6 +159,7 @@ async function withTripwires(
     clear: () => refuse("integrations.clear"),
   });
   const uninstallTools = installRemoteToolPort({
+    callFile: (name) => refuse(`tools.callFile ${name}`),
     call: (name) => refuse(`tools.call ${name}`),
     prepare: (name) => refuse(`tools.prepare ${name}`),
     apply: (name) => refuse(`tools.apply ${name}`),

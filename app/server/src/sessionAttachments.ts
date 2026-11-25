@@ -102,7 +102,13 @@ export function stageSessionAttachment(
     id,
     name: input.name,
     mimeType: normalizeMime(input.mimeType) || inferMimeFromName(input.name),
-    bytes: Buffer.from(input.bytes),
+    // A view, not a copy: the write below is synchronous and keeps nothing,
+    // so a 100 MiB download is not held twice while it is staged.
+    bytes: Buffer.from(
+      input.bytes.buffer,
+      input.bytes.byteOffset,
+      input.bytes.byteLength,
+    ),
     source: input.source,
   });
 }

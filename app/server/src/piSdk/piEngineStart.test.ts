@@ -33,6 +33,7 @@ afterEach(() => {
 
 const clientMode = () => {
   uninstall = installRemoteToolPort({
+    callFile: () => Promise.reject(new Error("unused")),
     call: () => Promise.reject(new Error("unused")),
     prepare: () => Promise.reject(new Error("unused")),
     apply: () => Promise.reject(new Error("unused")),

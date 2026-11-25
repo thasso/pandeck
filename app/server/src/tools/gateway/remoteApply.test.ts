@@ -120,6 +120,7 @@ let sessionId: string;
 function install(): void {
   uninstall();
   uninstall = installRemoteToolPort({
+    callFile: () => Promise.reject(new Error("unused")),
     call: () => Promise.reject(new Error("unused")),
     prepare: () => Promise.reject(new Error("unused")),
     apply: (name, site, items) => {

@@ -682,6 +682,7 @@ const GATEWAY_TOOLS_ALLOWED = new Set([
   "atlassian/confluenceClient.ts",
   "atlassian/storageToMarkdown.ts",
   "confluenceAttachmentChange.ts",
+  "confluenceDownload.ts",
   "confluenceMutate.ts",
   "confluenceMutateApply.ts",
   "confluenceMutationCheck.ts",
@@ -966,6 +967,18 @@ test("the gateway's Codex refresher imports only node, pi and proper-lockfile", 
   assert.deepEqual(
     importersOf((target) => target === "piSdk/codexRenewal.ts"),
     ["harnesses/gatewayPorts.ts"],
+  );
+});
+
+test("the test-only file tool is not imported by production modules (Task-1441 P7a, H3)", () => {
+  assert.deepEqual(
+    importersOf((target) => target === "gatewayTools/fileFixtureTool.ts"),
+    [],
+  ); // The scan sees it, and names its own imports the same way.
+  assert.ok(
+    importersOf((target) => target === "gatewayTools/descriptor.ts").includes(
+      "gatewayTools/fileFixtureTool.ts",
+    ),
   );
 });
 

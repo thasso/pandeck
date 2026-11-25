@@ -74,6 +74,7 @@ beforeEach(async () => {
   setApprovalBroadcastForTests(() => {});
   setAutoApprovalDrainForTests(async () => {});
   uninstall = installRemoteToolPort({
+    callFile: () => Promise.reject(new Error("unused")),
     call: () => Promise.reject(new Error("unused")),
     prepare: () => Promise.reject(new Error("unused")),
     apply: (name) => {
