@@ -681,9 +681,10 @@ const validateTopics: Validator = (msg) => {
       topic !== "tasks" &&
       topic !== "projects" &&
       topic !== "initiatives" &&
-      topic !== "sessions"
+      topic !== "sessions" &&
+      topic !== "schedules"
     )
-      return "digests currently supports only tasks, projects, initiatives and sessions";
+      return "digests currently supports only tasks, projects, initiatives, sessions and schedules";
     if (!msg.topics.includes(topic))
       return "digests must be a subset of topics";
   }
@@ -695,9 +696,10 @@ const validateGetStateItems: Validator = (msg) => {
     msg.topic !== "tasks" &&
     msg.topic !== "projects" &&
     msg.topic !== "initiatives" &&
-    msg.topic !== "sessions"
+    msg.topic !== "sessions" &&
+    msg.topic !== "schedules"
   )
-    return "topic must be tasks, projects, initiatives or sessions";
+    return "topic must be tasks, projects, initiatives, sessions or schedules";
   if (!Array.isArray(msg.ids) || !msg.ids.every(isString))
     return "ids must be an array of strings";
   if (!isString(msg.requestId)) return "requestId must be a string";

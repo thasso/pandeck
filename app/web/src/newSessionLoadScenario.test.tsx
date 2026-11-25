@@ -224,10 +224,10 @@ describe("new-session load request counts", () => {
       socket.open();
       socket.receive(readyMessage());
     });
-    // Only the session list, which every surface holds.
+    // Only the session list and the Schedules, which every surface holds.
     expect(
       socket.sent.filter((message) => message.type === "subscribe"),
-    ).toEqual([{ type: "subscribe", topics: ["sessions"] }]);
+    ).toEqual([{ type: "subscribe", topics: ["sessions", "schedules"] }]);
 
     await act(async () =>
       root!.render(<NewRouteHarness routeName="sessions" taskPickerOpen />),
@@ -235,7 +235,7 @@ describe("new-session load request counts", () => {
     expect(
       socket.sent.filter((message) => message.type === "subscribe"),
     ).toEqual([
-      { type: "subscribe", topics: ["sessions"] },
+      { type: "subscribe", topics: ["sessions", "schedules"] },
       { type: "subscribe", topics: ["tasks"] },
     ]);
     expect(
@@ -292,7 +292,11 @@ describe("new-session load request counts", () => {
     expect(
       socket.sent.filter((message) => message.type === "subscribe"),
     ).toEqual([
-      { type: "subscribe", topics: ["sessions", "tasks"], digests: ["tasks"] },
+      {
+        type: "subscribe",
+        topics: ["sessions", "schedules", "tasks"],
+        digests: ["tasks"],
+      },
     ]);
 
     await act(async () =>

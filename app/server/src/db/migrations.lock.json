@@ -104,5 +104,6 @@
   "0103_session_engine_binding_resumed.sql": "908e5e18765b236cbe2b23ffd24ddd49a913eed4f53d0d3b46ca3899d06ff7cd",
   "0104_session_engine_binding_usage_base.sql": "724efe263261d7e4da26898a89ba6042a7c776182b214db25e6912e112b3ef2a",
   "0105_session_last_error_continue.sql": "3f5671b7f72c078f2fdcab4fc47403e2468cc052c98efd7543824a3ce1031e1b",
-  "0106_session_last_error_run.sql": "e95305a224857a7af5a953c64df52047fb88febeb7c71d74ffc72d3fec6d7a4b"
+  "0106_session_last_error_run.sql": "e95305a224857a7af5a953c64df52047fb88febeb7c71d74ffc72d3fec6d7a4b",
+  "0107_schedules.sql": "5846314ee2f87f94e9021025dae45d5e516884d708da70aaeeffe39b92e7d923"
 }

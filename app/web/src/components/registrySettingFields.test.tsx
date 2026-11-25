@@ -66,6 +66,10 @@ test("voice settings are claimed by their dedicated UI", () => {
   expect(unclaimed).toEqual([
     "accountRouting.openAiResetAutoRedeemHours",
     "sessionSwitching.handoffTokenCap",
+    // The Schedules section has no hand-written UI: its registry fields are it.
+    "schedules.graceWindowMinutes",
+    "schedules.cardlessLimit",
+    "schedules.paused",
     "tempo.authorAccountId",
   ]);
 });
@@ -154,6 +158,39 @@ test("a read-only setting shows its value", () => {
   expect(container!.textContent).toContain("Worklog author account");
   expect(container!.textContent).toContain("acc-123");
   expect(container!.querySelector("input")).toBeNull();
+});
+
+test("the Schedules section is its three registry fields", () => {
+  const onUpdate = vi.fn();
+  const scheduleSettings = {
+    schedules: { graceWindowMinutes: 60, cardlessLimit: 10, paused: false },
+  } as unknown as AppSettings;
+  render(
+    <RegistrySettingFields
+      section="schedules"
+      settings={scheduleSettings}
+      onUpdate={onUpdate}
+    />,
+  );
+  expect(container!.textContent).toContain("Grace window");
+  expect(container!.textContent).toContain("Cardless Schedules per session");
+  expect(container!.textContent).toContain("Pause all Schedules");
+  const grace = container!.querySelector<HTMLInputElement>(
+    'input[aria-label="Grace window"]',
+  )!;
+  type(grace, "2000");
+  blur(grace);
+  expect(onUpdate).toHaveBeenLastCalledWith({
+    schedules: { graceWindowMinutes: 1440, cardlessLimit: 10, paused: false },
+  });
+  act(() =>
+    container!
+      .querySelector<HTMLInputElement>('input[type="checkbox"]')!
+      .click(),
+  );
+  expect(onUpdate).toHaveBeenLastCalledWith({
+    schedules: { graceWindowMinutes: 60, cardlessLimit: 10, paused: true },
+  });
 });
 
 test("an omitted path says why, and is not also rendered", () => {

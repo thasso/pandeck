@@ -4,9 +4,9 @@ A Schedule sends a prompt at a wall-clock time, once or repeating, either into
 an existing session or as the first prompt of a new session. The user and agents
 both create them; the user sees and controls every one.
 
-This contract was agreed on 2026-11-25 ([Task-1498](pa://task/1498)). Nothing in
-it is implemented yet; the phases at the end say what lands when. The motivating
-stories:
+This contract was agreed on 2026-11-25 ([Task-1498](pa://task/1498)). Phase 1 is
+being built ([Implemented so far](#implemented-so-far)); the phases at the end
+say what lands when. The motivating stories:
 
 - A user's roadmap update agent runs automatically on Mondays at 11:00.
 - An agent gets a prompt back as a reminder today at 15:45.
@@ -57,6 +57,11 @@ three occurrences with it, and the tools echo them with it.
 - A local time that does not exist (spring forward) occurs at the next valid
   minute. A local time that exists twice (fall back) occurs once, at the first.
 - Monthly on day 29–31 occurs on the month's last day when the month is shorter.
+- `startsOn` and `endsOn` are inclusive local dates: the first and the last date
+  that may occur.
+- An occurrence's due time is that scheduled instant (a whole minute, or the end
+  of a gap), never the time it was delivered. The function returns due times
+  strictly after `afterMs`, and the clock compares them to the millisecond.
 - Nothing repeats more often than once a day. Polling for a condition belongs in
   `Monitor` or background tasks, not in a Schedule.
 
@@ -121,7 +126,9 @@ occurrence. An occurrence is therefore claimed at most once across restarts.
   `missed`. There is no backlog replay.
 - **Pause all** (one switch on the Schedules page) stops the clock from
   claiming. Occurrences due while paused are `missed` and do not catch up on
-  resume; the grace window covers server downtime only.
+  resume; the grace window covers server downtime only. Pause stops NEW claims
+  only: an occurrence claimed before the pause stays owed and may still be
+  delivered, and a due time missed while paused does not supersede it.
 
 ### States
 
@@ -191,14 +198,18 @@ not reliable.
 ### Retention
 
 A Schedule keeps its last 50 terminal occurrences; older terminal rows are
-pruned. A `claimed` occurrence is owed and is never pruned.
+pruned. A `claimed` occurrence is owed and is never pruned. After long downtime
+at most the newest 50 missed due times are recorded.
 
 A Schedule becomes `done` when it can produce no further occurrence and its last
 one is terminal: a `once` Schedule after its single occurrence, a repeating one
 after the last occurrence before `endsOn`. A `done` Schedule leaves the default
 list for the Done filter and is deleted with its history 30 days after it became
-`done`, never counted from the due or claim time. Deleting a Schedule deletes
-its history.
+`done`, never counted from the due or claim time: `done_at` is stamped by the
+transition that leaves nothing owed and nothing due (the settle of the last
+`claimed` occurrence, not its claim). An edit that gives a `done` Schedule a
+future occurrence makes it active again. Deleting a Schedule deletes its
+history.
 
 ## Delivering into an existing session
 
@@ -320,6 +331,37 @@ subscribes; the inspector section and the header badge filter that state, so
 Tables `schedules` (definition, `next_due_at_ms`, `revision`) and
 `schedule_occurrences`. Settings, through the registry: grace window (60
 minutes), cardless limit (10), Pause all.
+
+### Implemented so far
+
+Phase 1 lands in two pull requests ([Task-1502](pa://task/1502), then
+[Task-1503](pa://task/1503)). Built so far, and inert: nothing in production
+creates a Schedule yet.
+
+- `app/shared/schedules.ts`: the model and `nextOccurrencesAfter`.
+- Migration `0107_schedules.sql`. A Schedule's target is an open union
+  (`target_kind`, with `target_session_id` for an existing session), so the
+  new-session target adds columns rather than a table rebuild. The zone lives in
+  the timing; an occurrence freezes its own copy with the prompt, name and
+  target.
+- `app/server/src/db/scheduleStore.ts`. Every public write is one transaction
+  that moves the revision of each Schedule it touched, occurrence changes
+  included. `claimDue` settles one Schedule's due times up to now in one
+  transaction: it claims the latest when not paused and within the grace window,
+  records the others `missed`, supersedes an earlier claim and advances
+  `next_due_at_ms`; the unique `(schedule_id, due_at_ms)` makes a repeat insert
+  nothing. Settling, superseding and withdrawing move only a row still
+  `claimed`, so a repeated or late settle changes nothing. A delete removes the
+  history and leaves a tombstone with the delete's revision; the maintenance
+  sweep prunes history, deletes Schedules 30 days after `done` and Schedules
+  whose target session was deleted, and purges tombstones after 30 days.
+- The `schedules` topic (`app/server/src/schedules/scheduleTopic.ts`): every
+  write stamps through a change set, a live Schedule (`done` included) is a
+  member, a tombstone leaves as a delete at its delete's revision. Every web
+  connection holds it and diffs a digest on resubscribe; nothing renders it.
+- The `schedules` Settings section, rendered from its three registry fields.
+
+The schedule clock, the scheduled prompts lane and the tools are not built yet.
 
 ## Phases
 

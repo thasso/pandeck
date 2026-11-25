@@ -288,6 +288,42 @@ describe("settingsPatchForWrites", () => {
     }
   });
 
+  test("schedule settings default, have bounded registry writes and normalized persistence", async () => {
+    const before = getSettings().schedules;
+    try {
+      assert.deepEqual(before, {
+        graceWindowMinutes: 60,
+        cardlessLimit: 10,
+        paused: false,
+      });
+      assert.throws(
+        () =>
+          settingsPatchForWrites([
+            { path: "schedules.graceWindowMinutes", value: 1441 },
+          ]),
+        /must be between/,
+      );
+      await saveSettings(
+        settingsPatchForWrites([{ path: "schedules.paused", value: true }]),
+      );
+      assert.deepEqual(getSettings().schedules, { ...before, paused: true });
+      await saveSettings({
+        schedules: {
+          graceWindowMinutes: -5,
+          cardlessLimit: 500,
+          paused: false,
+        },
+      });
+      assert.deepEqual(getSettings().schedules, {
+        graceWindowMinutes: 0,
+        cardlessLimit: 100,
+        paused: false,
+      });
+    } finally {
+      await saveSettings({ schedules: before });
+    }
+  });
+
   test("a malformed vocabulary is refused before it can erase the current one", async () => {
     const vocabulary = [{ from: "pan deck", to: "Pandeck" }];
     await saveSettings(

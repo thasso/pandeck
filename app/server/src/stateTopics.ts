@@ -9,6 +9,7 @@ import { setStateChangeSink } from "./db/changeSet.ts";
 import { dbIsOpen, getDb } from "./db/index.ts";
 import { initiativeStateTopic } from "./initiatives.ts";
 import { projectStateTopic } from "./projectRegistry.ts";
+import { scheduleStateTopic } from "./schedules/scheduleTopic.ts";
 import { sessionsStateTopic } from "./sessionsTopic.ts";
 import { createStateTopic, type StateTopic } from "./stateTopicKernel.ts";
 import { taskStateTopic } from "./tasks.ts";
@@ -20,6 +21,7 @@ const projects = createStateTopic(projectStateTopic);
 // flushes both together.
 const tasks = createStateTopic(taskStateTopic);
 const initiatives = createStateTopic(initiativeStateTopic);
+const schedules = createStateTopic(scheduleStateTopic);
 
 const topics = new Map<
   BroadcastTopic,
@@ -30,6 +32,7 @@ const topics = new Map<
   ["projects", projects],
   ["tasks", tasks],
   ["initiatives", initiatives],
+  ["schedules", schedules],
 ]);
 
 /** The kernel answering `topic`, when that topic runs on one. */
@@ -52,6 +55,7 @@ export function attachStateTopics(
   projects.attach(broadcast);
   tasks.attach(broadcast);
   initiatives.attach(broadcast);
+  schedules.attach(broadcast);
   setStateChangeSink((topic, ids) => topics.get(topic)?.report(ids));
 }
 

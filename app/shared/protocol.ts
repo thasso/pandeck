@@ -71,6 +71,7 @@ import type {
   SessionRuntimeAccount,
 } from "./sessionRuntime.ts";
 import { clampInt } from "./memoryValidation.ts";
+import type { ScheduleSettings, ScheduleSummary } from "./schedules.ts";
 import type {
   MemoryListFilter,
   MemoryListResult,
@@ -1659,6 +1660,8 @@ export interface AppSettings {
   browserTools: BrowserToolSettings;
   /** Governance for session-owned background work ([Task-467](pa://task/467)). */
   backgroundWork: BackgroundWorkSettings;
+  /** The schedule clock's grace window, cardless limit and Pause all (`docs/schedules.md`). */
+  schedules: ScheduleSettings;
   jira: JiraSettings;
   confluence: ConfluenceSettings;
   tempo: TempoSettings;
@@ -6788,7 +6791,9 @@ export type BroadcastTopic =
   /** The user-owned skills library, rescanned on every subscribe. */
   | "skills"
   /** The user-owned agent definitions library, rescanned on every subscribe. */
-  | "agents";
+  | "agents"
+  /** Live Schedule summaries (`docs/schedules.md`); history is a separate read. */
+  | "schedules";
 
 export const BROADCAST_TOPICS: readonly BroadcastTopic[] = [
   "sessions",
@@ -6801,6 +6806,7 @@ export const BROADCAST_TOPICS: readonly BroadcastTopic[] = [
   "workflow",
   "skills",
   "agents",
+  "schedules",
 ];
 
 /**
@@ -8286,7 +8292,7 @@ export type ClientMessage =
   /** Batch-fetch rows whose revisions differed in a state digest. */
   | {
       type: "getStateItems";
-      topic: "tasks" | "projects" | "initiatives" | "sessions";
+      topic: "tasks" | "projects" | "initiatives" | "sessions" | "schedules";
       ids: string[];
       requestId: string;
     }
@@ -8637,6 +8643,7 @@ export type ServerMessage =
   | StateEventsMessage<"tasks", TaskSummary>
   | StateEventsMessage<"projects", ProjectSummary>
   | StateEventsMessage<"initiatives", InitiativeSummary>
+  | StateEventsMessage<"schedules", ScheduleSummary>
   | StateEventsMessage<"background", BackgroundWorkItemSummary>
   | StateEventsMessage<"sessions", SessionListItem>
   | CommentsSnapshotMessage
@@ -8904,6 +8911,18 @@ export type ServerMessage =
   | StateItemsMessage<"projects", ProjectSummary>
   | StateDigestMessage<"initiatives">
   | StateItemsMessage<"initiatives", InitiativeSummary>
+  | StateDigestMessage<"schedules">
+  | StateItemsMessage<"schedules", ScheduleSummary>
+  /**
+   * Cold/resync snapshot of the live Schedules. Mutations never travel this
+   * way; the sidecar `revisions` seeds the client's next resubscribe.
+   */
+  | {
+      type: "scheduleList";
+      items: ScheduleSummary[];
+      seq: number;
+      revisions: StateDigestEntry[];
+    }
   /**
    * The `sessions` digest: the live projection's ids with their revisions,
    * followed on the same connection by one `archivedSessionCount`.

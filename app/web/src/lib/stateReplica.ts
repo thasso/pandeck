@@ -39,6 +39,7 @@ const DIGEST_ORDER: readonly ItemTopic[] = [
   "projects",
   "initiatives",
   "sessions",
+  "schedules",
 ];
 
 /** Why an item fetch is open: a digest's catch-up, or an edit's recovery. */

@@ -15,6 +15,10 @@ import {
   taskSummaryOf,
   workflowRunRoleSessionIds,
 } from "@assistant/shared";
+import {
+  DEFAULT_SCHEDULE_SETTINGS,
+  type ScheduleSummary,
+} from "@assistant/shared/schedules";
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import {
   readAppShellCacheRecord,
@@ -281,6 +285,7 @@ const defaultSettings: AppSettings = {
     rawMcpEnabled: false,
   },
   backgroundWork: DEFAULT_BACKGROUND_WORK_SETTINGS,
+  schedules: DEFAULT_SCHEDULE_SETTINGS,
   jira: {
     enabled: false,
     jiraHost: "",
@@ -590,6 +595,11 @@ export interface UIState {
   initiativesRefreshing: boolean;
   /** The Initiative list could not be read; cleared by the next snapshot. */
   initiativeListError: string | null;
+  /**
+   * Live Schedule summaries from the always-held `schedules` topic, `done`
+   * ones included. Nothing renders them yet (`docs/schedules.md`).
+   */
+  schedules: ScheduleSummary[];
   /**
    * The inspector's last compaction-window save, by session id: busy while it
    * is unanswered, then its refusal (if any) until the next save.
@@ -1056,6 +1066,7 @@ const emptyInitial: UIState = {
   initiativesFresh: false,
   initiativesRefreshing: false,
   initiativeListError: null,
+  schedules: [],
   compactionWindowEdits: {},
   initiativeDetails: {},
   initiativeDetailRevisions: {},
@@ -3824,6 +3835,10 @@ type BackgroundStateEventsMessage = StateEventsMessage<
   "background",
   BackgroundWorkItemSummary
 >;
+type ScheduleStateEventsMessage = StateEventsMessage<
+  "schedules",
+  ScheduleSummary
+>;
 
 /**
  * The `background` topic's replica lenses. A newly seen row goes FIRST, and a
@@ -4169,6 +4184,51 @@ const initiativeReplica: TopicDescriptor<
   resubscribeOnlyWhileHeld: true,
 };
 
+/**
+ * The `schedules` topic's replica lenses. Every connection holds it, so its
+ * snapshot is the whole live set and a newly seen row goes LAST, like the
+ * server's creation order.
+ */
+const scheduleReplica: TopicDescriptor<
+  UIState,
+  ScheduleSummary,
+  Extract<ServerMessage, { type: "scheduleList" }>
+> = {
+  read: (state) => ({
+    items: state.schedules,
+    revisions: state.stateEventRevisions.schedules ?? {},
+  }),
+  write: (state, replica) => ({
+    ...state,
+    schedules: replica.items,
+    stateEventRevisions: {
+      ...state.stateEventRevisions,
+      schedules: replica.revisions,
+    },
+  }),
+  snapshot: (message) => ({
+    items: message.items,
+    revisions: message.revisions,
+  }),
+  place: (items, item) => [...items, item],
+  digest: {
+    // A baseline exists only once this hook instance applied an answer.
+    baseline: (state) => {
+      const revisions = state.stateEventRevisions.schedules;
+      return (
+        revisions !== undefined &&
+        state.schedules.every(
+          (item) =>
+            Number.isSafeInteger(revisions[item.id]) &&
+            revisions[item.id]! >= 0,
+        )
+      );
+    },
+    adoptDigest: (state) => state,
+    adoptItems: (state) => state,
+  },
+};
+
 type TaskListMessage = Extract<ServerMessage, { type: "taskList" }>;
 const NO_TASKS: TaskSummary[] = [];
 
@@ -4357,10 +4417,13 @@ function applyEvent(
     | ProjectStateEventsMessage
     | InitiativeStateEventsMessage
     | BackgroundStateEventsMessage
-    | SessionStateEventsMessage,
+    | SessionStateEventsMessage
+    | ScheduleStateEventsMessage,
 ): UIState {
   if (message.topic === "sessions")
     return applyTopicMessage(sessionReplica, state, message);
+  if (message.topic === "schedules")
+    return applyTopicMessage(scheduleReplica, state, message);
   if (message.topic === "tasks")
     return applyTopicMessage(taskReplica, state, message);
   if (message.topic === "projects")
@@ -5082,6 +5145,12 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
         purpose,
         events: msg.events,
       });
+    if (msg.topic === "schedules")
+      return applyTopicMessage(scheduleReplica, state, {
+        kind: "items",
+        purpose,
+        events: msg.events,
+      });
     return msg.topic === "projects"
       ? applyTopicMessage(projectReplica, state, {
           kind: "items",
@@ -5104,6 +5173,8 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       return applyTopicMessage(initiativeReplica, state, input);
     if (action.topic === "sessions")
       return applyTopicMessage(sessionReplica, state, input);
+    if (action.topic === "schedules")
+      return applyTopicMessage(scheduleReplica, state, input);
     return state;
   }
   if (action.kind === "optimisticProjectSave") {
@@ -6380,7 +6451,9 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
           ? applyTopicMessage(projectReplica, state, msg)
           : msg.topic === "sessions"
             ? applyTopicMessage(sessionReplica, state, msg)
-            : applyTopicMessage(initiativeReplica, state, msg);
+            : msg.topic === "schedules"
+              ? applyTopicMessage(scheduleReplica, state, msg)
+              : applyTopicMessage(initiativeReplica, state, msg);
     case "stateItems":
       // Every answer arrives as `replicaItems`, tagged by its purpose.
       return state;
@@ -6414,6 +6487,8 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
     }
     case "initiativeList":
       return applyTopicMessage(initiativeReplica, state, msg);
+    case "scheduleList":
+      return applyTopicMessage(scheduleReplica, state, msg);
     case "initiativeDetail":
       // Correlated before reducer dispatch in the socket effect.
       return state;
@@ -7752,6 +7827,7 @@ export function useAssistant({
       projects: projectReplica,
       initiatives: initiativeReplica,
       sessions: sessionReplica,
+      schedules: scheduleReplica,
     },
     send: (message) => socketRef.current?.send(message),
     holds: (topic) => topicsRef.current.has(topic),
@@ -8035,6 +8111,8 @@ export function useAssistant({
         replicaTransport.snapshotReceived("initiatives", msg.seq);
       if (msg.type === "sessionList")
         replicaTransport.snapshotReceived("sessions", msg.seq);
+      if (msg.type === "scheduleList")
+        replicaTransport.snapshotReceived("schedules", msg.seq);
       if (msg.type === "stateDigest") {
         // A digest the transport fell back from never reaches the reducer.
         const answer = replicaTransport.digestReceived(msg, stateRef.current);

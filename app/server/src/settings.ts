@@ -59,6 +59,7 @@ import {
   SESSION_HANDOFF_TOKEN_CAP_LIMITS,
 } from "@assistant/shared";
 import { OPENAI_RESET_AUTO_REDEEM_LEAD_HOURS } from "@assistant/shared/usage";
+import { normalizeScheduleSettings } from "@assistant/shared/schedules";
 import {
   readStoredAppSettings,
   writeStoredAppSettings,
@@ -670,6 +671,7 @@ export function getSettings(publicBaseUrl?: string): AppSettings {
       stored.browserTools ?? DEFAULT_BROWSER_TOOL_SETTINGS,
     ),
     backgroundWork: normalizeBackgroundWorkSettings(stored.backgroundWork),
+    schedules: normalizeScheduleSettings(stored.schedules),
     claudeSdk: { ...DEFAULT_CLAUDE_SDK_SETTINGS, ...(stored.claudeSdk ?? {}) },
     worktrees: normalizeWorktreeSettings(stored.worktrees),
     projectsRoot: normalizeProjectsRoot(stored.projectsRoot),
@@ -794,6 +796,9 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
       ? {
           backgroundWork: normalizeBackgroundWorkSettings(patch.backgroundWork),
         }
+      : {}),
+    ...(patch.schedules
+      ? { schedules: normalizeScheduleSettings(patch.schedules) }
       : {}),
     ...(patch.claudeSdk ? { claudeSdk: patch.claudeSdk } : {}),
     ...(patch.worktrees

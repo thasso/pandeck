@@ -204,6 +204,9 @@ export const webAliases: Record<string, string> = {
   "@assistant/shared/zonedTime": fileURLToPath(
     new URL("../shared/zonedTime.ts", import.meta.url),
   ),
+  "@assistant/shared/schedules": fileURLToPath(
+    new URL("../shared/schedules.ts", import.meta.url),
+  ),
   "@assistant/shared/sessionTreeWorktrees": fileURLToPath(
     new URL("../shared/sessionTreeWorktrees.ts", import.meta.url),
   ),

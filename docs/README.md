@@ -20,11 +20,12 @@ only binding rules; everything else lives here.
   `blocks` as the one dependency type, membership and milestones as `links`
   edges, the agent tools, the live map page, the Sessions inbox item that stays
   until the user settles it, and the phases, and server-side layout.
-- `schedules.md` — Schedules (agreed, not yet built): prompts at a wall-clock
-  time, once or repeating, into an existing session or as a new session; timing
-  and DST rules, occurrences, the grace window and Pause all, the scheduled
-  prompts lane, who may change what with the `scheduleChange` card and the
-  `schedule` grant, the tools, the web surfaces and the phases.
+- `schedules.md` — Schedules (agreed; Phase 1 model, storage and settings built,
+  inert): prompts at a wall-clock time, once or repeating, into an existing
+  session or as a new session; timing and DST rules, occurrences, the grace
+  window and Pause all, the scheduled prompts lane, who may change what with the
+  `scheduleChange` card and the `schedule` grant, the tools, the web surfaces
+  and the phases.
 - `agent-workflows.md` — the agreed v1 Workflow Run architecture: a durable run
   with append-only steps and events, one code-delivery recipe as recipe code
   over generic step rows, structured results via `session_submit_result`,

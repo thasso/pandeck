@@ -113,8 +113,10 @@ export function topicsForSurface({
   settingsSection,
 }: TopicSurface): BroadcastTopic[] {
   // Always held: the session list is in every surface's chrome (sidebar,
-  // inbox, routing), so every connection subscribes at socket open.
-  const topics = new Set<BroadcastTopic>(["sessions"]);
+  // inbox, routing), so every connection subscribes at socket open. Schedules
+  // are held everywhere too: the session inspector and the header badge filter
+  // that one list (`docs/schedules.md`).
+  const topics = new Set<BroadcastTopic>(["sessions", "schedules"]);
   const shownSection = sidebarVisible ? sidebarSection : null;
 
   const taskSurface = shownSection === "tasks" || routeName === "tasks";

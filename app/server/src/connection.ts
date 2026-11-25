@@ -1941,6 +1941,7 @@ export class Connection implements Viewer {
         projects: "Project",
         initiatives: "Initiative",
         sessions: "Session",
+        schedules: "Schedule",
       }[topic];
       this.send({
         type: "error",
