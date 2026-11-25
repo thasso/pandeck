@@ -218,6 +218,7 @@ import {
   startScheduleClock,
   stopScheduleClock,
 } from "./schedules/scheduleClock.ts";
+import { recoverScheduledPromptsOnBoot } from "./schedules/scheduledPrompts.ts";
 import {
   startOpenAiResetAutoRedeemSweep,
   stopOpenAiResetAutoRedeemSweep,
@@ -2339,10 +2340,18 @@ server.listen(PORT, HOST, () => {
   bootStep("peer-prompt recovery offers", () =>
     drainAllQueuedOnBoot(offerOnBoot),
   );
+  // Before the clock: an attempted occurrence a restart interrupted is
+  // settled from its target's transcript, and every owed target is offered.
+  bootStep("scheduled-prompt recovery", () =>
+    recoverScheduledPromptsOnBoot(offerOnBoot),
+  );
   // After every delivery recovery, so an occurrence the clock claims finds the
   // owed work restored. Its boot tick runs the first maintenance sweep, which
-  // also deletes Schedules whose target session was deleted while down.
-  bootStep("schedule clock", () => startScheduleClock());
+  // also deletes Schedules whose target session was deleted while down. Each
+  // claim wakes its target's scheduled prompts lane.
+  bootStep("schedule clock", () =>
+    startScheduleClock({ claimed: (target) => offerDelivery(target) }),
+  );
   // After recovery and the idle wiring: children that waited for a slot across
   // the restart start as the surviving work allows.
   bootStep("held direct peer starts", () => startHeldDirectPeersOnBoot());

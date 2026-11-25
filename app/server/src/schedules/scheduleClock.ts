@@ -71,8 +71,8 @@ interface ScheduleClockOptions {
    * Runs once per occurrence claimed while the clock is started, by a tick or
    * a Pause all switch, after its claim committed, with the target from the
    * frozen occurrence row. A wake, not a durable event: a claim committed
-   * while stopped stays owed and is not replayed by `start`. PR-A wires
-   * nothing to it; the scheduled prompts lane wakes the target's delivery here.
+   * while stopped stays owed and is not replayed by `start`. In production it
+   * wakes the target's scheduled prompts lane.
    */
   claimed?: (
     targetSessionId: string,
@@ -242,9 +242,14 @@ export function createScheduleClock(
 
 let production: ScheduleClock | undefined;
 
-/** Boot: start the one production clock, after delivery recovery. */
-export function startScheduleClock(): void {
-  production ??= createScheduleClock();
+/**
+ * Boot: start the one production clock, after delivery recovery. `claimed`
+ * wakes the target's delivery for every occurrence claimed while it runs.
+ */
+export function startScheduleClock(
+  options: Pick<ScheduleClockOptions, "claimed"> = {},
+): void {
+  production ??= createScheduleClock(options);
   production.start();
 }
 

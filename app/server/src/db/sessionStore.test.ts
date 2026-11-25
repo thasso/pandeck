@@ -1064,3 +1064,107 @@ test("a pending runtime selection persists across restart, survives upserts, and
   sessionStore.remove(id);
   sessionStore.remove(child);
 });
+
+test("restoreForScheduledDelivery clears both flags strictly in one change set", async () => {
+  const { setStateChangeSink } = await import("./changeSet.ts");
+  const tag = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const parent = `restore-parent-${tag}`;
+  const target = `restore-target-${tag}`;
+  for (const id of [parent, target])
+    sessionStore.upsert({ id, harness: "pi", agentType: "assistant" });
+  sessionStore.linkSpawned(parent, target);
+  const handed: Array<[string, readonly string[]]> = [];
+  const previous = setStateChangeSink((topic, ids) => {
+    handed.push([topic, ids]);
+  });
+  try {
+    // Nothing set: false, nothing written or touched.
+    assert.deepEqual(sessionStore.archiveFlags(target), {
+      archivedAtMs: null,
+      settledAtMs: null,
+    });
+    assert.equal(sessionStore.restoreForScheduledDelivery(target), false);
+    assert.equal(handed.length, 0);
+
+    sessionStore.setArchived(target, true, 11);
+    sessionStore.setSettled(target, true, 12);
+    assert.deepEqual(sessionStore.archiveFlags(target), {
+      archivedAtMs: 11,
+      settledAtMs: 12,
+    });
+    handed.length = 0;
+    assert.equal(sessionStore.restoreForScheduledDelivery(target), true);
+    assert.deepEqual(sessionStore.archiveFlags(target), {
+      archivedAtMs: null,
+      settledAtMs: null,
+    });
+    // One hand-off for the change set: the session and its spawn parent.
+    const sessions = handed.filter(([topic]) => topic === "sessions");
+    assert.equal(sessions.length, 1);
+    assert.deepEqual(new Set(sessions[0]![1]), new Set([target, parent]));
+
+    // Settled only.
+    sessionStore.setSettled(target, true, 13);
+    assert.equal(sessionStore.restoreForScheduledDelivery(target), true);
+    assert.equal(sessionStore.isSettled(target), false);
+  } finally {
+    setStateChangeSink(previous);
+  }
+
+  // Missing or tombstoned: throws, and the flags read undefined.
+  assert.throws(
+    () => sessionStore.restoreForScheduledDelivery(`restore-missing-${tag}`),
+    /Session not found: restore-missing-/,
+  );
+  assert.equal(sessionStore.archiveFlags(`restore-missing-${tag}`), undefined);
+  sessionStore.setArchived(target, true, 14);
+  sessionStore.remove(target);
+  assert.throws(
+    () => sessionStore.restoreForScheduledDelivery(target),
+    /Session not found/,
+  );
+  assert.equal(sessionStore.archiveFlags(target), undefined);
+});
+
+test("restoreForScheduledDelivery rolls back when its update or a primary touch fails", () => {
+  const id = `restore-fail-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  sessionStore.upsert({ id, harness: "pi", agentType: "assistant" });
+  sessionStore.setArchived(id, true, 21);
+  sessionStore.setSettled(id, true, 22);
+  const failOn = (trigger: string, fn: () => void) => {
+    getDb().exec(trigger);
+    try {
+      fn();
+    } finally {
+      getDb().exec("DROP TRIGGER temp.fail_restore");
+    }
+  };
+  // The flags' own update.
+  failOn(
+    `CREATE TEMP TRIGGER fail_restore BEFORE UPDATE OF archived_at_ms ON session_index
+     BEGIN SELECT RAISE(ABORT, 'restore update failed'); END`,
+    () =>
+      assert.throws(
+        () => sessionStore.restoreForScheduledDelivery(id),
+        /restore update failed/,
+      ),
+  );
+  assert.deepEqual(sessionStore.archiveFlags(id), {
+    archivedAtMs: 21,
+    settledAtMs: 22,
+  });
+  // The session-row touch inside the same change set.
+  failOn(
+    `CREATE TEMP TRIGGER fail_restore BEFORE INSERT ON session_list_revisions
+     BEGIN SELECT RAISE(ABORT, 'row touch failed'); END`,
+    () =>
+      assert.throws(
+        () => sessionStore.restoreForScheduledDelivery(id),
+        /row touch failed/,
+      ),
+  );
+  assert.deepEqual(sessionStore.archiveFlags(id), {
+    archivedAtMs: 21,
+    settledAtMs: 22,
+  });
+});

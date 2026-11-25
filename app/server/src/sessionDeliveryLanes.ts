@@ -26,6 +26,8 @@ import {
   type PromptQueueDriver,
 } from "./promptQueue.ts";
 import { subscribeSessionUserEntry } from "./session/runtime/liveSession.ts";
+import { scheduleStore } from "./db/scheduleStore.ts";
+import { deliverScheduledPrompts } from "./schedules/scheduledPrompts.ts";
 import { hasExplicitRecipientAuthority } from "./recipientDrainAuthority.ts";
 import { workflowAssignmentDelivery } from "./workflow/assignmentDelivery.ts";
 import {
@@ -101,7 +103,10 @@ export function sessionDeliveryLanes(
     settleEarlierDeliveries,
     // Keep the old queue-to-peer deferral without lane-owned cross-yields.
     // A paused/failed queue no longer owes; other lanes keep their policy.
-    deferOnDecline: { "user queue": ["peer fifo", "peer notices"] },
+    // Scheduled prompts yield to a queue that still owes work the same way.
+    deferOnDecline: {
+      "user queue": ["peer fifo", "peer notices", "scheduled prompts"],
+    },
     lanes: [
       {
         name: "handoffs",
@@ -159,6 +164,19 @@ export function sessionDeliveryLanes(
             true,
           ),
       })),
+      {
+        // One occurrence per NEW turn, never joining a running one. Stop is
+        // the scheduler's own hold, and a session that cannot be acquired
+        // keeps its occurrences owed: nothing to record here.
+        name: "scheduled prompts",
+        mayJoinRunningTurn: false,
+        owes: (id) => scheduleStore.owesTarget(id),
+        unavailable: () => {},
+        deliver: (session, canAdmit) =>
+          deliver(session, canAdmit, (shouldStart) =>
+            deliverScheduledPrompts(session, shouldStart),
+          ),
+      },
       {
         name: "background completions",
         mayJoinRunningTurn: true,

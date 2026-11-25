@@ -1244,6 +1244,29 @@ export const scheduleStore = {
     ).map(occurrenceRecordOf);
   },
 
+  /** Whether any occurrence is still owed to a session: the lane's cheap check. */
+  owesTarget(sessionId: string): boolean {
+    return (
+      getDb()
+        .prepare(
+          "SELECT 1 FROM schedule_occurrences WHERE target_session_id = ? AND state = 'claimed' LIMIT 1",
+        )
+        .get(sessionId) !== undefined
+    );
+  },
+
+  /** Every occurrence still `claimed`, oldest due time first: boot recovery. */
+  claimedOccurrences(): ScheduleOccurrenceRecord[] {
+    return (
+      getDb()
+        .prepare(
+          `SELECT * FROM schedule_occurrences WHERE state = 'claimed'
+           ORDER BY due_at_ms, id`,
+        )
+        .all() as unknown as OccurrenceRow[]
+    ).map(occurrenceRecordOf);
+  },
+
   /**
    * Hear about every committed write that touched a Schedule: the clock
    * re-arms on it. A listener's throw is logged and never fails the write.
@@ -1276,6 +1299,11 @@ export const scheduleStore = {
    */
   setAdmissionResolver(resolver: ScheduleAdmissionResolver | undefined): void {
     admissionResolver = resolver;
+  },
+
+  /** Whether an admission resolver is registered now. */
+  hasAdmissionResolver(): boolean {
+    return admissionResolver !== undefined;
   },
 
   /**

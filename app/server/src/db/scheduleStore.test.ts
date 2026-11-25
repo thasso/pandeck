@@ -1883,4 +1883,40 @@ describe("scheduleStore cutovers, capacity and admission (Task-1503)", () => {
       assert.deepEqual(asked, []);
     });
   });
+
+  describe("reads for the scheduled prompts lane and recovery", () => {
+    it("owesTarget and claimedOccurrences see only claimed rows; the resolver reads back", () => {
+      const s = daily({ target: { kind: "session", sessionId: "owed-a" } });
+      const t = daily({ target: { kind: "session", sessionId: "owed-b" } });
+      assert.equal(scheduleStore.owesTarget("owed-a"), false);
+      assert.deepEqual(scheduleStore.claimedOccurrences(), []);
+      const a = scheduleStore.claimDue(s.id, D1_0900, GRACE).claimed!;
+      const b = attempted(t.id);
+      assert.equal(scheduleStore.owesTarget("owed-a"), true);
+      assert.equal(scheduleStore.owesTarget("owed-b"), true);
+      assert.equal(scheduleStore.owesTarget("owed-c"), false);
+      const claimed = scheduleStore.claimedOccurrences();
+      assert.deepEqual(
+        claimed.map((o) => [o.id, o.target.sessionId, o.attemptedAtMs]),
+        [
+          [a.id, "owed-a", undefined],
+          [b.id, "owed-b", D1_0900 + 1],
+        ].sort((x, y) => String(x[0]).localeCompare(String(y[0]))),
+      );
+      scheduleStore.settleOccurrence(a.id, "delivered", {
+        sessionId: "owed-a",
+      });
+      assert.equal(scheduleStore.owesTarget("owed-a"), false);
+      assert.deepEqual(
+        scheduleStore.claimedOccurrences().map((o) => o.id),
+        [b.id],
+      );
+
+      assert.equal(scheduleStore.hasAdmissionResolver(), false);
+      resolveWith(() => ({ kind: "absent" }));
+      assert.equal(scheduleStore.hasAdmissionResolver(), true);
+      scheduleStore.setAdmissionResolver(undefined);
+      assert.equal(scheduleStore.hasAdmissionResolver(), false);
+    });
+  });
 });
