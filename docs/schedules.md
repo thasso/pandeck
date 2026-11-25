@@ -136,7 +136,12 @@ occurrence. An occurrence is therefore claimed at most once across restarts.
   claiming. Occurrences due while paused are `missed` and do not catch up on
   resume; the grace window covers server downtime only. Pause stops NEW claims
   only: an occurrence claimed before the pause stays owed and may still be
-  delivered, and a due time missed while paused does not supersede it.
+  delivered, and a due time missed while paused does not supersede it. What
+  counts is when the due time fell, not when the clock got to it: the clock
+  remembers when it saw the pause lifted, and until it has settled every
+  Schedule through that instant, a due time at or before it is `missed` even if
+  the tick that records it runs after the resume (a late timer, a failure
+  back-off). A due time after the resume is claimed as usual.
 
 ### States
 

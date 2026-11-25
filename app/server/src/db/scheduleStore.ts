@@ -111,6 +111,11 @@ export interface ScheduleUpdate {
 export interface ScheduleClaimPolicy {
   graceMs: number;
   paused: boolean;
+  /**
+   * Due times at or before this instant were crossed while paused: they are
+   * recorded `missed` and never claimed, though the clock now runs unpaused.
+   */
+  missThroughMs?: number;
 }
 
 export interface ScheduleClaimOutcome {
@@ -589,7 +594,8 @@ export const scheduleStore = {
    * every other one is recorded `missed` (the newest
    * {@link SCHEDULE_HISTORY_LIMIT} of them), and `next_due_at_ms` advances to
    * the first occurrence after `nowMs`. A claim supersedes an earlier
-   * still-`claimed` occurrence; while paused an existing claim stays owed.
+   * still-`claimed` occurrence; while paused, and for a due time at or before
+   * `missThroughMs`, nothing is claimed and an existing claim stays owed.
    *
    * A due time already recorded (the unique `(schedule_id, due_at_ms)`)
    * inserts nothing, so a claim happens at most once across restarts.
@@ -615,7 +621,10 @@ export const scheduleStore = {
         nowMs,
       );
       const latest = due.at(-1)!;
-      const claimable = !policy.paused && nowMs - latest <= policy.graceMs;
+      const claimable =
+        !policy.paused &&
+        latest > (policy.missThroughMs ?? -Infinity) &&
+        nowMs - latest <= policy.graceMs;
       let claimedId: string | undefined;
       if (claimable) {
         claimedId = insertOccurrence(row, latest, "claimed", nowMs);

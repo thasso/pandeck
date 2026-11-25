@@ -724,3 +724,26 @@ describe("scheduleStore.onWrite", () => {
     }
   });
 });
+
+describe("scheduleStore.claimDue missThroughMs", () => {
+  it("misses a due time at or before the cutoff and keeps the owed claim", () => {
+    const created = scheduleStore.create(input(), DEC1 - 1);
+    const owed = scheduleStore.claimDue(created.id, DEC1, GRACE).claimed!;
+    const DEC2 = DEC1 + DAY;
+    const atCutoff = scheduleStore.claimDue(created.id, DEC2 + MINUTE, {
+      ...GRACE,
+      missThroughMs: DEC2,
+    });
+    assert.equal(atCutoff.claimed, undefined);
+    assert.equal(atCutoff.missed, 1);
+    assert.equal(scheduleStore.getOccurrence(owed.id)?.state, "claimed");
+    assert.equal(scheduleStore.get(created.id)?.nextDueAtMs, DEC2 + DAY);
+    // A due time after the cutoff is claimed as usual and supersedes.
+    const after = scheduleStore.claimDue(created.id, DEC2 + DAY, {
+      ...GRACE,
+      missThroughMs: DEC2 + DAY - 1,
+    });
+    assert.ok(after.claimed);
+    assert.equal(scheduleStore.getOccurrence(owed.id)?.state, "superseded");
+  });
+});

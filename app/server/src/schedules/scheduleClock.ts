@@ -15,11 +15,21 @@
  * after that claim committed, with the target read from the frozen occurrence.
  * A tick that fails anywhere logs it and does not re-arm sooner than
  * {@link SCHEDULE_CLOCK_RETRY_MS}, so a persistent failure never spins.
+ *
+ * Pause all is judged by when a due time fell, not by when a tick gets to it.
+ * A tick can come late (a failed one waits out its back-off, a timer can run
+ * late), and Pause all may be lifted in between. So the clock remembers the
+ * instant it saw the pause lifted, and until a tick has settled every Schedule
+ * through it, due times at or before it are recorded `missed` and never
+ * claimed: they cannot catch up on resume or supersede an occurrence claimed
+ * before the pause. A resume also ticks at once, outside a back-off, so those
+ * due times are recorded while the cutoff is still known.
  */
 import { onSettingsChanged } from "../settingsService.ts";
 import { getSettings } from "../settings.ts";
 import {
   scheduleStore,
+  type ScheduleClaimPolicy,
   type ScheduleOccurrenceRecord,
 } from "../db/scheduleStore.ts";
 import { errorText } from "../errors.ts";
@@ -109,7 +119,39 @@ export function createScheduleClock(
   let maintenanceDueAtMs = 0;
   /** Set by a failed tick: no timer fires before it. */
   let retryNotBeforeMs: number | undefined;
+  /** Pause all as last read. */
+  let paused = false;
+  /**
+   * The latest instant Pause all was seen lifted, until a tick settled every
+   * due Schedule through it: due times at or before it are missed.
+   */
+  let missThroughMs: number | undefined;
   let unsubscribe: Array<() => void> = [];
+
+  /** Record a pause read at `at`; a pause seen lifted moves the cutoff. */
+  function observePause(next: boolean, at: number): boolean {
+    const resumed = paused && !next;
+    if (resumed) missThroughMs = Math.max(missThroughMs ?? at, at);
+    paused = next;
+    return resumed;
+  }
+
+  /** A settings change: note a pause or resume now, then tick or re-arm. */
+  function settingsChanged(): void {
+    if (!running) return;
+    let resumed = false;
+    try {
+      resumed = observePause(settings.read().paused, now());
+    } catch (err) {
+      // The next tick reads the settings again and treats a resume it only
+      // sees then as lifted at that tick: never later than it was.
+      warn("reading the schedule settings failed", err);
+    }
+    const inBackOff =
+      retryNotBeforeMs !== undefined && now() < retryNotBeforeMs;
+    if (resumed && !inBackOff && !ticking) tick();
+    else arm();
+  }
 
   function disarm(): void {
     if (handle !== undefined) timers.clear(handle);
@@ -146,13 +188,16 @@ export function createScheduleClock(
     ticking = true;
     const at = now();
     let failed = false;
+    let claimsFailed = false;
+    let policy: ScheduleClaimPolicy | undefined;
     try {
-      let policy: { graceMs: number; paused: boolean } | undefined;
       try {
         const current = settings.read();
+        observePause(current.paused, at);
         policy = {
           graceMs: current.graceWindowMinutes * MINUTE_MS,
           paused: current.paused,
+          ...(missThroughMs !== undefined ? { missThroughMs } : {}),
         };
       } catch (err) {
         failed = true;
@@ -165,6 +210,7 @@ export function createScheduleClock(
             occurrence = store.claimDue(id, at, policy).claimed;
           } catch (err) {
             failed = true;
+            claimsFailed = true;
             warn(`claiming ${id} failed`, err);
           }
           if (occurrence)
@@ -193,10 +239,15 @@ export function createScheduleClock(
       }
     } catch (err) {
       failed = true;
+      claimsFailed = true;
       warn("the schedule clock tick failed", err);
     } finally {
       ticking = false;
     }
+    // Every due Schedule was settled through the cutoff this tick applied, so
+    // nothing at or before it is left to claim. A newer resume keeps its own.
+    if (policy && !claimsFailed && missThroughMs === policy.missThroughMs)
+      missThroughMs = undefined;
     retryNotBeforeMs = failed ? at + SCHEDULE_CLOCK_RETRY_MS : undefined;
     arm();
   }
@@ -207,7 +258,7 @@ export function createScheduleClock(
       running = true;
       maintenanceDueAtMs = now();
       retryNotBeforeMs = undefined;
-      unsubscribe = [store.onWrite(arm), settings.onChange(arm)];
+      unsubscribe = [store.onWrite(arm), settings.onChange(settingsChanged)];
       tick();
     },
     stop() {
