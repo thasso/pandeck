@@ -15,8 +15,10 @@ import {
   scheduleStore,
   type ScheduleOccurrenceRecord,
 } from "../db/scheduleStore.ts";
+import { peerPromptStore } from "../db/peerPromptStore.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import { setHumanPromptHook } from "../session/runtime/liveSession.ts";
+import { promptRuntimeSession } from "../session/runtimePrompt.ts";
 import { sessionDeliveryLanes } from "../sessionDeliveryLanes.ts";
 import {
   beforeAdmit,
@@ -257,5 +259,57 @@ describe("scheduled prompts lane: delivery, ordering, the final guard and Stop",
     await until(() => row(occurrence.id).state === "delivered");
     assert.deepEqual(human, [], "the human-prompt hook never runs");
     assert.equal(keyed(f.id, occurrence.id).length, 1);
+  });
+
+  it("T4.11 an open peer chain with spent hops survives a Stop-held and a resumed scheduled prompt; a human prompt closes it", async () => {
+    const f = fixture();
+    const peerSession = seed();
+    // The production hook, observed: every human prompt closes its chains.
+    const human: string[] = [];
+    setHumanPromptHook((id) => {
+      human.push(id);
+      peer.closeChainsForHumanPrompt(id);
+    });
+    const chainId = peerPromptStore.createChain();
+    assert.equal(peerPromptStore.reserveHop(chainId), 1);
+    assert.equal(peerPromptStore.reserveHop(chainId), 2);
+    peerPromptStore.addParticipant(chainId, peerSession.sessionId);
+    peerPromptStore.addParticipant(chainId, f.id);
+    const chain = () => ({
+      state: peerPromptStore.getChain(chainId),
+      participants: [...peerPromptStore.participantsOf(chainId)].sort(),
+      ofTarget: peerPromptStore.chainsForSession(f.id),
+    });
+    const before = chain();
+    assert.equal(before.state?.nextHop, 3);
+    assert.equal(before.state?.closed, false);
+    assert.deepEqual(before.ofTarget, [chainId]);
+
+    hold.holdAutomaticTurns(f.id);
+    const { occurrence } = owed(f.id);
+    await f.scheduler.wake(f.id);
+    assert.equal(row(occurrence.id).state, "claimed");
+    assert.equal(hold.automaticTurnsHeld(f.id), true, "Stop is not lifted");
+    assert.deepEqual(
+      chain(),
+      before,
+      "a held scheduled prompt changes nothing",
+    );
+
+    hold.resumeAutomaticTurns(f.id);
+    await until(() => row(occurrence.id).state === "delivered");
+    await until(() => !f.driver.isRunning);
+    assert.equal(keyed(f.id, occurrence.id).length, 1);
+    assert.deepEqual(human, [], "a scheduled prompt is not a human prompt");
+    assert.deepEqual(chain(), before, "the chain, its hops and members stay");
+
+    // Positive control: the same hook does close the chain for a human turn.
+    await promptRuntimeSession(f.driver, "A human prompt");
+    await until(() => !f.driver.isRunning);
+    assert.deepEqual(human, [f.id]);
+    const after = chain();
+    assert.equal(after.state?.closed, true);
+    assert.equal(after.state?.nextHop, 3, "closing spends no hop");
+    assert.deepEqual(after.participants, before.participants);
   });
 });

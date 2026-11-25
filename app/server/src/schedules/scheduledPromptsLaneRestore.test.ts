@@ -193,6 +193,56 @@ describe("scheduled prompts lane: strict restore and store ends of an attempted 
       assert.equal(after.nextDueAtMs, undefined);
     });
 
+    it("O6 a disable whose outer transaction rolls back keeps the claim and the local record; a later disable delivers it", async () => {
+      const { f, scheduleId, occurrence, release, settle } =
+        await heldAfterRolledBackSettle();
+      const key = scheduledPromptKey(occurrence.id);
+      // Only this process's record can say `present` now: the log is unknown.
+      readerOverride.set(key, "unknown");
+      assert.equal(scheduledAppendRecordedForTests(occurrence.id), true);
+      // `setEnabled` ends the claim (consulting the resolver) BEFORE it writes
+      // `enabled`, so this trigger aborts the whole outer transaction after
+      // the resolver answered.
+      getDb()
+        .exec(`CREATE TEMP TRIGGER fail_disable BEFORE UPDATE OF enabled ON schedules
+        BEGIN SELECT RAISE(ABORT, 'disable failed'); END`);
+      cleanups.push(() =>
+        getDb().exec("DROP TRIGGER IF EXISTS temp.fail_disable"),
+      );
+      assert.throws(
+        () => scheduleStore.setEnabled(scheduleId, false, Date.now(), GRACE),
+        /disable failed/,
+      );
+      getDb().exec("DROP TRIGGER temp.fail_disable");
+      assert.equal(row(occurrence.id).state, "claimed", "rolled back");
+      assert.equal(row(occurrence.id).sessionId, undefined);
+      assert.equal(scheduleStore.get(scheduleId)!.enabled, true);
+      assert.equal(
+        scheduledAppendRecordedForTests(occurrence.id),
+        true,
+        "the local record survives the rollback",
+      );
+      assert.equal(f.driver.isRunning, true);
+
+      scheduleStore.setEnabled(scheduleId, false, Date.now(), GRACE);
+      // Delivered, not D10: the retained record answered, the log could not.
+      assert.equal(row(occurrence.id).state, "delivered");
+      assert.equal(row(occurrence.id).sessionId, f.id);
+      assert.equal(row(occurrence.id).error, undefined);
+      assert.equal(f.driver.isRunning, true, "the turn is not stopped");
+      assert.equal(
+        scheduledAppendRecordedForTests(occurrence.id),
+        true,
+        "kept until the receipt settles",
+      );
+      release();
+      await until(() => !f.driver.isRunning);
+      await until(() => !scheduledAppendRecordedForTests(occurrence.id));
+      assert.equal(row(occurrence.id).state, "delivered");
+      assert.equal(keyed(f.id, occurrence.id).length, 1);
+      assert.equal(settle.mock.calls.length, 1, "the reconcile wrote nothing");
+    });
+
     for (const how of ["clock claim", "edit cutover"] as const)
       it(`T4.20 a newer ${how} resolves it delivered; the next is its own turn`, async () => {
         const { f, scheduleId, occurrence, release } =
