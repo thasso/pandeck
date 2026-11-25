@@ -341,7 +341,7 @@ test("mkdir answers the failure native mkdirSync throws, code and message", asyn
     location: here(join(file, "below")),
   });
   assert.deepEqual(answer.json, { error: { code: native.code } });
-  assert.deepEqual(answer.text, { message: native.message });
+  assert.deepEqual({ ...answer.text }, { message: native.message });
 });
 
 describe("createDir creates exclusively", () => {
@@ -391,7 +391,7 @@ describe("createDir creates exclusively", () => {
         location: here(target),
       });
       assert.deepEqual(answer.json, { error: { code: native.code } }, target);
-      assert.deepEqual(answer.text, { message: native.message });
+      assert.deepEqual({ ...answer.text }, { message: native.message });
     }
     assert.equal(readFileSync(file, "utf8"), "x");
   });

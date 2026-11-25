@@ -244,6 +244,27 @@ const BAD_STREAMS: [string, Buffer][] = [
     "data without seq",
     rawFrame({ type: "data", of: "request", id: 1, stream: "body" }),
   ],
+  [
+    "a text name declared twice",
+    rawFrame({
+      type: "request",
+      id: 1,
+      method: "m",
+      text: ["a", "a"],
+      bytes: [],
+      chunks: 0,
+    }),
+  ],
+  [
+    "a bytes name declared twice",
+    rawFrame({
+      type: "response",
+      id: 1,
+      text: [],
+      bytes: ["chunk", "chunk"],
+      chunks: 0,
+    }),
+  ],
 ];
 
 test("a malformed or over-cap frame is a protocol error, found before buffering", () => {
@@ -320,6 +341,32 @@ test("data out of sequence, or a count that does not match, is a protocol error"
       }),
     WorkerProtocolError,
   );
+});
+
+test("stream names like __proto__ and constructor arrive as own entries", () => {
+  const names = ["__proto__", "constructor", "toString"];
+  const sent: Payload = {
+    text: Object.fromEntries(names.map((name) => [name, `t-${name}`])),
+    bytes: Object.fromEntries(
+      names.map((name) => [name, Buffer.from(`b-${name}`)]),
+    ),
+  };
+  const frames = decodeAll(encodeMessage("request", 9, { method: "m" }, sent));
+  const assembler = new MessageAssembler();
+  let received: Payload | undefined;
+  for (const frame of frames)
+    if (frame.type === "data") assembler.data(frame);
+    else if (frame.type === "request") received = assembler.complete(frame);
+  const { text, bytes } = received!;
+  assert.equal(Object.getPrototypeOf(text), null);
+  assert.equal(Object.getPrototypeOf(bytes), null);
+  for (const name of names) {
+    assert.ok(Object.hasOwn(text!, name), name);
+    assert.ok(Object.hasOwn(bytes!, name), name);
+    assert.equal(text![name], `t-${name}`);
+    assert.equal(Buffer.from(bytes![name]!).toString(), `b-${name}`);
+  }
+  assert.deepEqual(Object.keys(text!).sort(), [...names].sort());
 });
 
 /** A connected server/Worker pair over the in-process transport. */

@@ -163,8 +163,13 @@ function isCount(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
+/** Stream names: strings, each declared once (P8a AC7). */
 function isNames(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every(isString);
+  return (
+    Array.isArray(value) &&
+    value.every(isString) &&
+    new Set(value).size === value.length
+  );
 }
 
 /** A decoded header checked against its frame type. */
@@ -444,14 +449,16 @@ export class MessageAssembler {
     } catch {
       fail(`The body of ${key} is not UTF-8 JSON.`);
     }
-    const text: Record<string, string> = {};
+    // Null-prototype records: a stream named `__proto__` is an own entry,
+    // never a prototype change (P8a AC7).
+    const text = Object.create(null) as Record<string, string>;
     for (const name of frame.text) {
       const bytes = joined(`text:${name}`);
       if (bytes.length % 2 !== 0)
         fail(`Text stream ${name} of ${key} ends inside a code unit.`);
       text[name] = bytes.toString("utf16le");
     }
-    const bytes: Record<string, Buffer> = {};
+    const bytes = Object.create(null) as Record<string, Buffer>;
     for (const name of frame.bytes) bytes[name] = joined(`bytes:${name}`);
     return { json, text, bytes };
   }
