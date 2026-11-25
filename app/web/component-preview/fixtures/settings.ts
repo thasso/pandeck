@@ -7,6 +7,7 @@ import {
   type CredentialProfileSummary,
   type EntryLibraryList,
 } from "@assistant/shared";
+import { DEFAULT_SCHEDULE_SETTINGS } from "@assistant/shared/schedules";
 import type { UseMemory } from "../../src/hooks/useMemory.ts";
 import type { Prefs } from "../../src/hooks/usePrefs.ts";
 import { PULL_REQUEST_GROUP_IDS } from "../../src/lib/pullRequestInbox.ts";
@@ -100,6 +101,7 @@ export const settingsFixture: AppSettings = {
   },
   browserTools: { headed: false, rawMcpEnabled: false },
   backgroundWork: DEFAULT_BACKGROUND_WORK_SETTINGS,
+  schedules: DEFAULT_SCHEDULE_SETTINGS,
   jira: {
     enabled: true,
     jiraHost: "example.atlassian.net",

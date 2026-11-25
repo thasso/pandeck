@@ -212,7 +212,7 @@ describe("Task-route socket load scenario", () => {
     expect(sentOf(first, "subscribe")).toEqual([
       {
         type: "subscribe",
-        topics: ["sessions", "tasks", "projects", "workflow"],
+        topics: ["sessions", "schedules", "tasks", "projects", "workflow"],
       },
     ]);
     expect(sentOf(first, "listTasks")).toEqual([]);
@@ -244,6 +244,7 @@ describe("Task-route socket load scenario", () => {
     expect(sentOf(second, "subscribe")).toHaveLength(1);
     expect(sentOf(second, "subscribe")[0]!.topics).toEqual([
       "sessions",
+      "schedules",
       "tasks",
       "projects",
       "workflow",
@@ -285,7 +286,7 @@ describe("Task-route socket load scenario", () => {
     expect(sentOf(socket, "subscribe")).toEqual([
       {
         type: "subscribe",
-        topics: ["sessions", "tasks", "projects", "workflow"],
+        topics: ["sessions", "schedules", "tasks", "projects", "workflow"],
         digests: ["tasks"],
       },
     ]);

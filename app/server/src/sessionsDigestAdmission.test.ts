@@ -27,7 +27,7 @@ test("subscribe digest topics must be supported and a subset of topics", () => {
       ok: false,
       type: "subscribe",
       reason:
-        "digests currently supports only tasks, projects, initiatives and sessions",
+        "digests currently supports only tasks, projects, initiatives, sessions and schedules",
     },
   );
   assert.deepEqual(

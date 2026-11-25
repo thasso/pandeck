@@ -25,6 +25,7 @@
     "./portForwarding": "./portForwarding.ts",
     "./settingsRegistry": "./settingsRegistry.ts",
     "./zonedTime": "./zonedTime.ts",
+    "./schedules": "./schedules.ts",
     "./sessionTreeWorktrees": "./sessionTreeWorktrees.ts",
     "./gatewayUi": "./gatewayUi.ts",
     "./jiraMutation": "./jiraMutation.ts",

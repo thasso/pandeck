@@ -1,0 +1,296 @@
+import { describe, expect, test } from "vitest";
+import {
+  DEFAULT_SCHEDULE_SETTINGS,
+  SCHEDULE_OCCURRENCE_STATES,
+  SCHEDULE_WEEKDAYS,
+  nextOccurrencesAfter,
+  normalizeScheduleSettings,
+  scheduleTimingError,
+  type ScheduleTiming,
+  type ScheduleWeekday,
+} from "./schedules.ts";
+
+/**
+ * Every expected instant below is a fixed UTC string worked out by hand from
+ * the zone's published rules, never computed with the code under test.
+ * Berlin: CET is UTC+1, CEST UTC+2; 2026 springs forward on 29 March at
+ * 01:00Z (02:00 → 03:00 local) and falls back on 25 October at 01:00Z
+ * (03:00 → 02:00 local).
+ */
+const at = (iso: string) => Date.parse(iso);
+const iso = (values: number[]) => values.map((v) => new Date(v).toISOString());
+const BERLIN = "Europe/Berlin";
+
+describe("nextOccurrencesAfter", () => {
+  test("daily keeps the local time across spring forward, never a fixed 24h step", () => {
+    const timing: ScheduleTiming = {
+      kind: "daily",
+      time: "11:00",
+      timeZone: BERLIN,
+    };
+    expect(
+      iso(nextOccurrencesAfter(timing, at("2026-03-28T00:00:00Z"), 3)),
+    ).toEqual([
+      "2026-03-28T10:00:00.000Z",
+      "2026-03-29T09:00:00.000Z",
+      "2026-03-30T09:00:00.000Z",
+    ]);
+  });
+
+  test("a time the spring-forward gap skips occurs when the gap ends", () => {
+    const timing: ScheduleTiming = {
+      kind: "once",
+      date: "2026-03-29",
+      time: "02:30",
+      timeZone: BERLIN,
+    };
+    expect(
+      iso(nextOccurrencesAfter(timing, at("2026-03-28T00:00:00Z"), 3)),
+    ).toEqual(["2026-03-29T01:00:00.000Z"]);
+  });
+
+  test("a time the fall-back fold repeats occurs once, at the first pass", () => {
+    const timing: ScheduleTiming = {
+      kind: "daily",
+      time: "02:30",
+      timeZone: BERLIN,
+    };
+    expect(
+      iso(nextOccurrencesAfter(timing, at("2026-10-24T12:00:00Z"), 2)),
+    ).toEqual(["2026-10-25T00:30:00.000Z", "2026-10-26T01:30:00.000Z"]);
+    // After the first pass, the second pass of the same day is not offered.
+    expect(
+      iso(nextOccurrencesAfter(timing, at("2026-10-25T00:30:00Z"), 1)),
+    ).toEqual(["2026-10-26T01:30:00.000Z"]);
+  });
+
+  test("a gap at local midnight: Havana 2026-03-08 00:00 occurs at 01:00 local", () => {
+    // Cuba springs forward at 00:00 (UTC-5 → UTC-4): 01:00 CDT is 05:00Z.
+    const timing: ScheduleTiming = {
+      kind: "once",
+      date: "2026-03-08",
+      time: "00:00",
+      timeZone: "America/Havana",
+    };
+    expect(
+      iso(nextOccurrencesAfter(timing, at("2026-03-07T00:00:00Z"), 1)),
+    ).toEqual(["2026-03-08T05:00:00.000Z"]);
+  });
+
+  test("monthly on day 31 occurs on the last day of shorter months, leap years included", () => {
+    const timing: ScheduleTiming = {
+      kind: "monthly",
+      day: 31,
+      time: "11:00",
+      timeZone: BERLIN,
+    };
+    expect(
+      iso(nextOccurrencesAfter(timing, at("2027-01-31T10:00:00Z"), 3)),
+    ).toEqual([
+      "2027-02-28T10:00:00.000Z",
+      "2027-03-31T09:00:00.000Z",
+      "2027-04-30T09:00:00.000Z",
+    ]);
+    expect(
+      iso(nextOccurrencesAfter(timing, at("2028-02-01T00:00:00Z"), 1)),
+    ).toEqual(["2028-02-29T10:00:00.000Z"]);
+  });
+
+  test("weekdays skip Saturday and Sunday", () => {
+    // 2026-11-27 is a Friday.
+    const timing: ScheduleTiming = {
+      kind: "weekdays",
+      time: "09:00",
+      timeZone: BERLIN,
+    };
+    expect(
+      iso(nextOccurrencesAfter(timing, at("2026-11-27T08:00:00Z"), 3)),
+    ).toEqual([
+      "2026-11-30T08:00:00.000Z",
+      "2026-12-01T08:00:00.000Z",
+      "2026-12-02T08:00:00.000Z",
+    ]);
+  });
+
+  test("weekly occurs on the chosen days only", () => {
+    const days: ScheduleWeekday[] = ["mon", "thu"];
+    const timing: ScheduleTiming = {
+      kind: "weekly",
+      days,
+      time: "11:00",
+      timeZone: BERLIN,
+    };
+    expect(
+      iso(nextOccurrencesAfter(timing, at("2026-11-25T00:00:00Z"), 3)),
+    ).toEqual([
+      "2026-11-26T10:00:00.000Z",
+      "2026-11-30T10:00:00.000Z",
+      "2026-12-03T10:00:00.000Z",
+    ]);
+  });
+
+  test("a once already past has no occurrence", () => {
+    const timing: ScheduleTiming = {
+      kind: "once",
+      date: "2026-11-25",
+      time: "15:45",
+      timeZone: BERLIN,
+    };
+    expect(nextOccurrencesAfter(timing, at("2026-11-25T14:45:00Z"), 3)).toEqual(
+      [],
+    );
+    expect(nextOccurrencesAfter(timing, at("2027-01-01T00:00:00Z"), 3)).toEqual(
+      [],
+    );
+  });
+
+  test("strictly after: afterMs = due - 1 returns due, afterMs = due excludes it", () => {
+    const timing: ScheduleTiming = {
+      kind: "once",
+      date: "2026-11-25",
+      time: "15:45",
+      timeZone: BERLIN,
+    };
+    const due = at("2026-11-25T14:45:00Z");
+    expect(nextOccurrencesAfter(timing, due - 1, 1)).toEqual([due]);
+    expect(nextOccurrencesAfter(timing, due, 1)).toEqual([]);
+  });
+
+  test("startsOn and endsOn are inclusive local dates", () => {
+    const timing: ScheduleTiming = {
+      kind: "daily",
+      time: "11:00",
+      timeZone: BERLIN,
+      startsOn: "2026-12-01",
+      endsOn: "2026-12-03",
+    };
+    expect(
+      iso(nextOccurrencesAfter(timing, at("2026-11-25T00:00:00Z"), 10)),
+    ).toEqual([
+      "2026-12-01T10:00:00.000Z",
+      "2026-12-02T10:00:00.000Z",
+      "2026-12-03T10:00:00.000Z",
+    ]);
+    // The endsOn date's occurrence is the last; the day after is not.
+    expect(nextOccurrencesAfter(timing, at("2026-12-03T10:00:00Z"), 1)).toEqual(
+      [],
+    );
+  });
+
+  test("endsOn is a LOCAL date: 00:30 Tokyo on endsOn is still the previous UTC day", () => {
+    const timing: ScheduleTiming = {
+      kind: "daily",
+      time: "00:30",
+      timeZone: "Asia/Tokyo",
+      endsOn: "2026-12-02",
+    };
+    expect(
+      iso(nextOccurrencesAfter(timing, at("2026-11-30T00:00:00Z"), 5)),
+    ).toEqual(["2026-11-30T15:30:00.000Z", "2026-12-01T15:30:00.000Z"]);
+  });
+
+  test("n bounds the count and n <= 0 returns nothing", () => {
+    const timing: ScheduleTiming = {
+      kind: "daily",
+      time: "11:00",
+      timeZone: "UTC",
+    };
+    expect(nextOccurrencesAfter(timing, 0, 3)).toHaveLength(3);
+    expect(nextOccurrencesAfter(timing, 0, 0)).toEqual([]);
+  });
+});
+
+describe("scheduleTimingError", () => {
+  test("accepts every valid preset", () => {
+    const valid: ScheduleTiming[] = [
+      { kind: "once", date: "2026-12-01", time: "08:00", timeZone: BERLIN },
+      { kind: "daily", time: "23:59", timeZone: "UTC", endsOn: "2027-01-01" },
+      { kind: "weekdays", time: "00:00", timeZone: "America/Havana" },
+      {
+        kind: "weekly",
+        days: [...SCHEDULE_WEEKDAYS],
+        time: "11:00",
+        timeZone: BERLIN,
+      },
+      { kind: "monthly", day: 31, time: "11:00", timeZone: BERLIN },
+    ];
+    for (const timing of valid) expect(scheduleTimingError(timing)).toBeNull();
+  });
+
+  test.each([
+    [null, "timing must be an object"],
+    [{ kind: "daily", time: "24:00", timeZone: "UTC" }, "timing.time"],
+    [{ kind: "daily", time: "9:00", timeZone: "UTC" }, "timing.time"],
+    [
+      { kind: "daily", time: "09:00", timeZone: "Mars/Base" },
+      "timing.timeZone",
+    ],
+    [{ kind: "hourly", time: "09:00", timeZone: "UTC" }, "timing.kind"],
+    [
+      { kind: "once", date: "2026-02-30", time: "09:00", timeZone: "UTC" },
+      "timing.date",
+    ],
+    [
+      { kind: "weekly", days: [], time: "09:00", timeZone: "UTC" },
+      "timing.days",
+    ],
+    [
+      { kind: "weekly", days: ["mon", "mon"], time: "09:00", timeZone: "UTC" },
+      "timing.days",
+    ],
+    [
+      { kind: "monthly", day: 32, time: "09:00", timeZone: "UTC" },
+      "timing.day",
+    ],
+    [
+      { kind: "monthly", day: 1.5, time: "09:00", timeZone: "UTC" },
+      "timing.day",
+    ],
+    [
+      { kind: "daily", time: "09:00", timeZone: "UTC", startsOn: "tomorrow" },
+      "timing.startsOn",
+    ],
+    [
+      {
+        kind: "daily",
+        time: "09:00",
+        timeZone: "UTC",
+        startsOn: "2026-12-02",
+        endsOn: "2026-12-01",
+      },
+      "timing.endsOn",
+    ],
+  ])("refuses %j", (timing, reason) => {
+    expect(scheduleTimingError(timing)).toContain(reason);
+  });
+});
+
+describe("normalizeScheduleSettings", () => {
+  test("fills defaults, clamps ranges and rejects wrong kinds", () => {
+    expect(normalizeScheduleSettings(undefined)).toEqual(
+      DEFAULT_SCHEDULE_SETTINGS,
+    );
+    expect(DEFAULT_SCHEDULE_SETTINGS).toEqual({
+      graceWindowMinutes: 60,
+      cardlessLimit: 10,
+      paused: false,
+    });
+    expect(
+      normalizeScheduleSettings({
+        graceWindowMinutes: 5000,
+        cardlessLimit: -3,
+        paused: true,
+      }),
+    ).toEqual({ graceWindowMinutes: 1440, cardlessLimit: 0, paused: true });
+    expect(
+      normalizeScheduleSettings({
+        graceWindowMinutes: "x" as unknown as number,
+        paused: "yes" as unknown as boolean,
+      }),
+    ).toEqual(DEFAULT_SCHEDULE_SETTINGS);
+  });
+});
+
+test("claimed is the one open occurrence state", () => {
+  expect(SCHEDULE_OCCURRENCE_STATES[0]).toBe("claimed");
+});

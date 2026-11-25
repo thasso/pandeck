@@ -203,6 +203,7 @@ import {
 import { publishSkillLibrary } from "./skills/skillLibrary.ts";
 import { publishAgentLibrary } from "./agents/agentLibraryList.ts";
 import { projectStore } from "./db/projectStore.ts";
+import { scheduleStore } from "./db/scheduleStore.ts";
 import { findSlashCommand, slashCommands } from "./slashCommands.ts";
 import { retitleSession } from "./sessionRetitle.ts";
 import { cancelSessionRetitle } from "./sessionRetitlePending.ts";
@@ -1941,6 +1942,7 @@ export class Connection implements Viewer {
         projects: "Project",
         initiatives: "Initiative",
         sessions: "Session",
+        schedules: "Schedule",
       }[topic];
       this.send({
         type: "error",
@@ -4910,6 +4912,8 @@ export class Connection implements Viewer {
       deleteToolGroupSessionData,
       deleteSessionStatusCard,
       (sessionId: string) => projectStore.forgetSessionProject(sessionId),
+      // Deleted targets delete the Schedules that target them.
+      (sessionId: string) => scheduleStore.deleteForTarget(sessionId),
     ]) {
       try {
         cleanup(id);

@@ -60,10 +60,15 @@ import {
 } from "@assistant/shared";
 import { OPENAI_RESET_AUTO_REDEEM_LEAD_HOURS } from "@assistant/shared/usage";
 import {
+  normalizeScheduleSettings,
+  type ScheduleSettings,
+} from "@assistant/shared/schedules";
+import {
   readStoredAppSettings,
   writeStoredAppSettings,
 } from "./appSettingsFile.ts";
 import { applyAccountPinRuleDeep } from "./compatibleSettingsPins.ts";
+import { scheduleStore } from "./db/scheduleStore.ts";
 import { getBraveSettings } from "./braveSettings.ts";
 import { getContext7Settings } from "./context7Settings.ts";
 import { getForgejoSettings } from "./forgejoSettings.ts";
@@ -618,7 +623,22 @@ function normalizeBrowserToolSettings(
   };
 }
 
-/** Current settings, with defaults filled in for any missing section. */
+/**
+ * The Schedules section as the settings file keeps it: Pause all is stored by
+ * the schedule store, which switches it in one transaction with what it
+ * settles, so the file never holds it.
+ */
+function storedScheduleSettings(
+  value: Partial<ScheduleSettings>,
+): Omit<ScheduleSettings, "paused"> {
+  const { paused: _paused, ...stored } = normalizeScheduleSettings(value);
+  return stored;
+}
+
+/**
+ * Current settings, with defaults filled in for any missing section. Opens
+ * (and migrates) the database on first use: Pause all is read from it.
+ */
 export function getSettings(publicBaseUrl?: string): AppSettings {
   const stored = readStoredAppSettings();
   return {
@@ -670,6 +690,10 @@ export function getSettings(publicBaseUrl?: string): AppSettings {
       stored.browserTools ?? DEFAULT_BROWSER_TOOL_SETTINGS,
     ),
     backgroundWork: normalizeBackgroundWorkSettings(stored.backgroundWork),
+    schedules: {
+      ...normalizeScheduleSettings(stored.schedules),
+      paused: scheduleStore.paused(),
+    },
     claudeSdk: { ...DEFAULT_CLAUDE_SDK_SETTINGS, ...(stored.claudeSdk ?? {}) },
     worktrees: normalizeWorktreeSettings(stored.worktrees),
     projectsRoot: normalizeProjectsRoot(stored.projectsRoot),
@@ -704,6 +728,11 @@ export function getSettings(publicBaseUrl?: string): AppSettings {
  * Merge a patch into the stored settings (each provided section replaces the
  * existing one), persist atomically, and return the new settings. Throws if the
  * file cannot be written — the caller decides what the client sees.
+ *
+ * A Schedules patch with a `paused` value then switches Pause all in the
+ * schedule store, after the file is written. That switch is one transaction:
+ * if it throws before commit nothing of it stays (the file write does), and
+ * once committed it stands even when the final read throws.
  */
 export function updateSettings(patch: Partial<AppSettings>): AppSettings {
   const stored = readStoredAppSettings();
@@ -794,6 +823,9 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
       ? {
           backgroundWork: normalizeBackgroundWorkSettings(patch.backgroundWork),
         }
+      : {}),
+    ...(patch.schedules
+      ? { schedules: storedScheduleSettings(patch.schedules) }
       : {}),
     ...(patch.claudeSdk ? { claudeSdk: patch.claudeSdk } : {}),
     ...(patch.worktrees
@@ -886,5 +918,11 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
   });
   invalidateUserProfileCache();
   invalidateKnowledgeBaseSettingsCache();
+  if (typeof patch.schedules?.paused === "boolean")
+    scheduleStore.setPaused(
+      patch.schedules.paused,
+      Date.now(),
+      normalizeScheduleSettings(patch.schedules).graceWindowMinutes * 60_000,
+    );
   return getSettings();
 }

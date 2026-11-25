@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, renameSync, rmdirSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, rmdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test, vi } from "vitest";
 import {
@@ -7,9 +7,13 @@ import {
   settingDescriptor,
 } from "@assistant/shared/settingsRegistry";
 import type { AppSettings, ServerMessage } from "@assistant/shared";
+import type { ScheduleTiming } from "@assistant/shared/schedules";
 import { DATA_DIR } from "./config.ts";
+import { setStateChangeSink } from "./db/changeSet.ts";
+import { closeDb, getDb } from "./db/index.ts";
+import { scheduleStore } from "./db/scheduleStore.ts";
 import { subscribeIntegrationToolChanges } from "./integrationToolChanges.ts";
-import { readStoredAppSettings } from "./appSettingsFile.ts";
+import { APP_SETTINGS_PATH, readStoredAppSettings } from "./appSettingsFile.ts";
 import { getSettings } from "./settings.ts";
 import {
   IntegrationRefusal,
@@ -285,6 +289,48 @@ describe("settingsPatchForWrites", () => {
       });
     } finally {
       await saveSettings({ speechConversation: before });
+    }
+  });
+
+  test("schedule settings default, have bounded registry writes and normalized persistence", async () => {
+    const before = getSettings().schedules;
+    try {
+      assert.deepEqual(before, {
+        graceWindowMinutes: 60,
+        cardlessLimit: 10,
+        paused: false,
+      });
+      assert.throws(
+        () =>
+          settingsPatchForWrites([
+            { path: "schedules.graceWindowMinutes", value: 1441 },
+          ]),
+        /must be between/,
+      );
+      await saveSettings(
+        settingsPatchForWrites([{ path: "schedules.paused", value: true }]),
+      );
+      assert.deepEqual(getSettings().schedules, { ...before, paused: true });
+      // Projected from the schedule store; the file keeps the rest only.
+      assert.equal(scheduleStore.paused(), true);
+      assert.deepEqual(readStoredAppSettings().schedules, {
+        graceWindowMinutes: 60,
+        cardlessLimit: 10,
+      });
+      await saveSettings({
+        schedules: {
+          graceWindowMinutes: -5,
+          cardlessLimit: 500,
+          paused: false,
+        },
+      });
+      assert.deepEqual(getSettings().schedules, {
+        graceWindowMinutes: 0,
+        cardlessLimit: 100,
+        paused: false,
+      });
+    } finally {
+      await saveSettings({ schedules: before });
     }
   });
 
@@ -699,5 +745,210 @@ describe("the settings message checks come from the registry", () => {
         expected,
         JSON.stringify(patch),
       );
+  });
+});
+
+describe("Pause all through saveSettings", () => {
+  const DEC1 = Date.parse("2026-12-01T09:00:00Z");
+  const DEC2 = DEC1 + 24 * 60 * 60_000;
+  const DAILY: ScheduleTiming = {
+    kind: "daily",
+    time: "09:00",
+    timeZone: "UTC",
+  };
+  const cleanups: Array<() => void> = [];
+  afterEach(async () => {
+    while (cleanups.length) cleanups.pop()?.();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    // Back to defaults, then no row: the next read starts it unpaused.
+    await saveSettings({
+      schedules: { graceWindowMinutes: 60, cardlessLimit: 10, paused: false },
+    });
+    getDb().exec(
+      "DELETE FROM schedule_occurrences; DELETE FROM schedules; DELETE FROM schedule_pause;",
+    );
+  });
+
+  /** Dec 2 09:00 due and unticked, Dec 1 claimed and owed; now 09:00:15. */
+  function dueWithOwed(): { id: string; owedId: string } {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    getDb().exec(
+      "DELETE FROM schedule_occurrences; DELETE FROM schedules; DELETE FROM schedule_pause;",
+    );
+    const { id } = scheduleStore.create(
+      {
+        name: "Daily check",
+        prompt: "Check CI",
+        timing: DAILY,
+        target: { kind: "session", sessionId: "settings-target" },
+        createdBy: { kind: "user" },
+      },
+      DEC1 - 60_000,
+    );
+    const owedId = scheduleStore.claimDue(id, DEC1, { graceMs: 3_600_000 })
+      .claimed!.id;
+    vi.setSystemTime(DEC2 + 15_000);
+    return { id, owedId };
+  }
+
+  function states(id: string): string[] {
+    return scheduleStore
+      .history(id)
+      .map((o) => `${new Date(o.dueAtMs).toISOString()} ${o.state}`);
+  }
+
+  /** Announcements, schedules topic reports and claims while it runs. */
+  function record() {
+    const heard = {
+      sections: [] as SettingsChange[],
+      reports: 0,
+      claims: [] as string[],
+    };
+    cleanups.push(onSettingsChanged((change) => heard.sections.push(change)));
+    const previous = setStateChangeSink((topic, ids) => {
+      if (topic === "schedules" && ids.length) heard.reports += 1;
+    });
+    cleanups.push(() => setStateChangeSink(previous));
+    cleanups.push(scheduleStore.onClaimed((o) => heard.claims.push(o.id)));
+    return heard;
+  }
+
+  test("a switch that fails before commit leaves nothing of it; the grace in the same patch is saved (T2)", async () => {
+    const { id, owedId } = dueWithOwed();
+    const revision = scheduleStore.revision(id);
+    const heard = record();
+    getDb().exec(`CREATE TEMP TRIGGER fail_schedule_stamp
+      BEFORE UPDATE OF revision ON schedules
+      BEGIN SELECT RAISE(ABORT, 'stamp failed'); END`);
+    cleanups.push(() => getDb().exec("DROP TRIGGER temp.fail_schedule_stamp"));
+    await assert.rejects(
+      saveSettings({
+        schedules: { graceWindowMinutes: 90, cardlessLimit: 10, paused: true },
+      }),
+      /stamp failed/,
+    );
+    assert.equal(scheduleStore.paused(), false);
+    assert.deepEqual(states(id), ["2026-12-01T09:00:00.000Z claimed"]);
+    assert.equal(scheduleStore.getOccurrence(owedId)?.state, "claimed");
+    assert.equal(scheduleStore.get(id)?.nextDueAtMs, DEC2);
+    assert.equal(scheduleStore.revision(id), revision);
+    assert.equal(heard.reports, 0);
+    assert.deepEqual(heard.claims, []);
+    assert.deepEqual(heard.sections, [{ sections: ["schedules"] }]);
+    assert.deepEqual(getSettings().schedules, {
+      graceWindowMinutes: 90,
+      cardlessLimit: 10,
+      paused: false,
+    });
+  });
+
+  test("a failure after commit keeps the switch and its claims, still announces, and rejects (T3)", async () => {
+    const { id, owedId } = dueWithOwed();
+    const heard = record();
+    const pause = settingsPatchForWrites([
+      { path: "schedules.paused", value: true },
+    ]);
+    // A directory where the Brave file belongs makes every full read throw.
+    const bravePath = join(DATA_DIR, "settings", "brave.json");
+    const saved = `${bravePath}.test-saved`;
+    const hadFile = existsSync(bravePath);
+    if (hadFile) renameSync(bravePath, saved);
+    mkdirSync(bravePath, { recursive: true });
+    try {
+      await assert.rejects(
+        saveSettings(pause),
+        (err: Error) =>
+          !err.message.startsWith("Settings saved") &&
+          /Brave config/.test(err.message),
+      );
+    } finally {
+      rmdirSync(bravePath);
+      if (hadFile) renameSync(saved, bravePath);
+    }
+    assert.deepEqual(heard.sections, [{ sections: ["schedules"] }]);
+    assert.equal(scheduleStore.paused(), true);
+    assert.deepEqual(states(id), [
+      "2026-12-02T09:00:00.000Z claimed",
+      "2026-12-01T09:00:00.000Z superseded",
+    ]);
+    assert.equal(scheduleStore.getOccurrence(owedId)?.state, "superseded");
+    assert.equal(heard.claims.length, 1);
+    assert.equal(heard.reports, 1);
+    closeDb();
+    assert.equal(getSettings().schedules.paused, true);
+  });
+
+  test("a failed file write switches nothing (T4)", async () => {
+    const { id, owedId } = dueWithOwed();
+    const revision = scheduleStore.revision(id);
+    const heard = record();
+    const tmp = `${APP_SETTINGS_PATH}.tmp`;
+    mkdirSync(tmp, { recursive: true });
+    cleanups.push(() => rmSync(tmp, { recursive: true, force: true }));
+    await assert.rejects(
+      saveSettings(
+        settingsPatchForWrites([{ path: "schedules.paused", value: true }]),
+      ),
+      /EISDIR|illegal operation on a directory/,
+    );
+    assert.equal(scheduleStore.paused(), false);
+    assert.deepEqual(states(id), ["2026-12-01T09:00:00.000Z claimed"]);
+    assert.equal(scheduleStore.getOccurrence(owedId)?.state, "claimed");
+    assert.equal(scheduleStore.revision(id), revision);
+    assert.deepEqual(heard.claims, []);
+    assert.equal(heard.reports, 0);
+    assert.deepEqual(heard.sections, [{ sections: ["schedules"] }]);
+  });
+
+  test("an unreadable settings file rejects the save and switches nothing", async () => {
+    const { id, owedId } = dueWithOwed();
+    const heard = record();
+    const { readFileSync, writeFileSync } = await import("node:fs");
+    const original = readFileSync(APP_SETTINGS_PATH, "utf8");
+    writeFileSync(APP_SETTINGS_PATH, "{ not json");
+    cleanups.push(() => writeFileSync(APP_SETTINGS_PATH, original));
+    await assert.rejects(
+      saveSettings({
+        schedules: { graceWindowMinutes: 60, cardlessLimit: 10, paused: true },
+      }),
+      /Failed to read app settings/,
+    );
+    assert.equal(scheduleStore.paused(), false);
+    assert.deepEqual(states(id), ["2026-12-01T09:00:00.000Z claimed"]);
+    assert.equal(scheduleStore.getOccurrence(owedId)?.state, "claimed");
+    assert.deepEqual(heard.claims, []);
+    assert.equal(heard.reports, 0);
+    assert.deepEqual(heard.sections, [{ sections: ["schedules"] }]);
+  });
+
+  test("a paused key in the settings file is never read, and a save drops it", async () => {
+    getDb().exec("DELETE FROM schedule_pause");
+    const { writeStoredAppSettings } = await import("./appSettingsFile.ts");
+    const stale = (paused: boolean) =>
+      writeStoredAppSettings({
+        ...readStoredAppSettings(),
+        schedules: { graceWindowMinutes: 60, cardlessLimit: 10, paused },
+      });
+    stale(true);
+    // No row: the stored state starts unpaused; the file's `true` is ignored.
+    await saveSettings(
+      settingsPatchForWrites([
+        { path: "schedules.graceWindowMinutes", value: 45 },
+      ]),
+    );
+    assert.equal("paused" in (readStoredAppSettings().schedules ?? {}), false);
+    assert.deepEqual(getSettings().schedules, {
+      graceWindowMinutes: 45,
+      cardlessLimit: 10,
+      paused: false,
+    });
+    await saveSettings(
+      settingsPatchForWrites([{ path: "schedules.paused", value: true }]),
+    );
+    assert.equal("paused" in (readStoredAppSettings().schedules ?? {}), false);
+    stale(false);
+    closeDb();
+    assert.equal(getSettings().schedules.paused, true);
   });
 });

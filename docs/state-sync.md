@@ -82,7 +82,8 @@ failure, and explicit recovery reads.
   each live id calls `summary`. `stateTopics.ts` registers the kernels, the hub
   attaches its topic broadcaster to them, and `connection.ts` routes a kernel
   topic's subscribe and `getStateItems` to its kernel. Background, Projects,
-  Tasks, Initiatives and Sessions run on it; `hub.ts` diffs no domain.
+  Tasks, Initiatives, Sessions and Schedules run on it; `hub.ts` diffs no
+  domain.
 - The change set (`db/changeSet.ts`) is the kernel's write half. A write runs as
   one top-level transaction with a change set, which stamps each topic's touched
   rows inside that transaction with one revision per topic, drawn from the
@@ -339,9 +340,9 @@ and replica read ownership are unchanged.
 ## Client replica
 
 `app/web/src/lib/stateReplica.ts` is the client's one implementation of the
-generic mechanics for a migrated topic: Background, Tasks, Projects, Initiatives
-and Sessions. The module has no React and two halves, and `useAssistant` stays
-the single owner of both:
+generic mechanics for a migrated topic: Background, Tasks, Projects,
+Initiatives, Sessions and Schedules. The module has no React and two halves, and
+`useAssistant` stays the single owner of both:
 
 - The DATA half is a pure reducer step,
   `applyTopicMessage(descriptor, state, message)`, for a topic's snapshot
@@ -371,7 +372,7 @@ the single owner of both:
     Background and Initiatives take the rows as given. A Project or Task sidecar
     is adopted only when it covers every row.
   - `place` decides where a newly seen member goes: Background and Tasks
-    prepend, Projects and Initiatives append.
+    prepend, Projects, Initiatives and Schedules append.
   - `adoptSnapshot` sets topic-specific snapshot fields on the written state:
     Background's `truncated` window flag, the Project and Task lists' own fields
     and freshness, the Initiative list's freshness and its held keyed reads.
@@ -432,8 +433,8 @@ the single owner of both:
     snapshot and the forgotten revisions; the next failure sends its own pair.
   - The one subscribe composer. A topic asks for a digest when it declares one,
     has no pending mutation, is not due a snapshot, and its baseline holds.
-    `digests` keeps the order `tasks`, `projects`, `initiatives`, `sessions` and
-    is omitted when empty.
+    `digests` keeps the order `tasks`, `projects`, `initiatives`, `sessions`,
+    `schedules` and is omitted when empty.
 
 Frame batching stays in `useAssistant`; the replica sees messages in the order
 they are applied.
@@ -620,6 +621,15 @@ per-surface sub-tasks — no page invents its own delta format.
   The client's digest baseline is one held live row with a revision. A server
   restart touches every row (`boot`), so the first digest after it re-reads
   every row.
+- Schedules: every live Schedule, `done` ones included (`docs/schedules.md`).
+  Every connection holds the topic; the subscribe answer is `scheduleList` with
+  its revision sidecar, or a digest. Each store write is one change set that
+  stamps the Schedules it touched, occurrence changes included, so a claim or
+  settle moves its Schedule's revision. A delete leaves a tombstone that
+  publishes as a `delete` at its delete's revision until the maintenance sweep
+  purges it. Occurrence history is a request/response read, never on the topic.
+  The client keeps no shell cache, so its digest baseline exists only after an
+  answer this hook instance applied.
 
 ## Enforcement
 

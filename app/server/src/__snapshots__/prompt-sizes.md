@@ -100,7 +100,7 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 5,399 |
 | `tools:eager:schemas` | tools | yes | 9,716 |
 | `tools:eager:harness-builtin` | tools | yes | 3,702 |
-| `tools:deferred:universe` | tools | no | 170,817 |
+| `tools:deferred:universe` | tools | no | 170,829 |
 
 ## personal-assistant — claude
 
@@ -122,7 +122,7 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 1,905 |
 | `tools:eager:schemas` | tools | yes | 8,179 |
 | `tools:eager:harness-builtin` | tools | no | 0 |
-| `tools:deferred:universe` | tools | no | 171,861 |
+| `tools:deferred:universe` | tools | no | 171,873 |
 
 ## workshop — pi
 

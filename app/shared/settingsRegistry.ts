@@ -31,6 +31,7 @@ import {
   SPEECH_TO_TEXT_LIMITS,
   SPEECH_CONVERSATION_LIMITS,
 } from "./protocol.ts";
+import { SCHEDULE_SETTINGS_RANGES } from "./schedules.ts";
 import { SESSION_HANDOFF_TOKEN_CAP_LIMITS } from "./sessionRuntime.ts";
 import { THINKING_LEVELS } from "./thinkingLevels.ts";
 import {
@@ -65,6 +66,7 @@ export const SETTINGS_SECTION_IDS = [
   "pull-request",
   "task-intake",
   "pdf-conversion",
+  "schedules",
   "browserTools",
   "google",
   "slack",
@@ -665,6 +667,33 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
     integer(30_000, 600_000),
     { hint: "Milliseconds." },
   ),
+  setting(
+    "schedules.graceWindowMinutes",
+    "schedules",
+    "Grace window",
+    integer(
+      SCHEDULE_SETTINGS_RANGES.graceWindowMinutes.min,
+      SCHEDULE_SETTINGS_RANGES.graceWindowMinutes.max,
+    ),
+    {
+      hint: "Minutes. An occurrence found late after server downtime is still sent if it is no older than this; otherwise it is missed.",
+    },
+  ),
+  setting(
+    "schedules.cardlessLimit",
+    "schedules",
+    "Cardless Schedules per session",
+    integer(
+      SCHEDULE_SETTINGS_RANGES.cardlessLimit.min,
+      SCHEDULE_SETTINGS_RANGES.cardlessLimit.max,
+    ),
+    {
+      hint: "How many Schedules a session may control that it created without a card. Disabled ones count.",
+    },
+  ),
+  setting("schedules.paused", "schedules", "Pause all Schedules", BOOLEAN, {
+    hint: "Nothing new is sent while paused; due times pass as missed and do not catch up on resume. An occurrence already owed stays owed.",
+  }),
 
   // Integrations
   setting("browserTools.headed", "browserTools", "Visible browser", BOOLEAN),

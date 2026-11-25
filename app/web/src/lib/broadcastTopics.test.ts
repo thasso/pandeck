@@ -5,26 +5,30 @@ import {
   type TopicSurface,
 } from "./broadcastTopics.ts";
 
-/** The surface-dependent topics; `sessions` is held everywhere. */
+/** The surface-dependent topics; `sessions` and `schedules` are held everywhere. */
 const domainTopics = (surface: TopicSurface) =>
-  topicsForSurface(surface).filter((topic) => topic !== "sessions");
+  topicsForSurface(surface).filter(
+    (topic) => topic !== "sessions" && topic !== "schedules",
+  );
 
 describe("topicsForSurface", () => {
-  it("holds the session list on every surface", () => {
+  it("holds the session list and the Schedules on every surface", () => {
     expect(
       topicsForSurface({
         sidebarVisible: false,
         sidebarSection: "settings",
         routeName: "settings",
       }),
-    ).toEqual(["sessions"]);
-    expect(
-      topicsForSurface({
-        sidebarVisible: true,
-        sidebarSection: "tasks",
-        routeName: "tasks",
-      }),
-    ).toContain("sessions");
+    ).toEqual(["sessions", "schedules"]);
+    // No surface renders Schedules yet; the topic is held anyway.
+    for (const routeName of ["tasks", "session", "projects"])
+      expect(
+        topicsForSurface({
+          sidebarVisible: true,
+          sidebarSection: "tasks",
+          routeName,
+        }),
+      ).toEqual(expect.arrayContaining(["sessions", "schedules"]));
   });
 
   it.each([
