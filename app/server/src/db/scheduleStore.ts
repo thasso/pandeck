@@ -18,12 +18,25 @@
  * state the row holds now, and a claim only reads the row in its own
  * transaction: no instant of a pause or resume is remembered anywhere else.
  *
- * Nothing in production creates a Schedule yet: the agent tools that will
- * arrive with the scheduled prompts lane ([Task-1503](pa://task/1503)).
+ * An edit or a disable is a switch too: it first settles the Schedule's due
+ * times at or before its instant under the definition BEFORE it, exactly like
+ * a tick, then applies the change.
+ *
+ * A `claimed` occurrence whose delivery was attempted may already be in its
+ * target's transcript. Ending it any other way than the lane's own settle
+ * (a newer claim, an edit, a Pause all switch, a disable) first asks the
+ * registered {@link ScheduleAdmissionResolver}, in the same transaction, and
+ * fails closed when none is registered. Only deleting a Schedule removes such
+ * a row unasked, with its whole history.
+ *
+ * Nothing in production creates a Schedule yet: the agent tools arrive with
+ * the scheduled prompts lane ([Task-1503](pa://task/1503)).
  */
 import {
+  canonicalScheduleTiming,
   nextOccurrencesAfter,
   scheduleTimingError,
+  scheduleTimingsEqual,
   type ScheduleActor,
   type ScheduleOccurrenceState,
   type ScheduleOccurrenceSummary,
@@ -120,6 +133,56 @@ export interface ScheduleUpdate {
  */
 export interface ScheduleClaimPolicy {
   graceMs: number;
+}
+
+/**
+ * What an edit or an enable/disable needs: the grace window its cutover
+ * settles under, and the writer's cardless limit when it has one.
+ */
+export type ScheduleWritePolicy = ScheduleClaimPolicy & {
+  cardlessLimit?: number;
+};
+
+/**
+ * Thrown inside a write that would bring its controller's cardless Schedules
+ * over `limit`; the whole write rolls back. `count` is how many OTHER counted
+ * Schedules that session already controls.
+ */
+export class ScheduleCardlessLimitError extends Error {
+  constructor(
+    readonly count: number,
+    readonly limit: number,
+  ) {
+    super(
+      `The session already controls ${count} cardless Schedules (limit ${limit})`,
+    );
+    this.name = "ScheduleCardlessLimitError";
+  }
+}
+
+/** What a target's transcript says about an attempted occurrence's admission key. */
+export type ScheduleAdmissionEvidence =
+  | { kind: "present"; sessionId: string }
+  | { kind: "absent" }
+  | { kind: "unknown"; error: string };
+
+/** Synchronous and total: it must not throw and must not await. */
+export type ScheduleAdmissionResolver = (
+  occurrence: ScheduleOccurrenceRecord,
+) => ScheduleAdmissionEvidence;
+
+/**
+ * Thrown inside a write that would end an attempted `claimed` occurrence
+ * while no {@link ScheduleAdmissionResolver} is registered; the whole write
+ * rolls back rather than guess how it ended.
+ */
+export class ScheduleAdmissionResolverMissingError extends Error {
+  constructor(occurrenceId: string) {
+    super(
+      `No schedule admission resolver is registered to end attempted occurrence ${occurrenceId}`,
+    );
+    this.name = "ScheduleAdmissionResolverMissingError";
+  }
 }
 
 export interface ScheduleClaimOutcome {
@@ -225,10 +288,11 @@ function checkText(value: unknown, field: string): string {
   return value;
 }
 
+/** A valid timing in its canonical stored form. */
 function checkTiming(timing: ScheduleTiming): ScheduleTiming {
   const reason = scheduleTimingError(timing);
   if (reason) throw new Error(reason);
-  return timing;
+  return canonicalScheduleTiming(timing);
 }
 
 function checkTarget(target: ScheduleTarget): ScheduleTarget {
@@ -421,21 +485,136 @@ function prune(scheduleId: string): number {
   );
 }
 
-/** End every `claimed` occurrence of a Schedule in `state`; returns how many. */
+let admissionResolver: ScheduleAdmissionResolver | undefined;
+
+/**
+ * How an attempted `claimed` occurrence ends when `requested` would end it:
+ * its admission evidence decides, read now, inside the caller's transaction.
+ * Its key in the target's transcript makes it `delivered`, an unreadable
+ * transcript `failed`, and only a key known absent lets `requested` stand.
+ */
+function admissionEnd(
+  row: OccurrenceRow,
+  requested: "superseded" | "withdrawn",
+): { state: ScheduleTerminalState; sessionId?: string; error?: string } {
+  if (!admissionResolver)
+    throw new ScheduleAdmissionResolverMissingError(row.id);
+  const evidence = admissionResolver(occurrenceRecordOf(row));
+  switch (evidence?.kind) {
+    case "present":
+      return { state: "delivered", sessionId: evidence.sessionId };
+    case "unknown":
+      return { state: "failed", error: evidence.error };
+    case "absent":
+      return { state: requested };
+    default:
+      throw new Error(
+        `The schedule admission resolver returned no evidence for ${row.id}`,
+      );
+  }
+}
+
+/**
+ * End every `claimed` occurrence of a Schedule but `exceptId` in `requested`;
+ * returns how many ended. One never offered to a runtime (no
+ * `attempted_at_ms`) is ended as asked. One that was may already be in its
+ * target's transcript, so {@link admissionEnd} decides it from evidence in
+ * this same transaction; with no resolver registered the whole write throws
+ * and rolls back. A row already terminal is never touched.
+ */
 function endClaimed(
   scheduleId: string,
-  state: "superseded" | "withdrawn",
+  requested: "superseded" | "withdrawn",
   nowMs: number,
   exceptId?: string,
 ): number {
-  return Number(
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT * FROM schedule_occurrences
+       WHERE schedule_id = ? AND state = 'claimed' AND id <> ?
+       ORDER BY due_at_ms, id`,
+    )
+    .all(scheduleId, exceptId ?? "") as unknown as OccurrenceRow[];
+  const end = db.prepare(
+    `UPDATE schedule_occurrences
+     SET state = ?, ended_at_ms = ?, session_id = COALESCE(?, session_id),
+         error = COALESCE(?, error)
+     WHERE id = ? AND state = 'claimed'`,
+  );
+  let ended = 0;
+  for (const row of rows) {
+    const outcome: {
+      state: ScheduleTerminalState;
+      sessionId?: string;
+      error?: string;
+    } =
+      row.attempted_at_ms === null
+        ? { state: requested }
+        : admissionEnd(row, requested);
+    ended += Number(
+      end.run(
+        outcome.state,
+        nowMs,
+        outcome.sessionId ?? null,
+        outcome.error ?? null,
+        row.id,
+      ).changes,
+    );
+  }
+  return ended;
+}
+
+/** Whether a Schedule counts toward its controller's cardless limit. */
+function countsTowardCardless(row: ScheduleRow): boolean {
+  if (row.cardless !== 1 || row.deleted_at_ms !== null) return false;
+  if (row.done_at_ms !== null) return false;
+  const creator = JSON.parse(row.created_by_json) as ScheduleActor;
+  const controller = JSON.parse(row.controlled_by_json) as ScheduleActor;
+  return (
+    creator.kind === "session" &&
+    controller.kind === "session" &&
+    creator.sessionId === controller.sessionId
+  );
+}
+
+/**
+ * Inside a write that may have moved Schedule `id` into its controller's
+ * cardless count (`wasCounted` false before it): when it now counts and
+ * `limit` is set, refuse the write if that brings the controller over
+ * `limit`. A write that moves nothing into the count is never refused, so
+ * every other change stays possible after the limit is lowered.
+ */
+function assertCardlessCapacity(
+  id: string,
+  wasCounted: boolean,
+  limit: number | undefined,
+): void {
+  if (limit === undefined || wasCounted) return;
+  const row = liveRow(id);
+  if (!row || !countsTowardCardless(row)) return;
+  const controller = row.controlled_by_json;
+  const counted = (
     getDb()
       .prepare(
-        `UPDATE schedule_occurrences SET state = ?, ended_at_ms = ?
-         WHERE schedule_id = ? AND state = 'claimed' AND id <> ?`,
+        `SELECT * FROM schedules
+         WHERE deleted_at_ms IS NULL AND done_at_ms IS NULL AND cardless = 1`,
       )
-      .run(state, nowMs, scheduleId, exceptId ?? "").changes,
-  );
+      .all() as unknown as ScheduleRow[]
+  ).filter(
+    (other) =>
+      countsTowardCardless(other) &&
+      sameActor(other.controlled_by_json, controller),
+  ).length;
+  if (counted > limit) throw new ScheduleCardlessLimitError(counted - 1, limit);
+}
+
+function sameActor(a: string, b: string): boolean {
+  const x = JSON.parse(a) as ScheduleActor;
+  const y = JSON.parse(b) as ScheduleActor;
+  return x.kind === "session" && y.kind === "session"
+    ? x.sessionId === y.sessionId
+    : x.kind === y.kind;
 }
 
 function tombstone(scheduleId: string, nowMs: number): void {
@@ -521,8 +700,10 @@ function pausedIn(): boolean {
  * policy the latest is claimed when no older than the grace window, every
  * other one is recorded `missed` (the newest {@link SCHEDULE_HISTORY_LIMIT}),
  * and `next_due_at_ms` advances to the first occurrence after `nowMs`. A claim
- * supersedes an earlier still-`claimed` occurrence. Without one (paused),
- * nothing is claimed and an existing claim stays owed.
+ * supersedes an earlier still-`claimed` occurrence (through
+ * {@link endClaimed}, so an attempted one ends by its admission evidence).
+ * Without one (paused), nothing is claimed and an existing claim stays owed.
+ * The frozen input comes from `row`, the definition the due times fell under.
  */
 function settleDue(
   row: ScheduleRow,
@@ -589,9 +770,15 @@ function dueIdsAt(nowMs: number): string[] {
 export const scheduleStore = {
   /**
    * Create a Schedule. Its first due time is the first occurrence after
-   * `nowMs`; a timing with none left is refused.
+   * `nowMs`; a timing with none left is refused. With `cardlessLimit`, a
+   * create that would bring its controller over that many counted cardless
+   * Schedules throws {@link ScheduleCardlessLimitError} and writes nothing.
    */
-  create(input: ScheduleCreateInput, nowMs = Date.now()): ScheduleSummary {
+  create(
+    input: ScheduleCreateInput,
+    nowMs = Date.now(),
+    options: { cardlessLimit?: number } = {},
+  ): ScheduleSummary {
     const name = checkText(input.name, "name");
     const prompt = checkText(input.prompt, "prompt");
     const timing = checkTiming(input.timing);
@@ -627,18 +814,29 @@ export const scheduleStore = {
           nowMs,
           nowMs,
         );
+      assertCardlessCapacity(id, false, options.cardlessLimit);
       touched.add(id);
       return summaryOf(liveRow(id)!);
     });
   },
 
   /**
-   * Change a Schedule's definition. A claimed occurrence keeps its frozen
-   * input; a new timing takes effect from the first occurrence after `nowMs`.
+   * Change a Schedule's definition at `nowMs`, in ONE transaction. First its
+   * due times at or before `nowMs` are settled under the definition BEFORE
+   * the change, exactly like a tick (unless Pause all is on, the latest
+   * within `policy.graceMs` is claimed with the old frozen input, the rest
+   * are `missed`). Then the patch applies. A timing that differs from the
+   * stored one (key and day order aside) takes effect from its first
+   * occurrence after `nowMs`; any other patch leaves `next_due_at_ms` where
+   * the settle left it. A claimed occurrence keeps its frozen input. With
+   * `policy.cardlessLimit`, a change that makes the Schedule count again (a
+   * done one given a future occurrence) throws
+   * {@link ScheduleCardlessLimitError} over the limit and writes nothing.
    */
   update(
     id: string,
     patch: ScheduleUpdate,
+    policy: ScheduleWritePolicy,
     nowMs = Date.now(),
   ): ScheduleSummary | undefined {
     const name =
@@ -655,15 +853,25 @@ export const scheduleStore = {
       patch.controlledBy === undefined
         ? undefined
         : checkActor(patch.controlledBy);
-    return write((touched) => {
-      const row = liveRow(id);
-      if (!row) return undefined;
-      const nextDue =
-        timing === undefined
-          ? row.next_due_at_ms
-          : row.enabled === 1
-            ? (nextOccurrencesAfter(timing, nowMs, 1)[0] ?? null)
-            : null;
+    return write((touched, claimed) => {
+      const before = liveRow(id);
+      if (!before) return undefined;
+      const wasCounted = countsTowardCardless(before);
+      const due = dueRow(id, nowMs);
+      if (due)
+        settleDue(due, nowMs, pausedIn() ? null : policy, { touched, claimed });
+      const row = liveRow(id)!;
+      const timingChanged =
+        timing !== undefined &&
+        !scheduleTimingsEqual(
+          JSON.parse(row.timing_json) as ScheduleTiming,
+          timing,
+        );
+      const nextDue = !timingChanged
+        ? row.next_due_at_ms
+        : row.enabled === 1
+          ? (nextOccurrencesAfter(timing, nowMs, 1)[0] ?? null)
+          : null;
       getDb()
         .prepare(
           `UPDATE schedules SET name = ?, prompt = ?, timing_json = ?,
@@ -674,7 +882,7 @@ export const scheduleStore = {
         .run(
           name ?? row.name,
           prompt ?? row.prompt,
-          timing ? JSON.stringify(timing) : row.timing_json,
+          timingChanged ? JSON.stringify(timing) : row.timing_json,
           target?.kind ?? row.target_kind,
           target?.sessionId ?? row.target_session_id,
           controlledBy ? JSON.stringify(controlledBy) : row.controlled_by_json,
@@ -683,25 +891,34 @@ export const scheduleStore = {
           id,
         );
       refreshDone(id, nowMs);
+      assertCardlessCapacity(id, wasCounted, policy.cardlessLimit);
       touched.add(id);
       return summaryOf(liveRow(id)!);
     });
   },
 
   /**
-   * Enable or disable. Disabling withdraws a `claimed` occurrence in the same
-   * transaction; enabling starts from the first occurrence after `nowMs`, with
-   * no catch-up. Setting the state it already has writes nothing.
+   * Enable or disable at `nowMs`, in ONE transaction. Disabling first settles
+   * the due times at or before `nowMs` under the enabled state, exactly like
+   * a tick (a due time within `policy.graceMs` is claimed, an older one, or
+   * any while Pause all is on, is `missed`), then withdraws every `claimed`
+   * occurrence (an attempted one ends by its admission evidence) and clears
+   * the next due time. Enabling starts from the first occurrence after
+   * `nowMs`, with no catch-up. Setting the state it already has writes
+   * nothing. With `policy.cardlessLimit`, a switch that makes the Schedule
+   * count again throws {@link ScheduleCardlessLimitError} over the limit.
    */
   setEnabled(
     id: string,
     enabled: boolean,
-    nowMs = Date.now(),
+    nowMs: number,
+    policy: ScheduleWritePolicy,
   ): ScheduleSummary | undefined {
-    return write((touched) => {
+    return write((touched, claimed) => {
       const row = liveRow(id);
       if (!row) return undefined;
       if ((row.enabled === 1) === enabled) return summaryOf(row);
+      const wasCounted = countsTowardCardless(row);
       let nextDue: number | null = null;
       if (enabled)
         nextDue =
@@ -710,7 +927,15 @@ export const scheduleStore = {
             nowMs,
             1,
           )[0] ?? null;
-      else endClaimed(id, "withdrawn", nowMs);
+      else {
+        const due = dueRow(id, nowMs);
+        if (due)
+          settleDue(due, nowMs, pausedIn() ? null : policy, {
+            touched,
+            claimed,
+          });
+        endClaimed(id, "withdrawn", nowMs);
+      }
       getDb()
         .prepare(
           "UPDATE schedules SET enabled = ?, next_due_at_ms = ?, updated_at_ms = ? WHERE id = ?",
@@ -718,6 +943,7 @@ export const scheduleStore = {
         .run(enabled ? 1 : 0, nextDue, nowMs, id);
       refreshDone(id, nowMs);
       prune(id);
+      assertCardlessCapacity(id, wasCounted, policy.cardlessLimit);
       touched.add(id);
       return summaryOf(liveRow(id)!);
     });
@@ -1039,6 +1265,17 @@ export const scheduleStore = {
   ): () => void {
     claimListeners.add(listener);
     return () => claimListeners.delete(listener);
+  },
+
+  /**
+   * Register how an attempted `claimed` occurrence's admission is found, or
+   * clear it with `undefined`. Every write that would end such a row other
+   * than by its own settle (a newer claim, an edit, a Pause all switch, a
+   * disable) calls it inside its transaction; with none registered that
+   * write throws {@link ScheduleAdmissionResolverMissingError} and rolls back.
+   */
+  setAdmissionResolver(resolver: ScheduleAdmissionResolver | undefined): void {
+    admissionResolver = resolver;
   },
 
   /**

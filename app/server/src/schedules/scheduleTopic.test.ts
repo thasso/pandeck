@@ -117,7 +117,7 @@ test("a sweep that finds a disabled Schedule expired publishes it done, and 30 d
     endsOn: "2026-12-02",
   });
   scheduleStore.claimDue(schedule.id, DEC1, GRACE);
-  scheduleStore.setEnabled(schedule.id, false, DEC1 + 1);
+  scheduleStore.setEnabled(schedule.id, false, DEC1 + 1, GRACE);
   const messages: ServerMessage[] = [];
   const viewer = {
     send: (message: ServerMessage) => messages.push(message),

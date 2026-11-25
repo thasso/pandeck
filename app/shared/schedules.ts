@@ -240,6 +240,48 @@ export function scheduleTimingError(timing: unknown): string | null {
   return null;
 }
 
+/**
+ * `timing` in its one stored form: only the keys of its kind, in a fixed
+ * order, `days` in {@link SCHEDULE_WEEKDAYS} order, and an absent optional
+ * date omitted. `timing` must be valid ({@link scheduleTimingError}).
+ */
+export function canonicalScheduleTiming(
+  timing: ScheduleTiming,
+): ScheduleTiming {
+  const clock = { time: timing.time, timeZone: timing.timeZone };
+  if (timing.kind === "once")
+    return { kind: "once", date: timing.date, ...clock };
+  const window = {
+    ...(timing.startsOn !== undefined ? { startsOn: timing.startsOn } : {}),
+    ...(timing.endsOn !== undefined ? { endsOn: timing.endsOn } : {}),
+  };
+  switch (timing.kind) {
+    case "daily":
+    case "weekdays":
+      return { kind: timing.kind, ...clock, ...window };
+    case "weekly":
+      return {
+        kind: "weekly",
+        days: SCHEDULE_WEEKDAYS.filter((day) => timing.days.includes(day)),
+        ...clock,
+        ...window,
+      };
+    case "monthly":
+      return { kind: "monthly", day: timing.day, ...clock, ...window };
+  }
+}
+
+/** Whether two valid timings describe the same occurrences, key order aside. */
+export function scheduleTimingsEqual(
+  a: ScheduleTiming,
+  b: ScheduleTiming,
+): boolean {
+  return (
+    JSON.stringify(canonicalScheduleTiming(a)) ===
+    JSON.stringify(canonicalScheduleTiming(b))
+  );
+}
+
 /** ISO weekday of a calendar date; zone-free. */
 function weekdayOf(date: string): ScheduleWeekday {
   // getUTCDay: 0 = Sunday.

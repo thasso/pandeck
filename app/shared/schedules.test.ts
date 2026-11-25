@@ -1,11 +1,13 @@
 import { describe, expect, test } from "vitest";
 import {
+  canonicalScheduleTiming,
   DEFAULT_SCHEDULE_SETTINGS,
   SCHEDULE_OCCURRENCE_STATES,
   SCHEDULE_WEEKDAYS,
   nextOccurrencesAfter,
   normalizeScheduleSettings,
   scheduleTimingError,
+  scheduleTimingsEqual,
   type ScheduleTiming,
   type ScheduleWeekday,
 } from "./schedules.ts";
@@ -262,6 +264,97 @@ describe("scheduleTimingError", () => {
     ],
   ])("refuses %j", (timing, reason) => {
     expect(scheduleTimingError(timing)).toContain(reason);
+  });
+});
+
+describe("canonicalScheduleTiming and scheduleTimingsEqual (T1.14)", () => {
+  const weekly: ScheduleTiming = {
+    kind: "weekly",
+    days: ["mon", "fri"],
+    time: "09:00",
+    timeZone: BERLIN,
+    endsOn: "2026-12-31",
+  };
+
+  test("the canonical form has the kind's keys in a fixed order and days in weekday order", () => {
+    const shuffled = {
+      endsOn: "2026-12-31",
+      timeZone: BERLIN,
+      days: ["fri", "mon"],
+      time: "09:00",
+      startsOn: undefined,
+      kind: "weekly",
+    } as unknown as ScheduleTiming;
+    const canonical = canonicalScheduleTiming(shuffled);
+    expect(JSON.stringify(canonical)).toBe(
+      '{"kind":"weekly","days":["mon","fri"],"time":"09:00","timeZone":"Europe/Berlin","endsOn":"2026-12-31"}',
+    );
+    expect(Object.keys(canonical)).not.toContain("startsOn");
+    // A once has no repeat window; a stray key of another kind is dropped.
+    expect(
+      canonicalScheduleTiming({
+        timeZone: "UTC",
+        time: "08:00",
+        date: "2026-12-01",
+        kind: "once",
+        days: ["mon"],
+      } as unknown as ScheduleTiming),
+    ).toStrictEqual({
+      kind: "once",
+      date: "2026-12-01",
+      time: "08:00",
+      timeZone: "UTC",
+    });
+  });
+
+  test("equal across key order, days order and absent vs undefined", () => {
+    expect(
+      scheduleTimingsEqual(weekly, {
+        ...weekly,
+        days: ["fri", "mon"],
+        startsOn: undefined,
+      } as unknown as ScheduleTiming),
+    ).toBe(true);
+    expect(
+      scheduleTimingsEqual({ kind: "daily", time: "09:00", timeZone: BERLIN }, {
+        timeZone: BERLIN,
+        time: "09:00",
+        kind: "daily",
+        endsOn: undefined,
+      } as unknown as ScheduleTiming),
+    ).toBe(true);
+  });
+
+  test("unequal for a changed zone, time, day, endsOn or kind", () => {
+    for (const changed of [
+      { ...weekly, timeZone: "Europe/London" },
+      { ...weekly, time: "09:01" },
+      { ...weekly, days: ["mon", "thu"] },
+      { ...weekly, days: ["mon"] },
+      { ...weekly, endsOn: "2027-01-01" },
+      { ...weekly, endsOn: undefined },
+      { ...weekly, startsOn: "2026-12-01" },
+    ] as ScheduleTiming[])
+      expect(scheduleTimingsEqual(weekly, changed)).toBe(false);
+    const monthly: ScheduleTiming = {
+      kind: "monthly",
+      day: 31,
+      time: "09:00",
+      timeZone: BERLIN,
+    };
+    expect(scheduleTimingsEqual(monthly, { ...monthly, day: 30 })).toBe(false);
+    expect(
+      scheduleTimingsEqual(
+        { kind: "daily", time: "09:00", timeZone: BERLIN },
+        { kind: "weekdays", time: "09:00", timeZone: BERLIN },
+      ),
+    ).toBe(false);
+    expect(
+      scheduleTimingsEqual(
+        { kind: "once", date: "2026-12-01", time: "09:00", timeZone: BERLIN },
+        { kind: "once", date: "2026-12-02", time: "09:00", timeZone: BERLIN },
+      ),
+    ).toBe(false);
   });
 });
 
