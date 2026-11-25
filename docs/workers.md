@@ -2004,11 +2004,12 @@ path above.
   base64url characters, so it never starts with `-`. Ids enrolled before the
   prefix keep their shape; one that starts with `-` goes after `--` on the admin
   command line (`clients revoke -- <id>`), where any option comes before `--`.
-- **`gateway-client/1.2`** (`gateway/clientMethods.ts`; 1.1 adds the two-phase
-  tool methods below, Task-1463, 1.2 a file tool's file answer, Task-1441, and a
-  peer of any 1.x connects), on the worker protocol's framing: `client.hello`,
-  `accounts.list` and the gateway's `accounts.changed`, `leases.grant`,
-  `leases.client` (the server's own requests, one lease per account and client),
+- **`gateway-client/1.3`** (`gateway/clientMethods.ts`; 1.1 adds the two-phase
+  tool methods below, Task-1463, 1.2 a file tool's file answer, Task-1441 P7a,
+  1.3 the client-mode upload methods, Task-1441 P8a, and a peer of any 1.x
+  connects), on the worker protocol's framing: `client.hello`, `accounts.list`
+  and the gateway's `accounts.changed`, `leases.grant`, `leases.client` (the
+  server's own requests, one lease per account and client),
   `leases.bindSession`, `leases.revoke` and `leases.reconcileWorker`, all on the
   calling client's leases and its user's accounts only; `accounts.remove`; and
   the login API below.
@@ -2132,10 +2133,52 @@ path above.
   call rechecks the connection, the toggle and the listing, then runs
   `tools.prepare`, which writes nothing; it checks the proposal and raises the
   local `jiraIssue` or `confluencePage` card with context `{via: "gateway"}`.
-  Only that kind's executor applies it, through `tools.apply` bounded at 55 s,
-  never with local credentials and never locally as a fallback. Its guards,
-  outcome table, texts and rollback are in `docs/approvals.md` "Gateway-prepared
-  cards".
+  Only that kind's executor applies it, through `tools.apply` bounded at 55 s
+  (an upload's at `uploadApplyCallMs(W)`, below), never with local credentials
+  and never locally as a fallback. Its guards, outcome table, texts and rollback
+  are in `docs/approvals.md` "Gateway-prepared cards".
+- **Gateway uploads** (Task-1441 P8a, `tools/gateway/remoteUploads.ts`, the
+  edge's side under "Client-mode uploads"). `confluence_mutate_page`'s
+  `uploadAttachment` items keep the local schema, `sourceAttachmentId` or
+  `sourcePath`, and Pandeck resolves the source as the local tool does.
+  - **Freeze.** Before `tools.prepare`, a stat pre-check of every upload item
+    reads and copies nothing: the local tool's texts for a missing, empty or
+    oversized source, then "These uploads total more than 100 MiB, which is the
+    limit through the gateway; nothing was written. Split them into smaller
+    changes." when the items total more than 100 MiB (W, every upload item
+    counted). The items then freeze in order under one 100 MiB work budget
+    (`statUploadSource` and `freezeUploadSource` in `confluenceAttachments.ts`):
+    a repeated session attachment reuses its freeze, any other source must still
+    fit on a fresh stat and is read at most one chunk past what is left, so a
+    source that grows meanwhile is refused the same way. A host path is copied
+    under a staging id the call chose (`p8a-` and 16 hex digits); a failed or
+    refused proposal discards exactly those copies and never an attachment that
+    existed before.
+  - **Prepare and binding.** The wire items name each frozen copy by
+    `sourceAttachmentId`, and `tools.prepare` carries
+    `uploads: [{stagedAttachmentId, name, mimeType, size, sha256, source}]`.
+    Before any card is persisted, each prepared upload row must carry its frozen
+    source exactly (staged id, digest, size, source, media type) and a target
+    name by the local rule; a row naming a source this call did not freeze, or
+    any other mismatch, is "The gateway answered something this server can't
+    show as a proposal; nothing was prepared." So an answer cannot select
+    another local file.
+  - **Apply.** Approved, the executor reads one stream per staged id from the
+    card (items sharing one must agree, W at most 100 MiB), then sends
+    `uploads.open` with the streams and W (30 s), then each staged copy in 1 MiB
+    chunks, one `uploads.put` outstanding at a time (30 s each), checking each
+    copy still has its approved size and digest. Then the P6-O4 fence runs with
+    nothing awaited before `tools.apply {…, uploadId}`, on the port that sent
+    the bytes, bounded at `uploadApplyCallMs(W)` (`gatewayClientLink.ts`): the
+    edge's `uploadApplyDeadlineMs(W)` plus 10 s, at most 155 s. An open refusal
+    shows the edge's fixed text with "Nothing was written." (P8A-V10-O1); a put
+    refusal or a changed copy reads "The approved file is no longer the same on
+    this server; nothing was written. Ask for the upload again."; an open or put
+    the link can't ask or that is not answered is unreachable. Every failure
+    before `tools.apply` is sent releases the upload and claims nothing was
+    written. After it, the outcome table applies with the upload text
+    (`docs/approvals.md`) and Pandeck releases nothing: the edge releases an
+    upload an apply took itself.
 - **Gateway file tools** (Task-1441 P7a, `FILE_TOOLS` in `remoteTools.ts`,
   `tools/gateway/remoteFiles.ts`). `confluence_download_attachment`, listed with
   `effect: "read"`, `actionKey: "confluence:read"` and
@@ -3061,22 +3104,23 @@ tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
   Send fewer items.", the fence before apply, and no further item once less than
   7 s remain. Before the credential is read or anything is sent, a gate refuses
   the whole call at the first item, in input order, that this edge does not
-  offer: an upload ("Uploading attachments is not available through this gateway
-  yet; nothing was written to Confluence."), a `delete` when page deletes are
-  off ("Deleting pages is not enabled on this gateway; nothing was written to
-  Confluence.") or a `deleteAttachment` when attachment deletes are off
-  ("Deleting attachments is not enabled on this gateway; nothing was written to
-  Confluence."). Deletes follow the scope list the gateway asks Atlassian for
-  (`atlassian.scopes`, or the default list, which holds both): page deletes are
-  on only when it holds `delete:page:confluence`, attachment deletes only when
-  it holds `delete:attachment:confluence`, matched exactly. An edge built
-  without a scope list offers neither. To turn deletes on or off, change
-  `atlassian.scopes` and restart the gateway; turning them on also needs each
-  user to sign in with Atlassian again, since a grant made without the scope is
-  refused. A delete still needs P5a's positive status, at prepare and again at
-  apply, which is no guard against a change made elsewhere between that read and
-  the DELETE. Failures follow D-W2 as for Jira, with "Confluence" in each text;
-  a refusal in prepare adds " Nothing was written to Confluence.". The result is
+  offer: an upload outside a client-mode upload ("Uploading attachments is not
+  available through this gateway yet; nothing was written to Confluence.";
+  "Client-mode uploads" below), a `delete` when page deletes are off ("Deleting
+  pages is not enabled on this gateway; nothing was written to Confluence.") or
+  a `deleteAttachment` when attachment deletes are off ("Deleting attachments is
+  not enabled on this gateway; nothing was written to Confluence."). Deletes
+  follow the scope list the gateway asks Atlassian for (`atlassian.scopes`, or
+  the default list, which holds both): page deletes are on only when it holds
+  `delete:page:confluence`, attachment deletes only when it holds
+  `delete:attachment:confluence`, matched exactly. An edge built without a scope
+  list offers neither. To turn deletes on or off, change `atlassian.scopes` and
+  restart the gateway; turning them on also needs each user to sign in with
+  Atlassian again, since a grant made without the scope is refused. A delete
+  still needs P5a's positive status, at prepare and again at apply, which is no
+  guard against a change made elsewhere between that read and the DELETE.
+  Failures follow D-W2 as for Jira, with "Confluence" in each text; a refusal in
+  prepare adds " Nothing was written to Confluence.". The result is
   `{summary, url?, warnings?, items}`, each item
   `{operation, pageId, ok, title?, url?, version?, attachment?, warning?, error?}`
   with `attachment` `{fileName, id?, version?}`. Texts are vetted and capped
@@ -3425,6 +3469,98 @@ tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
   client connection takes messages of at most 2 MiB (4 MiB buffered, 8 partial,
   256 served). Download failures are fixed texts chosen by error type, HTTP
   status or reason, never by a message (`gatewayTools/confluenceDownload.ts`).
+
+- **Client-mode uploads** (`gateway-client/1.3`, Task-1441 P8a;
+  `gatewayTools/uploads.ts`, decoded in `gateway/clientMethods.ts`). Pandeck
+  sends the approved bytes of `uploadAttachment` items before the apply that
+  writes them, on the same connection (Pandeck's side: "Gateway uploads" under
+  Client mode).
+  - **Methods.** `tools.prepare` may carry
+    `uploads: [{stagedAttachmentId, name, mimeType, size, sha256, source}]` (at
+    most ten, ids unique), the sources its upload items name by
+    `sourceAttachmentId`.
+    `uploads.open {streams: [{stagedAttachmentId, size, sha256}], work}` answers
+    `{ok: true, uploadId}` (`upl-` and 32 hex digits): one to ten streams,
+    `work` (W) the items' total bytes, at least the streams' and at most 100
+    MiB. `uploads.put {uploadId, stagedAttachmentId, offset}` with exactly one
+    bytes stream `chunk` (1 B to 1 MiB) at exactly the bytes received so far
+    answers `{ok: true, received, streamComplete, sealed}`: `streamComplete` on
+    the put that completes its stream with the declared digest, `sealed` once
+    every stream is. `uploads.release {uploadId}` answers `{ok: true}`, discards
+    an upload no apply took and is idempotent. `tools.apply` may carry
+    `uploadId`. Each `uploads.*` request has exactly its JSON keys and no other
+    stream; a failure answers `{ok: false, code: "tool_error", message}` with a
+    fixed text (busy, invalid, expired, in use), and a bad put or request
+    discards the upload. An id another connection opened reads as unknown and
+    discards nothing.
+  - **Gates.** The edge admits an upload item only through these methods: a
+    prepare that declared `uploads`, or an apply that names `uploadId`. On
+    `/mcp` and through `tools.call` an upload is still refused with "Uploading
+    attachments is not available through this gateway yet; nothing was written
+    to Confluence." The apply consumes the sealed upload synchronously, before
+    its deadline starts: every upload item must name a sealed stream with its
+    exact size and digest, the items' total must be the open's W, and every
+    stream must be used; otherwise the upload is discarded and the apply refused
+    (`invalid_params`) with nothing written. The shared apply reads its bytes
+    from the upload (`stagedBytes`), and an item whose bytes are missing or
+    differ fails "The gateway did not receive the file for this upload; nothing
+    was written." or "The file received for this item does not match the
+    approved one; nothing was written for it."
+  - **Reservation and lifetime.** `uploads.open` reserves `2U + 2 MiB` (U the
+    streams' bytes, so at most 202 MiB) from the process's one 210 MiB
+    `FileBudget`, the one file downloads take, before any byte arrives; a held
+    budget answers "The gateway is already transferring a file; try again when
+    it finishes. Nothing was uploaded." and stores nothing. Each connection has
+    its own scope, never named on the wire. A stream's buffer is allocated once,
+    at its first put, and every chunk is copied into it synchronously and
+    hashed. An upload no apply took is discarded, and its reservation released,
+    on `release`, on its connection's end, after 60 s without an open or put
+    (`UPLOAD_IDLE_MS`), or 600 s after its open (`UPLOAD_MAX_UNATTACHED_MS`). An
+    upload an apply took is immune to puts, releases, timers and the
+    connection's end, and is released exactly once, when the apply's execution
+    and its answer's output have both settled (the file permit's two holds). An
+    apply without the `onSettled` seam is refused before consumption; its answer
+    gets the file answers' 65 s to drain (`FILE_OUTPUT_MS`), or the edge ends
+    that client's connection.
+  - **Deadlines.** The upload apply's deadline is `uploadApplyDeadlineMs(W)`:
+    the tool's 45 s write deadline plus 1 s per started MiB of W, at most 145 s.
+    It starts when the edge admits `tools.apply`, with the bytes already here,
+    so no transfer time falls inside it; uploads never queue. Pandeck bounds the
+    call at that plus 10 s, at most 155 s (`uploadApplyCallMs`), from a pinned
+    copy of the formula checked by a shared table (1 B and 1 MiB: 46/56 s; 1
+    MiB + 1 B: 47/57 s; 100 MiB: 145/155 s). `uploads.open` and each put are
+    bounded at 30 s in Pandeck (`OPEN_CALL_MS`, `PUT_CALL_MS`). The 7 s stop and
+    every other write rule are unchanged.
+  - **Codec name rule.** A request or response frame that declares a text or
+    bytes stream name twice is a protocol error, and a message's text and bytes
+    records have no prototype, so a stream named `__proto__` is an own entry
+    (`workerProtocol/codec.ts`).
+  - **Why `2U + 2 MiB`.** One upload's live bytes are the store (U), about 1 MiB
+    of put transients and at most about 8 MiB for the streamed POST
+    (`docs/confluence.md` "Attachments"). The rest is room for garbage the
+    runtime has not collected yet, the put payloads and socket reads that die
+    after their copy. The budget is exclusive, so the reservation is an
+    admission bound and a counter, never a memory claim.
+  - **Measured (V3, 2026-11-25).** The edge and the Pandeck link in their own
+    child processes over the real relay and client listener, a local fake
+    Atlassian over HTTP that parses the body, and 100 MiB through
+    `uploads.open`, 100 pipelined puts and `tools.apply`. Node 24, with a GC
+    before every 10 ms sample: peak arrayBuffers + heapUsed 122.5-123.7 MB
+    (trigger 132,120,576 B). Packaged Bun 1.4.2 (`bundle()` with the server's
+    define and plugins), unforced: peak rss 239-262 MB (trigger 300 MiB). After
+    release and two forced GCs the store's buffer was collected and arrayBuffers
+    was within 54 KB of the baseline on both runtimes, also when the fake closed
+    mid-body or answered before reading it; a retained 1-byte view kept the 100
+    MiB visible to both oracles. Bun sent the stream with `Content-Length` and
+    no chunked framing. Node's unforced peaks (up to 192 MB of arrayBuffers) are
+    garbage a GC reclaims and are no trigger.
+  - **Transfers and other calls.** An upload and a download never overlap on one
+    edge: whichever starts second gets the busy answer. The budget is
+    process-wide, so one client's upload (up to `UPLOAD_MAX_UNATTACHED_MS` per
+    open) makes other users' downloads and uploads answer busy. Upload bytes
+    travel in 1 MiB requests, so other calls on the same Pandeck wait behind at
+    most one chunk. The download direction, where a file answer travels whole,
+    is [Task-1515](pa://task/1515) ("Answers wait behind a file").
 
 - **Pandeck in client mode** (`remoteIntegrations.ts`, installed by
   `gatewayClientLink.ts`): Settings → Jira sends a newly entered token with the

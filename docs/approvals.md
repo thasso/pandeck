@@ -105,15 +105,15 @@ written."). After the wait there is no reconnect wait.
 
 After the send, one table decides the card:
 
-| What came back                                   | The card                                                                  |
-| ------------------------------------------------ | ------------------------------------------------------------------------- |
-| not sent (no connection)                         | failed, unreachable, nothing written                                      |
-| a failure the edge certifies `effects: "none"`   | failed, its message plus "Nothing was written." unless it says so already |
-| the edge's `unknown_tool` refusal                | failed, the no-longer-offered text, nothing written                       |
-| a failure with `effects: "possible"`             | failed, may have written; its checked results merged                      |
-| a success, every record checked                  | the local summary, plus the notices below                                 |
-| every item failed                                | failed, the local all-failed text, plus the notices below                 |
-| lost, timed out (55 s), unreadable, a bad record | failed, may have written; nothing merged                                  |
+| What came back                                                                                      | The card                                                                  |
+| --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| not sent (no connection)                                                                            | failed, unreachable, nothing written                                      |
+| a failure the edge certifies `effects: "none"`                                                      | failed, its message plus "Nothing was written." unless it says so already |
+| the edge's `unknown_tool` refusal                                                                   | failed, the no-longer-offered text, nothing written                       |
+| a failure with `effects: "possible"`                                                                | failed, may have written; its checked results merged                      |
+| a success, every record checked                                                                     | the local summary, plus the notices below                                 |
+| every item failed                                                                                   | failed, the local all-failed text, plus the notices below                 |
+| lost, timed out (55 s; an upload's `uploadApplyCallMs(W)`, at most 155 s), unreadable, a bad record | failed, may have written; nothing merged                                  |
 
 "May have written" reads: "The gateway did not confirm the result. Changes may
 have been written, and a change already sent can still finish within about a
@@ -128,6 +128,25 @@ can still quote Jira's or Confluence's own reason, whatever it says, and that
 quote never decides a claim. Every record is checked before any is merged, so a
 card is never half-merged. An answer that arrives after the 55 s bound is
 dropped and never changes the decided card.
+
+**Upload cards** (Task-1441 P8a, `docs/workers.md` "Gateway uploads"). A
+`confluencePage` card with `uploadAttachment` items is the local card: it shows
+each file as the local card does, from a copy frozen into the session's
+attachments before the proposal. Approved, the executor sends those bytes to the
+gateway (`uploads.open`, then 1 MiB `uploads.put`s) after the wait for the first
+listing and before the rechecks, which then also require the connection that
+took the bytes. A failure up to the send fails the card with nothing written:
+the gateway's own text for a refused open (busy, for one), "The approved file is
+no longer the same on this server; nothing was written. Ask for the upload
+again." for a copy that changed or a refused put, and unreachable for a lost
+one. The apply is bounded at `uploadApplyCallMs(W)`: the gateway's upload
+deadline (45 s plus 1 s per started MiB of the items' bytes, at most 145 s) plus
+10 s, at most 155 s. Wherever the table says "may have written", an upload card
+reads instead: "The gateway did not confirm the result. Changes may have been
+written, and an upload already sent can still finish within about three minutes.
+Wait three minutes, then check the page; ask again only for what is missing.
+Don't approve the same upload again unchecked." Three minutes exceeds the
+gateway's 145 s plus margin.
 
 Items apply in order. An item that started finishes; once the connection drops
 or the bound expires the edge starts no further item, and the card says it may
@@ -146,9 +165,11 @@ restart is never retried. The operator approves each step:
    Pending gateway cards stay pending, approving one fails closed, and the user
    may deny them.
 3. For each card that was `executing` at the restart, and each card that failed
-   with "may have written", wait at least two minutes after the deploy, then
-   check the target issue or page in Atlassian and record only "written" or "not
-   written" per card. No identifiers or content leave the machine.
+   with "may have written", wait at least two minutes after the deploy (four
+   minutes for a card with an upload), then check the target issue or page in
+   Atlassian and record only "written" or "not written" per card. No identifiers
+   or content leave the machine. There is no blind retry, and no client timer
+   proves that a write ended.
 4. Only after step 3, switch modes if wanted. The guard still refuses gateway
    cards in local mode.
 5. Reverting P6a as well needs steps 1-4 first and no pending gateway card left
