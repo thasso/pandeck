@@ -146,9 +146,12 @@ error.
   selection that cannot apply, and a session that cannot be acquired right now
   are holds: the occurrence stays owed and is offered again on the next wake.
 - **What makes it `failed`.** A new session that cannot be created (agent
-  definition gone, pinned account unavailable, enterprise requirement unmet), or
-  delivery whose outcome is unknown (below). A failed occurrence is never
-  retried.
+  definition gone, pinned account unavailable, enterprise requirement unmet);
+  any other refusal or error before the append for an existing session (the
+  bound account no longer offers the model, an unmet enterprise requirement, an
+  unavailable checkout), recorded with its concrete reason; or delivery whose
+  outcome is unknown (below). Only the holds above keep an occurrence `claimed`.
+  A failed occurrence is never retried, and its Schedule needs attention.
 
 ### Admission and crash safety
 
