@@ -30,6 +30,7 @@ import {
 } from "../test/githubFake.ts";
 import {
   exchangeGithubCode,
+  githubRepo,
   githubUser,
   refreshGithub,
 } from "./vaultGithub.ts";
@@ -90,12 +91,22 @@ test("the code exchange posts the form to github.com with the fixed TLS name, Ho
   });
 });
 
-test("an error member is rejected at any status; missing tokens or lifetimes are rejected; a 3xx is not followed", async () => {
-  for (const status of [200, 400, 404, 503]) {
+test("an error member is rejected on a 2xx or 400 only; missing tokens or lifetimes are rejected; a 3xx is not followed", async () => {
+  for (const status of [200, 400]) {
     github.script.token = errorAt(status);
     assert.deepEqual(
       await exchangeGithubCode(FAKE_GITHUB_CLIENT, grant, github.endpoint),
       { kind: "rejected" },
+      String(status),
+    );
+  }
+  // P-9: the status comes first; another non-2xx is unreachable whatever
+  // its body holds.
+  for (const status of [404, 503]) {
+    github.script.token = errorAt(status);
+    assert.deepEqual(
+      await exchangeGithubCode(FAKE_GITHUB_CLIENT, grant, github.endpoint),
+      { kind: "unreachable", code: String(status) },
       String(status),
     );
   }
@@ -208,6 +219,103 @@ test("a refresh rotates: the new pair, the old refresh token then refused; no ne
   );
 });
 
+// P-9 (Task-1446 R2-F7): one classification for the exchange and the refresh.
+test("the token endpoint's status is classified before its body, for the code exchange and the refresh alike", async () => {
+  const table: [string, () => void, unknown][] = [
+    [
+      "200 bad_refresh_token",
+      () =>
+        (github.script.token = githubJson(200, { error: "bad_refresh_token" })),
+      { kind: "rejected" },
+    ],
+    ...[400, 401, 403].flatMap((status): [string, () => void, unknown][] => [
+      [
+        `${status} with error`,
+        () => (github.script.token = githubJson(status, { error: "x" })),
+        { kind: "rejected" },
+      ],
+      [
+        `${status} without error`,
+        () => (github.script.token = githubJson(status, {})),
+        { kind: "rejected" },
+      ],
+    ]),
+    ...(
+      [
+        [500, "server_error"],
+        [503, "x"],
+        [429, "x"],
+        [422, "x"],
+      ] as const
+    ).map(([status, error]): [string, () => void, unknown] => [
+      `${status} {error: ${error}}`,
+      () => (github.script.token = githubJson(status, { error })),
+      { kind: "unreachable", code: String(status) },
+    ]),
+    [
+      "200 non-JSON",
+      () => (github.script.token = githubJson(200, "not json")),
+      { kind: "unreachable", code: "bad_response" },
+    ],
+  ];
+  for (const [name, arrange, expected] of table) {
+    arrange();
+    assert.deepEqual(
+      await exchangeGithubCode(FAKE_GITHUB_CLIENT, grant, github.endpoint),
+      expected,
+      `exchange: ${name}`,
+    );
+    assert.deepEqual(
+      await refreshGithub(FAKE_GITHUB_CLIENT, "fake-refresh", github.endpoint),
+      expected,
+      `refresh: ${name}`,
+    );
+  }
+});
+
+test("the repository check: 401 is unauthorized; 403, 404 and a redirect are denied; 500 is unavailable", async () => {
+  const name = { owner: "fake-owner", repo: "fake-repo" };
+  const cases: [string, () => void, unknown][] = [
+    [
+      "401",
+      () => (github.script.repo = githubJson(401, { message: "x" })),
+      { kind: "unauthorized" },
+    ],
+    [
+      "403",
+      () => (github.script.repo = githubJson(403, {})),
+      { kind: "denied" },
+    ],
+    [
+      "404",
+      () => (github.script.repo = githubJson(404, {})),
+      { kind: "denied" },
+    ],
+    [
+      "redirect",
+      () =>
+        (github.script.repo = (_seen, res) => {
+          res.raw.writeHead(301, { location: "https://api.github.com/x" });
+          res.raw.end();
+        }),
+      { kind: "denied" },
+    ],
+    [
+      "500",
+      () => (github.script.repo = githubJson(500, {})),
+      { kind: "unavailable", code: "500" },
+    ],
+  ];
+  for (const [label, arrange, expected] of cases) {
+    arrange();
+    assert.deepEqual(
+      await githubRepo("fake-gh-user-access-x", name, github.endpoint),
+      expected,
+      label,
+    );
+  }
+});
+
 test("GET /user goes to api.github.com with the token and REST headers; its login and id are checked", async () => {
   const exchanged = await exchangeGithubCode(
     FAKE_GITHUB_CLIENT,
@@ -258,12 +366,12 @@ const UNAVAILABLE = { ok: false, unavailable: true };
 const DENIED = { ok: false, denied: true };
 const INVALID = { ok: false, invalid: true };
 
-/** No token, secret, code, key, JWT or user id in any line. */
+/** No token, secret, code, key, JWT, user id or repository in any line. */
 const noSecretsIn = (lines: string[]): void => {
   for (const line of lines)
     assert.doesNotMatch(
       line,
-      /fake-gh-|fake-github-|fake-user|fake-other|(?<![A-Za-z0-9])u[12](?![A-Za-z0-9])|BEGIN|PRIVATE|eyJ/,
+      /fake-gh-|fake-github-|fake-user|fake-other|fake-owner|fake-repo|(?<![A-Za-z0-9])u[12](?![A-Za-z0-9])|BEGIN|PRIVATE|eyJ/,
       line,
     );
 };
@@ -918,4 +1026,225 @@ test("github.token: a waiter abandoned during a held refresh answers at once; th
     github.issuedRefresh.at(-1),
   );
   assert.equal(count("repo"), 0, "the abandoned call went no further");
+});
+
+// --- Task-1508 O1: a 401 on the user check refreshes once -------------------
+
+const refreshes = (): number =>
+  github.on("token").filter((seen) => seen.form.grant_type === "refresh_token")
+    .length;
+const recordFile = (dir: string): string =>
+  join(dir, "accounts", integrationDirId("u1", "github"), INTEGRATION_FILE);
+const REJECTED = { ok: false, rejected: true };
+const REFRESHING =
+  /^github\.token int-[0-9a-f]{40}: user token refused; refreshing$/;
+const AFTER_REFRESH =
+  /^github\.token int-[0-9a-f]{40}: repository check failed \(401 after refresh\)$/;
+
+test("G-a github.token: a 401 on the user check refreshes once, checks again with the new token, then mints", async () => {
+  const { v, dir, lines } = await tokenVault();
+  const revoked = github.issuedAccess.at(-1)!;
+  github.revokeAccess(revoked);
+  const from = github.seen.length;
+  const answer = await v.githubToken("u1", REPO);
+  assert.deepEqual(answer, {
+    ok: true,
+    token: github.minted.at(-1),
+    expiresAt: (answer as { expiresAt: number }).expiresAt,
+  });
+  const after = github.seen.slice(from);
+  assert.deepEqual(
+    after.map((seen) => seen.route),
+    ["repo", "token", "repo", "installation", "mint"],
+  );
+  assert.equal(after[0]?.bearer, revoked);
+  assert.equal(after[1]?.form.grant_type, "refresh_token");
+  assert.equal(after[2]?.bearer, github.issuedAccess.at(-1));
+  assert.equal(refreshes(), 1);
+  assert.equal(
+    (
+      JSON.parse(readFileSync(recordFile(dir), "utf8")) as {
+        refreshToken: string;
+      }
+    ).refreshToken,
+    github.issuedRefresh.at(-1),
+  );
+  assert.equal(lines.filter((line) => REFRESHING.test(line)).length, 1);
+  noSecretsIn(lines);
+});
+
+// DR2: GitHub refusing the refresh answers rejected at once.
+for (const [name, refused] of [
+  ["G-r1 a refresh 401", githubJson(401, { message: "x" })],
+  [
+    "G-r2 a refresh 400 invalid_grant",
+    githubJson(400, { error: "invalid_grant" }),
+  ],
+  [
+    "G-r3 a refresh 200 bad_refresh_token",
+    githubJson(200, { error: "bad_refresh_token" }),
+  ],
+] as const)
+  test(`${name} after a 401 on the user check answers rejected at once and leaves no view cached`, async () => {
+    const { v, lines } = await tokenVault();
+    github.script.repo = githubJson(401, { message: "Bad credentials" });
+    github.script.token = refused;
+    const started = Date.now();
+    assert.deepEqual(await v.githubToken("u1", REPO), REJECTED);
+    assert.ok(Date.now() - started < 5_000, "at once, not after 8 h");
+    assert.equal(count("repo"), 1, "no second user check");
+    assert.equal(count("installation"), 0);
+    assert.equal(count("mint"), 0);
+    assert.equal(refreshes(), 1);
+    // The revoked view is gone: the next read refreshes, and is refused.
+    assert.deepEqual(await v.integrationGet("u1", "github"), REJECTED);
+    assert.equal(refreshes(), 2);
+    noSecretsIn(lines);
+  });
+
+// DR2: a refresh GitHub could not answer stays unavailable, never rejected.
+for (const [name, arrange] of [
+  ["G-u1 a refresh 500", () => (github.script.token = githubJson(500, {}))],
+  ["G-u2 a refresh 503", () => (github.script.token = githubJson(503, {}))],
+  [
+    "G-u3 a refresh whose connection drops",
+    () => (github.script.token = (_seen, res) => res.raw.destroy()),
+  ],
+  [
+    "G-u4 a refresh that times out",
+    () => {
+      github.endpoint.timeoutMs = 200;
+      github.hold("token");
+    },
+  ],
+  [
+    "G-u5 a refresh 503 temporarily_unavailable",
+    () =>
+      (github.script.token = githubJson(503, {
+        error: "temporarily_unavailable",
+      })),
+  ],
+] as const)
+  test(`${name} after a 401 on the user check answers unavailable, not rejected; the record is untouched`, async () => {
+    const { v, dir, lines } = await tokenVault();
+    github.revokeAccess(github.issuedAccess.at(-1)!);
+    const stored = readFileSync(recordFile(dir), "utf8");
+    arrange();
+    assert.deepEqual(await v.githubToken("u1", REPO), UNAVAILABLE);
+    assert.equal(refreshes(), 1);
+    assert.equal(count("mint"), 0);
+    assert.equal(readFileSync(recordFile(dir), "utf8"), stored);
+    // The view is gone: the next read refreshes.
+    assert.notDeepEqual(await v.integrationGet("u1", "github"), REJECTED);
+    assert.equal(refreshes(), 2);
+    delete github.script.token;
+    delete github.endpoint.timeoutMs;
+    assert.equal((await v.githubToken("u1", REPO)).ok, true);
+    noSecretsIn(lines);
+  });
+
+test("G-d github.token: a second 401 after a good refresh is unavailable, with exactly one refresh", async () => {
+  const { v, lines } = await tokenVault();
+  github.script.repo = githubJson(401, { message: "Bad credentials" });
+  assert.deepEqual(await v.githubToken("u1", REPO), UNAVAILABLE);
+  assert.equal(refreshes(), 1);
+  assert.equal(count("repo"), 2);
+  assert.equal(count("mint"), 0);
+  assert.equal(github.on("repo")[1]?.bearer, github.issuedAccess.at(-1));
+  assert.equal(lines.filter((line) => AFTER_REFRESH.test(line)).length, 1);
+  noSecretsIn(lines);
+});
+
+test("G-e github.token: two calls refused the same token share one refresh and both succeed with the new token", async () => {
+  const { v, lines } = await tokenVault();
+  const stale = github.issuedAccess.at(-1)!;
+  github.revokeAccess(stale);
+  const held = github.hold("token");
+  const first = v.githubToken("u1", REPO);
+  const second = v.githubToken("u1", REPO);
+  await held.arrived;
+  for (let i = 0; i < 100 && count("repo") < 2; i++) await delay(10);
+  assert.equal(count("repo"), 2, "both checked the stale token");
+  await delay(50);
+  held.release();
+  const answers = await Promise.all([first, second]);
+  for (const answer of answers) assert.equal(answer.ok, true);
+  assert.equal(refreshes(), 1);
+  const checks = github.on("repo");
+  assert.deepEqual(
+    checks.map((seen) => seen.bearer),
+    [stale, stale, github.issuedAccess.at(-1), github.issuedAccess.at(-1)],
+  );
+  noSecretsIn(lines);
+});
+
+test("G-f github.token: a 401 for a token someone has refreshed since takes the newer view without a refresh", async () => {
+  let clock = Date.now();
+  github.expiresInS = 600;
+  const { v, lines } = await tokenVault({ now: () => clock });
+  const stale = github.issuedAccess.at(-1)!;
+  const held = github.hold("repo");
+  const asking = v.githubToken("u1", REPO);
+  await held.arrived;
+  // Another reader refreshes in the ordinary way under the margin.
+  clock += 6 * 60_000;
+  assert.equal((await v.integrationGet("u1", "github")).ok, true);
+  assert.equal(refreshes(), 1);
+  github.revokeAccess(stale);
+  held.release();
+  assert.equal((await asking).ok, true);
+  assert.equal(refreshes(), 1, "no new refresh");
+  assert.equal(github.on("repo")[1]?.bearer, github.issuedAccess.at(-1));
+  noSecretsIn(lines);
+});
+
+test("G-g github.token: a clear during the held forced refresh voids the call and caches no token", async () => {
+  const { v, lines } = await tokenVault();
+  github.revokeAccess(github.issuedAccess.at(-1)!);
+  const held = github.hold("token");
+  const asking = v.githubToken("u1", REPO);
+  await held.arrived;
+  const clearing = v.integrationClear("u1", "github");
+  held.release();
+  const answer = await asking;
+  assert.ok(
+    [
+      JSON.stringify(UNAVAILABLE),
+      JSON.stringify({ ok: false, absent: true }),
+    ].includes(JSON.stringify(answer)),
+    JSON.stringify(answer),
+  );
+  assert.deepEqual(await clearing, { ok: true });
+  assert.equal(count("mint"), 0);
+  await connect(v, "u1", FAKE_GITHUB_USER);
+  assert.equal((await v.githubToken("u1", REPO)).ok, true);
+  assert.equal(count("mint"), 1, "nothing was cached");
+  noSecretsIn(lines);
+});
+
+test("G-h github.token: a forced refresh held past the budget answers unavailable; the refresh still lands in the cache", async () => {
+  const { v, written, lines } = await tokenVault({
+    extra: { githubTokenBudgetMs: 250 },
+  });
+  github.revokeAccess(github.issuedAccess.at(-1)!);
+  const held = github.hold("token");
+  const writes = written.length;
+  const started = Date.now();
+  const asking = v.githubToken("u1", REPO);
+  await held.arrived;
+  assert.deepEqual(await asking, UNAVAILABLE);
+  const took = Date.now() - started;
+  assert.ok(took >= 240 && took < 2_000, `answered after ${took} ms`);
+  held.release();
+  for (let i = 0; i < 100 && written.length === writes; i++) await delay(20);
+  assert.equal(written.length, writes + 1, "the rotation was written");
+  const view = await v.integrationGet("u1", "github");
+  assert.equal(view.ok, true);
+  assert.equal(
+    view.ok &&
+      (JSON.parse(view.credential) as { accessToken: string }).accessToken,
+    github.issuedAccess.at(-1),
+  );
+  assert.equal(refreshes(), 1, "the cached view answered");
+  noSecretsIn(lines);
 });

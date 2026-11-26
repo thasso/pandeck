@@ -3271,11 +3271,14 @@ tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
   holds a GitHub App (`gateway/vaultGithub.ts`): its user OAuth client and its
   private key. Connect posts the code to
   `https://github.com/login/oauth/access_token` (form body,
-  `Accept: application/json`); GitHub answers a refused grant as HTTP 200
-  `{error}`, so any `error` member is `rejected`, as are 400, 401 and 403, and
-  the answer needs both tokens and both lifetimes (S1a: 8 hours and 181 days).
-  Then `GET https://api.github.com/user` with the new token names the user. The
-  record is
+  `Accept: application/json`). The status is classified first (Task-1446 P-9):
+  400, 401 and 403 are `rejected`; any other non-2xx, 429 and 5xx included, is
+  `unavailable` whatever its body holds. An `error` member counts only on a 2xx,
+  where it is `rejected`: that is how GitHub refuses a code or refresh token
+  (HTTP 200 `{error: "bad_refresh_token"}`). The same rule classifies connect's
+  exchange and every refresh. A 2xx answer needs both tokens and both lifetimes
+  (S1a: 8 hours and 181 days). Then `GET https://api.github.com/user` with the
+  new token names the user. The record is
   `{kind: "github-oauth", v: 1, login, githubUserId, refreshToken, refreshExpiresAt}`;
   a get answers `{kind, login, accessToken, expiresAt}` by the Atlassian rule. A
   refresh must hand back a new refresh token, as for Slack; GitHub refuses a
@@ -3286,9 +3289,24 @@ tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
   first checks with the user's own token that `GET /repos/{owner}/{repo}` names
   exactly that repository with `pull` (a redirect, 403 or 404 is `denied`); a
   cached token for that installation and repository id with over 10 minutes left
-  may then be answered. Otherwise the App's JWT (RS256, `iss` the client id, 9
-  minutes, reused until a minute before expiry) finds the installation (cached
-  an hour per repository) and mints with exactly
+  may then be answered. A 401 on that check (Task-1508 O1) means GitHub refused
+  the user's token, a revoked grant say: the vault refreshes the access view
+  once, keyed to the refused token (callers that saw the same token refused
+  share one refresh; a view someone already refreshed is taken without one),
+  drops the cached view first, and repeats the check once with the new token.
+  GitHub refusing that refresh (400, 401, 403, or a 2xx with an `error` member)
+  answers `rejected` at once, not `unavailable` until the access token's 8 hours
+  run out; a 5xx or any other status, a transport failure or a timeout answers
+  `unavailable`, as does a second 401 after a good refresh (no second refresh).
+  The refresh runs in the record's lane like any other and caches its result
+  even when the call's budget ran out. The page's repository check shares this
+  path, so a revoked grant shows `integration_rejected` there too. The
+  installation-token cache (O4) is memory only and keyed by installation and
+  repository id, not by record: it outlives a clear and a reconnect, and a
+  cached token is answered only after that call's own user check passes.
+  Otherwise the App's JWT (RS256, `iss` the client id, 9 minutes, reused until a
+  minute before expiry) finds the installation (cached an hour per repository)
+  and mints with exactly
   `{repository_ids: [id], permissions: {contents: "read", metadata: "read"}}`.
   The answer must prove itself: a token the vault may hand on, `permissions`
   exactly those two reads, `expires_at` a future UTC time, and exactly that

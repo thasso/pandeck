@@ -575,7 +575,7 @@ test("3. revoked grant: a refused refresh shows rejected and the check is 422; a
   });
 });
 
-test("4. a revoked user token behind a fresh cached view: the user check's 401 is vault_unavailable (observed vault behavior, O1)", async () => {
+test("4. a user check that answers 401 for every token: one refresh, then the second 401 is vault_unavailable (Task-1508 O1)", async () => {
   const f = await setUp();
   assert.equal(await f.connect(), "/");
   f.fake.script.repo = githubJson(401, { message: "Bad credentials" });
@@ -583,6 +583,13 @@ test("4. a revoked user token behind a fresh cached view: the user check's 401 i
     status: 503,
     body: { error: "vault_unavailable" },
   });
+  assert.equal(
+    f.fake
+      .on("token")
+      .filter((seen) => seen.form.grant_type === "refresh_token").length,
+    1,
+  );
+  assert.equal(f.fake.on("repo").length, 2);
   assert.equal(f.fake.minted.length, 0);
 });
 

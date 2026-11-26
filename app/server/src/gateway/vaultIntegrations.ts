@@ -370,6 +370,11 @@ export function createVaultIntegrations(
   const cache = new Map<string, AccessView>();
   /** Each record's refresh in flight, queued or running. */
   const refreshing = new Map<string, Promise<IntegrationRecord>>();
+  /** Each GitHub record's forced refresh in flight, by the refused token. */
+  const forced = new Map<
+    string,
+    { stale: string; flight: Promise<IntegrationRecord> }
+  >();
   /** Each record's generation; never reused, so a dropped entry is safe. */
   const generations = new Map<string, number>();
   let lastGeneration = 0;
@@ -572,11 +577,18 @@ export function createVaultIntegrations(
     };
   };
 
-  /** In the lane: the record as it is now, refreshed when still due. */
+  /**
+   * In the lane: the record as it is now, refreshed when still due. A forced
+   * refresh (`stale`, the access token GitHub refused) skips the "still fresh"
+   * shortcut unless the cached view already holds another token, which means
+   * someone refreshed since; else it drops the view first, so a refused
+   * refresh leaves nothing cached to serve the revoked token from.
+   */
   const refreshInLane = async (
     dirId: string,
     file: string,
     integration: Integration,
+    stale?: string,
   ): Promise<IntegrationRecord> => {
     const read = readRecord(file);
     if ("answer" in read) return read.answer;
@@ -585,7 +597,13 @@ export function createVaultIntegrations(
     if (stored === undefined) return { ok: true, credential: read.text };
     if (stored === "malformed") return UNAVAILABLE;
     const cached = cache.get(dirId);
-    if (fresh(cached)) return viewCredential(cached);
+    if (stale === undefined) {
+      if (fresh(cached)) return viewCredential(cached);
+    } else if (cached?.accessToken !== stale && fresh(cached)) {
+      return viewCredential(cached);
+    } else {
+      cache.delete(dirId);
+    }
     const issuedAt = now();
     const result =
       stored.kind === ATLASSIAN_KIND
@@ -631,6 +649,31 @@ export function createVaultIntegrations(
         if (refreshing.get(dirId) === settled) refreshing.delete(dirId);
       });
     }
+    return flight;
+  };
+
+  /**
+   * A refresh because GitHub refused `stale` (Task-1508 O1): one flight per
+   * stale token, joined by every caller that saw the same token refused, run
+   * in the record's lane after whatever is queued there.
+   */
+  const forceRefresh = (
+    dirId: string,
+    file: string,
+    stale: string,
+  ): Promise<IntegrationRecord> => {
+    const joined = forced.get(dirId);
+    if (joined?.stale === stale) return joined.flight;
+    const flight = enqueue(
+      dirId,
+      () => refreshInLane(dirId, file, "github", stale),
+      UNAVAILABLE,
+    );
+    const entry = { stale, flight };
+    forced.set(dirId, entry);
+    void flight.finally(() => {
+      if (forced.get(dirId) === entry) forced.delete(dirId);
+    });
     return flight;
   };
 
@@ -928,6 +971,37 @@ export function createVaultIntegrations(
   };
 
   /**
+   * The access view `record` answered, fenced by `generation`. `renew` forces
+   * one refresh keyed to this view's token; the renewed view keeps the same
+   * baseline, and its own `renew` answers unavailable: one refresh per call.
+   */
+  const githubAccessOf = (
+    record: IntegrationRecord,
+    located: { dirId: string; file: string },
+    generation: number,
+    renewable: boolean,
+  ): GithubAccess => {
+    if (!record.ok) return record;
+    const accessToken = fieldsOf(record.credential)?.accessToken;
+    if (typeof accessToken !== "string") return UNAVAILABLE;
+    const { dirId, file } = located;
+    return {
+      ok: true,
+      dirId,
+      accessToken,
+      current: () => !closed && (generations.get(dirId) ?? 0) === generation,
+      renew: async (signal) => {
+        if (!renewable || signal.aborted) return UNAVAILABLE;
+        const renewed = await untilAborted(
+          forceRefresh(dirId, file, accessToken),
+          signal,
+        );
+        return githubAccessOf(renewed, located, generation, false);
+      },
+    };
+  };
+
+  /**
    * `github.token`'s step 2: the generation noted before the access view is
    * read, so a clear, connect or refused refresh from here on voids the call.
    */
@@ -936,18 +1010,10 @@ export function createVaultIntegrations(
     signal: AbortSignal,
   ): Promise<GithubAccess> => {
     if (!stateDir) return UNAVAILABLE;
-    const { dirId } = locate(userId, "github");
-    const generation = generations.get(dirId) ?? 0;
+    const located = locate(userId, "github");
+    const generation = generations.get(located.dirId) ?? 0;
     const record = await api.integrationGet(userId, "github", { signal });
-    if (!record.ok) return record;
-    const accessToken = fieldsOf(record.credential)?.accessToken;
-    if (typeof accessToken !== "string") return UNAVAILABLE;
-    return {
-      ok: true,
-      dirId,
-      accessToken,
-      current: () => !closed && (generations.get(dirId) ?? 0) === generation,
-    };
+    return githubAccessOf(record, located, generation, true);
   };
   const githubTokens = createGithubTokens({
     client: options.clients?.github,
