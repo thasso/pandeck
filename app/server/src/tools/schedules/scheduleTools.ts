@@ -19,8 +19,10 @@
 // an attempted occurrence this tool triggers never runs without it.
 import "../../schedules/scheduledPrompts.ts";
 import {
+  canonicalScheduleTiming,
   nextOccurrencesAfter,
   formatScheduleInstant,
+  scheduleTimingError,
   type ScheduleActor,
   type ScheduleOccurrenceSummary,
   type ScheduleSummary,
@@ -528,8 +530,28 @@ function assertNear(caller: string, targetId: string): void {
 /**
  * A row's timing in the stored shape, in `timeZone`: the profile zone on
  * create, the Schedule's stored zone on update. A row never names a zone.
+ * Every supplied timing needs a future occurrence, checked before any write:
+ * the store would take a spent one on update, cutting over the old dues and
+ * leaving the Schedule done, and an agent ends a Schedule by disabling or
+ * deleting it instead.
  */
 function timingOf(
+  value: unknown,
+  timeZone: string,
+  nowMs: number,
+): ScheduleTiming {
+  const timing = suppliedTiming(value, timeZone, nowMs);
+  // The store's own validation message, for a timing it would refuse anyway.
+  const reason = scheduleTimingError(timing);
+  if (reason) throw new Error(reason);
+  if (
+    nextOccurrencesAfter(canonicalScheduleTiming(timing), nowMs, 1).length === 0
+  )
+    throw new Error("Schedule timing has no future occurrence");
+  return timing;
+}
+
+function suppliedTiming(
   value: unknown,
   timeZone: string,
   nowMs: number,

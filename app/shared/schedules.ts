@@ -328,13 +328,19 @@ function occursOn(timing: ScheduleTiming, date: string): boolean {
 const MAX_DAYS_WITHOUT_MATCH = 400;
 
 /**
+ * The last date a timing can name: dates have four-digit years, and the day
+ * after this one has no such date, so a scan stops here.
+ */
+const LAST_CALENDAR_DATE = "9999-12-31";
+
+/**
  * The next `n` due instants of `timing` strictly after `afterMs`, ascending.
  *
  * Each due instant is the local wall-clock `time` on a matching local date in
  * `timing.timeZone`: a time the date skips (spring forward) occurs when the gap
  * ends, a time it repeats (fall back) once, at the first pass. `startsOn` and
  * `endsOn` are inclusive local dates. Fewer than `n` come back when the timing
- * runs out, none for a `once` already past.
+ * runs out, none for a `once` already past; the calendar ends with 9999-12-31.
  */
 export function nextOccurrencesAfter(
   timing: ScheduleTiming,
@@ -345,9 +351,12 @@ export function nextOccurrencesAfter(
   if (n <= 0) return out;
   const { time, timeZone } = timing;
   const window: ScheduleRepeatWindow = timing.kind === "once" ? {} : timing;
+  const today = localDateOf(afterMs, timeZone);
+  // Past the calendar's end, no date is left.
+  if (!ISO_DATE_RE.test(today)) return out;
   // A gap at the end of a local day moves that day's time onto the next one,
   // so the day before afterMs's local date may still hold a later instant.
-  let date = addDaysToDate(localDateOf(afterMs, timeZone), -1);
+  let date = addDaysToDate(today, -1);
   if (timing.kind === "once" && date < timing.date) date = timing.date;
   if (window.startsOn && date < window.startsOn) date = window.startsOn;
   let sinceMatch = 0;
@@ -360,6 +369,7 @@ export function nextOccurrencesAfter(
       if (dueAtMs > afterMs && dueAtMs > (out.at(-1) ?? -Infinity))
         out.push(dueAtMs);
     } else sinceMatch += 1;
+    if (date === LAST_CALENDAR_DATE) break;
     date = addDaysToDate(date, 1);
   }
   return out;
