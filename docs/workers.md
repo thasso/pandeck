@@ -3486,13 +3486,12 @@ tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
   inside the `tools/call` result: no `gateway-client` wire changes, and the
   client listing never carries `file.mcp`.
   - **Limits.** The `/mcp` cap and default are both 11,534,336 bytes
-    (`MCP_FILE_MAX_BYTES`, set by M8 run 2c); P7a's metadata precheck and
-    streamed check enforce it before any classification, and an over-limit call
-    answers P7a's text with that number and sends no file byte. A UTF-8 text
-    file up to 32,768 bytes (`MCP_TEXT_INLINE_MAX`) and a PNG, JPEG, GIF or WebP
-    image up to 8,389,778 bytes (`MCP_IMAGE_INLINE_MAX`) and 7,900 pixels a side
-    (`MCP_IMAGE_MAX_DIM`) go inline; every other file, larger images included,
-    goes as a saved file.
+    (`MCP_FILE_MAX_BYTES`); P7a's metadata precheck and streamed check enforce
+    it before any classification, and an over-limit call answers P7a's text with
+    that number and sends no file byte. A UTF-8 text file up to 32,768 bytes
+    (`MCP_TEXT_INLINE_MAX`) and a PNG, JPEG, GIF or WebP image up to 8,389,778
+    bytes (`MCP_IMAGE_INLINE_MAX`) and 7,900 pixels a side (`MCP_IMAGE_MAX_DIM`)
+    go inline; every other file, larger images included, goes as a saved file.
   - **Result.** `content` is a JSON text part, the tool's closed projection
     (`status: "downloaded_attachment"`, `pageId` and the attachment's `id`,
     `title`, `mediaType`, `fileSize`, `version`; never a URL, path or session
@@ -3506,8 +3505,9 @@ tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
     64-character placeholder. The serialized body must hold it exactly once, or
     the answer is a fixed 500 "Internal error." with no file byte. The body is
     then written as its prefix, the file's base64 in pieces of at most 3 MiB of
-    input, each written only after the socket drained, and its suffix, with an
-    exact `content-length`. The exchange's bound ends when the SDK answers;
+    input, and its suffix, with an exact `content-length`. The next piece is
+    written at once unless the previous `write()` returned false; only then does
+    the writer wait for `drain`. The exchange's bound ends when the SDK answers;
     writing the body has its own 120 s bound (`MCP_FILE_OUTPUT_MS`), after
     which, or when the reader goes away, the response is destroyed.
   - **Permit.** The download's permit is released once both holds have settled:
