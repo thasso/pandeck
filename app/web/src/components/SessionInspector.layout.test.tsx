@@ -2,7 +2,8 @@
 /**
  * What the session Details panel puts where: where it runs and the runtime
  * facts it is asked for most (account/model/thinking) in one Details section,
- * and a Tasks group that cannot grow past its first page.
+ * or in the Runtime section once the session started (the account once, with
+ * its enterprise rows), and a Tasks group that cannot grow past its first page.
  *   pnpm --filter @assistant/web test src/components/SessionInspector.layout.test.tsx
  */
 import { act } from "react";
@@ -505,6 +506,167 @@ describe("SessionInspector layout", () => {
         ...host.querySelectorAll<HTMLButtonElement>("button"),
       ].find((button) => button.textContent?.trim() === "Reset")!;
       expect(reset.getAttribute("aria-busy")).toBe("true");
+    });
+
+    describe("the account, shown once", () => {
+      const personal = { name: "Personal", provider: "claude" as const };
+      const lists = (host: ParentNode) => {
+        const all = [...host.querySelectorAll<HTMLElement>(".property-list")];
+        return {
+          details: all.find((list) => labels(list).includes("Project")),
+          runtime: all.find((list) =>
+            list.querySelector('[aria-label="Next turn\'s model"]'),
+          ),
+        };
+      };
+      // A property list's labels, in order: its `PropertyLabel` spans.
+      const labels = (list: Element) =>
+        [...list.children]
+          .filter(
+            (child) =>
+              child.tagName === "SPAN" &&
+              child.classList.contains("text-muted-foreground") &&
+              child.classList.contains("flex"),
+          )
+          .map((child) => child.textContent);
+      const accountRows = (host: ParentNode) =>
+        [...host.querySelectorAll(".property-list")].flatMap((list) =>
+          labels(list).filter((label) => label === "Account"),
+        );
+      const parse = (html: string) =>
+        new DOMParser().parseFromString(html, "text/html");
+
+      it("puts it in Details without a Runtime section", () => {
+        const doc = parse(render({ ...base, credentialProfile: personal }));
+        expect(accountRows(doc)).toHaveLength(1);
+        expect(lists(doc).runtime).toBeUndefined();
+        expect(labels(lists(doc).details!)).toContain("Account");
+      });
+
+      it("puts it only in Runtime when Runtime shows it", () => {
+        const doc = parse(
+          render({ ...base, credentialProfile: personal, runtime: control() }),
+        );
+        expect(accountRows(doc)).toHaveLength(1);
+        const { details, runtime } = lists(doc);
+        expect(labels(details!)).not.toContain("Account");
+        expect(labels(runtime!)).toContain("Account");
+        expect(details!.textContent).not.toContain("Personal");
+      });
+
+      it("keeps it in Details when Runtime has no account to show", () => {
+        const doc = parse(
+          render({
+            ...base,
+            credentialProfile: personal,
+            runtime: control({
+              current: { ...control().current, accountName: undefined },
+            }),
+          }),
+        );
+        expect(accountRows(doc)).toHaveLength(1);
+        const { details, runtime } = lists(doc);
+        expect(labels(details!)).toContain("Account");
+        expect(labels(runtime!)).not.toContain("Account");
+      });
+
+      it("marks an enterprise-only session under Runtime's account, with no other row", () => {
+        const doc = parse(
+          render({
+            ...base,
+            sessions: [
+              {
+                id: "s1",
+                title: "Session",
+                requiresEnterprise: true,
+              } as SessionListItem,
+            ],
+            credentialProfile: personal,
+            enterpriseAccountAvailable: true,
+            onRequireEnterprise: () => {},
+            runtime: control(),
+          }),
+        );
+        const { details, runtime } = lists(doc);
+        expect(details!.textContent).not.toContain("nterprise");
+        expect(runtime!.textContent).toContain("Enterprise only");
+        expect(runtime!.textContent).not.toContain(
+          "Require enterprise account",
+        );
+        // The marker follows the account picker as its one continuation row
+        // (skipping the Select's fixed-position form input, outside the grid).
+        const cells = [...runtime!.children].filter(
+          (cell) => cell.tagName !== "INPUT",
+        );
+        const picker = cells.findIndex(
+          (cell) => cell.getAttribute("aria-label") === "Next turn's account",
+        );
+        expect(picker).toBeGreaterThan(0);
+        const [spacer, marker, next] = cells.slice(picker + 1);
+        expect(spacer!.getAttribute("aria-hidden")).toBe("true");
+        expect(spacer!.textContent).toBe("");
+        expect(marker!.textContent).toBe("Enterprise only");
+        expect(next).toBeUndefined();
+      });
+
+      it("offers Require enterprise account under Runtime's account, disabled with its hint while running", async () => {
+        const { host, root } = mount();
+        const asked: string[] = [];
+        const showRunning = (isStreaming: boolean) =>
+          act(async () =>
+            root.render(
+              <DialogProvider>
+                <SessionInspector
+                  {...base}
+                  sessions={[
+                    {
+                      id: "s1",
+                      title: "Session",
+                      ...(isStreaming ? { isStreaming } : {}),
+                    } as SessionListItem,
+                  ]}
+                  credentialProfile={personal}
+                  enterpriseAccountAvailable
+                  onRequireEnterprise={(id) => asked.push(id)}
+                  runtime={control()}
+                />
+              </DialogProvider>,
+            ),
+          );
+        const hint = "Available once the current turn ends.";
+        const action = () =>
+          [
+            ...(lists(host).runtime?.querySelectorAll<HTMLButtonElement>(
+              "button",
+            ) ?? []),
+          ].find(
+            (item) => item.textContent?.trim() === "Require enterprise account",
+          );
+
+        await showRunning(true);
+        expect(accountRows(host)).toHaveLength(1);
+        expect(lists(host).details!.textContent).not.toContain("nterprise");
+        expect(action()!.disabled).toBe(true);
+        const describedBy = action()!.getAttribute("aria-describedby");
+        expect(
+          describedBy && document.getElementById(describedBy)?.textContent,
+        ).toBe(hint);
+        expect(lists(host).runtime!.textContent).toContain(hint);
+
+        await showRunning(false);
+        expect(action()!.disabled).toBe(false);
+        expect(host.textContent).not.toContain(hint);
+        await act(async () => action()!.click());
+        const confirm = [
+          ...document.querySelectorAll<HTMLButtonElement>(
+            '[role="dialog"] button, dialog button',
+          ),
+        ].find(
+          (item) => item.textContent?.trim() === "Require enterprise account",
+        );
+        await act(async () => confirm!.click());
+        expect(asked).toEqual(["s1"]);
+      });
     });
 
     it("shows a fixed account as text, without a picker", async () => {

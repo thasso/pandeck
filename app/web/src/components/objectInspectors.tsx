@@ -1643,6 +1643,21 @@ export function SessionInspector({
   const groups = withPeerPrompts(relationGroups, peerPromptPeers, sessions);
   const listItem = sessions.find((item) => item.id === sessionId);
   const requiresEnterprise = listItem?.requiresEnterprise === true;
+  const running = listItem?.isStreaming === true;
+  const requireEnterprise =
+    sessionId &&
+    onRequireEnterprise &&
+    credentialProfile &&
+    // Only a subscription login ever moves; any other account alone serves
+    // its models (the server refuses those too).
+    isSubscriptionAccountKind(credentialProfile.provider) &&
+    enterpriseAccountAvailable &&
+    !requiresEnterprise
+      ? () => onRequireEnterprise(sessionId)
+      : undefined;
+  // The account shows once: in Runtime when that section shows it, with its
+  // enterprise rows under it; otherwise in Details.
+  const runtimeShowsAccount = Boolean(runtime?.current.accountName);
   return (
     <Inspector
       relations={[
@@ -1672,21 +1687,12 @@ export function SessionInspector({
               }
               worktree={worktree}
               worktreeStatus={worktreeStatus}
-              credentialProfile={credentialProfile}
-              requiresEnterprise={requiresEnterprise}
-              running={listItem?.isStreaming === true}
-              onRequireEnterprise={
-                sessionId &&
-                onRequireEnterprise &&
-                credentialProfile &&
-                // Only a subscription login ever moves; any other account
-                // alone serves its models (the server refuses those too).
-                isSubscriptionAccountKind(credentialProfile.provider) &&
-                enterpriseAccountAvailable &&
-                !requiresEnterprise
-                  ? () => onRequireEnterprise(sessionId)
-                  : undefined
+              credentialProfile={
+                runtimeShowsAccount ? undefined : credentialProfile
               }
+              requiresEnterprise={requiresEnterprise}
+              running={running}
+              onRequireEnterprise={requireEnterprise}
               model={runtime ? undefined : model}
               thinkingLevel={runtime ? undefined : thinkingLevel}
               openers={openers}
@@ -1704,7 +1710,18 @@ export function SessionInspector({
                 ...(runtime.revealNonce !== undefined
                   ? { revealNonce: runtime.revealNonce }
                   : {}),
-                content: <SessionRuntimeSection control={runtime} />,
+                content: (
+                  <SessionRuntimeSection
+                    control={runtime}
+                    accountRows={
+                      <EnterpriseAccountRows
+                        marker={requiresEnterprise}
+                        running={running}
+                        onRequireEnterprise={requireEnterprise}
+                      />
+                    }
+                  />
+                ),
               },
             ]
           : []),
@@ -1869,6 +1886,8 @@ function withPeerPrompts(
  * A session's Details: where it runs (its project and worktree, each opening
  * its object) and on what (the account fixed at the first prompt, the model
  * and thinking level it runs on now), as the Task inspector's property list.
+ * A started session's Runtime section owns the model and thinking level, and
+ * the account whenever it shows one; the inspector then omits them here.
  */
 function SessionDetails({
   requiresEnterprise,
@@ -1904,18 +1923,6 @@ function SessionDetails({
   openers: ObjectOpeners;
 }) {
   const onAct = useInspectorAct();
-  const dialogs = useDialogs();
-  const runningHintId = useId();
-  const requireEnterprise = onRequireEnterprise
-    ? async () => {
-        const confirmed = await dialogs.confirm({
-          title: "Require an enterprise account?",
-          body: "From now on only enterprise accounts run this session. Its next turn moves it to an enterprise account first. This cannot be undone.",
-          confirmLabel: "Require enterprise account",
-        });
-        if (confirmed) onRequireEnterprise();
-      }
-    : undefined;
   const open = (run: () => void) => () => {
     run();
     onAct?.();
@@ -2023,32 +2030,11 @@ function SessionDetails({
               <span className="text-muted-foreground"> · enterprise only</span>
             ) : null}
           </PropertyText>
-          {requireEnterprise ? (
-            <>
-              <span aria-hidden />
-              <Button
-                variant="ghost"
-                size="sm"
-                className={`${PROPERTY_TRIGGER} justify-start text-muted-foreground`}
-                disabled={running}
-                aria-describedby={running ? runningHintId : undefined}
-                onClick={() => void requireEnterprise()}
-              >
-                <ShieldCheck aria-hidden />
-                Require enterprise account
-              </Button>
-            </>
-          ) : null}
-          {running && requireEnterprise ? (
-            <>
-              <span aria-hidden />
-              <PropertyText className="text-xs text-muted-foreground">
-                <span id={runningHintId}>
-                  Available once the current turn ends.
-                </span>
-              </PropertyText>
-            </>
-          ) : null}
+          <EnterpriseAccountRows
+            marker={false}
+            running={running}
+            onRequireEnterprise={onRequireEnterprise}
+          />
         </>
       ) : null}
       {model ? (
@@ -2067,6 +2053,74 @@ function SessionDetails({
         </>
       ) : null}
     </PropertyList>
+  );
+}
+
+/**
+ * The property rows under a session's Account row about enterprise accounts:
+ * the "Enterprise only" marker as its own row (Details writes it beside the
+ * name instead), or the one-way "Require enterprise account" with its hint
+ * while a turn runs. Renders nothing when neither applies.
+ */
+function EnterpriseAccountRows({
+  marker,
+  running,
+  onRequireEnterprise,
+}: {
+  /** Show the requirement as a row. */
+  marker: boolean;
+  /** A turn is running: the server refuses the requirement until it ends. */
+  running: boolean;
+  /** Offered only when it would change something and could be honored. */
+  onRequireEnterprise: (() => void) | undefined;
+}) {
+  const dialogs = useDialogs();
+  const runningHintId = useId();
+  const requireEnterprise = async (require: () => void) => {
+    const confirmed = await dialogs.confirm({
+      title: "Require an enterprise account?",
+      body: "From now on only enterprise accounts run this session. Its next turn moves it to an enterprise account first. This cannot be undone.",
+      confirmLabel: "Require enterprise account",
+    });
+    if (confirmed) require();
+  };
+  return (
+    <>
+      {marker ? (
+        <>
+          <span aria-hidden />
+          <PropertyText className="text-xs text-muted-foreground">
+            Enterprise only
+          </PropertyText>
+        </>
+      ) : null}
+      {onRequireEnterprise ? (
+        <>
+          <span aria-hidden />
+          <Button
+            variant="ghost"
+            size="sm"
+            className={`${PROPERTY_TRIGGER} justify-start text-muted-foreground`}
+            disabled={running}
+            aria-describedby={running ? runningHintId : undefined}
+            onClick={() => void requireEnterprise(onRequireEnterprise)}
+          >
+            <ShieldCheck aria-hidden />
+            Require enterprise account
+          </Button>
+          {running ? (
+            <>
+              <span aria-hidden />
+              <PropertyText className="text-xs text-muted-foreground">
+                <span id={runningHintId}>
+                  Available once the current turn ends.
+                </span>
+              </PropertyText>
+            </>
+          ) : null}
+        </>
+      ) : null}
+    </>
   );
 }
 
