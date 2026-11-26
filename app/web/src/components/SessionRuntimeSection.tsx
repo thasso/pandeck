@@ -10,6 +10,7 @@
  * session's failure (`lib/messageArrival.ts`); these controls show only that a
  * change is busy.
  */
+import type { ReactNode } from "react";
 import { RotateCcw } from "lucide-react";
 import {
   supportedThinkingLevelsForModel,
@@ -112,8 +113,14 @@ export function runtimeTargetLabel(
 
 export function SessionRuntimeSection({
   control,
+  accountRows,
 }: {
   control: SessionRuntimeControl;
+  /**
+   * Property rows about the account (its enterprise requirement), placed
+   * under the Account row and only while that row is shown.
+   */
+  accountRows?: ReactNode;
 }) {
   const { current, pending, models, accounts, engineSwitch } = control;
   const targetModel = pending?.model ?? current.model;
@@ -303,6 +310,7 @@ export function SessionRuntimeSection({
                 : current.accountName}
             </PropertyText>
           )}
+          {accountRows}
         </>
       ) : null}
 
