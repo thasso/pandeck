@@ -116,6 +116,7 @@ async function listen(
 async function serveEdge(): Promise<
   Served & {
     host: ToolHost;
+    uploads: ReturnType<typeof createEdgeTools>["uploads"];
     mcpCalls: () => number;
     calls: () => number;
   }
@@ -128,6 +129,7 @@ async function serveEdge(): Promise<
   return {
     ...served,
     host: tools.host,
+    uploads: tools.uploads,
     mcpCalls: () => mcpCall.mock.calls.length,
     calls: () => call.mock.calls.length,
   };
@@ -610,7 +612,7 @@ test("a sentinel in either download link never reaches the /mcp body or a log li
   }
 });
 
-test("the permit is shared with the client route: /mcp answers FILE_BUSY with no vault read or fetch, then proceeds after the release (T4)", async () => {
+test("a client download holding its output keeps the permit: /mcp answers FILE_BUSY with no vault read or fetch, then proceeds after the release", async () => {
   const fetch = vi.fn(oracleFetch());
   vi.stubGlobal("fetch", fetch);
   const edge = await serveEdge();
@@ -634,6 +636,34 @@ test("the permit is shared with the client route: /mcp answers FILE_BUSY with no
   const after = await post(edge.url, download({ attachmentId: "att101" }));
   assert.equal(after.json.result!.isError, undefined);
   assert.equal(edge.reads(), 1);
+});
+
+test("an open client upload holds the same permit: /mcp answers FILE_BUSY with no vault read or Atlassian request, then proceeds after its release (v08 T4)", async () => {
+  const fetch = vi.fn(oracleFetch());
+  vi.stubGlobal("fetch", fetch);
+  const edge = await serveEdge();
+  const scope = edge.uploads.scope("user-1");
+  const bytes = new TextEncoder().encode("upload");
+  const opened = scope.open({
+    streams: [
+      {
+        stagedAttachmentId: "s1",
+        size: bytes.byteLength,
+        sha256: sha256(bytes),
+      },
+    ],
+    work: bytes.byteLength,
+  });
+  assert.ok(opened.ok);
+  const busy = await post(edge.url, download({ attachmentId: "att101" }));
+  assert.deepEqual(busy.json.result, failure(FILE_BUSY));
+  assert.equal(edge.reads(), 0);
+  assert.equal(fetch.mock.calls.length, 0);
+  assert.deepEqual(scope.release(opened.uploadId), { ok: true });
+  const after = await post(edge.url, download({ attachmentId: "att101" }));
+  assert.equal(after.json.result!.isError, undefined);
+  assert.equal(edge.reads(), 1);
+  assert.ok(fetch.mock.calls.length > 0);
 });
 
 const DENYLIST = [
