@@ -81,9 +81,9 @@ CLI's cannot be edited or reliably withdrawn, and pi's dies with its process.
   running turn that takes steering, and otherwise moves it to the front and
   sends it as soon as the session is idle.
 - **One per pass, the user first.** The per-session delivery scheduler offers
-  handoffs, this queue, workflow assignments, peer FIFO, peer notices,
-  background completions, then eligible reply reminders. Starting a turn ends
-  the pass at its append. A steer does not. See
+  handoffs, this queue, workflow assignments, peer FIFO, peer notices, scheduled
+  prompts, background completions, then eligible reply reminders. Starting a
+  turn ends the pass at its append. A steer does not. See
   [Delivery scheduler](#delivery-scheduler).
 - **Stop means stop.** Stopping a turn that has messages queued pauses the queue
   (`session_prompt_queue_pause`), so its idle edge sends nothing. Sending a
@@ -147,7 +147,8 @@ prompt is still pending.
 The auto-approval pre-pass runs before checking Stop. It executes
 session-granted cards only while idle, even under Stop, and only queues their
 handoffs. The lanes then run in order: handoffs, user queue, workflow
-assignments, peer FIFO, peer notices, background completions, reminders.
+assignments, peer FIFO, peer notices, scheduled prompts, background completions,
+reminders.
 
 A lane exposes cheap priority debt through `owes(sessionId)` without opening a
 harness, and `deliver(session)`. Optional `offerable(sessionId, endedRunId)`
@@ -185,10 +186,18 @@ starting a turn or persisting a reload refusal as a queue pause.
 A new turn ends the pass; a steer does not. A failure before append is logged
 and the next lane is offered. One ordering rule preserves the former peer queue
 deferral: when the user queue declines delivery and still owes priority,
-`deferOnDecline` skips peer FIFO and notices for that pass. A failed or paused
-queue no longer owes priority and does not defer peers; a thrown delivery does
-not install a deferral either. Other lanes keep their own policy, and a later
-wake starts afresh. This is scheduler ordering, not a shared
+`deferOnDecline` skips peer FIFO, peer notices and scheduled prompts for that
+pass. A failed or paused queue no longer owes priority and does not defer peers;
+a thrown delivery does not install a deferral either. Other lanes keep their own
+policy, and a later wake starts afresh.
+
+The scheduled prompts lane (`schedules.md`) never steers or joins a running
+turn: it starts one new turn per occurrence, oldest first. An occurrence that
+ends without an append (failed, or superseded or withdrawn before its final
+admission check) lets the pass offer the next one, so the lane always makes
+progress; a hold (a running turn, Stop, a runtime selection that cannot apply, a
+session that cannot be acquired) leaves the occurrence owed until the next wake
+and is never retried in a loop. This is scheduler ordering, not a shared
 recovery-reservation block. An admitted recovery continuation still accepts
 genuine background steering; its idle auto-approval prepass still executes and
 queues outcomes. Each lane keeps its own table, rendering, batching, retry,
