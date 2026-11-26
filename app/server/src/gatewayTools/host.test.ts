@@ -16,8 +16,10 @@ import {
   createToolHost,
   effectiveDeadlineMs,
   longestDeadlineMs,
+  mcpDeadlineMs,
   type ToolCaller,
 } from "./host.ts";
+import { fixtureFileTool } from "./fileFixtureTool.ts";
 import { EDGE_TOOLS } from "./tools.ts";
 
 const SENTINEL = "SENTINEL-do-not-echo";
@@ -565,11 +567,18 @@ test("the effective and longest deadlines", () => {
     ),
     45_000,
   );
-  // The file download's 150 s (Task-1441 P7a); `/mcp` leaves it out.
+  // The file download's 150 s (Task-1441 P7a), on `/mcp` too (P7b).
   assert.equal(longestDeadlineMs(EDGE_TOOLS), 150_000);
   assert.equal(longestDeadlineMs(EDGE_TOOLS, 60_000), 150_000);
-  assert.equal(
-    longestDeadlineMs(EDGE_TOOLS.filter((tool) => !tool.file)),
-    45_000,
-  );
+  assert.equal(mcpDeadlineMs(EDGE_TOOLS), 150_000);
+});
+
+test("the /mcp bound counts only the tools /mcp lists: a file tool without file.mcp is left out (P7b N2a)", () => {
+  const writes = EDGE_TOOLS.filter((tool) => !tool.file);
+  const download = EDGE_TOOLS.filter((tool) => tool.file);
+  assert.equal(download.length, 1);
+  const hidden = fixtureFileTool({ deadlineMs: 200_000 });
+  assert.equal(longestDeadlineMs([...writes, hidden]), 200_000);
+  assert.equal(mcpDeadlineMs([...writes, hidden]), 45_000);
+  assert.equal(mcpDeadlineMs([...writes, ...download, hidden]), 150_000);
 });

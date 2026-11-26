@@ -370,7 +370,8 @@ test("the relay lists Jira's, Confluence's and Slack's read tools as read-only, 
   const { a1, tokens } = await twoUsers();
   const client = await mcpClient(a1.url, tokens.a1);
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 12);
+  // The download is listed with its `/mcp` form (Task-1441 P7b).
+  assert.equal(tools.length, 13);
   // Every tool but the write tools (Task-1463) is read-only.
   const writes = new Set(["jira_mutate_issue", "confluence_mutate_page"]);
   for (const tool of tools)
@@ -436,6 +437,7 @@ test("an SDK client lists and calls jira_get_issue through the relay, with its o
       "confluence_search",
       "confluence_get_page",
       "confluence_lookup",
+      "confluence_download_attachment",
       "slack_search",
       "slack_conversation_read",
       "slack_thread_read",

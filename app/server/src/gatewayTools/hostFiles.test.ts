@@ -4,7 +4,10 @@
  * (J3), the refusal without an output seam (P7A-R2), and the one file permit
  * (G7, H1): taken before the credential read, `FILE_BUSY` meanwhile with no
  * credential read, released exactly once when both the execution and the
- * output settled (t2, t7). Every value is fake.
+ * output settled (t2, t7). On `/mcp` (Task-1441 P7b): the `file.mcp`
+ * refusals at construction, a file tool without it unlisted and unknown
+ * before any permit, and one with it run under its own limits (v09 U1).
+ * Every value is fake.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -15,9 +18,11 @@ import {
   ToolError,
   type AtlassianToolDescriptor,
   type FileSpec,
+  type McpFileSpec,
 } from "./descriptor.ts";
 import {
   FILE_BUSY,
+  NO_SUCH_TOOL,
   createFileBudget,
   createToolHost,
   effectiveFileLimit,
@@ -57,6 +62,12 @@ function fileTool(
     execute,
     ...extra,
   };
+}
+
+/** The same tool without `file`, named `plain`. */
+function plainTool(): AtlassianToolDescriptor {
+  const { file: _file, ...rest } = fileTool(() => Promise.resolve({}));
+  return { ...rest, name: "plain" };
 }
 
 const bytesOf = (n: number) => new Uint8Array(n).fill(0x61);
@@ -272,6 +283,144 @@ test("construction refuses a file tool with phases, a write, or limits the path 
   assert.doesNotThrow(() =>
     createToolHost([fileTool(execute)], { log: () => {} }),
   );
+});
+
+const MCP: McpFileSpec = {
+  description: "The tool on /mcp.",
+  limitDescription: "Largest file on /mcp.",
+  defaultBytes: 4,
+  maxBytes: 12,
+  project: (json) => ({ projected: json }),
+  uri: () => "pandeck-gateway://fixture/x",
+};
+
+test("construction refuses a file.mcp the /mcp path cannot run (P7b)", () => {
+  const execute = () => Promise.resolve({});
+  const withMcp = (mcp: Partial<Record<keyof McpFileSpec, unknown>>) => ({
+    file: { ...SPEC, mcp: { ...MCP, ...mcp } as McpFileSpec },
+  });
+  const bad: [Partial<AtlassianToolDescriptor>, RegExp][] = [
+    [withMcp({ description: "" }), /mcp\.description/],
+    [withMcp({ limitDescription: "" }), /mcp\.limitDescription/],
+    [withMcp({ maxBytes: 0 }), /mcp\.maxBytes/],
+    [withMcp({ maxBytes: 17 }), /mcp\.maxBytes/],
+    [withMcp({ maxBytes: 2.5 }), /mcp\.maxBytes/],
+    [withMcp({ defaultBytes: 0 }), /mcp\.defaultBytes/],
+    [withMcp({ defaultBytes: 13 }), /mcp\.defaultBytes/],
+    [withMcp({ project: undefined }), /project and uri/],
+    [withMcp({ uri: "x" }), /project and uri/],
+  ];
+  for (const [extra, message] of bad)
+    assert.throws(
+      () => createToolHost([fileTool(execute, extra)], { log: () => {} }),
+      message,
+    );
+  assert.doesNotThrow(() =>
+    createToolHost([fileTool(execute, withMcp({}))], { log: () => {} }),
+  );
+});
+
+test("a file tool without file.mcp is off the /mcp listing and unknown to mcpCall before any permit or credential read", async () => {
+  const budget = countingBudget();
+  const execute = vi.fn(() => Promise.resolve(fileOf(1)));
+  const host = createToolHost([fileTool(execute), plainTool()], {
+    log: () => {},
+    fileBudget: budget,
+  });
+  assert.deepEqual(
+    host.list().map((tool) => tool.name),
+    ["fixture_file", "plain"],
+  );
+  assert.deepEqual(
+    host.mcpList().map((tool) => tool.name),
+    ["plain"],
+  );
+  const caller = fileCaller();
+  assert.deepEqual(await host.mcpCall("fixture_file", {}, caller), {
+    ok: false,
+    code: "unknown_tool",
+    message: NO_SUCH_TOOL,
+  });
+  assert.equal(execute.mock.calls.length, 0);
+  assert.deepEqual(budget.asked, []);
+  assert.equal(caller.reads, 0);
+  assert.equal(caller.registered, 0);
+});
+
+test("on /mcp a file tool lists its /mcp description and limit text and runs under file.mcp's limits", async () => {
+  const budget = countingBudget();
+  const seen: unknown[] = [];
+  const host = createToolHost(
+    [
+      fileTool(
+        (params, ctx) => {
+          seen.push({
+            limit: ctx.maxFileBytes,
+            cap: ctx.maxFileCap,
+            reserved: budget.reserved,
+          });
+          return Promise.resolve(fileOf(Number(params.id ?? 1)));
+        },
+        { file: { ...SPEC, mcp: MCP } },
+      ),
+    ],
+    { log: () => {}, fileBudget: budget },
+  );
+  const [listed] = host.mcpList();
+  assert.deepEqual(Object.keys(listed!).sort(), [
+    "description",
+    "effect",
+    "inputSchema",
+    "name",
+  ]);
+  assert.equal(listed!.description, "The tool on /mcp.");
+  assert.deepEqual(listed!.inputSchema.properties.maxBytes, {
+    type: "number",
+    description: "Largest file on /mcp.",
+  });
+  // The client listing is untouched.
+  assert.equal(host.list()[0]!.description, "A test file tool.");
+  assert.deepEqual(host.list()[0]!.inputSchema.properties.maxBytes, {
+    type: "number",
+  });
+
+  const caller = fileCaller();
+  const answer = await host.mcpCall("fixture_file", { id: "4" }, caller);
+  assert.ok(answer.ok && answer.file);
+  assert.equal(answer.text, JSON.stringify({ projected: { status: "saved" } }));
+  assert.equal(answer.file.uri, "pandeck-gateway://fixture/x");
+  assert.equal(answer.file.size, 4);
+  caller.settleOutput();
+  await settle();
+  // Clamped to file.mcp's cap; the limit's edge E + 1 refused with its text.
+  const over = await host.mcpCall(
+    "fixture_file",
+    { id: "13", maxBytes: 1e9 },
+    caller,
+  );
+  caller.settleOutput();
+  await settle();
+  assert.deepEqual(over, {
+    ok: false,
+    code: "tool_error",
+    message:
+      "The file is larger than the 12-byte limit; nothing was saved. Raise maxBytes (at most 12) to fetch it.",
+  });
+  assert.deepEqual(seen, [
+    { limit: 4, cap: 12, reserved: 2 * 4 + 2 * MiB },
+    { limit: 12, cap: 12, reserved: 2 * 12 + 2 * MiB },
+  ]);
+  assert.equal(budget.releases, 2);
+  // On the client route the same tool runs under `file`, unprojected.
+  const client = await host.callForClient("fixture_file", { id: "2" }, caller);
+  assert.ok(client.ok && client.file);
+  assert.equal(client.text, JSON.stringify({ status: "saved" }));
+  assert.equal("uri" in client.file, false);
+  assert.deepEqual(seen.at(-1), {
+    limit: 8,
+    cap: 16,
+    reserved: 2 * 8 + 2 * MiB,
+  });
 });
 
 test("the listing carries a file tool's limits", () => {

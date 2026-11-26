@@ -17,6 +17,7 @@ import {
 } from "../test/confluenceDownloadOracle.ts";
 import { FAKE_ACCESS, FAKE_CLOUD_ID } from "../test/atlassianFake.ts";
 import {
+  CONFLUENCE_ATTACHMENT_MAX_BYTES,
   CONFLUENCE_DOWNLOAD_DESCRIPTION,
   CONFLUENCE_DOWNLOAD_SCHEMA,
 } from "../confluenceDownload.ts";
@@ -122,11 +123,18 @@ test("the edge tool has the local tool's schema and description, a 150 s deadlin
   assert.equal(FILE_DEADLINE_MS, 150_000);
   assert.equal(confluenceDownloadAttachment.effect, "read");
   assert.equal(confluenceDownloadAttachment.actionKey, "confluence:read");
-  assert.deepEqual(confluenceDownloadAttachment.file, {
-    limitParam: "maxBytes",
-    defaultBytes: 50 * 1024 * 1024,
-    maxBytes: 100 * 1024 * 1024,
-  });
+  const { limitParam, defaultBytes, maxBytes, mcp } =
+    confluenceDownloadAttachment.file!;
+  assert.deepEqual(
+    { limitParam, defaultBytes, maxBytes },
+    {
+      limitParam: "maxBytes",
+      defaultBytes: 50 * 1024 * 1024,
+      maxBytes: 100 * 1024 * 1024,
+    },
+  );
+  // Its `/mcp` form (Task-1441 P7b), pinned in `mcpFiles.test.ts`.
+  assert.ok(mcp);
   const listed = createToolHost(EDGE_TOOLS, { log: () => {} })
     .list()
     .find((tool) => tool.name === "confluence_download_attachment");
@@ -274,7 +282,7 @@ const BRANCHES: Branch[] = [
             downloadLink: `/download/attachments/123/${MARK}.txt`,
           })
         : undefined,
-    expected: DOWNLOAD_TEXT.tooLarge(4),
+    expected: DOWNLOAD_TEXT.tooLarge(4, CONFLUENCE_ATTACHMENT_MAX_BYTES),
   },
   {
     name: "the declared size over E",
@@ -289,7 +297,7 @@ const BRANCHES: Branch[] = [
         : isDownload(url)
           ? new Response("hello", { headers: { "content-length": "5" } })
           : undefined,
-    expected: DOWNLOAD_TEXT.tooLarge(4),
+    expected: DOWNLOAD_TEXT.tooLarge(4, CONFLUENCE_ATTACHMENT_MAX_BYTES),
   },
   {
     name: "the streamed size over E",
@@ -311,7 +319,7 @@ const BRANCHES: Branch[] = [
               }),
             )
           : undefined,
-    expected: DOWNLOAD_TEXT.tooLarge(4),
+    expected: DOWNLOAD_TEXT.tooLarge(4, CONFLUENCE_ATTACHMENT_MAX_BYTES),
   },
 ];
 

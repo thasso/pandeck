@@ -26,9 +26,16 @@
  * - Each POST is its own SDK server, so a `notifications/cancelled` on a
  *   separate POST never reaches a running call: only the call's own response
  *   closing aborts it.
- * - A file tool (Task-1441 P7a) is not listed, and a call of one answers
- *   "No such tool." before any vault read: its bytes travel only on a
- *   client connection.
+ * - `/mcp` lists and runs what the host's `mcpList` admits (Task-1441 P7b):
+ *   a file tool only with `file.mcp`. A call of any other name answers
+ *   "No such tool." before any vault read.
+ * - A file answer (P7b, `mcpFileResult.ts`) is a metadata text part and one
+ *   file part: text, image or blob. An image or blob crosses the SDK as a
+ *   per-call placeholder that must occur exactly once in the answer, and its
+ *   base64 is spliced in as the body is written, never built whole. The
+ *   exchange's bound ends when the SDK answers; the body then has its own
+ *   output bound. The host's file permit settles once the response has
+ *   finished or closed and the writer has stopped.
  */
 import type http from "node:http";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -41,6 +48,13 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import type { CredentialSource } from "./toolCredential.ts";
 import { NO_SUCH_TOOL, type ToolHost } from "./host.ts";
+import {
+  classifyFile,
+  createOutputHold,
+  newPlaceholder,
+  writeSplicedFile,
+  type WriterEvent,
+} from "./mcpFileResult.ts";
 
 const MAX_BODY_BYTES = 1024 * 1024;
 /** How long a refused upload may keep its connection after the answer. */
@@ -62,16 +76,6 @@ const ERROR_TEXT: Record<number, string> = {
 };
 const FALLBACK_ERROR_TEXT = "The request failed.";
 
-/** The tools `/mcp` lists and runs: every one but a file tool (J2). */
-function mcpTools(host: Pick<ToolHost, "list">) {
-  return host.list().filter((tool) => !tool.file);
-}
-
-/** Whether `name` is a registered file tool; a request string is only compared. */
-function fileToolNamed(host: Pick<ToolHost, "list">, name: string): boolean {
-  return host.list().some((tool) => tool.file && tool.name === name);
-}
-
 /** The caller the gateway hands in: the client and its credential reads. */
 export interface McpCaller extends CredentialSource {
   clientId: string;
@@ -85,7 +89,26 @@ export interface McpHandlerOptions {
   deadlineMs?: number;
   /** Test seam: the exchange's bound itself. */
   lifecycleMs?: number;
+  /** Test seam: a file answer's output bound (120 s unless given). */
+  fileOutputMs?: number;
+  /** Test seams on a file answer's splice (P7b, v03 Y2, v04 W6). */
+  fileSeams?: {
+    /** Makes each call's placeholder. */
+    placeholder?: () => string;
+    /** Rewrites the sanitized body before the placeholder is checked. */
+    body?: (text: string) => string;
+    /** Sees the writer's steps. */
+    writer?: (event: WriterEvent) => void;
+  };
 }
+
+type FileAnswer = Extract<
+  Awaited<ReturnType<ToolHost["mcpCall"]>>,
+  { ok: true }
+>["file"] & {};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 function send(
   res: http.ServerResponse,
@@ -180,7 +203,7 @@ function readBody(req: http.IncomingMessage): Promise<Body> {
  * `callForClient`, `prepare` or `apply` (Task-1463 P6a).
  */
 export function createMcpHandler(
-  host: Pick<ToolHost, "list" | "call">,
+  host: Pick<ToolHost, "mcpList" | "mcpCall">,
   log: (line: string) => void,
   options: McpHandlerOptions = {},
 ): (
@@ -197,6 +220,8 @@ export function createMcpHandler(
     res: http.ServerResponse,
     caller: McpCaller,
   ): Promise<void> => {
+    // Registered before any await, so no `finish` or `close` is missed.
+    const output = createOutputHold(res);
     if (req.method !== "POST") {
       req.resume();
       return rpcError(res, 405, -32000, "Method not allowed.", {
@@ -245,6 +270,63 @@ export function createMcpHandler(
       void transport.close().catch(() => {});
       void server.close().catch(() => {});
     };
+    // A file answer's bytes, kept only until this exchange has answered.
+    let pending: { placeholder: string; bytes: Uint8Array } | undefined;
+    let answered = false;
+    /** The answer's content: the metadata, then the file part (AC4). */
+    const fileContent = (text: string, file: FileAnswer) => {
+      const { bytes, uri } = file;
+      const classified = classifyFile(bytes, file.mimeType);
+      const parsed: unknown = JSON.parse(text);
+      const meta = {
+        type: "text" as const,
+        text: JSON.stringify({
+          ...(isRecord(parsed) ? parsed : {}),
+          file: {
+            name: file.name,
+            mimeType: file.mimeType,
+            size: file.size,
+            sha256: file.sha256,
+            deliveredAs: classified.as,
+          },
+        }),
+      };
+      if (classified.as === "text")
+        return {
+          content: [
+            meta,
+            {
+              type: "resource" as const,
+              resource: {
+                uri,
+                mimeType: classified.mimeType,
+                text: classified.text,
+              },
+            },
+          ],
+        };
+      const placeholder = (options.fileSeams?.placeholder ?? newPlaceholder)();
+      if (!answered) pending = { placeholder, bytes };
+      return {
+        content: [
+          meta,
+          classified.as === "image"
+            ? {
+                type: "image" as const,
+                data: placeholder,
+                mimeType: classified.mimeType,
+              }
+            : {
+                type: "resource" as const,
+                resource: {
+                  uri,
+                  mimeType: "application/octet-stream",
+                  blob: placeholder,
+                },
+              },
+        ],
+      };
+    };
     let expire = (): void => {};
     const expired = new Promise<undefined>((resolve) => {
       expire = () => resolve(undefined);
@@ -255,10 +337,9 @@ export function createMcpHandler(
       expire();
       close();
     });
-    // A file tool answers bytes, which `/mcp` cannot carry: it is neither
-    // listed nor run here, only on a client connection (Task-1441 P7a, J2).
+    // A file tool is listed and run only with `file.mcp` (Task-1441 P7b).
     server.setRequestHandler(ListToolsRequestSchema, () => ({
-      tools: mcpTools(host).map((tool) => ({
+      tools: host.mcpList().map((tool) => ({
         name: tool.name,
         description: tool.description,
         inputSchema: tool.inputSchema,
@@ -266,12 +347,13 @@ export function createMcpHandler(
       })),
     }));
     server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
-      if (fileToolNamed(host, request.params.name))
+      // A request string is only compared, never logged or echoed.
+      if (!host.mcpList().some((tool) => tool.name === request.params.name))
         return {
           content: [{ type: "text", text: NO_SUCH_TOOL }],
           isError: true,
         };
-      const answer = await host.call(
+      const answer = await host.mcpCall(
         request.params.name,
         request.params.arguments,
         {
@@ -279,11 +361,18 @@ export function createMcpHandler(
           credential: (integration, signal) =>
             caller.credential(integration, signal),
           signal: AbortSignal.any([controller.signal, extra.signal]),
+          // The file permit's output hold: this response's end (v08 T3).
+          onSettled: output.onSettled,
         },
       );
-      return answer.ok
-        ? { content: [{ type: "text", text: answer.text }] }
-        : { content: [{ type: "text", text: answer.message }], isError: true };
+      if (!answer.ok)
+        return {
+          content: [{ type: "text", text: answer.message }],
+          isError: true,
+        };
+      return answer.file
+        ? fileContent(answer.text, answer.file)
+        : { content: [{ type: "text", text: answer.text }] };
     });
     const headers = new Headers();
     for (const name of SDK_HEADERS) {
@@ -299,16 +388,56 @@ export function createMcpHandler(
       );
       handled.catch(() => {});
       const response = await Promise.race([handled, expired]);
+      // The exchange's bound ends with the SDK's answer, before any output
+      // (v02 Z3); a file body has its own bound.
+      clearTimeout(lifecycle);
       if (!response) {
+        answered = true;
+        pending = undefined;
         controller.abort();
         if (!res.destroyed)
           log(`mcp request of client ${caller.clientId} timed out`);
         return rpcError(res, 504, -32603, "The request timed out.");
       }
       const text = await sanitizedBody(response);
+      answered = true;
+      let file = pending;
+      pending = undefined;
+      close();
       if (text === undefined)
         return rpcError(res, 500, -32603, "Internal error.");
-      send(res, response.status, text);
+      if (!file) return send(res, response.status, text);
+      // Exactly one placeholder, or no file byte is written (v03 Y2).
+      const parts = (options.fileSeams?.body?.(text) ?? text).split(
+        file.placeholder,
+      );
+      if (parts.length !== 2)
+        return rpcError(res, 500, -32603, "Internal error.");
+      const exited = output.writerStarted();
+      const bytes = file.bytes;
+      file = undefined;
+      try {
+        await writeSplicedFile(
+          res,
+          {
+            status: response.status,
+            prefix: parts[0]!,
+            suffix: parts[1]!,
+            bytes,
+          },
+          {
+            signal: controller.signal,
+            ...(options.fileOutputMs !== undefined
+              ? { outputMs: options.fileOutputMs }
+              : {}),
+            ...(options.fileSeams?.writer
+              ? { probe: options.fileSeams.writer }
+              : {}),
+          },
+        );
+      } finally {
+        exited();
+      }
     } finally {
       clearTimeout(lifecycle);
       close();
