@@ -377,6 +377,23 @@ const ROWS: Row[] = [
     type: "application/octet-stream",
     expected: { as: "resource" },
   },
+  // Object.prototype's keys as the upstream type: own-key lookups only (F004).
+  ...[
+    "__proto__",
+    "constructor",
+    "hasOwnProperty",
+    "valueOf",
+    "toString",
+    "isPrototypeOf",
+    "propertyIsEnumerable",
+    "toLocaleString",
+    "__proto__; charset=utf-8",
+  ].map((type): Row => ({
+    name: `the type ${JSON.stringify(type)}`,
+    bytes: utf8("hello"),
+    type,
+    expected: { as: "resource" },
+  })),
 ];
 
 for (const row of ROWS)

@@ -593,6 +593,33 @@ test("images on /mcp: a FILE-byte PNG and a 12000-pixel PNG are blobs, a FILE + 
   }
 }, 60_000);
 
+test("an attachment typed __proto__ arrives as a blob with its bytes, not an internal error (F004)", async () => {
+  const bytes = new Uint8Array(4_096).map((_b, i) => i % 251);
+  stubConfluence({
+    ...attachmentOf("att551", "odd.bin", bytes, "__proto__"),
+    contentType: "__proto__",
+  });
+  const edge = await serveEdge();
+  const answer = await post(edge.url, download({ attachmentId: "att551" }));
+  assert.equal(answer.json.result!.isError, undefined);
+  assert.deepEqual(answer.json.result!.content[1], {
+    type: "resource",
+    resource: {
+      uri: "pandeck-gateway://confluence/attachment/att551",
+      mimeType: "application/octet-stream",
+      blob: Buffer.from(bytes).toString("base64"),
+    },
+  });
+  const file = metaOf(answer).file as Record<string, unknown>;
+  assert.deepEqual(file, {
+    name: "odd.bin",
+    mimeType: "__proto__",
+    size: bytes.byteLength,
+    sha256: sha256(bytes),
+    deliveredAs: "resource",
+  });
+});
+
 test("a sentinel in either download link never reaches the /mcp body or a log line (Z4)", async () => {
   const bytes = new TextEncoder().encode("hello");
   const link = `/download/attachments/123/${SENTINEL}.txt?version=3`;

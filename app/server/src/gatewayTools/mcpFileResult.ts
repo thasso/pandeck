@@ -22,8 +22,7 @@
 import { randomBytes } from "node:crypto";
 
 /**
- * The applied M8 values (P7b handoff, "Applied values"): run 1 for text,
- * image and dimension, run 2c B7 for the file cap.
+ * The applied M8 values (P7b handoff, "Applied values").
  */
 export const MCP_TEXT_INLINE_MAX = 32_768;
 export const MCP_IMAGE_INLINE_MAX = 8_389_778;
@@ -182,15 +181,20 @@ function webpDimensions(bytes: Uint8Array): Dimensions | undefined {
   return undefined;
 }
 
-const IMAGE_DIMENSIONS: Record<
+/**
+ * The four image types and their header readers. A `Map`, because the key is
+ * the upstream type: a plain object would hand `__proto__` or an inherited
+ * method such as `valueOf` to the caller below (F004).
+ */
+const IMAGE_DIMENSIONS = new Map<
   string,
   (bytes: Uint8Array) => Dimensions | undefined
-> = {
-  "image/png": pngDimensions,
-  "image/jpeg": jpegDimensions,
-  "image/gif": gifDimensions,
-  "image/webp": webpDimensions,
-};
+>([
+  ["image/png", pngDimensions],
+  ["image/jpeg", jpegDimensions],
+  ["image/gif", gifDimensions],
+  ["image/webp", webpDimensions],
+]);
 
 /**
  * The part a file goes as: a pure function of its bytes, its type and the
@@ -202,7 +206,7 @@ export function classifyFile(
   limits: InlineLimits = DEPLOYED_LIMITS,
 ): Classified {
   const type = mediaTypeOf(mimeType);
-  const dimensions = IMAGE_DIMENSIONS[type];
+  const dimensions = IMAGE_DIMENSIONS.get(type);
   if (dimensions && bytes.byteLength <= limits.imageMax) {
     const size = dimensions(bytes);
     if (
