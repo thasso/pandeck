@@ -5,21 +5,23 @@
  * body (AC5, v03 Y2), the placeholder's failure paths, the permit's two
  * holds and its release once (v02 Z2, v03 Y1, v09 U6), the output bound and
  * the lifecycle (v02 Z3), backpressure and an abort mid-body on a 32 MiB
- * test-only fixture (v04 W6 2, v05 V3c), and the SDK client's own result
- * check as the independent oracle (AC4). Every value is fake.
+ * test-only fixture (v04 W6 2, v05 V3c), the bytes' collection after the
+ * holds settle (v03 Y1, W6 2), the timer phases (v02 Z3), and the SDK
+ * client's own result check as the independent oracle (AC4). Every value is
+ * fake.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import http from "node:http";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import type { AddressInfo } from "node:net";
+import type { AddressInfo, Socket } from "node:net";
 import { dirname, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
-import { afterEach, test } from "vitest";
+import { afterEach, test, vi } from "vitest";
 import { encodeAtlassianCredential } from "./atlassian.ts";
 import {
   FileResult,
@@ -35,6 +37,11 @@ import {
 } from "./host.ts";
 import { createMcpHandler, type McpHandlerOptions } from "./mcp.ts";
 import { newPlaceholder, type WriterEvent } from "./mcpFileResult.ts";
+import {
+  modelConnection,
+  type ModelConnection,
+} from "../gateway/clientListener.ts";
+import { retentionControl, settleGc } from "../test/forcedGc.ts";
 import { pngOf } from "../test/imageHeaders.ts";
 
 const MiB = 1024 * 1024;
@@ -49,6 +56,7 @@ const VERSION = { "mcp-protocol-version": "2025-06-18" };
 const open: http.Server[] = [];
 
 afterEach(async () => {
+  vi.useRealTimers();
   await Promise.all(
     open.splice(0).map(
       (server) =>
@@ -89,16 +97,26 @@ function mcpFixture(
   });
 }
 
-/** A budget that counts its releases, around the real one. */
-function countingBudget(): FileBudget & { releases: number } {
+/**
+ * A budget that counts its releases, around the real one. `probe`, when set,
+ * is read inside each release and its value kept in `seen`.
+ */
+function countingBudget(): FileBudget & {
+  releases: number;
+  probe: (() => unknown) | undefined;
+  seen: unknown[];
+} {
   const inner = createFileBudget();
   const budget = {
     releases: 0,
+    probe: undefined as (() => unknown) | undefined,
+    seen: [] as unknown[],
     reserve(bytes: number) {
       const release = inner.reserve(bytes);
       if (!release) return undefined;
       return () => {
         budget.releases += 1;
+        if (budget.probe) budget.seen.push(budget.probe());
         release();
       };
     },
@@ -115,13 +133,25 @@ interface Served {
   reads: () => number;
   /** The last response the handler was given. */
   response: () => http.ServerResponse | undefined;
+  /**
+   * Whether that response has emitted `close`. Its listener is registered
+   * before the handler's, so it runs first within the same emit.
+   */
+  closeSeen: () => boolean;
   lines: string[];
+}
+
+/** Test seams around the handler: the server's sockets and its requests. */
+interface ServeHooks {
+  connection?: (socket: Socket) => void;
+  request?: (req: http.IncomingMessage, res: http.ServerResponse) => void;
 }
 
 async function serve(
   tools: AtlassianToolDescriptor[],
   budget: FileBudget,
   options: McpHandlerOptions = {},
+  hooks: ServeHooks = {},
 ): Promise<Served> {
   const lines: string[] = [];
   const host = createToolHost(tools, {
@@ -131,8 +161,12 @@ async function serve(
   const handle = createMcpHandler(host, (line) => lines.push(line), options);
   let reads = 0;
   let last: http.ServerResponse | undefined;
+  let closeSeen = false;
   const server = http.createServer((req, res) => {
     last = res;
+    closeSeen = false;
+    res.once("close", () => (closeSeen = true));
+    hooks.request?.(req, res);
     handle(req, res, {
       clientId: "client-1",
       credential: () => {
@@ -141,6 +175,7 @@ async function serve(
       },
     });
   });
+  if (hooks.connection) server.on("connection", hooks.connection);
   open.push(server);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address() as AddressInfo;
@@ -149,6 +184,7 @@ async function serve(
     port,
     reads: () => reads,
     response: () => last,
+    closeSeen: () => closeSeen,
     lines,
   };
 }
@@ -626,6 +662,66 @@ async function rawPost(
 const BIG = 32 * MiB;
 const bigFixture = () => mcpFixture({ maxBytes: BIG, defaultBytes: BIG }, {});
 
+/**
+ * A file tool whose bytes only the call holds: the test keeps a WeakRef to
+ * their backing buffer and, as the control, one retained 1-byte view.
+ */
+function ownedFixture(size: number, retain = false) {
+  const owned: { target?: WeakRef<ArrayBufferLike>; view?: Uint8Array } = {};
+  const tool = mcpFixture(
+    { maxBytes: size, defaultBytes: size },
+    {
+      async execute(_params, ctx) {
+        await ctx.credential();
+        const bytes = new Uint8Array(size).fill(7);
+        owned.target = new WeakRef(bytes.buffer);
+        if (retain) owned.view = bytes.subarray(7, 8);
+        return new FileResult(
+          { status: "downloaded" },
+          { name: "f.bin", mimeType: "application/octet-stream", bytes },
+        );
+      },
+    },
+  );
+  return { tool, owned };
+}
+
+/** Two forced collections with event-loop turns, up to three times. */
+async function collected(
+  target: WeakRef<ArrayBufferLike> | undefined,
+): Promise<boolean> {
+  assert.ok(target, "the call never made its bytes");
+  for (let round = 0; round < 3; round += 1) {
+    await settleGc();
+    if (target.deref() === undefined) return true;
+  }
+  return false;
+}
+
+test("the retention control, first: the forcedGc control passes, and a view retained past a /mcp answer keeps the bytes visible to the oracle", async () => {
+  const control = await retentionControl();
+  assert.ok(control.retainedVisible, JSON.stringify(control));
+  assert.ok(control.clearedAfterDrop, JSON.stringify(control));
+  const budget = countingBudget();
+  const { tool, owned } = ownedFixture(4 * MiB, true);
+  const { url } = await serve([tool], budget);
+  const received = await post(url, callOf({ id: "bin" }));
+  assert.equal(received.contentLength, received.body.length);
+  await until(() => budget.releases === 1);
+  assert.equal(await collected(owned.target), false);
+  assert.equal(owned.view?.byteLength, 1);
+});
+
+test("a normal finish: once the permit is released, the bytes are collectable (Y1)", async () => {
+  const budget = countingBudget();
+  const { tool, owned } = ownedFixture(4 * MiB);
+  const { url } = await serve([tool], budget);
+  const received = await post(url, callOf({ id: "bin" }));
+  assert.equal(received.contentLength, received.body.length);
+  await until(() => budget.releases === 1);
+  assert.equal(await collected(owned.target), true);
+});
+
 test("backpressure on a 32 MiB test-only fixture: a write is refused, the writer waits for drain, and writableLength stays within 8 MiB", async () => {
   const budget = countingBudget();
   const events: WriterEvent[] = [];
@@ -662,25 +758,31 @@ test("backpressure on a 32 MiB test-only fixture: a write is refused, the writer
   await until(() => budget.releases === 1);
 }, 60_000);
 
-test("an abort while the writer waits for drain: stopped, then exited, no further piece, and the release only after close", async () => {
+test("an abort while the writer waits for drain: stopped, then exited, no further piece, the release only after close and exit, then the 32 MiB source is collectable", async () => {
   const budget = countingBudget();
   const events: string[] = [];
-  const served = await serve([bigFixture()], budget, {
+  const { tool, owned } = ownedFixture(BIG);
+  const served = await serve([tool], budget, {
     fileSeams: { writer: (event) => events.push(event) },
+  });
+  // Read inside the release: had it come before `close` or the writer's
+  // exit, this would see either still false.
+  budget.probe = () => ({
+    closeSeen: served.closeSeen(),
+    exited: events.includes("exited"),
   });
   const { request } = await rawPost(
     served.port,
     callOf({ id: "bin", size: BIG }),
   );
   await until(() => events.includes("waiting"));
-  served.response()!.once("close", () => events.push("close"));
-  const before = budget.releases;
+  assert.equal(served.closeSeen(), false);
   request.destroy();
-  await until(() => budget.releases === before + 1);
+  await until(() => budget.releases === 1);
+  assert.deepEqual(budget.seen, [{ closeSeen: true, exited: true }]);
   const stopped = events.indexOf("stopped");
   assert.ok(stopped >= 0);
   assert.ok(events.indexOf("exited") > stopped);
-  assert.ok(events.indexOf("close") >= 0);
   assert.deepEqual(
     events
       .slice(stopped)
@@ -688,12 +790,15 @@ test("an abort while the writer waits for drain: stopped, then exited, no furthe
     [],
     "no piece after the stop",
   );
+  // W6 2: both holds have settled, so nothing keeps the source.
+  assert.equal(await collected(owned.target), true);
 }, 60_000);
 
-test("a stalled reader is cut at the output bound and the permit released after the close", async () => {
+test("a stalled reader is cut at the output bound, the permit released after the close, and then the bytes are collectable", async () => {
   const budget = countingBudget();
   const events: WriterEvent[] = [];
-  const served = await serve([bigFixture()], budget, {
+  const { tool, owned } = ownedFixture(BIG);
+  const served = await serve([tool], budget, {
     fileOutputMs: 300,
     fileSeams: { writer: (event) => events.push(event) },
   });
@@ -706,6 +811,107 @@ test("a stalled reader is cut at the output bound and the permit released after 
   await until(() => budget.releases === 1);
   assert.deepEqual(events.slice(-2), ["stopped", "exited"]);
   assert.ok(served.response()!.destroyed);
+  assert.equal(await collected(owned.target), true);
+}, 60_000);
+
+/** Polls `check` on real event-loop turns: fake timers leave I/O real. */
+async function turnsUntil(check: () => boolean): Promise<void> {
+  for (let turn = 0; turn < 100_000 && !check(); turn += 1)
+    await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(check(), "condition not reached");
+}
+
+test("Z3: an execution finishing at 149 s, then 100 s of output to a slow reader, arrives in full: the lifecycle timer is gone once the SDK answers", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const budget = countingBudget();
+  const events: WriterEvent[] = [];
+  const bytes = new Uint8Array(BIG).fill(9);
+  let started = false;
+  const tool = mcpFixture(
+    { maxBytes: BIG, defaultBytes: BIG },
+    {
+      deadlineMs: 150_000,
+      async execute(_params, ctx) {
+        await ctx.credential();
+        started = true;
+        await new Promise((resolve) => setTimeout(resolve, 149_000));
+        return new FileResult(
+          { status: "downloaded" },
+          { name: "f.bin", mimeType: "application/octet-stream", bytes },
+        );
+      },
+    },
+  );
+  // The download's deadline: the exchange is bounded at 150 + 5 = 155 s.
+  const served = await serve([tool], budget, {
+    deadlineMs: 150_000,
+    fileSeams: { writer: (event) => events.push(event) },
+  });
+  const posting = rawPost(served.port, callOf({ id: "bin" }));
+  await turnsUntil(() => started);
+  await vi.advanceTimersByTimeAsync(149_000);
+  await turnsUntil(() => events.includes("waiting"));
+  const { response } = await posting;
+  // Only the 120 s output timer is left.
+  assert.equal(vi.getTimerCount(), 1);
+  // 100 s of output: 64 KiB every 10 s, past the 150 s tool deadline and the
+  // 155 s lifecycle, short of the 120 s output bound.
+  const chunks: Buffer[] = [];
+  for (let second = 0; second < 100; second += 10) {
+    await vi.advanceTimersByTimeAsync(10_000);
+    await turnsUntil(() => response.readableLength > 0);
+    chunks.push(response.read(Math.min(64 * 1024, response.readableLength)));
+  }
+  assert.ok(!events.includes("stopped"));
+  response.on("data", (chunk: Buffer) => chunks.push(chunk));
+  const ended = new Promise((resolve) => response.on("end", resolve));
+  response.resume();
+  await ended;
+  const body = Buffer.concat(chunks);
+  assert.equal(body.length, Number(response.headers["content-length"]));
+  const part = (JSON.parse(body.toString("utf8")) as { result: CallResult })
+    .result.content[1] as { resource: { blob: string } };
+  assert.equal(
+    sha256(Buffer.from(part.resource.blob, "base64")),
+    sha256(bytes),
+  );
+  assert.deepEqual(events.slice(-1), ["exited"]);
+  assert.ok(!events.includes("stopped"));
+  await turnsUntil(() => budget.releases === 1);
+  assert.equal(vi.getTimerCount(), 0);
+}, 60_000);
+
+test("Z3: a long /mcp body leaves the model connection's deadlines alone: a reader paused past each of them still gets the whole body", async () => {
+  const SHORT = { headersMs: 100, requestMs: 100, idleMs: 100 };
+  const connections = new Map<Socket, ModelConnection>();
+  const budget = countingBudget();
+  const events: WriterEvent[] = [];
+  const served = await serve(
+    [bigFixture()],
+    budget,
+    { fileSeams: { writer: (event) => events.push(event) } },
+    {
+      connection: (socket) =>
+        connections.set(socket, modelConnection(socket, SHORT)),
+      request: (req, res) => connections.get(req.socket)!.request(req, res),
+    },
+  );
+  const { response } = await rawPost(
+    served.port,
+    callOf({ id: "bin", size: BIG }),
+  );
+  await until(() => events.includes("waiting"));
+  // Paused for five times every model deadline.
+  await new Promise((resolve) => setTimeout(resolve, 5 * 100));
+  assert.equal(served.response()!.destroyed, false);
+  let received = 0;
+  response.on("data", (chunk: Buffer) => (received += chunk.length));
+  const ended = new Promise((resolve) => response.on("end", resolve));
+  response.resume();
+  await ended;
+  assert.equal(received, Number(response.headers["content-length"]));
+  assert.ok(!events.includes("stopped"));
+  await until(() => budget.releases === 1);
 }, 60_000);
 
 test("the SDK client accepts each part and its own result check passes: blob, image and text decode to the bytes", async () => {

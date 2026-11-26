@@ -2,7 +2,8 @@
  * The `/mcp` file result's pure parts (Task-1441 P7b): the applied limits
  * (AC7), the classification table (AC3, v02 Z1 and Z4 B) with injected
  * limits (v04 W5), the base64 pieces (Y4), and the writer's ordered stop and
- * the output hold (v03 Y1, v05 V3c) on a fake response with fake timers.
+ * the output hold (v03 Y1, v05 V3c) on a fake response with fake timers,
+ * including the bytes' collection on every exit path (Y1).
  * Expected values come from the rule table, never from the classifier.
  * Every value is fake.
  */
@@ -25,6 +26,7 @@ import {
   type InlineLimits,
   type WriterEvent,
 } from "./mcpFileResult.ts";
+import { retentionControl, settleGc } from "../test/forcedGc.ts";
 import { pngHeader } from "../test/imageHeaders.ts";
 
 afterEach(() => {
@@ -644,6 +646,93 @@ test("a response already destroyed writes nothing and the hold waits for close",
   res.emit("close");
   assert.equal(run.released(), 1);
 });
+
+// v03 Y1: on every exit path the bytes are collectable once the hold has
+// settled. The oracle is a WeakRef to the bytes' backing buffer after
+// `settleGc`; the forcedGc control runs first, and each path also runs with
+// one retained 1-byte view, which the oracle must see.
+
+type Exit = "finish" | "timer" | "error" | "client close" | "controller abort";
+const EXITS: Exit[] = [
+  "finish",
+  "timer",
+  "error",
+  "client close",
+  "controller abort",
+];
+
+/** The writer's bytes, made here so the test itself holds no reference. */
+function startOwned(res: FakeResponse, signal: AbortSignal, retain: boolean) {
+  const bytes = new Uint8Array(7 * MiB).fill(7);
+  const view = retain ? bytes.subarray(7, 8) : undefined;
+  return {
+    run: startWriter(res, bytes, signal),
+    target: new WeakRef(bytes.buffer),
+    view,
+  };
+}
+
+/** Ends the writer by `exit`, then emits `close` as the socket would. */
+async function exitBy(exit: Exit, retain: boolean) {
+  const res = new FakeResponse();
+  const controller = new AbortController();
+  if (exit === "timer") vi.useFakeTimers();
+  res.blocked = exit !== "finish";
+  const owned = startOwned(res, controller.signal, retain);
+  const { run } = owned;
+  if (exit === "timer") await vi.advanceTimersByTimeAsync(0);
+  else await tick();
+  if (exit === "finish") {
+    assert.ok(res.ended);
+    res.emit("finish");
+  } else assert.ok(run.events.includes("waiting"));
+  if (exit === "timer") await vi.advanceTimersByTimeAsync(MCP_FILE_OUTPUT_MS);
+  if (exit === "error") res.emit("error", new Error("socket"));
+  if (exit === "client close") res.destroyed = true;
+  if (exit === "controller abort") controller.abort();
+  // An abort settles at close, never before; a finish settles at finish.
+  if (exit !== "client close" && exit !== "finish") {
+    await run.writing;
+    assert.equal(run.released(), 0, "no release before close");
+  }
+  res.emit("close");
+  await run.writing;
+  if (exit === "timer") {
+    assert.equal(vi.getTimerCount(), 0, "the output timer is cleared");
+    vi.useRealTimers();
+  }
+  assert.equal(run.released(), 1);
+  assert.equal(res.listening(), 0, "the writer's listeners are removed");
+  return owned;
+}
+
+/** Two forced collections with event-loop turns, up to three times. */
+async function collected(target: WeakRef<ArrayBufferLike>): Promise<boolean> {
+  for (let round = 0; round < 3; round += 1) {
+    await settleGc();
+    if (target.deref() === undefined) return true;
+  }
+  return false;
+}
+
+test("the retention control: a retained view stays visible to the oracle, a dropped one clears", async () => {
+  const control = await retentionControl();
+  assert.ok(control.retainedVisible, JSON.stringify(control));
+  assert.ok(control.clearedAfterDrop, JSON.stringify(control));
+});
+
+for (const exit of EXITS)
+  test(`exit by ${exit}: the hold settles once after close, and then the bytes are collectable (Y1); a retained view keeps them`, async () => {
+    const free = await exitBy(exit, false);
+    assert.equal(await collected(free.target), true, "the bytes were kept");
+    const kept = await exitBy(exit, true);
+    assert.equal(
+      await collected(kept.target),
+      false,
+      "the oracle missed a retained view",
+    );
+    assert.equal(kept.view?.byteLength, 1);
+  });
 
 test("the output hold without a writer settles at finish or close, at most once, and late registrations run at once", () => {
   for (const event of ["finish", "close"]) {
