@@ -1149,9 +1149,14 @@ function stubVault() {
           signal: options?.signal,
         });
         if (stub.githubHeld)
-          await new Promise<void>((resolve) =>
-            stub.githubReleases.push(resolve),
-          );
+          await new Promise<void>((resolve) => {
+            stub.githubReleases.push(resolve);
+            // As `remoteVault`: an abort answers unavailable at once.
+            options?.signal?.addEventListener("abort", () => resolve(), {
+              once: true,
+            });
+          });
+        if (options?.signal?.aborted) return { ok: false, unavailable: true };
         return (
           stub.githubAnswer ?? {
             ok: true,
@@ -3955,24 +3960,59 @@ test("git.credential asks the vault for the client's registry user only; the edg
     assert.doesNotMatch(line, /fake-owner|fake-repo|fake-install|github\.com/);
 });
 
-test("git.credential: a connection that ends mid-call aborts the vault's signal", async () => {
+test("git.credential: a call whose connection ended keeps its slot until the vault answers (F006)", async () => {
   const vault = stubVault();
   vault.githubHeld = true;
   const edge = await listenerWith(vault, undefined);
-  const connection = await dialClient(edge, await enroll(edge, "u1"));
-  void connection
-    .request(
+  const identity = await enroll(edge, "u1");
+  const ending = await dialClient(edge, identity);
+  const staying = await dialClient(edge, identity);
+  const ask = (via: WorkerConnection) =>
+    via.request(
       CLIENT_METHODS.gitCredential,
       encodeClientMessage({
         host: "github.com",
         path: "fake-owner/fake-repo",
         access: "read",
       }),
-    )
-    .catch(() => {});
+    );
+  void ask(ending).catch(() => {});
   await vi.waitFor(() => assert.equal(vault.githubCalls.length, 1));
-  assert.equal(vault.githubCalls[0]!.signal?.aborted, false);
-  connection.end("test over");
-  await vi.waitFor(() => assert.ok(vault.githubCalls[0]!.signal?.aborted));
+  const held = Array.from({ length: 7 }, () => ask(staying));
+  await vi.waitFor(() => assert.equal(vault.githubCalls.length, 8));
+  assert.ok(
+    vault.githubCalls.every((entry) => entry.signal === undefined),
+    "no abort signal reaches the vault",
+  );
+
+  // The first call's connection ends while its vault call runs. For half a
+  // second, every further call from the same client is still busy and never
+  // reaches the vault: the ended call holds its slot. (Before F006 the end
+  // aborted the vault call and freed the slot at once.)
+  ending.end("test over");
+  for (const until = Date.now() + 500; Date.now() < until;) {
+    // A call that got a slot would wait on the held vault: 1 s says so.
+    const answer: unknown = await Promise.race([
+      ask(staying).catch((e: unknown) => e),
+      new Promise((resolve) => setTimeout(() => resolve("held"), 1_000)),
+    ]);
+    assert.notEqual(answer, "held", "a call got the ended call's slot");
+    assert.equal(failureOf(answer).code, "git_busy");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(vault.githubCalls.length, 8);
+
+  // Once the vault answers the ended call, its slot frees: the next call
+  // reaches the vault.
+  vault.githubReleases.shift()!();
+  vault.githubHeld = false;
+  await vi.waitFor(async () =>
+    assert.deepEqual((await ask(staying).catch((e) => e)).json, {
+      token: "fake-install-token",
+      expiresAt: 4_102_444_800_000,
+    }),
+  );
+  assert.equal(vault.githubCalls.length, 9);
   for (const release of vault.githubReleases.splice(0)) release();
+  await Promise.all(held);
 });

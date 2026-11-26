@@ -71,25 +71,33 @@ function answerOf(answer: GithubToken): Payload {
   return gitCredentialFailure("vault_unavailable");
 }
 
-/** `git.credential` for `userId`, the client's registry user. */
+/**
+ * `git.credential` for `userId`, the client's registry user. The vault call
+ * gets no abort signal (F006): an ended connection does not end it, so the
+ * caller's gate slot is held until the vault answers or the edge's vault
+ * timeout (`remoteVault.ts`, 30 s) fires. That keeps the per-client cap a
+ * bound on the vault work in flight; aborting here would free the slot at
+ * once while the vault's call ran on. Passing a cancel through to the vault
+ * is Task-1528.
+ */
 export async function gitCredentialFor(
   vault: Pick<VaultPort, "githubToken">,
   userId: string,
   request: GitCredentialRequest,
-  signal: AbortSignal,
 ): Promise<Payload> {
   const name = repositoryOf(request);
   const answer = await vault
-    .githubToken(userId, name, { signal })
+    .githubToken(userId, name)
     .catch((): GithubToken => ({ ok: false, unavailable: true }));
   return answerOf(answer);
 }
 
 /**
  * At most `limit` `git.credential` calls in flight per client (P-8): one
- * more answers `git_busy` at once, before the vault is asked. A slot is
- * released however the call ends, an abort included, and a client's entry
- * is dropped when its count reaches 0.
+ * more answers `git_busy` at once, before the vault is asked. A slot lasts
+ * as long as its work: for `gitCredentialFor`, until the vault answers or
+ * times out, even when the connection ended first. It is released however
+ * the work ends, and a client's entry is dropped when its count reaches 0.
  */
 export function createGitCredentialGate(limit = 8): {
   run<T>(clientId: string, work: () => Promise<T>): Promise<T>;

@@ -101,6 +101,9 @@ function git(
     child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
     child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
     child.on("close", (code) => done({ code, stdout, stderr }));
+    // Git may exit without reading stdin (`git config` never does); the
+    // write then fails with EPIPE, which says nothing about the answer.
+    child.stdin.on("error", () => {});
     child.stdin.end(input);
   });
 }

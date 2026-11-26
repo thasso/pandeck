@@ -2068,27 +2068,28 @@ path above.
   - **`git-credential`** (Task-1446, `relay/gitCredential.ts`):
     `relay.js git-credential --socket <relay socket> <operation>` is git's
     credential helper for `https://github.com`, through the relay's own socket.
-    On `get` it reads git's attributes (64 KiB at most), opens one client
-    connection, sends `git.credential` with `host: "github.com"`, git's `path`
-    and `access: "read"`, and prints either `username=x-access-token`,
-    `password=<token>` and `password_expiry_utc=<seconds>` in one write, or
-    `quit=1` with one line of its own on stderr, so git asks no later helper and
-    no prompt. It reads a failure's message stream but never prints it: every
-    stderr line comes from the helper's own table, one per code, plus a generic
-    line for a socket or protocol error and hints for a missing `path`
-    (`useHttpPath`) or a host other than `github.com` over https. Every other
-    operation (`store`, `erase`) reads its input and prints nothing, without
-    opening the socket. It retries only `git_busy`, at most three times with
-    jittered 250, 500 and 1,000 ms waits, all inside a 45 s deadline. It always
-    exits 0, needs no state directory, and writes no file and no log; the token
-    reaches git only on stdout, never in argv, the environment, stderr or a
-    file. Requests the edge sends on that connection (an `accounts.changed`
-    racing in) are skipped unanswered, within the frame caps and 4 MiB in all;
-    when the helper closes, the edge logs
-    `client <id> accounts.changed: failed`, which is harmless. Whoever can open
-    the 0600 socket (Pandeck's account and the agents that share it, M17) can
-    ask for read git tokens; that is the intended capability. The gitconfig
-    block, run as the relay socket's account:
+    On `get` it reads git's attributes (64 KiB at most), opens a client
+    connection (up to 4 in all: one plus at most three `git_busy` retries, each
+    on a new connection), sends `git.credential` with `host: "github.com"`,
+    git's `path` and `access: "read"`, and prints either
+    `username=x-access-token`, `password=<token>` and
+    `password_expiry_utc=<seconds>` in one write, or `quit=1` with one line of
+    its own on stderr, so git asks no later helper and no prompt. It reads a
+    failure's message stream but never prints it: every stderr line comes from
+    the helper's own table, one per code, plus a generic line for a socket or
+    protocol error and hints for a missing `path` (`useHttpPath`) or a host
+    other than `github.com` over https. Every other operation (`store`, `erase`)
+    reads its input and prints nothing, without opening the socket. It retries
+    only `git_busy`, at most three times with jittered 250, 500 and 1,000 ms
+    waits, all inside a 45 s deadline. It always exits 0, needs no state
+    directory, and writes no file and no log; the token reaches git only on
+    stdout, never in argv, the environment, stderr or a file. Requests the edge
+    sends on that connection (an `accounts.changed` racing in) are skipped
+    unanswered, within the frame caps and 4 MiB in all; when the helper closes,
+    the edge logs `client <id> accounts.changed: failed`, which is harmless.
+    Whoever can open the 0600 socket (Pandeck's account and the agents that
+    share it, M17) can ask for read git tokens; that is the intended capability.
+    The gitconfig block, run as the relay socket's account:
 
     ```ini
     [credential "https://github.com"]
@@ -3705,11 +3706,17 @@ tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
 
   At most 8 calls per client are in flight; one more answers `git_busy` ("Too
   many git credential requests from this machine at once; try again.") before
-  the vault is asked, and the helper retries it. A slot is released however a
-  call ends, a closed connection's abort included. Each call logs
-  `client <id> git.credential: ok` or `: <code>`, never the host, path or token.
-  The token is the only gateway-held credential a client receives; the user's
-  token never leaves the vault.
+  the vault is asked, and the helper retries it. A slot is held until the vault
+  answers or the edge's vault timeout (30 s, `remoteVault.ts`) fires, also when
+  the client's connection ended first: the edge passes the vault call no abort,
+  since nothing would cancel it at the vault and an early release would let a
+  client that keeps reconnecting run more than 8 vault calls at once. So the cap
+  bounds each client's vault work; an ended connection's answer is dropped,
+  logged like any other. Passing a cancel through to the vault is
+  [Task-1528](pa://task/1528). Each call logs `client <id> git.credential: ok`
+  or `: <code>`, never the host, path or token. The token is the only
+  gateway-held credential a client receives; the user's token never leaves the
+  vault.
 
 - **Pandeck in client mode** (`remoteIntegrations.ts`, installed by
   `gatewayClientLink.ts`): Settings → Jira sends a newly entered token with the

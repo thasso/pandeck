@@ -13,11 +13,19 @@ import type { GithubToken, GithubTokenRequest } from "./vaultPort.ts";
 
 function recordingVault(answer: () => Promise<GithubToken>) {
   const calls: { userId: string; request: GithubTokenRequest }[] = [];
+  /** Each call's options, kept apart so `calls` compares by value. */
+  const options: unknown[] = [];
   return {
     calls,
+    options,
     port: {
-      githubToken: (userId: string, request: GithubTokenRequest) => {
+      githubToken: (
+        userId: string,
+        request: GithubTokenRequest,
+        ...rest: unknown[]
+      ) => {
         calls.push({ userId, request });
+        options.push(rest[0]);
         return answer();
       },
     },
@@ -34,7 +42,6 @@ const REQUEST = {
   path: "fake-owner/fake-repo",
   access: "read",
 };
-const signal = new AbortController().signal;
 
 async function codeOf(work: Promise<unknown>): Promise<string> {
   try {
@@ -53,12 +60,11 @@ test("owner/repo and owner/repo.git ask the vault once for the given user; the h
     ["github.com", "fake-owner/fake-repo.git"],
     ["GitHub.com", "fake-owner/fake-repo"],
   ])
-    await gitCredentialFor(
-      vault.port,
-      "u1",
-      { ...REQUEST, host: host!, path: path! },
-      signal,
-    );
+    await gitCredentialFor(vault.port, "u1", {
+      ...REQUEST,
+      host: host!,
+      path: path!,
+    });
   assert.deepEqual(
     vault.calls,
     Array.from({ length: 3 }, () => ({
@@ -66,6 +72,9 @@ test("owner/repo and owner/repo.git ask the vault once for the given user; the h
       request: { owner: "fake-owner", repo: "fake-repo" },
     })),
   );
+  // The vault call gets no options, so no abort (F006): it runs until it
+  // answers or the edge's vault timeout fires.
+  assert.deepEqual(vault.options, [undefined, undefined, undefined]);
 });
 
 test("a bad host, path or access is invalid_params with no vault call", async () => {
@@ -93,7 +102,7 @@ test("a bad host, path or access is invalid_params with no vault call", async ()
   ];
   for (const request of bad)
     assert.equal(
-      await codeOf(gitCredentialFor(vault.port, "u1", request, signal)),
+      await codeOf(gitCredentialFor(vault.port, "u1", request)),
       "invalid_params",
       JSON.stringify(request),
     );
@@ -112,7 +121,7 @@ test("each vault outcome answers its code and fixed text; ok is a fresh {token, 
   for (const [answer, code] of table) {
     const vault = recordingVault(() => Promise.resolve(answer));
     try {
-      await gitCredentialFor(vault.port, "u1", REQUEST, signal);
+      await gitCredentialFor(vault.port, "u1", REQUEST);
       assert.fail(code);
     } catch (err) {
       assert.ok(err instanceof WorkerMethodError);
@@ -126,7 +135,7 @@ test("each vault outcome answers its code and fixed text; ok is a fresh {token, 
   }
   const answer = { ...OK, extra: "x" } as GithubToken;
   const vault = recordingVault(() => Promise.resolve(answer));
-  const payload = await gitCredentialFor(vault.port, "u1", REQUEST, signal);
+  const payload = await gitCredentialFor(vault.port, "u1", REQUEST);
   assert.deepEqual(Object.keys(payload.json as object).sort(), [
     "expiresAt",
     "token",
@@ -136,7 +145,7 @@ test("each vault outcome answers its code and fixed text; ok is a fresh {token, 
   assert.equal(payload.bytes, undefined);
   const rejecting = recordingVault(() => Promise.reject(new Error("boom")));
   assert.equal(
-    await codeOf(gitCredentialFor(rejecting.port, "u1", REQUEST, signal)),
+    await codeOf(gitCredentialFor(rejecting.port, "u1", REQUEST)),
     "vault_unavailable",
   );
 });
@@ -148,10 +157,8 @@ test("the gate: 8 calls in flight per client, the 9th busy before the vault; ano
     () =>
       new Promise<GithubToken>((resolve) => releases.push(() => resolve(OK))),
   );
-  const ask = (clientId: string, controller = new AbortController()) =>
-    gate.run(clientId, () =>
-      gitCredentialFor(vault.port, "u1", REQUEST, controller.signal),
-    );
+  const ask = (clientId: string) =>
+    gate.run(clientId, () => gitCredentialFor(vault.port, "u1", REQUEST));
   const a = Array.from({ length: 8 }, () => ask("A"));
   await Promise.resolve();
   assert.equal(vault.calls.length, 8);
@@ -165,16 +172,13 @@ test("the gate: 8 calls in flight per client, the 9th busy before the vault; ano
   const next = ask("A");
   assert.equal(vault.calls.length, 10, "a released slot lets one more through");
 
-  // A malformed call takes no slot: it is refused before the vault.
+  // The gate comes first: with A full again, even a malformed call answers
+  // git_busy. Its repository check runs only inside a slot, so it never
+  // reaches the vault either way.
   assert.equal(
     await codeOf(
       gate.run("A", () =>
-        gitCredentialFor(
-          vault.port,
-          "u1",
-          { ...REQUEST, access: "write" },
-          signal,
-        ),
+        gitCredentialFor(vault.port, "u1", { ...REQUEST, access: "write" }),
       ),
     ),
     "git_busy",
@@ -187,12 +191,7 @@ test("the gate: 8 calls in flight per client, the 9th busy before the vault; ano
   assert.equal(
     await codeOf(
       gate.run("C", () =>
-        gitCredentialFor(
-          vault.port,
-          "u1",
-          { ...REQUEST, access: "write" },
-          signal,
-        ),
+        gitCredentialFor(vault.port, "u1", { ...REQUEST, access: "write" }),
       ),
     ),
     "invalid_params",
@@ -200,7 +199,7 @@ test("the gate: 8 calls in flight per client, the 9th busy before the vault; ano
   assert.equal(gate.size, 0, "a refused call leaves no entry");
 });
 
-test("the gate: an aborted call releases its slot", async () => {
+test("the gate: work that fails releases its slot", async () => {
   const gate = createGitCredentialGate(1);
   const controller = new AbortController();
   const held = gate.run(
