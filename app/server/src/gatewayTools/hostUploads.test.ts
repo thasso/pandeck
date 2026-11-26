@@ -15,6 +15,7 @@ import {
 import { assertNoCredential } from "../test/credentialOracle.ts";
 import { encodeAtlassianCredential } from "./atlassian.ts";
 import {
+  MCP_UPLOAD_UNAVAILABLE,
   UPLOAD_UNAVAILABLE,
   confluenceDeleteSwitchFor,
 } from "./confluenceMutatePage.ts";
@@ -406,14 +407,15 @@ describe("confluence_mutate_page with a client's upload", () => {
     async (_what, items, uploads, message) => {
       const seen = stubConfluenceWriteFetch();
       const who = client();
-      expect(
-        await edge().host.prepare(
-          CONFLUENCE,
-          { items },
-          who.caller,
-          uploads ? { uploads } : {},
-        ),
-      ).toEqual({ ok: false, code: "tool_error", message });
+      const answer = await edge().host.prepare(
+        CONFLUENCE,
+        { items },
+        who.caller,
+        uploads ? { uploads } : {},
+      );
+      expect(answer).toEqual({ ok: false, code: "tool_error", message });
+      // Client mode keeps P5b's text, never `/mcp`'s (P7b v07 R1).
+      expect(answer.ok ? "" : answer.message).not.toBe(MCP_UPLOAD_UNAVAILABLE);
       expect(who.reads()).toBe(0);
       expect(seen).toEqual([]);
     },
@@ -478,18 +480,19 @@ describe("confluence_mutate_page with a client's upload", () => {
     vi.unstubAllGlobals();
     const seen = stubConfluenceWriteFetch();
     const who = client();
-    expect(
-      await set.host.apply(
-        CONFLUENCE,
-        { site: proposal.site, items: proposal.items },
-        who.caller,
-      ),
-    ).toMatchObject({
+    const answer = await set.host.apply(
+      CONFLUENCE,
+      { site: proposal.site, items: proposal.items },
+      who.caller,
+    );
+    expect(answer).toMatchObject({
       ok: false,
       code: "tool_error",
       message: UPLOAD_UNAVAILABLE,
       effects: "none",
     });
+    // Client mode keeps P5b's text, never `/mcp`'s (P7b v07 R1).
+    expect(answer.ok ? "" : answer.message).not.toBe(MCP_UPLOAD_UNAVAILABLE);
     expect(who.reads()).toBe(0);
     expect(seen).toEqual([]);
   });

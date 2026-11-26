@@ -181,10 +181,16 @@ export interface ToolContext<C> {
    */
   deadlineAt: number;
   /**
-   * A file-capable tool's effective limit in bytes for this call, from its
-   * `file` spec and the call's limit argument; absent for every other tool.
+   * A file-capable tool's effective limit in bytes for this call, from the
+   * spec in effect (`file` on a client connection, `file.mcp` on `/mcp`) and
+   * the call's limit argument; absent for every other tool.
    */
   maxFileBytes?: number;
+  /**
+   * The cap of that same spec, which the tool's own over-limit text names
+   * (Task-1441 P7b, v09 U1); set exactly when `maxFileBytes` is.
+   */
+  maxFileCap?: number;
 }
 
 /**
@@ -195,6 +201,30 @@ export interface FileSpec {
   limitParam: string;
   defaultBytes: number;
   maxBytes: number;
+  /**
+   * Opts the tool in to `/mcp` (Task-1441 P7b, PD-7b1): without it the tool
+   * is neither listed nor run there. Internal: it never reaches the gateway
+   * client's listing.
+   */
+  mcp?: McpFileSpec;
+}
+
+/** A file tool's `/mcp` form (P7b AC1, v02 Z4, v09 U1). */
+export interface McpFileSpec {
+  /** The tool's description on `/mcp`, in place of the client one. */
+  description: string;
+  /** The limit argument's description on `/mcp`: its default and cap. */
+  limitDescription: string;
+  defaultBytes: number;
+  /** At most `file.maxBytes`. */
+  maxBytes: number;
+  /**
+   * The `/mcp` metadata: a closed projection of the tool's JSON, never a
+   * URL, path or session field. Fixed text only besides the JSON's values.
+   */
+  project(json: unknown): Record<string, unknown>;
+  /** The file part's resource URI, from the tool's JSON: no URL or path. */
+  uri(json: unknown): string;
 }
 
 /** One file as a tool answers it, beside its JSON. */
@@ -230,8 +260,8 @@ interface ToolDescriptorBase {
   /**
    * Makes the tool file-capable (Task-1441 P7a): a read with no `phases`,
    * run only for a caller that reports when its answer has left
-   * (`ToolCaller.onSettled`), one at a time per edge process, never on
-   * `/mcp`.
+   * (`ToolCaller.onSettled`), one at a time per edge process, and on `/mcp`
+   * only with `file.mcp` (P7b).
    */
   file?: FileSpec;
 }

@@ -219,8 +219,12 @@ arguments.
 `confluence_download_attachment` shares its schema, description and download
 core with the edge too (`app/server/src/confluenceDownload.ts`, Task-1441). The
 edge's tool (`gatewayTools/confluenceDownload.ts`) answers fixed texts and the
-file's bytes, runs only for an enrolled machine's connection, never on `/mcp`,
-and one download at a time per edge: `docs/workers.md` "File answers".
+file's bytes, one transfer at a time per edge: `docs/workers.md` "File answers".
+On `/mcp` (Task-1441 P7b) it returns the file inside the result, at most
+11,534,336 bytes: a small UTF-8 text file as text, a small PNG, JPEG, GIF or
+WebP image as an image, and any other file as a saved file, after a JSON part
+with the attachment's metadata and the file's name, type, size and SHA-256
+(`docs/workers.md` "`/mcp` file results").
 
 `confluence_mutate_page`'s prepare and apply live beside `tools/confluence/` in
 modules the local tool and the edge share: `confluenceMutate.ts` (schema,
@@ -243,8 +247,9 @@ schema's structure is the local one. It differs as follows:
   edge before the apply that writes them (`docs/workers.md` "Gateway uploads"
   and "Client-mode uploads"). On `/mcp`, which has no byte source, an
   `uploadAttachment` item still refuses the whole call before anything is read
-  or sent ("Uploading attachments is not available through this gateway yet;
-  nothing was written to Confluence.").
+  or sent ("Uploading attachments isn't available on this connection yet; upload
+  from a Pandeck session in client mode instead. Nothing was written to
+  Confluence.", Task-1441 P7b).
 - **A sign-in from before the upload scope gets a 403.** Uploads need
   `write:confluence-file`, which the gateway asks for since Task-1439 P1. A user
   whose Atlassian grant is older keeps the old scopes, so Confluence refuses the

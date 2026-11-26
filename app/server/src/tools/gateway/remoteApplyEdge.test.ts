@@ -17,7 +17,10 @@ import * as linkDecoders from "../../gateway/clientMethods.ts";
 import { encodeAtlassianCredential } from "../../gatewayTools/atlassian.ts";
 import { createToolHost } from "../../gatewayTools/host.ts";
 import { edgeTools } from "../../gatewayTools/tools.ts";
-import { UPLOAD_UNAVAILABLE } from "../../gatewayTools/confluenceMutatePage.ts";
+import {
+  MCP_UPLOAD_UNAVAILABLE,
+  UPLOAD_UNAVAILABLE,
+} from "../../gatewayTools/confluenceMutatePage.ts";
 import { SITE_CHANGED, STOPPED } from "../../gatewayTools/twoPhase.ts";
 import { updateJiraSettings } from "../../jiraSettings.ts";
 import {
@@ -352,6 +355,8 @@ test("a Confluence prepare gate's refusal is the edge's text as is, and the froz
       { operation: "uploadAttachment", page: "123", sourcePath: path },
     ]);
     assert.equal(text, UPLOAD_UNAVAILABLE);
+    // Client mode keeps P5b's text, never `/mcp`'s (P7b v07 R1).
+    assert.notEqual(text, MCP_UPLOAD_UNAVAILABLE);
     assert.equal(claims(text), 1, text);
     assert.deepEqual(
       listSessionAttachments(`remote-apply-edge-${session}`),

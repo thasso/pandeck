@@ -16,7 +16,7 @@ import {
 import {
   createFileBudget,
   createToolHost,
-  longestDeadlineMs,
+  mcpDeadlineMs,
   type ToolHost,
   type ToolHostOptions,
 } from "./host.ts";
@@ -81,12 +81,9 @@ export function createEdgeTools(options: EdgeToolOptions = {}): EdgeToolSet {
   const host = createToolHost(tools, { ...options, log, fileBudget });
   return {
     handleMcp: createMcpHandler(host, log, {
-      // A write tool's own deadline can outlast the host's (Task-1463). A
-      // file tool never runs on `/mcp`, so its 150 s does not count (J2).
-      deadlineMs: longestDeadlineMs(
-        tools.filter((tool) => !tool.file),
-        options.deadlineMs,
-      ),
+      // A write tool's own deadline can outlast the host's (Task-1463), and
+      // so can a file tool's that `/mcp` lists (Task-1441 P7b, v09 U2).
+      deadlineMs: mcpDeadlineMs(tools, options.deadlineMs),
       ...(options.lifecycleMs !== undefined
         ? { lifecycleMs: options.lifecycleMs }
         : {}),

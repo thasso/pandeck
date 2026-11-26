@@ -98,8 +98,12 @@ import {
   vettedUrl,
 } from "./writeResult.ts";
 
+/** Client mode's upload refusal (P5b): `tools.prepare` and `tools.apply`. */
 export const UPLOAD_UNAVAILABLE =
   "Uploading attachments is not available through this gateway yet; nothing was written to Confluence.";
+/** `/mcp`'s upload refusal (Task-1441 P7b AC9, v07 R1): the one-call `execute`. */
+export const MCP_UPLOAD_UNAVAILABLE =
+  "Uploading attachments isn't available on this connection yet; upload from a Pandeck session in client mode instead. Nothing was written to Confluence.";
 export const PAGE_DELETE_OFF =
   "Deleting pages is not enabled on this gateway; nothing was written to Confluence.";
 export const ATTACHMENT_DELETE_OFF =
@@ -151,7 +155,7 @@ const OPERATIONS = [
 ] as const satisfies readonly ConfluencePageMutationOperation[];
 
 const CONFLUENCE_MUTATE_PAGE_EDGE_DESCRIPTION =
-  "Change Confluence pages: create a page, edit one (append, prepend or replace its body, rename it, relabel it), add a footer comment, or move a page or an attachment to the trash. CommonMark/GFM is converted to Atlassian Document Format. This tool writes in one call: the client asks the user to approve it, and Confluence changes as soon as it runs. Use it only when the user explicitly asks to write to Confluence, and ask first when the target page, space or content is ambiguous. Prefer append over replace: replace rebuilds the body from Markdown and destroys the page's macros, layouts and images. uploadAttachment is not available here, and deletes work only where this gateway enables them. Keep batches small. Interrupting the call does not stop it; it may still be writing. After a timeout or interrupt, wait 60 s before reading the pages and before any retry: an early unchanged read does not prove nothing will change.";
+  "Change Confluence pages: create a page, edit one (append, prepend or replace its body, rename it, relabel it), add a footer comment, or move a page or an attachment to the trash. CommonMark/GFM is converted to Atlassian Document Format. This tool writes in one call: the client asks the user to approve it, and Confluence changes as soon as it runs. Use it only when the user explicitly asks to write to Confluence, and ask first when the target page, space or content is ambiguous. Prefer append over replace: replace rebuilds the body from Markdown and destroys the page's macros, layouts and images. uploadAttachment isn't available on this connection yet (upload from a Pandeck session in client mode instead), and deletes work only where this gateway enables them. Keep batches small. Interrupting the call does not stop it; it may still be writing. After a timeout or interrupt, wait 60 s before reading the pages and before any retry: an early unchanged read does not prove nothing will change.";
 
 const localItems = confluenceMutateParamsSchema.properties.items;
 const localItem = localItems.items;
@@ -489,12 +493,14 @@ function withheldUnlessSafe(
  * also runs on `tools.apply`'s items before their check, so it reads any
  * value: a non-string operation is left to the check. An upload passes only
  * with `via.uploads`, which only the host's upload context sets (Task-1441
- * P8a, v09 P1(e)).
+ * P8a, v09 P1(e)). Otherwise it is refused by `via.path`: `/mcp`'s `execute`
+ * with `MCP_UPLOAD_UNAVAILABLE`, client mode's prepare and apply with
+ * `UPLOAD_UNAVAILABLE` (P7b v08 T1, `gate-coordination-p7b-p8a.md`).
  */
 function gate(
   items: unknown,
   deletes: ConfluenceDeleteSwitch,
-  via: { uploads: boolean },
+  via: { path: "mcp" | "client"; uploads: boolean },
 ): void {
   if (!Array.isArray(items)) return;
   for (const item of items as unknown[]) {
@@ -504,7 +510,9 @@ function gate(
         : undefined;
     const operation = raw ?? "edit";
     if (operation === "uploadAttachment" && !via.uploads)
-      throw new ToolError(UPLOAD_UNAVAILABLE);
+      throw new ToolError(
+        via.path === "mcp" ? MCP_UPLOAD_UNAVAILABLE : UPLOAD_UNAVAILABLE,
+      );
     if (operation === "delete" && !deletes.page)
       throw new ToolError(PAGE_DELETE_OFF);
     if (operation === "deleteAttachment" && !deletes.attachment)
@@ -629,8 +637,9 @@ export function confluenceMutatePageTool(
     async execute(params, ctx) {
       const requested = params as ConfluenceMutateParams;
       // Before the credential, so a refused call reads and sends nothing.
-      // `/mcp` never carries an upload context.
-      gate(requested.items, deletes, { uploads: false });
+      // `/mcp` never carries an upload context: an upload answers
+      // `MCP_UPLOAD_UNAVAILABLE`.
+      gate(requested.items, deletes, { path: "mcp", uploads: false });
       const { credential, prepared, applied } = await runWrite(
         ctx,
         CONFLUENCE_WRITE,
@@ -650,12 +659,18 @@ export function confluenceMutatePageTool(
     phases: {
       prepare(params, ctx) {
         const { items } = params as ConfluenceMutateParams;
-        gate(items, deletes, { uploads: ctx.uploads !== undefined });
+        gate(items, deletes, {
+          path: "client",
+          uploads: ctx.uploads !== undefined,
+        });
         if (ctx.uploads) checkDeclaredSources(items, ctx.uploads);
         return runPrepare(ctx, CONFLUENCE_PREPARE(items, ctx.uploads));
       },
       apply(request, ctx) {
-        gate(request.items, deletes, { uploads: ctx.upload !== undefined });
+        gate(request.items, deletes, {
+          path: "client",
+          uploads: ctx.upload !== undefined,
+        });
         return runApply(ctx, CONFLUENCE_APPLY(ctx.upload), request);
       },
     },

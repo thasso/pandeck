@@ -23,9 +23,9 @@ afterEach(async () => {
 });
 
 const listedHost = (
-  call: ToolHost["call"],
-): Pick<ToolHost, "list" | "call"> => ({
-  list: () => [
+  mcpCall: ToolHost["mcpCall"],
+): Pick<ToolHost, "mcpList" | "mcpCall"> => ({
+  mcpList: () => [
     {
       name: "probe",
       description: "A test tool.",
@@ -35,14 +35,13 @@ const listedHost = (
         additionalProperties: false,
       },
       effect: "read",
-      actionKey: "probe:read",
     },
   ],
-  call,
+  mcpCall,
 });
 
 async function serve(
-  host: Pick<ToolHost, "list" | "call">,
+  host: Pick<ToolHost, "mcpList" | "mcpCall">,
   options: McpHandlerOptions = {},
 ): Promise<{ url: string; lines: string[] }> {
   const lines: string[] = [];
@@ -117,7 +116,7 @@ function spies() {
 
 test("a batch, the review's cancellation one included, is refused before the SDK runs", async () => {
   const counts = spies();
-  const hostCall = vi.fn<ToolHost["call"]>(() => new Promise(() => {}));
+  const hostCall = vi.fn<ToolHost["mcpCall"]>(() => new Promise(() => {}));
   const { url } = await serve(listedHost(hostCall));
   const answer = await post(url, [
     call(1),

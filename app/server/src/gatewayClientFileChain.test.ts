@@ -35,7 +35,7 @@ const { encodeAtlassianCredential } =
 const { remoteToolsFor } = await import("./tools/gateway/remoteToolGroup.ts");
 const { FILE_ADAPTERS, settleFileAnswer } =
   await import("./tools/gateway/remoteFiles.ts");
-const { CONFLUENCE_DOWNLOAD_URL_MAX_CHARS } =
+const { CONFLUENCE_ATTACHMENT_MAX_BYTES, CONFLUENCE_DOWNLOAD_URL_MAX_CHARS } =
   await import("./confluenceDownload.ts");
 const { DISABLED, FILE_BUSY_HERE, UNEXPECTED_FILE_ANSWER } =
   await import("./tools/gateway/remoteReadRules.ts");
@@ -296,13 +296,16 @@ test("each edge text reaches the agent as the edge words it, and nothing is stag
     [{ attachmentId: "att900001" }, DOWNLOAD_TEXT.noDownloadLink],
     [
       { attachmentId: "att900002", maxBytes: 100 * MiB },
-      DOWNLOAD_TEXT.tooLarge(100 * MiB),
+      DOWNLOAD_TEXT.tooLarge(100 * MiB, CONFLUENCE_ATTACHMENT_MAX_BYTES),
     ],
     // The default limit when maxBytes is absent, and a fraction truncated.
-    [{ attachmentId: "att900002" }, DOWNLOAD_TEXT.tooLarge(50 * MiB)],
+    [
+      { attachmentId: "att900002" },
+      DOWNLOAD_TEXT.tooLarge(50 * MiB, CONFLUENCE_ATTACHMENT_MAX_BYTES),
+    ],
     [
       { attachmentId: "att900002", maxBytes: 4096.9 },
-      DOWNLOAD_TEXT.tooLarge(4096),
+      DOWNLOAD_TEXT.tooLarge(4096, CONFLUENCE_ATTACHMENT_MAX_BYTES),
     ],
     [{ page: "777", fileName: "none.txt" }, DOWNLOAD_TEXT.notOnPage],
     [{}, DOWNLOAD_TEXT.inputMissing],

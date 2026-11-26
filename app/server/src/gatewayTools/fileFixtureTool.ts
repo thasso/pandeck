@@ -5,7 +5,8 @@
  * default, 20 MiB cap); a `maxBytes` argument is accepted and ignored.
  * Test-only: it lives here because only `gatewayTools/` may import the
  * descriptor (`workerBoundary.test.ts`), and it is never registered
- * (`tools.ts`), never in FILE_TOOLS, never on `/mcp`.
+ * (`tools.ts`) and never in FILE_TOOLS. It is off `/mcp` (no `file.mcp`)
+ * unless a test gives it one (Task-1441 P7b).
  *
  * `id` picks the answer: `bin` a file of `size` bytes (5 unless given),
  * `inline` text content and `limit` a `download_limit_reached`, both plain;
