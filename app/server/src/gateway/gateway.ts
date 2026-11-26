@@ -159,6 +159,12 @@ export interface RunningGateway {
   readonly requests: RequestLog | undefined;
   /** The profiles' writer lane, for in-gateway writers (G4, G5). */
   readonly lane: Pick<WriterLane, "run">;
+  /**
+   * The vault's `github.token` (in process or remote), for the page's
+   * repository check (`createGithubCheck`, Task-1445), the edge's only
+   * caller of it. Its answer's token goes no further than that check.
+   */
+  readonly githubToken: VaultPort["githubToken"];
   /** Serves gateway control 1.4 on `endpoint`, as the listener. */
   attachControl(endpoint: ByteEndpoint): void;
   /** The last `control.hello` a control connection said, as recorded. */
@@ -371,6 +377,8 @@ export async function startGateway(
     stats,
     clients,
     requests,
+    githubToken: (userId, request, options) =>
+      vault.githubToken(userId, request, options),
     lane: local?.lane ?? {
       run: () =>
         Promise.reject(new Error("The vault runs in its own process.")),

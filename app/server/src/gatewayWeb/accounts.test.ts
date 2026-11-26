@@ -257,6 +257,10 @@ async function startUi(fake = fakeAccounts()) {
         Promise.reject(new IntegrationsRefusal("tools_unavailable")),
       clearSlack: () =>
         Promise.reject(new IntegrationsRefusal("tools_unavailable")),
+      githubStatus: () => Promise.resolve({ connected: false }),
+      connectGithub: () => Promise.reject(new Error("unused")),
+      clearGithub: () => Promise.reject(new Error("unused")),
+      checkGithub: () => Promise.reject(new Error("unused")),
     },
     requests: { since: () => ({ epoch: "", requests: [] }) },
     clients: {

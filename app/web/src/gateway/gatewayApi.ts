@@ -13,6 +13,9 @@ import {
   decodeGatewayUiClients,
   decodeGatewayUiEnrollmentCode,
   decodeGatewayUiEnrollmentRequest,
+  decodeGatewayUiGithub,
+  decodeGatewayUiGithubCheck,
+  decodeGatewayUiGithubConnectStart,
   decodeGatewayUiLogin,
   decodeGatewayUiLoginStart,
   decodeGatewayUiMcpToken,
@@ -27,6 +30,9 @@ import {
   type GatewayUiEnrollmentCode,
   type GatewayUiEnrollmentRequest,
   type GatewayUiError,
+  type GatewayUiGithub,
+  type GatewayUiGithubCheck,
+  type GatewayUiGithubCheckRequest,
   type GatewayUiLogin,
   type GatewayUiLoginStart,
   type GatewayUiLoginStartRequest,
@@ -184,6 +190,41 @@ export async function startSlackConnect(): Promise<string> {
 
 export async function clearSlack(): Promise<void> {
   await post("/api/integrations/slack/clear", {});
+}
+
+/** The user's GitHub connection, and whether this gateway offers it. */
+export async function fetchGithub(
+  _key: string,
+  signal: AbortSignal,
+): Promise<GatewayUiGithub> {
+  return decoded(
+    decodeGatewayUiGithub(await get("/api/integrations/github", signal)),
+  );
+}
+
+/**
+ * Starts "Connect GitHub": the URL the browser goes to next, accepted only on
+ * GitHub's authorize endpoint.
+ */
+export async function startGithubConnect(): Promise<string> {
+  const response = await post("/api/integrations/github/connect", {});
+  return decoded(decodeGatewayUiGithubConnectStart(await response.json()))
+    .authorizeUrl;
+}
+
+export async function clearGithub(): Promise<void> {
+  await post("/api/integrations/github/clear", {});
+}
+
+/**
+ * Whether the vault hands the user read access to `owner/repo`: the
+ * repository and the token's expiry, never the token.
+ */
+export async function checkGithub(
+  request: GatewayUiGithubCheckRequest,
+): Promise<GatewayUiGithubCheck> {
+  const response = await post("/api/integrations/github/check", request);
+  return decoded(decodeGatewayUiGithubCheck(await response.json()));
 }
 
 export async function fetchClients(

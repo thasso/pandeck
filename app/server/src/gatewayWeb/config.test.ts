@@ -15,6 +15,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, test } from "vitest";
 import { FAKE_CLIENT } from "../test/atlassianFake.ts";
+import { FAKE_GITHUB_CLIENT } from "../test/githubFake.ts";
 import { FAKE_SLACK_CLIENT } from "../test/slackFake.ts";
 import {
   admittedEmail,
@@ -521,6 +522,56 @@ test("the coder preset refuses a missing or empty id, a non-boolean switch, an u
     assert.ok(!message.includes(FAKE_CODER_CLIENT_ID), `${name}: no id`);
     assert.ok(!message.includes(FAKE_CODER_API_TOKEN), `${name}: no token`);
     assert.ok(!message.includes("apiToken"), `${name}: no key from the file`);
+  }
+});
+
+/** Synthetic: what a misplaced App secret or key path would hold. */
+const FAKE_MISPLACED_VALUE = "FAKE_github-misplaced-sentinel";
+
+test("the github preset: absent leaves github undefined; given, only the client id loads", () => {
+  assert.equal(loadGatewayWebConfig(fixture().file).github, undefined);
+  assert.deepEqual(
+    loadGatewayWebConfig(
+      fixture(
+        (c) => (c.github = { clientId: ` ${FAKE_GITHUB_CLIENT.clientId} ` }),
+      ).file,
+    ).github,
+    { clientId: FAKE_GITHUB_CLIENT.clientId },
+  );
+});
+
+test("the github preset takes exactly clientId: anything else refuses, naming the field and no value", () => {
+  const cases: [string, unknown, RegExp][] = [
+    ["not an object", "x", /^gateway UI config: github must be an object$/],
+    ["null", null, /^gateway UI config: github must be an object$/],
+    [
+      "a list",
+      [{ clientId: FAKE_GITHUB_CLIENT.clientId }],
+      /^gateway UI config: github must be an object$/,
+    ],
+    ["missing id", {}, /^gateway UI config: github\.clientId /],
+    ["empty id", { clientId: " " }, /^gateway UI config: github\.clientId /],
+    [
+      "id not a string",
+      { clientId: 7 },
+      /^gateway UI config: github\.clientId /,
+    ],
+    ...["clientSecret", "appId", "privateKeyFile", "unexpected"].map(
+      (key): [string, unknown, RegExp] => [
+        `a ${key}`,
+        { clientId: FAKE_GITHUB_CLIENT.clientId, [key]: FAKE_MISPLACED_VALUE },
+        /^gateway UI config: github takes only clientId$/,
+      ],
+    ),
+  ];
+  for (const [name, github, expected] of cases) {
+    const message = refusal(fixture((c) => (c.github = github)).file);
+    assert.match(message, expected, name);
+    assert.ok(!message.includes(FAKE_MISPLACED_VALUE), `${name}: no value`);
+    assert.ok(
+      !message.includes(FAKE_GITHUB_CLIENT.clientId),
+      `${name}: no client id`,
+    );
   }
 });
 

@@ -227,6 +227,10 @@ function fakeIntegrations() {
     slackStatus: () => Promise.resolve({ connected: false }),
     connectSlack: () => Promise.reject(new Error("unused")),
     clearSlack: () => Promise.reject(new Error("unused")),
+    githubStatus: () => Promise.resolve({ connected: false }),
+    connectGithub: () => Promise.reject(new Error("unused")),
+    clearGithub: () => Promise.reject(new Error("unused")),
+    checkGithub: () => Promise.reject(new Error("unused")),
   };
   return {
     integrations,

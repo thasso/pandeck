@@ -212,6 +212,10 @@ function fakeSettings() {
     slackStatus: async () => ({ connected: false }),
     connectSlack: async () => {},
     clearSlack: async () => {},
+    githubStatus: async () => ({ connected: false }),
+    connectGithub: async () => {},
+    clearGithub: async () => {},
+    checkGithub: () => Promise.reject(new Error("unused")),
   };
   const clients: GatewayWebClients = {
     list: (userId) => {

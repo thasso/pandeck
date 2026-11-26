@@ -44,7 +44,19 @@ export interface GatewayWebConfig {
    * browser.
    */
   coder?: CoderPreset;
+  /**
+   * "Connect GitHub" (Task-1445): the GitHub App's client id, the only key.
+   * The App's secret and key stay with the vault (`--integrations-config`).
+   * Absent, the page offers no GitHub.
+   */
+  github?: GithubPreset;
 }
+
+interface GithubPreset {
+  clientId: string;
+}
+
+const GITHUB_KEYS = new Set(["clientId"]);
 
 interface CoderPreset {
   /** The OAuth client id Coder signs its users in to Google with. */
@@ -364,6 +376,21 @@ function coderPreset(value: unknown, issuer: string): CoderPreset | undefined {
   return { googleClientId, automaticApproval: raw.automaticApproval };
 }
 
+/**
+ * `github`: exactly `{clientId}`, so a `clientSecret`, `appId` or key file put
+ * here by mistake refuses rather than sits unread. The refusal names the
+ * field, never a value.
+ */
+function githubPreset(value: unknown): GithubPreset | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    refuse("github must be an object");
+  const raw = value as Record<string, unknown>;
+  for (const key of Object.keys(raw))
+    if (!GITHUB_KEYS.has(key)) refuse("github takes only clientId");
+  return { clientId: text(raw.clientId, "github.clientId") };
+}
+
 /** Reads and checks the UI config at `file`; throws `GatewayWebConfigError`. */
 export function loadGatewayWebConfig(file: string): GatewayWebConfig {
   let mode: number;
@@ -403,6 +430,7 @@ export function loadGatewayWebConfig(file: string): GatewayWebConfig {
   const slack = slackPreset(raw.slack);
   const issuer = text(oidc.issuer, "oidc.issuer");
   const coder = coderPreset(raw.coder, issuer);
+  const github = githubPreset(raw.github);
 
   const certPem = pem(raw.certFile, "certFile");
   const keyPem = pem(raw.keyFile, "keyFile");
@@ -422,6 +450,7 @@ export function loadGatewayWebConfig(file: string): GatewayWebConfig {
     ...(atlassian ? { atlassian } : {}),
     ...(slack ? { slack } : {}),
     ...(coder ? { coder } : {}),
+    ...(github ? { github } : {}),
   };
 }
 

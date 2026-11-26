@@ -10,8 +10,10 @@
  * drivers, and, with `--ui-config`, the gateway's sign-in and page
  * (`gatewayWeb/`) over the running gateway's own client registry and its
  * user-scoped operations (`gateway/userOperations.ts`: accounts, logins, the
- * Atlassian credential, clients and MCP tokens), so the page and enrolled
- * clients run the same implementation.
+ * Atlassian credential, the Slack and GitHub records, clients and MCP
+ * tokens), so the page and enrolled clients run the same implementation. The
+ * page's GitHub repository check (Task-1445) runs over the gateway's
+ * `githubToken` (`createGithubCheck`) and drops the token it answers.
  *
  * The UI config's OAuth clients (Atlassian, Task-1411; Slack, Task-1452)
  * follow the vault's topology, each on its own (`integrationClientFor`): the
@@ -34,8 +36,11 @@ import type { MachinePathMode } from "./gateway/machinePaths.ts";
 import type { CodexRenewPort } from "./gateway/renewal.ts";
 import { readEdgeVaultLink } from "./gateway/vaultMethods.ts";
 import {
+  createGithubCheck,
   UserOperationRefusal,
   type AtlassianStatus,
+  type GithubCheck,
+  type GithubStatus,
   type SlackStatus,
   type UserOperations,
 } from "./gateway/userOperations.ts";
@@ -263,10 +268,29 @@ function browserSlack(
 }
 
 /**
- * The page's Atlassian credential and Slack record over the edge's
- * user-scoped operations.
+ * What the page's status gets of the user's GitHub record: connected and the
+ * login (the route applies the display rule), or a stored record's problem;
+ * never a token.
  */
-function webIntegrations(operations: UserOperations): GatewayWebIntegrations {
+function browserGithub(
+  status: GithubStatus,
+): Awaited<ReturnType<GatewayWebIntegrations["githubStatus"]>> {
+  return status.connected
+    ? { connected: true, login: status.login }
+    : {
+        connected: false,
+        ...(status.problem !== undefined ? { problem: status.problem } : {}),
+      };
+}
+
+/**
+ * The page's Atlassian credential, Slack and GitHub records over the edge's
+ * user-scoped operations, and the GitHub repository check over `github`.
+ */
+function webIntegrations(
+  operations: UserOperations,
+  github: GithubCheck,
+): GatewayWebIntegrations {
   return {
     status: (userId) =>
       operations
@@ -287,6 +311,17 @@ function webIntegrations(operations: UserOperations): GatewayWebIntegrations {
       operations.connectSlack(userId, request).then(() => {}, settingsRefusal),
     clearSlack: (userId) =>
       operations.clearSlack(userId).catch(settingsRefusal),
+    githubStatus: (userId) =>
+      operations.githubStatus(userId).then(browserGithub, settingsRefusal),
+    connectGithub: (userId, request) =>
+      operations.connectGithub(userId, request).then(() => {}, settingsRefusal),
+    clearGithub: (userId) =>
+      operations.clearGithub(userId).catch(settingsRefusal),
+    // Only the expiry, built fresh: the check's answer never holds the token.
+    checkGithub: (userId, request) =>
+      github
+        .checkGithub(userId, request)
+        .then(({ expiresAt }) => ({ expiresAt }), settingsRefusal),
   };
 }
 
@@ -507,7 +542,12 @@ export async function startEdge(
             user: (id) => registry.user(id),
           },
           accounts: webAccounts(edge.userOperations),
-          integrations: webIntegrations(edge.userOperations),
+          integrations: webIntegrations(
+            edge.userOperations,
+            createGithubCheck({
+              vault: { githubToken: gateway.githubToken },
+            }),
+          ),
           clients: webClients(edge.userOperations),
           requests: webRequests(gateway.requests),
           log: (line) => console.log(`[gateway] ${line}`),
