@@ -120,6 +120,10 @@ beforeEach(() => {
       method: init?.method ?? "GET",
       url: new URL(String(input)),
     };
+    // A server reads a streamed upload whole before it answers; the
+    // upload completes only then (Task-1441 P8a).
+    if (init?.body instanceof ReadableStream)
+      await new Response(init.body).arrayBuffer();
     seen.push(request);
     return site(request);
   }) as unknown as typeof fetch;
@@ -135,13 +139,17 @@ const deletes = () => seen.filter((request) => request.method === "DELETE");
 const trace = () =>
   seen.map(({ method, url }) => `${method} ${url.pathname}${url.search}`);
 
+/** The SHA-256 of the staged bytes `abc`: the body checks it as it streams. */
+const ABC_SHA256 =
+  "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
 const prepare = (items: ConfluenceMutateItemParams[]) =>
   buildConfluenceMutationItems(config, items, {
     freezeUpload: async () => ({
       name: "diagram.png",
       mimeType: "image/png",
       size: 3,
-      sha256: "a".repeat(64),
+      sha256: ABC_SHA256,
       source: "/tmp/diagram.png",
       stagedAttachmentId: "staged-1",
     }),

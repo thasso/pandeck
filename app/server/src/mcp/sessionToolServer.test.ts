@@ -805,6 +805,11 @@ test("client mode: a Claude session lists the gateway's Jira tool while connecte
   const calls: string[] = [];
   const uninstall = installRemoteToolPort({
     callFile: () => Promise.reject(new Error("unused")),
+    uploads: {
+      open: () => Promise.reject(new Error("unused")),
+      put: () => Promise.reject(new Error("unused")),
+      release: () => {},
+    },
     call: (name) => {
       calls.push(name);
       return Promise.resolve({ ok: true, text: '{"key":"OPS-1"}' });

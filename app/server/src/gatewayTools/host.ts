@@ -24,6 +24,13 @@
  * until both its execution and its answer's output have settled, never on a
  * timer; a second call meanwhile answers `FILE_BUSY` and sends nothing. The
  * answer carries the bytes with their size and SHA-256.
+ *
+ * A client-mode upload (Task-1441 P8a) shares that permit: the upload store
+ * (`uploads.ts`) reserves from the same `FileBudget`, so a download and an
+ * upload never overlap and the second answers the transfer-neutral busy text.
+ * `prepare` takes the declared sources only as a host option, and `apply`
+ * consumes the connection's sealed upload synchronously before its timer is
+ * armed, which then runs to the upload deadline.
  */
 import { createHash } from "node:crypto";
 import {
@@ -44,6 +51,13 @@ import {
 } from "./toolCredential.ts";
 import { checkArguments } from "./schema.ts";
 import {
+  uploadApplyDeadlineMs,
+  type AttachedUpload,
+  type UploadEntry,
+  type UploadScope,
+} from "./uploads.ts";
+import {
+  ITEMS_INVALID,
   PREPARE_DEADLINE_MS,
   TWO_PHASE_ONLY,
   applyAnswerWithinCap,
@@ -119,12 +133,27 @@ export interface ToolHost {
     name: string,
     args: unknown,
     caller: ToolCaller,
+    options?: PrepareOptions,
   ): Promise<PrepareAnswer>;
   apply(
     name: string,
     request: ApplyRequest,
     caller: ToolCaller,
+    options?: ApplyOptions,
   ): Promise<ApplyAnswer>;
+}
+
+/** `prepare`'s host option: the upload sources a client declared (v09 P1(b)). */
+interface PrepareOptions {
+  uploads?: readonly UploadEntry[];
+}
+
+/**
+ * `apply`'s host option: the connection's upload this apply names (v09
+ * P1(c), v10 S1). It needs `caller.onSettled`, which carries the output hold.
+ */
+interface ApplyOptions {
+  upload?: { id: string; scope: UploadScope };
 }
 
 export const NO_SUCH_TOOL = "No such tool.";
@@ -150,8 +179,9 @@ const FILE_NOT_SETTLED_LOG_MS = 30_000;
 const FILE_NAME_MAX_CHARS = 1024;
 const FILE_MIME_MAX_CHARS = 1024;
 
+/** Transfer-neutral: an upload holds the same permit (Task-1441 P8a, v10 S3). */
 export const FILE_BUSY =
-  "The gateway is already downloading a file; try again when it finishes. Nothing was downloaded.";
+  "The gateway is already transferring a file; try again when it finishes. Nothing was downloaded.";
 /** P7A-R2: a file call whose answer's departure nobody reports. */
 const FILE_NEEDS_OUTPUT =
   "This tool can only be called over a gateway client connection.";
@@ -502,6 +532,7 @@ export function createToolHost(
     tool: AtlassianToolDescriptor & { phases: TwoPhaseTool },
     args: unknown,
     caller: ToolCaller,
+    uploads: readonly UploadEntry[] | undefined,
   ): Promise<PrepareAnswer> => {
     const checked = checkArguments(tool.inputSchema, args);
     if (!checked.ok)
@@ -520,6 +551,13 @@ export function createToolHost(
             signal,
             deadlineAt,
             credential: () => atlassianCredentialFor(caller, signal),
+            ...(uploads
+              ? {
+                  uploads: new Map(
+                    uploads.map((entry) => [entry.stagedAttachmentId, entry]),
+                  ),
+                }
+              : {}),
           });
         }),
         signal,
@@ -542,28 +580,39 @@ export function createToolHost(
     tool: AtlassianToolDescriptor & { phases: TwoPhaseTool },
     request: ApplyRequest,
     caller: ToolCaller,
+    upload?: AttachedUpload,
   ): Promise<ApplyAnswer> => {
     // The request signal is the deadline's alone; the caller's only stops.
     const ledger = createWriteLedger();
     const deadline = new AbortController();
-    const deadlineMs = effectiveDeadlineMs(tool, options.deadlineMs);
+    // An upload's deadline grows with its bytes (v08 N1), fixed here, at
+    // admission, before the timer is armed.
+    const baseMs = effectiveDeadlineMs(tool, options.deadlineMs);
+    const deadlineMs = upload
+      ? uploadApplyDeadlineMs(upload.work, baseMs)
+      : baseMs;
     const deadlineAt = Date.now() + deadlineMs;
     const timer = setTimeout(() => deadline.abort(), deadlineMs);
     const { signal } = deadline;
     try {
-      return await raceAbort(
-        Promise.resolve().then(() => {
-          if (signal.aborted) throw abortError();
-          return tool.phases.apply(request, {
-            signal,
-            deadlineAt,
-            cancel: caller.signal ?? new AbortController().signal,
-            ledger,
-            credential: () => atlassianCredentialFor(caller, signal),
-          });
-        }),
-        signal,
-      );
+      const executing = Promise.resolve().then(() => {
+        if (signal.aborted) throw abortError();
+        return tool.phases.apply(request, {
+          signal,
+          deadlineAt,
+          cancel: caller.signal ?? new AbortController().signal,
+          ledger,
+          credential: () => atlassianCredentialFor(caller, signal),
+          ...(upload ? { upload } : {}),
+        });
+      });
+      // The execution hold: the tool's own promise, not the race below,
+      // which a deadline settles while a request may still be running.
+      if (upload) {
+        const settled = () => upload.executionSettled();
+        executing.then(settled, settled);
+      }
+      return await raceAbort(executing, signal);
     } catch (err) {
       // Whatever ended the call, the ledger says what may have been written
       // and, once the apply began, what the working copy shows (AC14).
@@ -587,6 +636,36 @@ export function createToolHost(
     } finally {
       clearTimeout(timer);
     }
+  };
+
+  /**
+   * v09 P1(c) steps 2-3, synchronous: no await may come between this and
+   * `runApply` arming its timer. Without the output seam nothing could
+   * release the upload, so it is refused unconsumed (P4); otherwise the
+   * scope's `consume` attaches it or discards it, and its output hold is
+   * registered at once either way.
+   */
+  const consumeUpload = (
+    applyOptions: ApplyOptions | undefined,
+    request: ApplyRequest,
+    caller: ToolCaller,
+  ): { upload?: AttachedUpload } | { refused: ApplyAnswer } => {
+    const named = applyOptions?.upload;
+    if (!named) return {};
+    const refused = (message: string) => ({
+      refused: {
+        ok: false as const,
+        code: "invalid_params" as const,
+        message,
+        effects: "none" as const,
+      },
+    });
+    if (!caller.onSettled) return refused(ITEMS_INVALID);
+    const consumed = named.scope.consume(named.id, request.items);
+    caller.onSettled(consumed.outputSettled);
+    return consumed.ok
+      ? { upload: consumed.upload }
+      : refused(consumed.message);
   };
 
   const logged = (
@@ -648,35 +727,43 @@ export function createToolHost(
       logged(tool.name, "", caller, Date.now(), answer);
       return answer;
     },
-    async prepare(name, args, caller) {
+    async prepare(name, args, caller, prepareOptions) {
       const started = Date.now();
       const tool = twoPhaseTool(name);
       const answer: PrepareAnswer = tool
-        ? await runPrepare(tool, args, caller).catch((): PrepareAnswer => ({
-            ok: false,
-            code: "failed",
-            message: prepareFailed(tool),
-          }))
+        ? await runPrepare(tool, args, caller, prepareOptions?.uploads).catch(
+            (): PrepareAnswer => ({
+              ok: false,
+              code: "failed",
+              message: prepareFailed(tool),
+            }),
+          )
         : { ok: false, code: "unknown_tool", message: NO_SUCH_TOOL };
       logged(tool?.name, " prepare", caller, started, answer);
       return answer;
     },
-    async apply(name, request, caller) {
+    async apply(name, request, caller, applyOptions) {
       const started = Date.now();
+      // An unknown name never consumes the upload (v09 P1(c) step 1).
       const tool = twoPhaseTool(name);
-      const ran: ApplyAnswer = tool
-        ? await runApply(tool, request, caller).catch((): ApplyAnswer => ({
-            ok: false,
-            code: "failed",
-            message: failureText(tool, "failed"),
-            effects: "possible",
-          }))
-        : {
+      const consumed = tool ? consumeUpload(applyOptions, request, caller) : {};
+      const ran: ApplyAnswer = !tool
+        ? {
             ok: false,
             code: "unknown_tool",
             message: NO_SUCH_TOOL,
             effects: "none",
-          };
+          }
+        : "refused" in consumed
+          ? consumed.refused
+          : await runApply(tool, request, caller, consumed.upload).catch(
+              (): ApplyAnswer => ({
+                ok: false,
+                code: "failed",
+                message: failureText(tool, "failed"),
+                effects: "possible",
+              }),
+            );
       const answer = applyAnswerWithinCap(ran, () =>
         log(`tool ${tool?.name ?? "(unknown)"} apply result over its cap`),
       );

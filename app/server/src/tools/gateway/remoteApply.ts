@@ -25,6 +25,21 @@
  * Every merge runs inside the executor's awaited path, before it returns or
  * throws; a late answer never reaches here (the link drops it).
  *
+ * A Confluence card with upload items (Task-1441 P8a, v02 AC5, v03 K1/K3)
+ * first sends its approved bytes. After the bounded wait, the route is
+ * checked once so an unavailable route reads no file. Then `uploads.open`
+ * reserves the edge's one transfer for the card's sources and W, and each
+ * source streams from its staged copy in 1 MiB chunks, one `uploads.put`
+ * outstanding at a time. Each source must end with its approved length and
+ * digest, `streamComplete`, and `sealed` only after the last. The fence
+ * above follows, then `tools.apply` names the sealed upload. Up to that
+ * attempt nothing reached Atlassian: any failure releases the upload
+ * without waiting and says nothing was written; a refused open shows the
+ * edge's own text (ruling P8A-V10-O1). From the attempt on, nothing is
+ * released (only the edge's holds end an attached upload), and every row
+ * above that says {@link MAY_HAVE_WRITTEN} says
+ * {@link MAY_HAVE_WRITTEN_UPLOAD}.
+ *
  * Imports no catalog, tool group or local tool module
  * (`architecture.test.ts`).
  */
@@ -57,9 +72,19 @@ import {
   remoteToolsReady,
   type RemoteApplyAnswer,
   type RemoteApplyOutcome,
+  type RemoteApplyUpload,
   type RemoteProduct,
+  type RemoteToolPort,
+  type RemoteUploadPort,
+  type RemoteUploadStream,
   type RemoteWriteName,
 } from "../../remoteTools.ts";
+import { readStagedChunks } from "../confluence/confluenceAttachments.ts";
+import {
+  UPLOAD_SOURCE_CHANGED_NOTHING_WRITTEN,
+  cardUploads,
+  type CardUploads,
+} from "./remoteUploads.ts";
 import {
   ATLASSIAN_SITE_RE,
   DISABLED,
@@ -80,6 +105,12 @@ const CANNOT_SEND =
 /** Nothing confirmed what happened: the transport or the answer failed. */
 const MAY_HAVE_WRITTEN =
   "The gateway did not confirm the result. Changes may have been written, and a change already sent can still finish within about a minute. Wait a minute, then check the site; ask again only for what is missing. Don't approve the same change again unchecked.";
+/**
+ * {@link MAY_HAVE_WRITTEN} for a card that uploads (v02 AC9): the edge's
+ * apply may run up to 145 s after it admits the request.
+ */
+const MAY_HAVE_WRITTEN_UPLOAD =
+  "The gateway did not confirm the result. Changes may have been written, and an upload already sent can still finish within about three minutes. Wait three minutes, then check the page; ask again only for what is missing. Don't approve the same upload again unchecked.";
 /** A confirmed answer in which a failed item may have written first. */
 const PARTIAL_EFFECTS =
   "Some failed changes may have been partly written before they failed; the card shows each item's outcome. Check the site and ask again only for what is missing. Don't approve the same change again unchecked.";
@@ -102,6 +133,8 @@ interface GatewayKind<Item, Rec extends object> {
   merge(card: Item, record: Rec, trimmed: boolean): void;
   /** The local summary owner; throws its all-failed text. */
   summarize(items: Item[]): Applied;
+  /** The card's upload sources, when it has any (Confluence only). */
+  uploads?(items: Item[]): CardUploads | undefined;
 }
 
 const JIRA: GatewayKind<JiraIssueMutationItemDisplay, JiraResultRecord> = {
@@ -143,6 +176,7 @@ const CONFLUENCE: GatewayKind<
   checkResult: checkConfluenceResult,
   merge: (card, record) => mergeConfluenceResult(card, record),
   summarize: summarizeConfluenceApplication,
+  uploads: cardUploads,
 };
 
 /**
@@ -173,13 +207,46 @@ async function applyWith<Item, Rec extends object>(
     !kind.checkProposal(sent)
   )
     throw new Error(CANNOT_SEND);
+  const sources = kind.uploads?.(sent);
   try {
     await remoteToolsReady(READY_WAIT_MS);
   } catch {
     throw new Error(UNREACHABLE);
   }
+  let upload: { port: RemoteToolPort; apply: RemoteApplyUpload } | undefined;
+  if (sources) {
+    const port = route(kind);
+    upload = {
+      port,
+      apply: await sendUploads(port.uploads, card.sessionId, sources),
+    };
+  }
   // From here to the send nothing is awaited (P6-O4): what is checked is
-  // what holds when the request leaves.
+  // what holds when the request leaves. An upload is sent on this port's
+  // connection, so another port (a mode switch) is not client mode.
+  let port: RemoteToolPort;
+  try {
+    port = route(kind);
+    if (upload && port !== upload.port) throw new Error(NOT_CLIENT_MODE);
+  } catch (err) {
+    if (upload) upload.port.uploads.release(upload.apply.uploadId);
+    throw err;
+  }
+  const outcome = await port.apply(kind.name, site, sent, upload?.apply);
+  return settle(
+    kind,
+    items,
+    sent,
+    site,
+    outcome,
+    upload ? MAY_HAVE_WRITTEN_UPLOAD : MAY_HAVE_WRITTEN,
+  );
+}
+
+/** The port, when client mode, the connection, toggle and listing allow. */
+function route<Item, Rec extends object>(
+  kind: GatewayKind<Item, Rec>,
+): RemoteToolPort {
   const port = remoteToolPort();
   if (!port) throw new Error(NOT_CLIENT_MODE);
   if (!remoteToolsConnected()) throw new Error(UNREACHABLE);
@@ -187,8 +254,108 @@ async function applyWith<Item, Rec extends object>(
     throw new Error(DISABLED[kind.product]);
   if (!remoteToolDispatchable(kind.name, "two-phase"))
     throw new Error(NOT_OFFERED);
-  const outcome = await port.apply(kind.name, site, sent);
-  return settle(kind, items, sent, site, outcome);
+  return port;
+}
+
+/**
+ * Opens the card's upload and sends every source (v02 AC5 steps 3-5, v03
+ * K1): the sealed upload for the apply. Throws the card's text, nothing
+ * written, after releasing what it opened.
+ */
+async function sendUploads(
+  uploads: RemoteUploadPort,
+  sessionId: string,
+  sources: CardUploads,
+): Promise<RemoteApplyUpload> {
+  let opened;
+  try {
+    opened = await uploads.open(sources.streams, sources.work);
+  } catch {
+    throw new Error(UNREACHABLE);
+  }
+  // The edge's fixed text, busy or not (P8A-V10-O1).
+  if (!opened.ok) throw new Error(withNothingWritten(opened.message));
+  const { uploadId } = opened;
+  try {
+    for (const [index, stream] of sources.streams.entries())
+      await sendSource(
+        uploads,
+        sessionId,
+        uploadId,
+        stream,
+        index === sources.streams.length - 1,
+      );
+  } catch (err) {
+    uploads.release(uploadId);
+    throw err instanceof UploadStopped
+      ? new Error(err.message)
+      : new Error(UPLOAD_SOURCE_CHANGED_NOTHING_WRITTEN);
+  }
+  return { uploadId, work: sources.work };
+}
+
+/** A send that stopped with the card's own text. */
+class UploadStopped extends Error {}
+
+/**
+ * One source's chunks, each put awaited before the next is read; then its
+ * length and digest against the approved ones, and the edge's account of
+ * the stream: complete, and sealed exactly when it is the last. A refused
+ * put shows the edge's text; an answer that disagrees with the put, or a
+ * staged copy that changed, is a changed source. A same-size change is
+ * caught by the digest before the final put, which the edge would refuse
+ * with its own text (requester ruling k1dz2xl1 #2).
+ */
+async function sendSource(
+  uploads: RemoteUploadPort,
+  sessionId: string,
+  uploadId: string,
+  stream: RemoteUploadStream,
+  last: boolean,
+): Promise<void> {
+  const changed = () =>
+    new UploadStopped(UPLOAD_SOURCE_CHANGED_NOTHING_WRITTEN);
+  let complete = false;
+  let sealed = false;
+  const read = await readStagedChunks(
+    sessionId,
+    stream,
+    async (chunk, offset, sha256) => {
+      if (sha256 !== undefined && sha256 !== stream.sha256) throw changed();
+      let answer;
+      try {
+        answer = await uploads.put(
+          uploadId,
+          stream.stagedAttachmentId,
+          offset,
+          chunk,
+        );
+      } catch {
+        throw new UploadStopped(UNREACHABLE);
+      }
+      // The edge's fixed text, as for open (requester ruling k1dz2xl1 #2):
+      // an expired or invalid upload is not a changed file.
+      if (!answer.ok)
+        throw new UploadStopped(withNothingWritten(answer.message));
+      const received = offset + chunk.byteLength;
+      if (
+        answer.received !== received ||
+        answer.streamComplete !== (received === stream.size) ||
+        (answer.sealed && !(last && received === stream.size))
+      )
+        throw changed();
+      complete = answer.streamComplete;
+      sealed = answer.sealed;
+    },
+  );
+  if (
+    !read ||
+    read.size !== stream.size ||
+    read.sha256 !== stream.sha256 ||
+    !complete ||
+    sealed !== last
+  )
+    throw changed();
 }
 
 /** The card's outcome from the link's, by the table in the header. */
@@ -198,6 +365,7 @@ function settle<Item, Rec extends object>(
   sent: Item[],
   site: string,
   outcome: RemoteApplyOutcome,
+  uncertain: string,
 ): Applied {
   switch (outcome.outcome) {
     case "notSent":
@@ -205,9 +373,9 @@ function settle<Item, Rec extends object>(
     case "lost":
     case "timeout":
     case "undecodable":
-      throw new Error(MAY_HAVE_WRITTEN);
+      throw new Error(uncertain);
     case "answer":
-      return answered(kind, items, sent, site, outcome.answer);
+      return answered(kind, items, sent, site, outcome.answer, uncertain);
   }
 }
 
@@ -217,6 +385,7 @@ function answered<Item, Rec extends object>(
   sent: Item[],
   site: string,
   answer: RemoteApplyAnswer,
+  uncertain: string,
 ): Applied {
   const trimmed = answer.trimmed === true;
   if (!answer.ok) {
@@ -231,14 +400,14 @@ function answered<Item, Rec extends object>(
     // What the edge's working copy shows, when every record passes.
     if (answer.results)
       mergeChecked(kind, items, sent, site, answer.results, trimmed);
-    throw new Error(MAY_HAVE_WRITTEN);
+    throw new Error(uncertain);
   }
   const { results } = answer;
   if (
     (answer.effects === "none" && results.some(mayHaveWritten)) ||
     !mergeChecked(kind, items, sent, site, results, trimmed)
   )
-    throw new Error(MAY_HAVE_WRITTEN);
+    throw new Error(uncertain);
   const notes = trimmed ? [TRIMMED] : [];
   let summary: Applied;
   try {

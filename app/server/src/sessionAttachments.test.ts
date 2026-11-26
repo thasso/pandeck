@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, test } from "vitest";
 import { DATA_DIR } from "./config.ts";
 import {
+  discardStagedAttachment,
   listSessionAttachments,
   persistUploadedAttachment,
   readSessionAttachmentBytes,
@@ -114,5 +115,84 @@ describe("session attachment store", () => {
   test("returns an empty list for a session with no attachments", () => {
     assert.deepEqual(listSessionAttachments("s-empty"), []);
     assert.equal(existsSync(sessionAttachmentsDir("s-empty")), false);
+  });
+
+  test("discarding a staging id removes its index entry and every file holding its segment, and nothing else", () => {
+    const sessionId = "s-discard";
+    const owned = stageSessionAttachment(sessionId, {
+      name: "a.bin",
+      mimeType: "",
+      bytes: Buffer.from("owned"),
+      source: "agent",
+      id: "p8a-0123456789abcdef",
+    });
+    const other = stageSessionAttachment(sessionId, {
+      name: "b.bin",
+      mimeType: "",
+      bytes: Buffer.from("other"),
+      source: "agent",
+      id: "p8a-fedcba9876543210",
+    });
+    const dir = sessionAttachmentsDir(sessionId);
+    // A partial write the index never recorded, and a directory that merely
+    // carries the segment.
+    writeFileSync(join(dir, "1-p8a-0123456789abcdef-partial.bin"), "half");
+    mkdirSync(join(dir, "2-p8a-0123456789abcdef-dir"));
+
+    discardStagedAttachment(sessionId, "p8a-0123456789abcdef");
+
+    assert.equal(existsSync(owned.path), false);
+    assert.equal(
+      existsSync(join(dir, "1-p8a-0123456789abcdef-partial.bin")),
+      false,
+    );
+    assert.equal(existsSync(join(dir, "2-p8a-0123456789abcdef-dir")), true);
+    assert.equal(resolveSessionAttachment(sessionId, owned.id), null);
+    assert.equal(resolveSessionAttachment(sessionId, other.id)?.size, 5);
+    // Only regular files are listed, so the directory does not appear.
+    assert.deepEqual(
+      listSessionAttachments(sessionId).map((record) => record.id),
+      [other.id],
+    );
+  });
+
+  test("discarding matches only the staged naming rule: another attachment whose name holds the segment survives", () => {
+    const sessionId = "s-discard-anchored";
+    const stageId = "p8a-0123456789abcdef";
+    const owned = stageSessionAttachment(sessionId, {
+      name: "a.bin",
+      mimeType: "",
+      bytes: Buffer.from("owned"),
+      source: "agent",
+      id: stageId,
+    });
+    // Pre-existing: an indexed attachment whose name carries `-<stageId>-`,
+    // and an unindexed file with the segment after another id.
+    const named = stageSessionAttachment(sessionId, {
+      name: `report-${stageId}-final.pdf`,
+      mimeType: "",
+      bytes: Buffer.from("named"),
+      source: "agent",
+      id: "att-other",
+    });
+    const dir = sessionAttachmentsDir(sessionId);
+    const orphan = join(dir, `3-att-x-${stageId}-copy.bin`);
+    writeFileSync(orphan, "orphan");
+
+    discardStagedAttachment(sessionId, stageId);
+
+    assert.equal(existsSync(owned.path), false);
+    assert.equal(existsSync(named.path), true);
+    assert.equal(existsSync(orphan), true);
+    assert.equal(resolveSessionAttachment(sessionId, named.id)?.size, 5);
+  });
+
+  test("discarding refuses an id that is not its own safe file name, and tolerates a session with nothing staged", () => {
+    for (const id of ["", "a/b", "../x", "with space"])
+      assert.throws(
+        () => discardStagedAttachment("s-discard-bad", id),
+        TypeError,
+      );
+    discardStagedAttachment("s-never-staged", "p8a-0000000000000000");
   });
 });

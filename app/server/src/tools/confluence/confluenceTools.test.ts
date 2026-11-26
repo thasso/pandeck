@@ -39,6 +39,13 @@ function pageAdf() {
  * normalizers call each other inside `confluenceClient.ts`, so mocking that
  * module's exports would leave the real functions running against the network.
  */
+/**
+ * Each streamed upload body the stub read, as the form it carried. The stub
+ * reads the whole body before it answers, as a server would, so the upload
+ * completes (P8a v04 V2).
+ */
+const uploadedForms = vi.hoisted(() => new Map<unknown, FormData>());
+
 vi.mock("../../atlassian/atlassianFetch.ts", async (importActual) => ({
   ...(await importActual<typeof import("../../atlassian/atlassianFetch.ts")>()),
   atlassianFetch: vi.fn(
@@ -47,9 +54,18 @@ vi.mock("../../atlassian/atlassianFetch.ts", async (importActual) => ({
       _product: unknown,
       method: string,
       path: string,
-      _body?: unknown,
+      body?: unknown,
       query?: Record<string, unknown>,
     ) => {
+      const { MultipartUpload } =
+        await import("../../atlassian/multipartUpload.ts");
+      if (body instanceof MultipartUpload)
+        uploadedForms.set(
+          body,
+          await new Response(body.stream, {
+            headers: { "content-type": body.contentType },
+          }).formData(),
+        );
       if (method !== "GET") return writeResponse(path);
       if (path === "/wiki/rest/api/search")
         return {
@@ -242,7 +258,10 @@ function queryFor(fragment: string) {
 function writes(method: "POST" | "PUT" | "DELETE") {
   return fetchMock.mock.calls
     .filter((call) => call[2] === method)
-    .map((call) => ({ path: call[3] as string, body: call[4] }));
+    .map((call) => ({
+      path: call[3] as string,
+      body: uploadedForms.get(call[4]) ?? call[4],
+    }));
 }
 
 setApprovalBroadcastForTests(() => {});

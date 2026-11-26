@@ -686,6 +686,11 @@ describe("client mode: the gateway's Jira tools (Task-1398)", () => {
   const clientMode = (names: string[]) => {
     uninstall = installRemoteToolPort({
       callFile: () => Promise.reject(new Error("unused")),
+      uploads: {
+        open: () => Promise.reject(new Error("unused")),
+        put: () => Promise.reject(new Error("unused")),
+        release: () => {},
+      },
       call: () => Promise.reject(new Error("unused")),
       prepare: () => Promise.reject(new Error("unused")),
       apply: () => Promise.reject(new Error("unused")),
@@ -791,6 +796,11 @@ describe("client mode: the gateway's Slack tools (Task-1455)", () => {
   const clientMode = (names: string[]) => {
     uninstall = installRemoteToolPort({
       callFile: () => Promise.reject(new Error("unused")),
+      uploads: {
+        open: () => Promise.reject(new Error("unused")),
+        put: () => Promise.reject(new Error("unused")),
+        release: () => {},
+      },
       call: () => Promise.reject(new Error("unused")),
       prepare: () => Promise.reject(new Error("unused")),
       apply: () => Promise.reject(new Error("unused")),
@@ -906,6 +916,11 @@ describe("client mode: the gateway's Confluence reads (Task-1439)", () => {
   const clientMode = (listing: unknown[]) => {
     uninstall = installRemoteToolPort({
       callFile: () => Promise.reject(new Error("unused")),
+      uploads: {
+        open: () => Promise.reject(new Error("unused")),
+        put: () => Promise.reject(new Error("unused")),
+        release: () => {},
+      },
       call: (name) => {
         calls.push(name);
         return Promise.resolve({ ok: true, text: "from the gateway" });
@@ -1109,6 +1124,11 @@ describe("client mode: reserved gateway writes in the catalog and Plan (Task-146
   const clientMode = async (listing: unknown[]) => {
     uninstall = installRemoteToolPort({
       callFile: () => Promise.reject(new Error("unused")),
+      uploads: {
+        open: () => Promise.reject(new Error("unused")),
+        put: () => Promise.reject(new Error("unused")),
+        release: () => {},
+      },
       call: () => Promise.reject(new Error("unused")),
       prepare: () => Promise.reject(new Error("unused")),
       apply: () => Promise.reject(new Error("unused")),

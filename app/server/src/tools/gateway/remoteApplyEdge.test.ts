@@ -7,6 +7,9 @@
  * the agent see. Every value is fake.
  */
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ApprovalCard } from "@assistant/shared";
 import { afterEach, test, vi } from "vitest";
 import { updateConfluenceSettings } from "../../confluenceSettings.ts";
@@ -27,6 +30,7 @@ import {
   applyListing,
   installRemoteToolPort,
 } from "../../remoteTools.ts";
+import { listSessionAttachments } from "../../sessionAttachments.ts";
 import { FAKE_CLOUD_ID } from "../../test/atlassianFake.ts";
 import { stubConfluenceWriteFetch } from "../../test/confluenceMutateFetch.ts";
 import { edgeRemotePort } from "../../test/edgeRemotePort.ts";
@@ -336,13 +340,26 @@ test("a prepare refusal in the edge's D-W2 wording keeps its own claim and gains
   assert.equal(claims(text), 1, text);
 });
 
-test("a Confluence prepare gate's refusal is the edge's text as is", async () => {
+test("a Confluence prepare gate's refusal is the edge's text as is, and the frozen copy is discarded", async () => {
+  // This port drops `uploads`, as an edge before 1.3 would: its gate
+  // refuses the item (v02 PR boundary), after Pandeck froze the file.
   stubConfluenceWriteFetch();
-  const text = await prepareRefusal("confluence", [
-    { operation: "uploadAttachment", page: "123", sourcePath: "/x" },
-  ]);
-  assert.equal(text, UPLOAD_UNAVAILABLE);
-  assert.equal(claims(text), 1, text);
+  const dir = mkdtempSync(join(tmpdir(), "remote-apply-edge-"));
+  try {
+    const path = join(dir, "x.txt");
+    writeFileSync(path, "bytes");
+    const text = await prepareRefusal("confluence", [
+      { operation: "uploadAttachment", page: "123", sourcePath: path },
+    ]);
+    assert.equal(text, UPLOAD_UNAVAILABLE);
+    assert.equal(claims(text), 1, text);
+    assert.deepEqual(
+      listSessionAttachments(`remote-apply-edge-${session}`),
+      [],
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("an apply refused because the gateway's site changed is SITE_CHANGED as is, certified, nothing sent", async () => {

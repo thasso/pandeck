@@ -163,6 +163,11 @@ async function withTripwires(
     call: (name) => refuse(`tools.call ${name}`),
     prepare: (name) => refuse(`tools.prepare ${name}`),
     apply: (name) => refuse(`tools.apply ${name}`),
+    uploads: {
+      open: () => refuse("uploads.open"),
+      put: () => refuse("uploads.put"),
+      release: () => void refuse("uploads.release").catch(() => {}),
+    },
   });
   try {
     // Seeded directly, never through a port.

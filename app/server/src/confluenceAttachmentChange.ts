@@ -24,7 +24,10 @@
  *
  * v2 has no upload endpoint, so uploads use v1
  * (`/wiki/rest/api/content/{pageId}/child/attachment`); reads and deletes are
- * v2.
+ * v2. An upload's body is streamed (`atlassian/multipartUpload.ts`): its
+ * pieces are copies, its digest is checked before the closing boundary, it is
+ * retired once the request settles, and only a `completed` body counts as
+ * sent (Task-1441 P8a).
  */
 import type {
   ConfluenceAttachmentMutationDisplay,
@@ -37,6 +40,7 @@ import {
   type ConfluenceConfig,
   type ConfluencePageResponse,
 } from "./atlassian/confluenceClient.ts";
+import { multipartUpload } from "./atlassian/multipartUpload.ts";
 import {
   versionOf,
   type ConfluenceAttachmentResponse,
@@ -48,6 +52,15 @@ import {
   signalTail,
 } from "./confluenceMutationErrors.ts";
 import type { WriteScope } from "./writeScope.ts";
+
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+
+/**
+ * An upload Confluence answered before its whole body was sent (P8a v05 W1,
+ * v06 X4): fixed, with no name, path or upstream text.
+ */
+export const BODY_NOT_COMPLETED =
+  "Confluence answered before the whole file was sent, so this upload may be incomplete. Check the page before trying again.";
 
 /** Attachment ids are `att<digits>`; a bare number is taken as the same id. */
 export function normalizeAttachmentId(value: string): string {
@@ -321,24 +334,37 @@ export async function executeAttachmentChange(
         );
       path = `/wiki/rest/api/content/${encodeURIComponent(pageId)}/child/attachment`;
     }
-    const form = new FormData();
-    form.append(
-      "file",
-      new Blob([new Uint8Array(bytes)], {
-        type: attachment.mediaType || "application/octet-stream",
-      }),
-      attachment.fileName,
-    );
-    form.append("minorEdit", "true");
-    if (item.versionMessage) form.append("comment", item.versionMessage);
+    const sha256 = attachment.sha256 ?? "";
+    if (!SHA256_HEX.test(sha256))
+      throw new ConfluenceMutationError(
+        `The proposal for ${attachment.fileName} recorded no valid file digest, so it cannot be uploaded safely. Propose the upload again.`,
+      );
+    const upload = multipartUpload({
+      bytes,
+      sha256,
+      fileName: attachment.fileName,
+      mediaType: attachment.mediaType,
+      fields: [
+        ["minorEdit", "true"],
+        ...(item.versionMessage
+          ? [["comment", item.versionMessage] as const]
+          : []),
+      ],
+    });
     // Creating answers a listing, updating answers the attachment itself.
-    const response = await confluenceWrite(
-      () =>
-        confluencePost<
-          V1AttachmentResponse & { results?: V1AttachmentResponse[] }
-        >(config, path, form, ...signalTail(signal)),
-      deps,
-    );
+    let response: V1AttachmentResponse & { results?: V1AttachmentResponse[] };
+    try {
+      response = await confluenceWrite(
+        () => confluencePost(config, path, upload, ...signalTail(signal)),
+        deps,
+      );
+    } finally {
+      // Every path: the body drops the bytes before this item settles.
+      upload.retire();
+    }
+    // An answer that came before the whole body was sent is no success.
+    if (upload.state !== "completed")
+      throw new ConfluenceMutationError(BODY_NOT_COMPLETED);
     const written = response.results?.[0] ?? response;
     attachment.resultId = written.id ?? attachment.existingId ?? null;
     attachment.resultVersion =

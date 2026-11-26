@@ -80,6 +80,11 @@ beforeEach(() => {
     call: () => Promise.reject(new Error("unused")),
     prepare: () => Promise.reject(new Error("unused")),
     apply: () => Promise.reject(new Error("unused")),
+    uploads: {
+      open: () => Promise.reject(new Error("unused")),
+      put: () => Promise.reject(new Error("unused")),
+      release: () => {},
+    },
     callFile: (_name, args, _signal, expect, use) => {
       seen.push({ maxBytes: expect.maxBytes, args });
       return respond(use as never) as never;

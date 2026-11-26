@@ -74,6 +74,9 @@ import {
   decodeToolApply,
   decodeToolCall,
   decodeToolPrepare,
+  decodeUploadOpen,
+  decodeUploadPut,
+  decodeUploadRelease,
   integrationFailure,
   isIntegrationFailure,
   decodeLoginId,
@@ -92,7 +95,7 @@ import {
   type GatewayClient,
 } from "./clientRegistry.ts";
 import type { DevboxApproval } from "./devboxProof.ts";
-import type { CredentialOutcome, EdgeTools } from "./edgeTools.ts";
+import type { CredentialOutcome, EdgeTools, UploadScope } from "./edgeTools.ts";
 import type {
   AdmittedClient,
   ConnectRefusal,
@@ -154,15 +157,21 @@ import {
 
 /**
  * What a client may make the edge buffer or run (Task-1441 P7a, AC3): its
- * messages are small (a tool call, an apply's approved items), so the 100
- * MiB file answers only ever travel the other way.
+ * messages are small (a tool call, an apply's approved items, an upload's
+ * `uploads.put` of at most 1 MiB, Task-1441 P8a), so the 100 MiB file answers
+ * only ever travel the other way and an upload arrives in chunks, one at a
+ * time.
  */
-const CLIENT_LIMITS: ConnectionLimits = {
+export const CLIENT_LIMITS: ConnectionLimits = {
   maxMessageBytes: 2 * 1024 * 1024,
   maxBufferedBytes: 4 * 1024 * 1024,
   maxPartialMessages: 8,
   maxServing: 256,
 };
+/** The one method whose byte stream reaches its handler uncopied (F004a). */
+const UPLOAD_PUT_METHODS: ReadonlySet<string> = new Set([
+  CLIENT_METHODS.uploadsPut,
+]);
 /**
  * How long a file answer's last frame may wait to flush before the edge ends
  * that client's connection (H1): `FILE_TRANSFER_MS` 60 s plus a margin.
@@ -699,8 +708,17 @@ export async function startClientListener(
     /** Aborts on the client's `cancel` or when its connection ends. */
     signal: AbortSignal,
     /** When the answer has left (Task-1441 P7a, H1). */
-    context?: MethodContext,
+    context: MethodContext | undefined,
+    /**
+     * The connection's upload scope (Task-1441 P8a, v10 S1), made once per
+     * connection; absent when the edge has no upload store.
+     */
+    uploads: UploadScope | undefined,
   ) => Payload | Promise<Payload>;
+
+  /** The connection's upload scope, or the fixed refusal. */
+  const uploadScope = (uploads: UploadScope | undefined): UploadScope =>
+    uploads ?? integrationFailure("tools_unavailable");
 
   /** The user's integration credential, read from the vault on every call. */
   const vaultCredential =
@@ -893,26 +911,102 @@ export async function startClientListener(
         bytes: { file: bytes },
       };
     },
+    // Declared upload sources (1.3) reach the host only as its option.
     [CLIENT_METHODS.toolsPrepare]: async (payload, client, signal) => {
-      const { name, args } = decodeToolPrepare(payload);
+      const { name, args, uploads } = decodeToolPrepare(payload);
       return encodeClientMessage(
-        await toolHost().prepare(name, args, {
-          clientId: client.id,
-          credential: vaultCredential(client),
-          signal,
-        }),
+        await toolHost().prepare(
+          name,
+          args,
+          {
+            clientId: client.id,
+            credential: vaultCredential(client),
+            signal,
+          },
+          ...(uploads ? [{ uploads }] : []),
+        ),
       );
     },
     // The signal is the client's cancel: the host starts no further item
-    // after it and never aborts a running request.
-    [CLIENT_METHODS.toolsApply]: async (payload, client, signal) => {
-      const { name, request } = decodeToolApply(payload);
+    // after it and never aborts a running request. An apply naming an
+    // upload (1.3) holds it until its answer drains, so only then does it
+    // register `onSettled`: a plain apply keeps the ordinary counting.
+    [CLIENT_METHODS.toolsApply]: async (
+      payload,
+      client,
+      signal,
+      context,
+      uploads,
+    ) => {
+      const { name, request, uploadId } = decodeToolApply(payload);
+      const host = toolHost();
+      const scope = uploadId === undefined ? undefined : uploadScope(uploads);
+      const drain = {
+        ms: deps.fileOutputMs ?? FILE_OUTPUT_MS,
+        reason: "an upload apply's answer did not drain",
+      };
       return encodeClientMessage(
-        await toolHost().apply(name, request, {
-          clientId: client.id,
-          credential: vaultCredential(client),
-          signal,
-        }),
+        await host.apply(
+          name,
+          request,
+          {
+            clientId: client.id,
+            credential: vaultCredential(client),
+            signal,
+            ...(scope && context
+              ? {
+                  onSettled: (fn: () => void) => context.onSettled(fn, drain),
+                }
+              : {}),
+          },
+          ...(scope && uploadId !== undefined
+            ? [{ upload: { id: uploadId, scope } }]
+            : []),
+        ),
+      );
+    },
+    // Upload methods (1.3): never a credential, never upstream; every
+    // failure is the store's fixed `tool_error` answer.
+    [CLIENT_METHODS.uploadsOpen]: (
+      payload,
+      _client,
+      _signal,
+      _context,
+      uploads,
+    ) => {
+      const scope = uploadScope(uploads);
+      const request = decodeUploadOpen(payload);
+      return encodeClientMessage(
+        request ? scope.open(request) : scope.invalid(),
+      );
+    },
+    // Synchronous: the chunk's slices (`bytePartsMethods`) are copied
+    // before this returns, so no slice or received chunk is kept past its
+    // own serve.
+    [CLIENT_METHODS.uploadsPut]: (
+      payload,
+      _client,
+      _signal,
+      _context,
+      uploads,
+    ) => {
+      const scope = uploadScope(uploads);
+      const { uploadId, put } = decodeUploadPut(payload);
+      if (!put) return encodeClientMessage(scope.invalid(uploadId));
+      const { chunk, ...request } = put;
+      return encodeClientMessage(scope.put(request, chunk));
+    },
+    [CLIENT_METHODS.uploadsRelease]: (
+      payload,
+      _client,
+      _signal,
+      _context,
+      uploads,
+    ) => {
+      const scope = uploadScope(uploads);
+      const uploadId = decodeUploadRelease(payload);
+      return encodeClientMessage(
+        uploadId === undefined ? scope.invalid() : scope.release(uploadId),
       );
     },
     [CLIENT_METHODS.removeAccount]: (payload, client) => {
@@ -924,6 +1018,9 @@ export async function startClientListener(
 
   const attachClient = (socket: tls.TLSSocket, client: GatewayClient): void => {
     const identity = peerIdentity(socket)!;
+    // One upload scope per connection: the connection's identity for the
+    // store, never named on the wire (Task-1441 P8a).
+    const uploads = deps.tools?.uploads?.scope(client.userId);
     const handlers: Record<string, MethodHandler> = {};
     for (const [method, body] of Object.entries(methods))
       handlers[method] = (payload, signal, context) => {
@@ -957,7 +1054,13 @@ export async function startClientListener(
         }
         return (async () => {
           try {
-            const answer = await body(payload, client, signal, context);
+            const answer = await body(
+              payload,
+              client,
+              signal,
+              context,
+              uploads,
+            );
             log(`client ${client.id} ${method}: ok`);
             return answer;
           } catch (err) {
@@ -986,7 +1089,14 @@ export async function startClientListener(
         },
         handlers,
         limits: CLIENT_LIMITS,
-        onEnd: () => connections.delete(connection),
+        // A put's chunk reaches the store as the received slices, which it
+        // copies into place: one copy per put, not three (F004a).
+        bytePartsMethods: UPLOAD_PUT_METHODS,
+        onEnd: () => {
+          connections.delete(connection);
+          // Unattached uploads go; one an apply took waits for its holds.
+          uploads?.end();
+        },
       },
     );
     connections.set(connection, client);

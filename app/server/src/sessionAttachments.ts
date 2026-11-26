@@ -16,9 +16,11 @@
 import { Buffer } from "node:buffer";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -111,6 +113,48 @@ export function stageSessionAttachment(
     ),
     source: input.source,
   });
+}
+
+/**
+ * Remove what a caller staged under `stageId` (Task-1441 P8a, v03 K4): the
+ * index entry with that id, and every regular file in the session's
+ * attachment directory named as `writeAttachment` names that id's files,
+ * `<digits>-<stageId>-…`, which also covers a partial write and a file whose
+ * index entry was never written. The caller chose the id itself before any
+ * write, so it owns every match. The match is anchored to that rule, so
+ * another attachment whose name holds the segment is not one, and a file
+ * another index entry records is never removed.
+ */
+export function discardStagedAttachment(
+  sessionId: string,
+  stageId: string,
+): void {
+  if (!stageId || safeAttachmentFileName(stageId) !== stageId)
+    throw new TypeError("A staging id must be a non-empty safe file name.");
+  const dir = sessionAttachmentsDir(sessionId);
+  if (!existsSync(dir)) return;
+  const records = readIndex(sessionId);
+  const kept = records.filter((record) => record.id !== stageId);
+  if (kept.length !== records.length)
+    writeFileSync(indexPath(sessionId), JSON.stringify(kept, null, 2));
+  const others = new Set(kept.map((record) => record.file));
+  for (const name of readdirSync(dir)) {
+    if (name === INDEX_FILE || others.has(name) || !isStagedFile(name, stageId))
+      continue;
+    const path = join(dir, name);
+    if (lstatSync(path, { throwIfNoEntry: false })?.isFile())
+      rmSync(path, { force: true });
+  }
+}
+
+/** Whether `name` is `<digits>-<stageId>-…`, `writeAttachment`'s file name. */
+function isStagedFile(name: string, stageId: string): boolean {
+  const dash = name.indexOf("-");
+  return (
+    dash > 0 &&
+    /^\d+$/.test(name.slice(0, dash)) &&
+    name.startsWith(`${stageId}-`, dash + 1)
+  );
 }
 
 /** List every attachment available to a session (indexed + orphan files). */

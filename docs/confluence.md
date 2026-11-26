@@ -237,10 +237,21 @@ Atlassian credential and no approval card: the client's approval of the call is
 the user's consent, and Confluence changes as soon as the call runs. Its
 schema's structure is the local one. It differs as follows:
 
-- **Upload is unavailable.** An `uploadAttachment` item refuses the whole call
-  before anything is read or sent ("Uploading attachments is not available
-  through this gateway yet; nothing was written to Confluence."), until the edge
-  has a byte source (P8).
+- **Uploads come from Pandeck, in client mode only** (Task-1441 P8a). Pandeck
+  freezes each source into the session's attachments, the card shows the file as
+  the local card does, and on approval Pandeck sends the approved bytes to the
+  edge before the apply that writes them (`docs/workers.md` "Gateway uploads"
+  and "Client-mode uploads"). On `/mcp`, which has no byte source, an
+  `uploadAttachment` item still refuses the whole call before anything is read
+  or sent ("Uploading attachments is not available through this gateway yet;
+  nothing was written to Confluence.").
+- **A sign-in from before the upload scope gets a 403.** Uploads need
+  `write:confluence-file`, which the gateway asks for since Task-1439 P1. A user
+  whose Atlassian grant is older keeps the old scopes, so Confluence refuses the
+  upload with 403. The POST has left by then, so the card fails with "Some
+  failed changes may have been partly written before they failed; …"
+  (`docs/approvals.md` "Gateway-prepared cards") although nothing was written.
+  Reconnect Atlassian on the gateway's page, then ask for the upload again.
 - **Deletes follow the gateway's scope list.** A `delete` runs only when the
   scope list the gateway asks Atlassian for holds `delete:page:confluence`, and
   a `deleteAttachment` only when it holds `delete:attachment:confluence`;
@@ -273,8 +284,8 @@ session attachment store side: freezing an upload's bytes and reading them back.
   the source's; naming an attachment the page already has, or passing its
   `attachmentId`, uploads a new version of it, and `versionMessage` becomes the
   version comment. A new file posts to `…/child/attachment`, a new version to
-  `…/child/attachment/{id}/data`, both multipart (`atlassianFetch` sends a
-  `FormData` body with `X-Atlassian-Token: no-check`).
+  `…/child/attachment/{id}/data`, both multipart with
+  `X-Atlassian-Token: no-check` ("The upload body is streamed").
 - **`deleteAttachment`** moves one attachment to the trash through
   `DELETE /wiki/api/v2/attachments/{id}`, only when it is reported `current`
   ("Deletes go to the trash, once").
@@ -284,6 +295,24 @@ session attachment store and records the copy's id and SHA-256 on the item. A
 session attachment source is pinned the same way. Execution re-hashes the staged
 bytes and refuses on a mismatch or a missing file, so editing the source after
 proposing does not change the upload.
+
+**The upload body is streamed** (Task-1441 P8a,
+`app/server/src/atlassian/multipartUpload.ts`). Every upload, local or on the
+gateway's edge, sends one `multipart/form-data` body that is byte for byte what
+`FormData` would send, a `file` part and then the fields, except for the
+boundary. It is pulled in pieces of at most 1 MiB, each a fresh copy of the
+already verified bytes, never a view, so the bytes are never held a second time
+as a `Blob` or a whole body. `atlassianFetch` sends it with `duplex: "half"`, an
+explicit `Content-Length` and no retry. Each piece is hashed before it is handed
+to fetch; only when the digest equals the approved SHA-256 does the body go on
+with the CRLF, the fields and the closing boundary. Otherwise the stream errors
+and no closing boundary is ever sent, so Confluence never sees a complete body.
+Such a failure reaches the card as may have written, never as nothing written:
+the request had started. Two designs are rejected for any upload, after
+measurement on both runtimes: file-backed Blobs (`fs.openAsBlob`, `Bun.file`),
+which on Bun silently uploaded a file changed after its check and on Node
+crashed the process with an uncaught `NotReadableError`, and keeping `FormData`,
+which held about four times the file on Node.
 
 **Attachments carry their own version guard.** Confluence versions an attachment
 separately from its page, so page `baseVersion` says nothing about it. Staging

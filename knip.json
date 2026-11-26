@@ -26,6 +26,7 @@
         "src/gateway/main.ts",
         "src/gateway/processFixture.ts",
         "src/test/gatewayLinkFixture.ts",
+        "src/test/multipartPeerFixture.ts",
         "src/codexRenewMain.ts",
         "src/claudeLoginMain.ts",
         "src/codexLoginMain.ts",

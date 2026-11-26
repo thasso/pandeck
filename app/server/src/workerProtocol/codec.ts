@@ -36,6 +36,13 @@ export interface Payload {
   text?: Readonly<Record<string, string>>;
   /** Named byte streams. */
   bytes?: Readonly<Record<string, Uint8Array>>;
+  /**
+   * Named byte streams as the received slices, uncopied, in place of `bytes`
+   * for a method that asked for them (`MessageAssembler.complete`). A slice
+   * can share a larger received chunk, so the handler copies what it needs
+   * during its synchronous call and keeps no slice (Task-1441 P8a, F004a).
+   */
+  byteParts?: Readonly<Record<string, readonly Uint8Array[]>>;
 }
 
 type MessageKind = "request" | "response";
@@ -65,7 +72,13 @@ export type Frame =
       id: number;
       stream: string;
       seq: number;
-      payload: Buffer;
+      /**
+       * The payload as received, in order: slices of the received chunks,
+       * never joined here, so a frame split across chunks costs no copy.
+       */
+      parts: Buffer[];
+      /** The payload's length, the sum of `parts`. */
+      length: number;
     }
   | { type: "cancel"; id: number };
 
@@ -163,12 +176,25 @@ function isCount(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
+/** Stream names: strings, each declared once (P8a AC7). */
 function isNames(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every(isString);
+  return (
+    Array.isArray(value) &&
+    value.every(isString) &&
+    new Set(value).size === value.length
+  );
 }
 
-/** A decoded header checked against its frame type. */
-function parseFrame(head: Buffer, payload: Buffer): Frame {
+/** One buffer of `parts`, joined only when there are several. */
+function joinParts(parts: Buffer[], length: number): Buffer {
+  return parts.length === 1 ? parts[0]! : Buffer.concat(parts, length);
+}
+
+/**
+ * A decoded header checked against its frame type. A data frame keeps its
+ * payload as `parts`; every other frame's payload is joined, as before.
+ */
+function parseFrame(head: Buffer, parts: Buffer[], length: number): Frame {
   let header: unknown;
   try {
     header = JSON.parse(utf8.decode(head));
@@ -179,8 +205,7 @@ function parseFrame(head: Buffer, payload: Buffer): Frame {
     fail("A frame header is not an object.");
   const h = header as Record<string, unknown>;
   const control = (): void => {
-    if (payload.length > 0)
-      fail(`A ${String(h.type)} frame carries a payload.`);
+    if (length > 0) fail(`A ${String(h.type)} frame carries a payload.`);
   };
   switch (h.type) {
     case "hello":
@@ -215,7 +240,8 @@ function parseFrame(head: Buffer, payload: Buffer): Frame {
         id: h.id,
         stream: h.stream,
         seq: h.seq,
-        payload,
+        parts,
+        length,
       };
     case "request":
     case "response": {
@@ -231,7 +257,7 @@ function parseFrame(head: Buffer, payload: Buffer): Frame {
         text: h.text,
         bytes: h.bytes,
         chunks: h.chunks,
-        payload,
+        payload: joinParts(parts, length),
       };
       if (h.type === "request") {
         if (!isString(h.method)) fail("A request frame needs a method.");
@@ -278,11 +304,13 @@ export class FrameDecoder {
         );
       const total = PREFIX_BYTES + headLength + payloadLength;
       if (this.buffered < total) return;
-      const frame = this.take(total);
+      this.take(PREFIX_BYTES);
+      const head = this.take(headLength);
       onFrame(
         parseFrame(
-          frame.subarray(PREFIX_BYTES, PREFIX_BYTES + headLength),
-          frame.subarray(PREFIX_BYTES + headLength),
+          joinParts(head, headLength),
+          this.take(payloadLength),
+          payloadLength,
         ),
       );
     }
@@ -304,15 +332,8 @@ export class FrameDecoder {
     return Buffer.concat(parts).subarray(0, length);
   }
 
-  private take(length: number): Buffer {
-    const first = this.chunks[0]!;
-    if (first.length >= length) {
-      const frame = first.subarray(0, length);
-      if (first.length === length) this.chunks.shift();
-      else this.chunks[0] = first.subarray(length);
-      this.buffered -= length;
-      return frame;
-    }
+  /** The next `length` buffered bytes as slices of the received chunks. */
+  private take(length: number): Buffer[] {
     const parts: Buffer[] = [];
     let needed = length;
     while (needed > 0) {
@@ -328,7 +349,7 @@ export class FrameDecoder {
       }
     }
     this.buffered -= length;
-    return Buffer.concat(parts, length);
+    return parts;
   }
 }
 
@@ -382,8 +403,8 @@ export class MessageAssembler {
     // Each frame costs its bookkeeping too, so empty frames or a new stream
     // name per frame still count against the bounds.
     const cost = this.limits
-      ? frame.payload.length + frame.stream.length + DATA_FRAME_COST
-      : frame.payload.length;
+      ? frame.length + frame.stream.length + DATA_FRAME_COST
+      : frame.length;
     message.bytes += cost;
     this.buffered += cost;
     if (
@@ -397,7 +418,8 @@ export class MessageAssembler {
       parts = [];
       message.streams.set(frame.stream, parts);
     }
-    parts.push(frame.payload);
+    // A loop, not a spread: a frame cut into many pieces is many slices.
+    for (const part of frame.parts) parts.push(part);
   }
 
   /** Drops every unfinished message: the connection has ended. */
@@ -412,7 +434,12 @@ export class MessageAssembler {
     return fail("A message is over the connection's bounds.");
   }
 
-  complete(frame: CompletingFrame): Payload {
+  /**
+   * The message `frame` completes. Each stream is joined into a buffer of its
+   * own, except that `byteParts` gives the byte streams as the received
+   * slices instead (`Payload.byteParts`), for a handler that copies them.
+   */
+  complete(frame: CompletingFrame, byteParts = false): Payload {
     const key = `${frame.type}:${frame.id}`;
     const message = this.partial.get(key);
     this.partial.delete(key);
@@ -444,14 +471,22 @@ export class MessageAssembler {
     } catch {
       fail(`The body of ${key} is not UTF-8 JSON.`);
     }
-    const text: Record<string, string> = {};
+    // Null-prototype records: a stream named `__proto__` is an own entry,
+    // never a prototype change (P8a AC7).
+    const text = Object.create(null) as Record<string, string>;
     for (const name of frame.text) {
       const bytes = joined(`text:${name}`);
       if (bytes.length % 2 !== 0)
         fail(`Text stream ${name} of ${key} ends inside a code unit.`);
       text[name] = bytes.toString("utf16le");
     }
-    const bytes: Record<string, Buffer> = {};
+    if (byteParts) {
+      const parts = Object.create(null) as Record<string, Buffer[]>;
+      for (const name of frame.bytes)
+        parts[name] = streams.get(`bytes:${name}`) ?? [];
+      return { json, text, byteParts: parts };
+    }
+    const bytes = Object.create(null) as Record<string, Buffer>;
     for (const name of frame.bytes) bytes[name] = joined(`bytes:${name}`);
     return { json, text, bytes };
   }

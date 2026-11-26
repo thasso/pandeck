@@ -149,6 +149,10 @@ beforeEach(() => {
       url,
       signal: init?.signal ?? undefined,
     };
+    // A server reads a streamed upload whole before it answers; the
+    // upload completes only then (Task-1441 P8a).
+    if (init?.body instanceof ReadableStream)
+      await new Response(init.body).arrayBuffer();
     seen.push(request);
     events.push(request.event);
     return override(request) ?? site(request);
@@ -161,6 +165,10 @@ afterEach(() => {
 });
 
 /** What fetch does when its signal aborts mid-request. */
+/** The SHA-256 of the staged bytes `abc`: the body checks it as it streams. */
+const ABC_SHA256 =
+  "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
 const abortedFetch = () =>
   new DOMException("This operation was aborted", "AbortError");
 
@@ -168,7 +176,7 @@ const FROZEN: FrozenUpload = {
   name: "frozen.txt",
   mimeType: "text/plain",
   size: 3,
-  sha256: "a".repeat(64),
+  sha256: ABC_SHA256,
   source: "/tmp/frozen.txt",
   stagedAttachmentId: "staged-1",
 };
@@ -247,7 +255,7 @@ const existingUpload = (): ConfluenceAttachmentMutationDisplay => ({
   mediaType: "image/png",
   size: 3,
   stagedAttachmentId: "staged-1",
-  sha256: "a".repeat(64),
+  sha256: ABC_SHA256,
 });
 
 describe("prepare: seam-level staging traces (B2, old-source literals)", () => {
@@ -276,7 +284,7 @@ describe("prepare: seam-level staging traces (B2, old-source literals)", () => {
       size: 3,
       source: "/tmp/frozen.txt",
       stagedAttachmentId: "staged-1",
-      sha256: "a".repeat(64),
+      sha256: ABC_SHA256,
     });
   });
 
@@ -729,7 +737,7 @@ describe("apply honours a signal (AC5b)", () => {
       attachmentItem("uploadAttachment", {
         fileName: "new.txt",
         stagedAttachmentId: "s",
-        sha256: "a".repeat(64),
+        sha256: ABC_SHA256,
       }),
       attachmentItem("deleteAttachment", {
         fileName: "diagram.png",
@@ -761,8 +769,17 @@ describe("apply honours a signal (AC5b)", () => {
         "DELETE attachment",
       ]),
     );
+    // An upload's request carries the call's signal joined with its body's
+    // own (pinned in `atlassianFetch.test.ts`), which the body's retirement
+    // aborts once the item is done; every other request carries it as is.
+    const uploads = new Set(["POST …/data", "POST …/child/attachment"]);
     for (const request of seen)
-      expect(request.signal, request.event).toBe(signal);
+      if (uploads.has(request.event)) {
+        expect(request.signal, request.event).toBeInstanceOf(AbortSignal);
+        expect(request.signal, request.event).not.toBe(signal);
+        expect(request.signal?.aborted, request.event).toBe(true);
+      } else expect(request.signal, request.event).toBe(signal);
+    expect(signal.aborted).toBe(false);
   });
 
   test("an already aborted signal sends nothing and records nothing", async () => {
