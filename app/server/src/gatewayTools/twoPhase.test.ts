@@ -49,6 +49,7 @@ import {
 } from "./atlassian.ts";
 import {
   ATTACHMENT_DELETE_OFF,
+  MCP_UPLOAD_UNAVAILABLE,
   UPLOAD_UNAVAILABLE,
 } from "./confluenceMutatePage.ts";
 import type { AtlassianTokenCredential } from "./descriptor.ts";
@@ -321,9 +322,14 @@ describe("tools.prepare", () => {
     for (const [item, message, deletes] of cases) {
       const seen = stubConfluenceWriteFetch();
       const { caller, reads } = client();
-      expect(
-        await host(deletes).host.prepare(CONFLUENCE, { items: [item] }, caller),
-      ).toEqual({ ok: false, code: "tool_error", message });
+      const answer = await host(deletes).host.prepare(
+        CONFLUENCE,
+        { items: [item] },
+        caller,
+      );
+      expect(answer).toEqual({ ok: false, code: "tool_error", message });
+      // Client mode keeps P5b's text, never `/mcp`'s (P7b v07 R1).
+      expect(answer.ok ? "" : answer.message).not.toBe(MCP_UPLOAD_UNAVAILABLE);
       expect(reads()).toBe(0);
       expect(seen).toEqual([]);
       vi.unstubAllGlobals();

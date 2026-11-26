@@ -35,8 +35,8 @@ import {
   ATTACHMENT_DELETE_OFF,
   CONFLUENCE_RESULT_WITHHELD,
   PAGE_DELETE_OFF,
+  MCP_UPLOAD_UNAVAILABLE,
   PREPARE_TOO_LONG_CONFLUENCE,
-  UPLOAD_UNAVAILABLE,
   confluenceDeleteSwitchFor,
   projectConfluenceResult,
   type ProjectedConfluenceResult,
@@ -159,7 +159,8 @@ const UPLOAD = {
 
 test("AC4: each gate refusal answers its text with no credential read and no request", async () => {
   const cases: Array<[unknown[], readonly string[], string]> = [
-    [[UPLOAD], BOTH, UPLOAD_UNAVAILABLE],
+    // The one-call `execute` is `/mcp`'s path (Task-1441 P7b AC9, v08 T1).
+    [[UPLOAD], BOTH, MCP_UPLOAD_UNAVAILABLE],
     [[DELETE_PAGE], ["delete:attachment:confluence"], PAGE_DELETE_OFF],
     [[DELETE_ATTACHMENT], ["delete:page:confluence"], ATTACHMENT_DELETE_OFF],
   ];
@@ -201,7 +202,7 @@ test("AC4: an upload is refused whatever the switches, and the first offending i
   const seen = stubConfluenceWriteFetch();
   for (const scopes of [[], ["delete:page:confluence"], BOTH, null]) {
     const answer = await mutate([EDIT, UPLOAD], { scopes });
-    assert.equal(answer.ok ? "" : answer.message, UPLOAD_UNAVAILABLE);
+    assert.equal(answer.ok ? "" : answer.message, MCP_UPLOAD_UNAVAILABLE);
   }
   const first = await mutate([DELETE_ATTACHMENT, DELETE_PAGE, UPLOAD], {
     scopes: [],

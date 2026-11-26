@@ -335,14 +335,14 @@ test("confluence_mutate_page differs from the local tool in exactly two schema s
     confluenceMutatePage.description,
     CONFLUENCE_MUTATE_PAGE_DESCRIPTION,
   );
-  // Measured: 929 characters.
-  assert.equal(confluenceMutatePage.description.length, 929);
+  // Measured: 1001 characters (P7b AC9's upload clause).
+  assert.equal(confluenceMutatePage.description.length, 1_001);
   for (const clause of [
     "This tool writes in one call: the client asks the user to approve it, and Confluence changes as soon as it runs.",
     "Use it only when the user explicitly asks to write to Confluence",
     "Interrupting the call does not stop it; it may still be writing.",
     "After a timeout or interrupt, wait 60 s before reading the pages and before any retry: an early unchanged read does not prove nothing will change.",
-    "uploadAttachment is not available here",
+    "uploadAttachment isn't available on this connection yet (upload from a Pandeck session in client mode instead)",
     "deletes work only where this gateway enables them",
     "Prefer append over replace",
   ])

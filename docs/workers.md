@@ -3175,10 +3175,11 @@ tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
   DELETE answer 405; a JSON-RPC batch or an unsupported `mcp-protocol-version`
   400; a body over 1 MiB 413 as soon as it crosses the cap. Every JSON-RPC error
   the SDK answers is rewritten to a fixed text for its code, without `data`. The
-  exchange is bounded at the longest tool deadline plus 5 s (50 s with
-  `jira_mutate_issue`'s 45 s): then the call is aborted, the response ends 504
-  with fixed text and the SDK instances close. A tool failure is an `isError`
-  result with the fixed text; a client that goes away aborts its call.
+  exchange is bounded at the longest deadline of the tools `/mcp` lists plus 5 s
+  (155 s with `confluence_download_attachment`'s 150 s): then the call is
+  aborted, the response ends 504 with fixed text and the SDK instances close. A
+  tool failure is an `isError` result with the fixed text; a client that goes
+  away aborts its call.
 - **MCP tokens.** `gateway:admin clients mcp-token <clientId>` mints one
   (`pgmcp_…`), prints it once and keeps only its SHA-256 on the client record,
   replacing an earlier one; `clients mcp-token-revoke <clientId>` removes it;
@@ -3443,17 +3444,22 @@ tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
   stream `file` (`size` its length, `sha256` its lowercase hex digest); a plain
   success, `{ok: true, text}` with no stream; or a failure. A client reads a
   file only with `decodeFileAnswer`, chosen by the tool it called and never by
-  the reply, and refuses any stream on another call's answer. File tools never
-  run on `/mcp`: they are left out of its listing and a call answers "No such
-  tool." before any vault read. The host's file path, in order:
+  the reply, and refuses any stream on another call's answer. A file tool runs
+  on `/mcp` only with `file.mcp` ("`/mcp` file results" below), under its `/mcp`
+  limits; one without it is left out of the `/mcp` listing and a call answers
+  "No such tool." before any vault read. The host's file path, in order:
   - a caller that cannot report when its answer has left (no `onSettled`) is
     answered `failed` before anything else;
-  - the call's E is the descriptor's `maxBytes`, or the limit argument,
-    truncated and clamped, if smaller; the tool sees it as `ctx.maxFileBytes`;
-  - one permit of `2E + 2 MiB` within a 210 MiB budget, one file call at a time
-    per edge process; another answers `tool_error` "The gateway is already
-    downloading a file; try again when it finishes. Nothing was downloaded."
-    before any vault read or request;
+  - the call's E comes from the spec in effect, `file` in client mode and
+    `file.mcp` on `/mcp`: the limit argument, truncated and clamped to the
+    spec's `maxBytes`, or its `defaultBytes` without one. The tool sees E as
+    `ctx.maxFileBytes` and the spec's `maxBytes` as `ctx.maxFileCap`, which its
+    over-limit text names;
+  - one permit of `2E + 2 MiB` within a 210 MiB budget, one file transfer at a
+    time per edge process. The one budget has three holders: client downloads,
+    `/mcp` downloads and client uploads (below). A download while it is held
+    answers `tool_error` "The gateway is already transferring a file; try again
+    when it finishes. Nothing was downloaded." before any vault read or request;
   - then the credential read and the tool.
 
   The permit is released exactly once, after both holds have settled: the
@@ -3473,6 +3479,43 @@ tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
   client connection takes messages of at most 2 MiB (4 MiB buffered, 8 partial,
   256 served). Download failures are fixed texts chosen by error type, HTTP
   status or reason, never by a message (`gatewayTools/confluenceDownload.ts`).
+
+- **`/mcp` file results** (Task-1441 P7b; `gatewayTools/mcpFileResult.ts`,
+  `gatewayTools/mcp.ts`). On `/mcp`, `confluence_download_attachment` is listed
+  with its own description and `maxBytes` text (`file.mcp`) and answers the file
+  inside the `tools/call` result: no `gateway-client` wire changes, and the
+  client listing never carries `file.mcp`.
+  - **Limits.** The `/mcp` cap and default are both 11,534,336 bytes
+    (`MCP_FILE_MAX_BYTES`, set by M8 run 2c); P7a's metadata precheck and
+    streamed check enforce it before any classification, and an over-limit call
+    answers P7a's text with that number and sends no file byte. A UTF-8 text
+    file up to 32,768 bytes (`MCP_TEXT_INLINE_MAX`) and a PNG, JPEG, GIF or WebP
+    image up to 8,389,778 bytes (`MCP_IMAGE_INLINE_MAX`) and 7,900 pixels a side
+    (`MCP_IMAGE_MAX_DIM`) go inline; every other file, larger images included,
+    goes as a saved file.
+  - **Result.** `content` is a JSON text part, the tool's closed projection
+    (`status: "downloaded_attachment"`, `pageId` and the attachment's `id`,
+    `title`, `mediaType`, `fileSize`, `version`; never a URL, path or session
+    field) plus `file: {name, mimeType, size, sha256, deliveredAs}`, then one
+    file part: a text resource, image content, or a resource whose `blob` is
+    typed `application/octet-stream`. Its `uri` is
+    `pandeck-gateway://confluence/attachment/<attachment id>`. The media type is
+    the attachment's own (`mediaType`, else the download's `Content-Type`),
+    never guessed from its name.
+  - **Streaming.** An image or blob part leaves the SDK holding a per-call
+    64-character placeholder. The serialized body must hold it exactly once, or
+    the answer is a fixed 500 "Internal error." with no file byte. The body is
+    then written as its prefix, the file's base64 in pieces of at most 3 MiB of
+    input, each written only after the socket drained, and its suffix, with an
+    exact `content-length`. The exchange's bound ends when the SDK answers;
+    writing the body has its own 120 s bound (`MCP_FILE_OUTPUT_MS`), after
+    which, or when the reader goes away, the response is destroyed.
+  - **Permit.** The download's permit is released once both holds have settled:
+    the execution, and the response's `finish` or `close` with the writer
+    stopped. A plain or failure answer, the exchange's 504 and an early close
+    settle the output hold the same way. A `/mcp` download shares the one
+    budget, so it answers the busy text above while a client download or upload
+    holds it, and holds it against them.
 
 - **Client-mode uploads** (`gateway-client/1.3`, Task-1441 P8a;
   `gatewayTools/uploads.ts`, decoded in `gateway/clientMethods.ts`). Pandeck
@@ -3499,17 +3542,20 @@ tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
     discards nothing.
   - **Gates.** The edge admits an upload item only through these methods: a
     prepare that declared `uploads`, or an apply that names `uploadId`. On
-    `/mcp` and through `tools.call` an upload is still refused with "Uploading
-    attachments is not available through this gateway yet; nothing was written
-    to Confluence." The apply consumes the sealed upload synchronously, before
-    its deadline starts: every upload item must name a sealed stream with its
-    exact size and digest, the items' total must be the open's W, and every
-    stream must be used; otherwise the upload is discarded and the apply refused
-    (`invalid_params`) with nothing written. The shared apply reads its bytes
-    from the upload (`stagedBytes`), and an item whose bytes are missing or
-    differ fails "The gateway did not receive the file for this upload; nothing
-    was written." or "The file received for this item does not match the
-    approved one; nothing was written for it."
+    `/mcp` an upload is refused with "Uploading attachments isn't available on
+    this connection yet; upload from a Pandeck session in client mode instead.
+    Nothing was written to Confluence." (`MCP_UPLOAD_UNAVAILABLE`, Task-1441
+    P7b), and through `tools.call` with "Uploading attachments is not available
+    through this gateway yet; nothing was written to Confluence." The apply
+    consumes the sealed upload synchronously, before its deadline starts: every
+    upload item must name a sealed stream with its exact size and digest, the
+    items' total must be the open's W, and every stream must be used; otherwise
+    the upload is discarded and the apply refused (`invalid_params`) with
+    nothing written. The shared apply reads its bytes from the upload
+    (`stagedBytes`), and an item whose bytes are missing or differ fails "The
+    gateway did not receive the file for this upload; nothing was written." or
+    "The file received for this item does not match the approved one; nothing
+    was written for it."
   - **Reservation and lifetime.** `uploads.open` reserves `2U + 2 MiB` (U the
     streams' bytes, so at most 202 MiB) from the process's one 210 MiB
     `FileBudget`, the one file downloads take, before any byte arrives; a held

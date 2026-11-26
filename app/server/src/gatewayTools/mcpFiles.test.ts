@@ -28,6 +28,10 @@ import {
   DOWNLOAD_TEXT,
   confluenceDownloadAttachment,
 } from "./confluenceDownload.ts";
+import {
+  MCP_UPLOAD_UNAVAILABLE,
+  UPLOAD_UNAVAILABLE,
+} from "./confluenceMutatePage.ts";
 import type { AtlassianToolDescriptor, ToolDescriptor } from "./descriptor.ts";
 import { fixtureFileTool } from "./fileFixtureTool.ts";
 import {
@@ -666,6 +670,32 @@ test("an open client upload holds the same permit: /mcp answers FILE_BUSY with n
   assert.ok(fetch.mock.calls.length > 0);
 });
 
+test("a /mcp upload answers MCP_UPLOAD_UNAVAILABLE with no vault read and no Atlassian request (AC9)", async () => {
+  const fetch = vi.fn(() => Promise.reject(new Error("no request expected")));
+  vi.stubGlobal("fetch", fetch);
+  const edge = await serveEdge();
+  const answer = await post(
+    edge.url,
+    download(
+      {
+        items: [
+          { page: "123", body: "Added" },
+          { operation: "uploadAttachment", page: "123", sourcePath: "/x.png" },
+        ],
+      },
+      "confluence_mutate_page",
+    ),
+  );
+  assert.deepEqual(answer.json.result, failure(MCP_UPLOAD_UNAVAILABLE));
+  assert.equal(
+    MCP_UPLOAD_UNAVAILABLE,
+    "Uploading attachments isn't available on this connection yet; upload from a Pandeck session in client mode instead. Nothing was written to Confluence.",
+  );
+  assert.notEqual(MCP_UPLOAD_UNAVAILABLE, UPLOAD_UNAVAILABLE);
+  assert.equal(edge.reads(), 0);
+  assert.equal(fetch.mock.calls.length, 0);
+});
+
 const DENYLIST = [
   "hidden",
   "not shown",
@@ -682,11 +712,18 @@ const denied = (texts: readonly string[]) =>
     DENYLIST.some((phrase) => text.toLowerCase().includes(phrase)),
   );
 
-test("the download's /mcp texts and P7b's fixed file texts never say the bytes are hidden from the model", async () => {
+test("the download's /mcp texts, P7b's fixed file texts and its upload sentence never say the bytes are hidden from the model", async () => {
   const { url } = await serveEdge();
-  const entry = (await post(url, listing)).json.result!.tools!.find(
+  const tools = (await post(url, listing)).json.result!.tools!;
+  const entry = tools.find(
     (tool) => tool.name === "confluence_download_attachment",
   )!;
+  // Only the sentence P7b rewrites in confluence_mutate_page (v07 R5).
+  const upload = tools
+    .find((tool) => tool.name === "confluence_mutate_page")!
+    .description.split(/(?<=\.) /)
+    .filter((sentence) => sentence.includes("uploadAttachment"));
+  assert.equal(upload.length, 1);
   const texts = [
     entry.description,
     ...Object.values(entry.inputSchema.properties).map(
@@ -694,6 +731,8 @@ test("the download's /mcp texts and P7b's fixed file texts never say the bytes a
     ),
     DOWNLOAD_TEXT.tooLarge(FILE, FILE),
     FILE_BUSY,
+    ...upload,
+    MCP_UPLOAD_UNAVAILABLE,
   ];
   assert.deepEqual(denied(texts), []);
   // The control: the check sees a denylisted phrase in any case.

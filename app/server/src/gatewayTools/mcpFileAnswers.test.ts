@@ -11,10 +11,14 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import http from "node:http";
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
+import { dirname, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, test } from "vitest";
 import { encodeAtlassianCredential } from "./atlassian.ts";
 import {
@@ -30,7 +34,7 @@ import {
   type FileBudget,
 } from "./host.ts";
 import { createMcpHandler, type McpHandlerOptions } from "./mcp.ts";
-import type { WriterEvent } from "./mcpFileResult.ts";
+import { newPlaceholder, type WriterEvent } from "./mcpFileResult.ts";
 import { pngOf } from "../test/imageHeaders.ts";
 
 const MiB = 1024 * 1024;
@@ -311,6 +315,106 @@ test("an image goes as image content and a text file as a text resource, each by
     deliveredAs: "text",
   });
 });
+
+/** The installed SDK's own `package.json` version. */
+function installedSdkVersion(): string {
+  let dir = dirname(
+    createRequire(import.meta.url).resolve(
+      "@modelcontextprotocol/sdk/types.js",
+    ),
+  );
+  for (;;) {
+    try {
+      const pkg = JSON.parse(
+        readFileSync(join(dir, "package.json"), "utf8"),
+      ) as {
+        name?: string;
+        version?: string;
+      };
+      if (pkg.name === "@modelcontextprotocol/sdk") return pkg.version ?? "";
+    } catch {
+      // No manifest here: one level up.
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return "";
+    dir = parent;
+  }
+}
+
+test("SDK 1.30.1: its result schema checks base64 in both slots, and the placeholder passes it", () => {
+  // The checks below are of this exact SDK; a bump re-runs them (v02 Z9).
+  assert.equal(installedSdkVersion(), "1.30.1");
+  const result = (slot: string) => ({
+    content: [
+      { type: "text", text: "{}" },
+      { type: "image", data: slot, mimeType: "image/png" },
+      {
+        type: "resource",
+        resource: {
+          uri: "pandeck-gateway://fixture/x",
+          mimeType: "application/octet-stream",
+          blob: slot,
+        },
+      },
+    ],
+  });
+  for (let run = 0; run < 100; run += 1) {
+    const marker = newPlaceholder();
+    assert.match(marker, /^[A-Za-z0-9+/]{64}$/);
+    assert.ok(CallToolResultSchema.safeParse(result(marker)).success);
+  }
+  // The schema is not a pass-through: a non-base64 slot is refused.
+  assert.equal(
+    CallToolResultSchema.safeParse(result("not base64!")).success,
+    false,
+  );
+});
+
+for (const kind of ["image", "blob"] as const)
+  test(`SDK 1.30.1 stage 1: after the SDK's serialization and the sanitizing re-read, the ${kind} slot holds the marker and the body holds it exactly once (Y2)`, async () => {
+    const bodies: string[] = [];
+    const marker = "C".repeat(63) + "=";
+    const bytes = kind === "image" ? pngOf(16, 16, 900) : fixtureBytes(900);
+    const { url } = await serve(
+      [answering(bytes, kind === "image" ? "image/png" : "application/pdf")],
+      countingBudget(),
+      {
+        fileSeams: {
+          placeholder: () => marker,
+          body: (text) => {
+            bodies.push(text);
+            return text;
+          },
+        },
+      },
+    );
+    const received = await post(url, callOf({ id: "x" }));
+    assert.equal(received.status, 200);
+    assert.equal(bodies.length, 1);
+    const body = bodies[0]!;
+    assert.equal(body.split(marker).length, 2, "exactly once");
+    const part = (JSON.parse(body) as { result: CallResult }).result
+      .content[1] as {
+      data?: string;
+      resource?: { blob?: string };
+    };
+    assert.equal(kind === "image" ? part.data : part.resource?.blob, marker);
+    // Stage 2: the marker is gone and the slot holds the file.
+    assert.ok(!received.body.toString("utf8").includes(marker));
+    const slot = resultOf(received).content[1] as {
+      data?: string;
+      resource?: { blob?: string };
+    };
+    assert.deepEqual(
+      new Uint8Array(
+        Buffer.from(
+          (kind === "image" ? slot.data : slot.resource?.blob) ?? "",
+          "base64",
+        ),
+      ),
+      bytes,
+    );
+  });
 
 test("the placeholder removed after sanitization: a fixed 500 with no file byte, and the permit released once", async () => {
   const budget = countingBudget();
