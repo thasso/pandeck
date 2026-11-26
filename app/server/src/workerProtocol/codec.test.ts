@@ -79,7 +79,10 @@ function decodeAll(chunks: Uint8Array[]): Frame[] {
       frames.push(
         "payload" in frame
           ? { ...frame, payload: Buffer.from(frame.payload) }
-          : frame,
+          : // A data frame's slices follow the split; its bytes do not.
+            frame.type === "data"
+            ? { ...frame, parts: [Buffer.concat(frame.parts)] }
+            : frame,
       ),
     );
   decoder.finish();

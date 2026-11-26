@@ -775,7 +775,10 @@ export function decodeToolApply(payload: Payload): {
 function hasOtherStreams(payload: Payload, allowed: string[] = []): boolean {
   return (
     Object.keys(payload.text ?? {}).length > 0 ||
-    Object.keys(payload.bytes ?? {}).some((name) => !allowed.includes(name))
+    [
+      ...Object.keys(payload.bytes ?? {}),
+      ...Object.keys(payload.byteParts ?? {}),
+    ].some((name) => !allowed.includes(name))
   );
 }
 
@@ -839,7 +842,9 @@ export function decodeUploadOpen(payload: Payload):
  * `uploads.put` (1.3): `put` when the envelope is valid (exact keys, a
  * non-negative safe offset, exactly one bytes stream `chunk` of 1 B to
  * 1 MiB, no text stream); `uploadId` whenever the request names a
- * well-formed one, so the edge can discard that upload on a bad put.
+ * well-formed one, so the edge can discard that upload on a bad put. The
+ * chunk is the stream's received slices when the connection delivers
+ * `byteParts` (F004a), which the caller copies before it returns.
  */
 export function decodeUploadPut(payload: Payload): {
   uploadId?: string;
@@ -847,7 +852,7 @@ export function decodeUploadPut(payload: Payload): {
     uploadId: string;
     stagedAttachmentId: string;
     offset: number;
-    chunk: Uint8Array;
+    chunk: Uint8Array | readonly Uint8Array[];
   };
 } {
   const request = record(payload.json);
@@ -856,7 +861,12 @@ export function decodeUploadPut(payload: Payload): {
       ? request.uploadId
       : undefined;
   const { stagedAttachmentId, offset } = request ?? {};
-  const chunk = payload.bytes?.chunk;
+  const chunk = payload.byteParts?.chunk ?? payload.bytes?.chunk;
+  const length = !chunk
+    ? 0
+    : chunk instanceof Uint8Array
+      ? chunk.byteLength
+      : chunk.reduce((sum, part) => sum + part.byteLength, 0);
   if (
     !request ||
     named === undefined ||
@@ -866,9 +876,9 @@ export function decodeUploadPut(payload: Payload): {
     !Number.isSafeInteger(offset) ||
     (offset as number) < 0 ||
     hasOtherStreams(payload, ["chunk"]) ||
-    !(chunk instanceof Uint8Array) ||
-    chunk.byteLength < 1 ||
-    chunk.byteLength > UPLOAD_CHUNK_MAX_BYTES
+    !chunk ||
+    length < 1 ||
+    length > UPLOAD_CHUNK_MAX_BYTES
   )
     return named === undefined ? {} : { uploadId: named };
   return {

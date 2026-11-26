@@ -3514,15 +3514,19 @@ tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
     it finishes. Nothing was uploaded." and stores nothing. Each connection has
     its own scope, never named on the wire. A stream's buffer is allocated once,
     at its first put, and every chunk is copied into it synchronously and
-    hashed. An upload no apply took is discarded, and its reservation released,
-    on `release`, on its connection's end, after 60 s without an open or put
-    (`UPLOAD_IDLE_MS`), or 600 s after its open (`UPLOAD_MAX_UNATTACHED_MS`). An
-    upload an apply took is immune to puts, releases, timers and the
-    connection's end, and is released exactly once, when the apply's execution
-    and its answer's output have both settled (the file permit's two holds). An
-    apply without the `onSettled` seam is refused before consumption; its answer
-    gets the file answers' 65 s to drain (`FILE_OUTPUT_MS`), or the edge ends
-    that client's connection.
+    hashed. That is the put's only copy: the listener hands `uploads.put` its
+    chunk as the received frame slices (`bytePartsMethods`,
+    `Payload.byteParts`), never joined, and the store keeps no slice; every
+    other message's streams are joined once into buffers of their own. An upload
+    no apply took is discarded, and its reservation released, on `release`, on
+    its connection's end, after 60 s without an open or put (`UPLOAD_IDLE_MS`),
+    or 600 s after its open (`UPLOAD_MAX_UNATTACHED_MS`). An upload an apply
+    took is immune to puts, releases, timers and the connection's end, and is
+    released exactly once, when the apply's execution and its answer's output
+    have both settled (the file permit's two holds). An apply without the
+    `onSettled` seam is refused before consumption; its answer gets the file
+    answers' 65 s to drain (`FILE_OUTPUT_MS`), or the edge ends that client's
+    connection.
   - **Deadlines.** The upload apply's deadline is `uploadApplyDeadlineMs(W)`:
     the tool's 45 s write deadline plus 1 s per started MiB of W, at most 145 s.
     It starts when the edge admits `tools.apply`, with the bytes already here,

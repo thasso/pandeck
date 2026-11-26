@@ -130,7 +130,7 @@ export interface UploadScope {
   }): { ok: true; uploadId: string } | UploadRefusal;
   put(
     request: { uploadId: string; stagedAttachmentId: string; offset: number },
-    chunk: Uint8Array,
+    chunk: Uint8Array | readonly Uint8Array[],
   ):
     | { ok: true; received: number; streamComplete: boolean; sealed: boolean }
     | UploadRefusal;

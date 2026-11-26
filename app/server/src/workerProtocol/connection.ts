@@ -165,6 +165,12 @@ interface ConnectionOptions {
     end: { incompatible: boolean; cause: ConnectionEndCause },
   ) => void;
   limits?: ConnectionLimits;
+  /**
+   * Methods this side serves whose byte streams arrive as the received
+   * slices (`Payload.byteParts`), uncopied; each handler copies them during
+   * its synchronous call (Task-1441 P8a, F004a: `uploads.put`).
+   */
+  bytePartsMethods?: ReadonlySet<string>;
 }
 
 interface Outgoing {
@@ -357,7 +363,14 @@ export class WorkerConnection {
       case "request": {
         if (this.serving.has(frame.id))
           throw new WorkerProtocolError(`Request ${frame.id} was sent twice.`);
-        this.serve(frame.id, frame.method, this.assembler.complete(frame));
+        this.serve(
+          frame.id,
+          frame.method,
+          this.assembler.complete(
+            frame,
+            this.options.bytePartsMethods?.has(frame.method) === true,
+          ),
+        );
         return;
       }
       case "response": {

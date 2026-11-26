@@ -168,6 +168,10 @@ export const CLIENT_LIMITS: ConnectionLimits = {
   maxPartialMessages: 8,
   maxServing: 256,
 };
+/** The one method whose byte stream reaches its handler uncopied (F004a). */
+const UPLOAD_PUT_METHODS: ReadonlySet<string> = new Set([
+  CLIENT_METHODS.uploadsPut,
+]);
 /**
  * How long a file answer's last frame may wait to flush before the edge ends
  * that client's connection (H1): `FILE_TRANSFER_MS` 60 s plus a margin.
@@ -976,8 +980,9 @@ export async function startClientListener(
         request ? scope.open(request) : scope.invalid(),
       );
     },
-    // Synchronous: the chunk is copied before this returns, so the
-    // request's payload is not kept past its own serve.
+    // Synchronous: the chunk's slices (`bytePartsMethods`) are copied
+    // before this returns, so no slice or received chunk is kept past its
+    // own serve.
     [CLIENT_METHODS.uploadsPut]: (
       payload,
       _client,
@@ -1084,6 +1089,9 @@ export async function startClientListener(
         },
         handlers,
         limits: CLIENT_LIMITS,
+        // A put's chunk reaches the store as the received slices, which it
+        // copies into place: one copy per put, not three (F004a).
+        bytePartsMethods: UPLOAD_PUT_METHODS,
         onEnd: () => {
           connections.delete(connection);
           // Unattached uploads go; one an apply took waits for its holds.

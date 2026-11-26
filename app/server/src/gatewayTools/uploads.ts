@@ -137,10 +137,13 @@ export interface UploadScope {
     streams: UploadStreamSpec[];
     work: number;
   }): UploadOpenAnswer;
-  /** `chunk` is copied before this returns; the caller's buffer is not kept. */
+  /**
+   * `chunk`, one buffer or the received slices in order, is copied before
+   * this returns; no buffer or slice of the caller's is kept.
+   */
   put(
     request: { uploadId: string; stagedAttachmentId: string; offset: number },
-    chunk: Uint8Array,
+    chunk: Uint8Array | readonly Uint8Array[],
   ): UploadPutAnswer;
   release(uploadId: string): UploadReleaseAnswer;
   /**
@@ -413,13 +416,16 @@ export function createUploadStore(options: StoreOptions): UploadStore {
             upload.state === "receiving"
               ? upload.streams.get(stagedAttachmentId)
               : undefined;
+          const parts = chunk instanceof Uint8Array ? [chunk] : chunk;
+          let length = 0;
+          for (const part of parts) length += part.byteLength;
           if (
             !stream ||
             stream.complete ||
             offset !== stream.received ||
-            chunk.byteLength < 1 ||
-            chunk.byteLength > UPLOAD_CHUNK_MAX_BYTES ||
-            offset + chunk.byteLength > stream.size
+            length < 1 ||
+            length > UPLOAD_CHUNK_MAX_BYTES ||
+            offset + length > stream.size
           ) {
             discard(uploadId, upload);
             return refusal(UPLOAD_INVALID);
@@ -428,9 +434,14 @@ export function createUploadStore(options: StoreOptions): UploadStore {
           // request's payload is not kept past this call (v03 K7).
           stream.buffer ??= allocateStream(stream.size);
           stream.hash ??= createHash("sha256");
-          stream.buffer.set(chunk, offset);
-          stream.hash.update(chunk);
-          stream.received += chunk.byteLength;
+          // Slice by slice, straight into place: the put's only copy (F004a).
+          let at = offset;
+          for (const part of parts) {
+            stream.buffer.set(part, at);
+            stream.hash.update(part);
+            at += part.byteLength;
+          }
+          stream.received += length;
           let streamComplete = false;
           if (stream.received === stream.size) {
             const digest = stream.hash.digest("hex");
