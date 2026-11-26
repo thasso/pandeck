@@ -35,10 +35,12 @@ const { createFileBudget, createToolHost } =
 const { edgeTools } = await import("./gatewayTools/tools.ts");
 const { confluenceDeleteSwitchFor } =
   await import("./gatewayTools/confluenceMutatePage.ts");
-const { createUploadStore, UPLOAD_BUSY, UPLOAD_MISMATCH } =
+const { createUploadStore, UPLOAD_BUSY } =
   await import("./gatewayTools/uploads.ts");
 const { BODY_NOT_COMPLETED } = await import("./confluenceAttachmentChange.ts");
 const { remoteToolsFor } = await import("./tools/gateway/remoteToolGroup.ts");
+const { UPLOAD_SOURCE_CHANGED_NOTHING_WRITTEN } =
+  await import("./tools/gateway/remoteUploads.ts");
 const { approvalForId, approvalsForSession, resolveApproval } =
   await import("./pendingApprovals.ts");
 const { setApprovalBroadcastForTests, setAutoApprovalDrainForTests } =
@@ -645,12 +647,14 @@ test("a busy edge refuses the open with its own text; nothing is uploaded, and t
   assert.deepEqual(writes(), []);
 });
 
-test("a staged copy changed after approval: the edge refuses the put with its own text, the upload is released, nothing is written", async () => {
+test("a staged copy changed after approval, same size: source-changed before the final put, the upload released, nothing applied or written", async () => {
+  const MIB = 1024 * 1024;
+  const bytes = Buffer.alloc(MIB + 4, 0x61);
   const card = await propose([
     {
       operation: "uploadAttachment",
       page: "123",
-      sourcePath: hostFile("a.bin", "aaaa"),
+      sourcePath: hostFile("a.bin", bytes),
     },
   ]);
   const { resolveSessionAttachment } = await import("./sessionAttachments.ts");
@@ -658,12 +662,43 @@ test("a staged copy changed after approval: the edge refuses the put with its ow
     sessionId,
     itemsOf(card)[0]!.attachment!.stagedAttachmentId!,
   );
-  writeFileSync(staged!.path, "bbbb");
-  const decided = await approve(card);
-  assert.equal(decided.status, "failed");
-  // The edge's fixed text (requester ruling k1dz2xl1 #2): it already says
-  // nothing was written, so it is shown as is.
-  assert.equal(decided.error, UPLOAD_MISMATCH);
+  const changed = Buffer.from(bytes);
+  changed[MIB + 3] = 0x62;
+  writeFileSync(staged!.path, changed);
+  const port = remoteTools.remoteToolPort()!;
+  const calls: string[] = [];
+  const openOriginal = port.uploads.open;
+  const putOriginal = port.uploads.put;
+  const releaseOriginal = port.uploads.release;
+  const applyOriginal = port.apply;
+  const restore = [
+    vi.spyOn(port.uploads, "open").mockImplementation((...args) => {
+      calls.push("open");
+      return openOriginal.apply(port.uploads, args);
+    }),
+    vi.spyOn(port.uploads, "put").mockImplementation((...args) => {
+      calls.push(`put ${args[2]}+${args[3].byteLength}`);
+      return putOriginal.apply(port.uploads, args);
+    }),
+    vi.spyOn(port.uploads, "release").mockImplementation((...args) => {
+      calls.push("release");
+      return releaseOriginal.apply(port.uploads, args);
+    }),
+    vi.spyOn(port, "apply").mockImplementation((...args) => {
+      calls.push("apply");
+      return applyOriginal.apply(port, args);
+    }),
+  ];
+  try {
+    const decided = await approve(card);
+    assert.equal(decided.status, "failed");
+    // Pandeck's own digest check (requester ruling k1dz2xl1 #2), never the
+    // edge's refusal of a final put it should not have received.
+    assert.equal(decided.error, UPLOAD_SOURCE_CHANGED_NOTHING_WRITTEN);
+    assert.deepEqual(calls, ["open", `put 0+${MIB}`, "release"]);
+  } finally {
+    for (const spy of restore) spy.mockRestore();
+  }
   assert.deepEqual(writes(), []);
   await vi.waitFor(() => assert.equal(fileBudget.reserved, 0));
 });

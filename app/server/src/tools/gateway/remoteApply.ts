@@ -302,7 +302,9 @@ class UploadStopped extends Error {}
  * length and digest against the approved ones, and the edge's account of
  * the stream: complete, and sealed exactly when it is the last. A refused
  * put shows the edge's text; an answer that disagrees with the put, or a
- * staged copy that changed, is a changed source.
+ * staged copy that changed, is a changed source. A same-size change is
+ * caught by the digest before the final put, which the edge would refuse
+ * with its own text (requester ruling k1dz2xl1 #2).
  */
 async function sendSource(
   uploads: RemoteUploadPort,
@@ -318,7 +320,8 @@ async function sendSource(
   const read = await readStagedChunks(
     sessionId,
     stream,
-    async (chunk, offset) => {
+    async (chunk, offset, sha256) => {
+      if (sha256 !== undefined && sha256 !== stream.sha256) throw changed();
       let answer;
       try {
         answer = await uploads.put(

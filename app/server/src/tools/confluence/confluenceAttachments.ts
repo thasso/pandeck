@@ -233,14 +233,16 @@ export interface StagedRead {
  * held at a time (Task-1441 P8a, v02 AC5 step 4).
  *
  * At most `size + 1` bytes are read, and only bytes within `size` are sent:
- * the extra byte is what shows a file that grew. The result is `null` when
- * the staged record is gone; otherwise the caller compares the length and
- * digest with the approved ones before anything is applied.
+ * the extra byte is what shows a file that grew. The chunk that completes
+ * `size` comes with the digest of everything read, so a same-size change is
+ * caught before it is sent. The result is `null` when the staged record is
+ * gone; otherwise the caller compares the length and digest with the
+ * approved ones before anything is applied.
  */
 export async function readStagedChunks(
   sessionId: string,
   source: { stagedAttachmentId: string; size: number },
-  send: (chunk: Uint8Array, offset: number) => Promise<void>,
+  send: (chunk: Uint8Array, offset: number, sha256?: string) => Promise<void>,
 ): Promise<StagedRead | null> {
   const staged = resolveSessionAttachment(sessionId, source.stagedAttachmentId);
   if (!staged) return null;
@@ -268,7 +270,11 @@ export async function readStagedChunks(
       const offset = total;
       total += filled;
       if (total > source.size) break;
-      await send(piece, offset);
+      await send(
+        piece,
+        offset,
+        total === source.size ? hash.copy().digest("hex") : undefined,
+      );
       if (filled < want) break;
     }
   } finally {

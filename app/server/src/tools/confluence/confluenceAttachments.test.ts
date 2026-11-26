@@ -145,6 +145,20 @@ describe("readStagedChunks", () => {
     );
   });
 
+  test("only the chunk that completes the approved size carries the digest, before it is sent", async () => {
+    const bytes = patterned(2 * MIB + 3, 10);
+    const record = staged("s-chunks-digest", bytes);
+    const digests: (string | undefined)[] = [];
+    await readStagedChunks(
+      "s-chunks-digest",
+      { stagedAttachmentId: record.id, size: bytes.byteLength },
+      async (_chunk, _offset, digest) => {
+        digests.push(digest);
+      },
+    );
+    expect(digests).toEqual([undefined, undefined, sha256(bytes)]);
+  });
+
   test("awaits each send before reading the next chunk", async () => {
     const bytes = patterned(3 * MIB, 7);
     const record = staged("s-chunks-await", bytes);

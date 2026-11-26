@@ -546,6 +546,16 @@ test("a staged copy that is gone, changed or grown is refused after open, releas
     for (const event of events)
       if (event.call === "put")
         assert.ok(event.offset + event.length <= MIB + 7, what);
+    // A same-size change is caught by the digest before the final put, so
+    // the edge never answers for it (F006, requester ruling k1dz2xl1 #2).
+    if (what === "changed")
+      assert.deepEqual(
+        events.flatMap((event) =>
+          event.call === "put" ? [event.offset + event.length] : [],
+        ),
+        [MIB],
+        what,
+      );
   }
 });
 
