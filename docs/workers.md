@@ -2004,15 +2004,15 @@ path above.
   base64url characters, so it never starts with `-`. Ids enrolled before the
   prefix keep their shape; one that starts with `-` goes after `--` on the admin
   command line (`clients revoke -- <id>`), where any option comes before `--`.
-- **`gateway-client/1.3`** (`gateway/clientMethods.ts`; 1.1 adds the two-phase
+- **`gateway-client/1.4`** (`gateway/clientMethods.ts`; 1.1 adds the two-phase
   tool methods below, Task-1463, 1.2 a file tool's file answer, Task-1441 P7a,
-  1.3 the client-mode upload methods, Task-1441 P8a, and a peer of any 1.x
-  connects), on the worker protocol's framing: `client.hello`, `accounts.list`
-  and the gateway's `accounts.changed`, `leases.grant`, `leases.client` (the
-  server's own requests, one lease per account and client),
-  `leases.bindSession`, `leases.revoke` and `leases.reconcileWorker`, all on the
-  calling client's leases and its user's accounts only; `accounts.remove`; and
-  the login API below.
+  1.3 the client-mode upload methods, Task-1441 P8a, 1.4 `git.credential`,
+  Task-1446, and a peer of any 1.x connects), on the worker protocol's framing:
+  `client.hello`, `accounts.list` and the gateway's `accounts.changed`,
+  `leases.grant`, `leases.client` (the server's own requests, one lease per
+  account and client), `leases.bindSession`, `leases.revoke` and
+  `leases.reconcileWorker`, all on the calling client's leases and its user's
+  accounts only; `accounts.remove`; and the login API below.
 - **Logins** (Task-1385, M11; the edge's `gateway/logins.ts`, the vault's
   `gateway/vaultLogins.ts` behind `VaultPort.login`):
   `logins.start {kind, accountId?, name?}` answers `{loginId, accountId}`; the
@@ -2065,6 +2065,51 @@ path above.
   would set it. Its TLS checks the edge's certificate for the enrolled address,
   never a forwarded `Host`: a DNS name is the SNI, and an IP sends none and is
   matched as an IP (Task-1424 transport amendment).
+  - **`git-credential`** (Task-1446, `relay/gitCredential.ts`):
+    `relay.js git-credential --socket <relay socket> <operation>` is git's
+    credential helper for `https://github.com`, through the relay's own socket.
+    On `get` it reads git's attributes (64 KiB at most), opens one client
+    connection, sends `git.credential` with `host: "github.com"`, git's `path`
+    and `access: "read"`, and prints either `username=x-access-token`,
+    `password=<token>` and `password_expiry_utc=<seconds>` in one write, or
+    `quit=1` with one line of its own on stderr, so git asks no later helper and
+    no prompt. It reads a failure's message stream but never prints it: every
+    stderr line comes from the helper's own table, one per code, plus a generic
+    line for a socket or protocol error and hints for a missing `path`
+    (`useHttpPath`) or a host other than `github.com` over https. Every other
+    operation (`store`, `erase`) reads its input and prints nothing, without
+    opening the socket. It retries only `git_busy`, at most three times with
+    jittered 250, 500 and 1,000 ms waits, all inside a 45 s deadline. It always
+    exits 0, needs no state directory, and writes no file and no log; the token
+    reaches git only on stdout, never in argv, the environment, stderr or a
+    file. Requests the edge sends on that connection (an `accounts.changed`
+    racing in) are skipped unanswered, within the frame caps and 4 MiB in all;
+    when the helper closes, the edge logs
+    `client <id> accounts.changed: failed`, which is harmless. Whoever can open
+    the 0600 socket (Pandeck's account and the agents that share it, M17) can
+    ask for read git tokens; that is the intended capability. The gitconfig
+    block, run as the relay socket's account:
+
+    ```ini
+    [credential "https://github.com"]
+        helper =
+        helper = "!<command that runs relay.js> git-credential --socket <relay socket>"
+        useHttpPath = true
+    ```
+
+    The empty `helper =` removes only helpers from files git read before this
+    one, so the block goes in that account's `~/.gitconfig`, and no source git
+    reads after it may define any `credential.helper`, generic or URL-scoped:
+    not a repository's `.git/config` or `config.worktree`, an `include` after
+    the block, `-c` or `GIT_CONFIG_COUNT`. A later store or cache helper would
+    write the token to disk. Check it inside any repository the account uses:
+    `git config --show-origin --get-regexp '^credential\..*helper$'` lists the
+    block's two lines last. Never set `GIT_TRACE_REDACT=0`. A renamed repository
+    is refused under its old name (GitHub's redirect is `git_denied`). On Coder
+    devboxes from the Pandeck template the command is
+    `/run/current-system/sw/bin/pandeck-relay` and the socket
+    `/run/pandeck-relay/client.sock`, a path that survives `pandeck-update`;
+    configuring it is Task-1451.
 - **The server** (`gatewayClientLink.ts`) speaks the client protocol through the
   relay's socket, mirrors the gateway's accounts into the profile registry and
   gives engines the relay's loopback URL. Settings' existing UI drives the
@@ -3633,6 +3678,38 @@ tools: `confluence_search`, `confluence_get_page` and `confluence_lookup`
     travel in 1 MiB requests, so other calls on the same Pandeck wait behind at
     most one chunk. The download direction, where a file answer travels whole,
     is [Task-1515](pa://task/1515) ("Answers wait behind a file").
+
+- **Git credentials** (`gateway-client/1.4`, Task-1446;
+  `gateway/gitCredential.ts`, decoded in `gateway/clientMethods.ts`).
+  `git.credential {host, path, access}` answers `{token, expiresAt}`: a read
+  installation token for one GitHub repository, for git on the enrolled machine
+  (the relay's `git-credential` helper above). The request has exactly those
+  three string members and no stream. `host` is `github.com` (ASCII
+  case-insensitive); `path` is `owner/repo` or `owner/repo.git` under the
+  vault's name rules, with one trailing `.git` stripped only where something
+  remains, so a repository named `.git` is refused; `access` is exactly `read`.
+  Anything else, an extra member such as a `userId` included, answers
+  `invalid_params` before any vault call (R-ME: no write ever reaches the
+  vault). The edge calls `github.token` for the client's registry user, taken
+  from its certificate and never from the request, and answers a freshly built
+  `{token, expiresAt}` or one fixed failure:
+
+  | Vault answer                               | Code                | Text                                                                                    |
+  | ------------------------------------------ | ------------------- | --------------------------------------------------------------------------------------- |
+  | `absent`                                   | `git_not_connected` | GitHub is not connected at the gateway; connect it on the gateway page.                 |
+  | `rejected`                                 | `git_reconnect`     | The gateway's GitHub sign-in no longer works; connect GitHub again on the gateway page. |
+  | `denied`                                   | `git_denied`        | No read access to this repository, or the gateway's GitHub App is not installed on it.  |
+  | `invalid`                                  | `invalid_params`    | Invalid git credential request.                                                         |
+  | `locked`                                   | `vault_locked`      | The vault is locked.                                                                    |
+  | `unavailable`, an old vault, anything else | `vault_unavailable` | The gateway could not get a git credential; try again.                                  |
+
+  At most 8 calls per client are in flight; one more answers `git_busy` ("Too
+  many git credential requests from this machine at once; try again.") before
+  the vault is asked, and the helper retries it. A slot is released however a
+  call ends, a closed connection's abort included. Each call logs
+  `client <id> git.credential: ok` or `: <code>`, never the host, path or token.
+  The token is the only gateway-held credential a client receives; the user's
+  token never leaves the vault.
 
 - **Pandeck in client mode** (`remoteIntegrations.ts`, installed by
   `gatewayClientLink.ts`): Settings → Jira sends a newly entered token with the

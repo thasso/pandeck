@@ -5,7 +5,10 @@
  * config naming `github.clientId`. A signed-in browser connects through the
  * callback, reads the status (which may refresh in the vault), checks
  * repositories (the edge's only `github.token` caller, which drops the token)
- * and disconnects.
+ * and disconnects. With `relay`, a relay enrolled for the browser's registry
+ * user carries git's credential request from the relay's helper to the
+ * edge's `git.credential` (Task-1446 V4), and the cases read what the helper
+ * prints to git.
  *
  * Every case builds its own fake, vault and edge (`setUp`) and shares
  * nothing: the vault's installation-token cache, keyed
@@ -14,8 +17,9 @@
  * reconnect, so on a shared vault every later check would reuse one case's
  * token and never reach `mint`. `afterEach` checks that case's answers,
  * edge and vault lines and both state dirs for secrets (AC7) before it
- * closes the fixture, and closes it even when that check fails. Every value
- * is fake.
+ * closes the fixture, and closes it even when that check fails; it also
+ * covers the relay's lines and dirs and the helper's output. Every value is
+ * fake.
  */
 import assert from "node:assert/strict";
 import {
@@ -30,12 +34,24 @@ import type http from "node:http";
 import https from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable, Writable } from "node:stream";
 import { afterAll, afterEach, beforeAll, test, vi } from "vitest";
 import { DATA_DIR } from "./config.ts";
+import {
+  CLIENT_METHODS,
+  encodeClientMessage,
+  GATEWAY_CLIENT_PROTOCOL,
+  GIT_CREDENTIAL_FAILURES,
+} from "./gateway/clientMethods.ts";
 import { edgeVaultLinkFile } from "./gateway/vaultMethods.ts";
 import { startVaultServer } from "./gateway/vaultServer.ts";
 import { edgeTlsFor, selfSignedIdentity } from "./gateway/x509.ts";
 import { startEdge } from "./gatewayEdge.ts";
+import {
+  GIT_CREDENTIAL_LINES,
+  runGitCredential,
+} from "./relay/gitCredential.ts";
+import { enrollRelay, startRelay } from "./relay/relay.ts";
 import {
   CLIENT_ID,
   CLIENT_PW,
@@ -53,7 +69,13 @@ import {
   startGithubFake,
   type FakeGithubUser,
   type GithubFake,
+  type GithubResponder,
 } from "./test/githubFake.ts";
+import {
+  WorkerConnection,
+  WorkerRequestError,
+} from "./workerProtocol/connection.ts";
+import { dialUnixSocket } from "./workerProtocol/unixSocketTransport.ts";
 
 const EDGE_ISSUER = "https://issuer.test";
 const CALLBACK = `${PUBLIC_ORIGIN}/auth/github/callback`;
@@ -75,6 +97,12 @@ interface Answer {
   status: number;
   headers: http.IncomingHttpHeaders;
   body: string;
+}
+
+/** One `git-credential get` the relay's helper answered, as git reads it. */
+interface HelperRun {
+  stdout: string;
+  stderr: string;
 }
 
 type Fixture = Awaited<ReturnType<typeof setUp>>;
@@ -132,6 +160,8 @@ async function setUp(
     expiresInS?: number;
     identity?: FakeGithubUser;
     githubApp?: boolean;
+    /** Enroll a relay for the browser's registry user (Task-1446 V4). */
+    relay?: boolean;
   } = {},
 ) {
   const fake: GithubFake = await startGithubFake();
@@ -357,10 +387,49 @@ async function setUp(
   const clear = async () =>
     (await post("/api/integrations/github/clear")).status;
 
+  // The relay side: an enrolled relay per registry user, its socket in a
+  // fresh dir, and every helper run's output (Task-1446 V4).
+  const clients = edge.gateway.clients!;
+  const relayLines: string[] = [];
+  const relayDirs: string[] = [];
+  const helperRuns: HelperRun[] = [];
+  const enroll = async (userId: string): Promise<string> => {
+    const relayDir = mkdtempSync(join(tmpdir(), "relay-"));
+    open.push({
+      close: () => rmSync(relayDir, { recursive: true, force: true }),
+    });
+    relayDirs.push(relayDir);
+    await enrollRelay({
+      stateDir: relayDir,
+      host: "127.0.0.1",
+      enrollPort: clients.enrollPort,
+      caPem: clients.caPem,
+      code: clients.registry.createCode(userId, "devbox"),
+    });
+    const relay = await startRelay({
+      stateDir: relayDir,
+      port: 0,
+      socketPath: join(relayDir, "relay.sock"),
+      log: (line) => relayLines.push(line),
+    });
+    open.push(relay);
+    return relay.socketPath;
+  };
+  const browserUser = clients.registry.users().find((user) => user.oidc);
+  assert.ok(browserUser, "the sign-in made a registry user");
+  const relaySocket = options.relay ? await enroll(browserUser.id) : "";
+
   const fixture = {
     fake,
     edgeLines,
     vaultLines,
+    relayLines,
+    relayDirs,
+    helperRuns,
+    relaySocket,
+    registry: clients.registry,
+    enroll,
+    stopVault: () => vault.close(),
     answers,
     states,
     cookieValues,
@@ -387,20 +456,51 @@ function assertRedacted(f: Fixture): void {
     FAKE_GITHUB_CLIENT.clientSecret,
     ...tokens,
   ];
-  // Edge and vault log lines.
-  for (const line of [...f.edgeLines, ...f.vaultLines])
+  // Edge, vault and relay log lines.
+  for (const line of [...f.edgeLines, ...f.vaultLines, ...f.relayLines])
     for (const value of [
       ...secrets,
       ...f.states,
       ...f.cookieValues,
       "state=",
       "code=",
+      "password=",
+      "x-access-token",
       "BEGIN",
       "PRIVATE",
       "eyJ",
       "pandeck-gateway-s1",
     ])
       assert.ok(!line.includes(value), `a log line leaked: ${line}`);
+  // The helper's output (Task-1446 V4): stderr is the relay's own line, never
+  // a token, the repository, the host or an edge text; a minted token reaches
+  // stdout only on the success answer's password line.
+  const edgeTexts = Object.values(GIT_CREDENTIAL_FAILURES);
+  for (const run of f.helperRuns) {
+    for (const value of [
+      ...tokens,
+      "pandeck-gateway-s1",
+      "github.com",
+      ...edgeTexts,
+    ])
+      assert.ok(!run.stderr.includes(value), `stderr leaked: ${run.stderr}`);
+    const lines = run.stdout.split("\n").filter(Boolean);
+    if (lines[0] === "quit=1") assert.deepEqual(lines, ["quit=1"]);
+    else {
+      assert.equal(run.stderr, "");
+      assert.equal(lines.length, 3, run.stdout);
+      assert.equal(lines[0], "username=x-access-token");
+      assert.ok(fake.minted.some((token) => lines[1] === `password=${token}`));
+      assert.match(lines[2]!, /^password_expiry_utc=\d+$/);
+    }
+  }
+  // The relay's state and socket dirs: no token of any kind.
+  for (const dir of f.relayDirs)
+    for (const file of filesUnder(dir)) {
+      for (const value of tokens)
+        assert.ok(!file.text.includes(value), `relay state: ${file.path}`);
+      assert.ok(!/gh[sour]_|github_pat_/.test(file.text), file.path);
+    }
   // Edge answers: bodies and headers (Location included).
   for (const answer of f.answers) {
     const { "set-cookie": cookies, ...rest } = answer.headers;
@@ -455,6 +555,42 @@ function assertRedacted(f: Fixture): void {
         !file.text.includes(value),
         `the vault state leaked: ${file.path}`,
       );
+}
+
+/**
+ * `git-credential get` for `path` through the relay's helper, in process, on
+ * `socketPath` (the fixture's relay by default), recorded for the redaction
+ * check.
+ */
+async function credential(
+  f: Fixture,
+  path: string,
+  socketPath = f.relaySocket,
+): Promise<HelperRun> {
+  const out = { stdout: "", stderr: "" };
+  const sink = (key: keyof HelperRun) =>
+    new Writable({
+      write(chunk: Buffer, _encoding, done) {
+        out[key] += chunk.toString();
+        done();
+      },
+    });
+  const code = await runGitCredential({
+    operation: "get",
+    socketPath,
+    stdin: Readable.from([`protocol=https\nhost=github.com\npath=${path}\n\n`]),
+    stdout: sink("stdout"),
+    stderr: sink("stderr"),
+    deadlineMs: 30_000,
+  });
+  assert.equal(code, 0);
+  f.helperRuns.push(out);
+  return out;
+}
+
+/** A refusal as git reads it: `quit=1`, and the relay's line for `code`. */
+function refused(code: keyof typeof GIT_CREDENTIAL_LINES): HelperRun {
+  return { stdout: "quit=1\n", stderr: `${GIT_CREDENTIAL_LINES[code]}\n` };
 }
 
 /** The fake's refresh requests' refresh tokens, in order. */
@@ -752,4 +888,210 @@ test("12. a vault without the App's client: connect is not_configured and the ch
     status: 503,
     body: { error: "vault_unavailable" },
   });
+});
+
+// Git read credentials through an enrolled relay's helper (Task-1446 V4): the
+// vault process, the edge's `git.credential` and the helper's stdout.
+
+const CLIENT_OK = /client c_[A-Za-z0-9_-]+ git\.credential: ok$/;
+
+test("G1/G2. git credential: the helper prints the proven read token; a second fill reuses it after a fresh user check", async () => {
+  const f = await setUp({ relay: true });
+  assert.equal(await f.connect(), "/");
+  const expiresAt = Math.floor((Date.now() + 3_600_000) / 1000) * 1000;
+  f.fake.script.mint = f.fake.mintWith({ expires_at: githubTime(expiresAt) });
+  const first = await credential(f, `${OWNER}/${S1}.git`);
+  assert.deepEqual(first, {
+    stdout: `username=x-access-token\npassword=${f.fake.minted[0]}\npassword_expiry_utc=${expiresAt / 1000}\n`,
+    stderr: "",
+  });
+  const mints = f.fake.on("mint");
+  assert.equal(mints.length, 1);
+  assert.deepEqual(JSON.parse(mints[0]!.body), {
+    repository_ids: [S1_ID],
+    permissions: { contents: "read", metadata: "read" },
+  });
+  assert.ok(f.edgeLines.some((line) => CLIENT_OK.test(line)));
+
+  const second = await credential(f, `${OWNER}/${S1}`);
+  assert.deepEqual(second, first);
+  assert.equal(f.fake.on("repo").length, 2);
+  assert.equal(f.fake.on("installation").length, 1);
+  assert.equal(f.fake.on("mint").length, 1);
+});
+
+test("G3. not connected: quit=1 with the relay's not-connected line, and GitHub sees nothing", async () => {
+  const f = await setUp({ relay: true });
+  assert.deepEqual(
+    await credential(f, `${OWNER}/${S1}`),
+    refused("git_not_connected"),
+  );
+  assert.deepEqual(f.fake.seen, []);
+});
+
+test("G4a. a user check that answers 401 for every token: one refresh, then vault_unavailable; the page check refreshes once more", async () => {
+  const f = await setUp({ relay: true });
+  assert.equal(await f.connect(), "/");
+  f.fake.script.repo = githubJson(401, { message: "Bad credentials" });
+  assert.deepEqual(
+    await credential(f, `${OWNER}/${S1}`),
+    refused("vault_unavailable"),
+  );
+  assert.equal(refreshesSeen(f.fake).length, 1);
+  assert.deepEqual(await f.check(S1), {
+    status: 503,
+    body: { error: "vault_unavailable" },
+  });
+  assert.equal(refreshesSeen(f.fake).length, 2);
+  assert.equal(f.fake.minted.length, 0);
+});
+
+test("G4b. a 401 whose refresh GitHub refuses: the reconnect line, the page shows rejected", async () => {
+  const f = await setUp({ relay: true });
+  assert.equal(await f.connect(), "/");
+  f.fake.script.repo = githubJson(401, { message: "Bad credentials" });
+  f.fake.script.token = githubJson(200, {
+    error: "bad_refresh_token",
+    error_description: "The refresh token passed is incorrect.",
+  });
+  assert.deepEqual(
+    await credential(f, `${OWNER}/${S1}`),
+    refused("git_reconnect"),
+  );
+  assert.deepEqual(await f.status(), {
+    offered: true,
+    connected: false,
+    problem: "rejected",
+  });
+  assert.deepEqual(await f.check(S1), {
+    status: 422,
+    body: { error: "integration_rejected" },
+  });
+  assert.equal(f.fake.minted.length, 0);
+});
+
+test("G4c. one 401, then a working refresh: the helper prints the minted token after one refresh", async () => {
+  const f = await setUp({ relay: true });
+  assert.equal(await f.connect(), "/");
+  const stale = f.fake.issuedAccess.at(-1)!;
+  f.fake.revokeAccess(stale);
+  const run = await credential(f, `${OWNER}/${S1}`);
+  assert.match(run.stdout, new RegExp(`^password=${f.fake.minted[0]}$`, "m"));
+  assert.equal(refreshesSeen(f.fake).length, 1);
+  assert.deepEqual(
+    f.fake.on("repo").map((seen) => seen.bearer),
+    [stale, f.fake.issuedAccess.at(-1)],
+  );
+});
+
+const REFRESH_FAILURES: [string, GithubResponder][] = [
+  ["G4d. a refresh that answers 503", githubJson(503, {})],
+  ["G4e. a refresh whose connection drops", (_seen, res) => res.raw.destroy()],
+];
+for (const [name, answer] of REFRESH_FAILURES)
+  test(`${name} after a 401: vault_unavailable, never the reconnect line`, async () => {
+    const f = await setUp({ relay: true });
+    assert.equal(await f.connect(), "/");
+    f.fake.revokeAccess(f.fake.issuedAccess.at(-1)!);
+    f.fake.script.token = answer;
+    assert.deepEqual(
+      await credential(f, `${OWNER}/${S1}`),
+      refused("vault_unavailable"),
+    );
+    assert.equal(refreshesSeen(f.fake).length, 1);
+    assert.equal(f.fake.minted.length, 0);
+  });
+
+test("G5. an uninstalled repository and one the user cannot pull: the denied line, no mint", async () => {
+  const f = await setUp({ relay: true });
+  assert.equal(await f.connect(), "/");
+  assert.deepEqual(
+    await credential(f, `${OWNER}/${S1_NOAPP}`),
+    refused("git_denied"),
+  );
+  assert.equal(f.fake.on("installation").length, 1);
+  assert.deepEqual(
+    await credential(f, `${OWNER}/${S1_PRIVATE}.git`),
+    refused("git_denied"),
+  );
+  assert.equal(f.fake.on("installation").length, 1);
+  assert.equal(f.fake.on("mint").length, 0);
+});
+
+test("G6. bad requests from a raw client are invalid_params, and GitHub sees nothing more", async () => {
+  const f = await setUp({ relay: true });
+  assert.equal(await f.connect(), "/");
+  const seen = f.fake.seen.length;
+  const connection = new WorkerConnection(await dialUnixSocket(f.relaySocket), {
+    handshake: { role: "worker", workerId: "test-raw" },
+    protocol: GATEWAY_CLIENT_PROTOCOL,
+    handlers: Object.fromEntries(
+      [CLIENT_METHODS.accountsChanged, CLIENT_METHODS.loginEvent].map((m) => [
+        m,
+        () => Promise.resolve(encodeClientMessage({})),
+      ]),
+    ),
+  });
+  open.push({ close: () => connection.end("test done") });
+  const good = { host: "github.com", path: `${OWNER}/${S1}`, access: "read" };
+  for (const json of [
+    { ...good, host: "gitlab.com" },
+    { ...good, path: `${OWNER}/${S1}/info/refs` },
+    { ...good, path: `${OWNER}/.git` },
+    { ...good, access: "write" },
+    { ...good, userId: "someone-else" },
+  ]) {
+    const err = await connection
+      .request(CLIENT_METHODS.gitCredential, { json })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    assert.ok(err instanceof WorkerRequestError, JSON.stringify(json));
+    assert.equal(err.code, "invalid_params", JSON.stringify(json));
+  }
+  assert.equal(f.fake.seen.length, seen);
+});
+
+test("G7. another registry user's relay: the not-connected line, though the browser's user is connected", async () => {
+  const f = await setUp({ relay: true });
+  assert.equal(await f.connect(), "/");
+  f.registry.addUser("other-user");
+  const otherSocket = await f.enroll("other-user");
+  assert.deepEqual(
+    await credential(f, `${OWNER}/${S1}`, otherSocket),
+    refused("git_not_connected"),
+  );
+  assert.equal(f.fake.minted.length, 0);
+});
+
+test("G8. disconnect and reconnect (O4): not connected in between, then the cached token after a user check with the new access token", async () => {
+  const f = await setUp({ relay: true });
+  assert.equal(await f.connect(), "/");
+  const first = await credential(f, `${OWNER}/${S1}`);
+  assert.equal(f.fake.minted.length, 1);
+  assert.equal(await f.clear(), 204);
+  assert.deepEqual(
+    await credential(f, `${OWNER}/${S1}`),
+    refused("git_not_connected"),
+  );
+  assert.equal(await f.connect(), "/");
+  const repoChecks = f.fake.on("repo").length;
+  assert.deepEqual(await credential(f, `${OWNER}/${S1}`), first);
+  assert.equal(f.fake.minted.length, 1);
+  const repos = f.fake.on("repo");
+  assert.equal(repos.length, repoChecks + 1);
+  assert.equal(repos.at(-1)!.bearer, f.fake.issuedAccess.at(-1));
+});
+
+test("G9. a stopped vault: quit=1 with the vault_unavailable line within the deadline", async () => {
+  const f = await setUp({ relay: true });
+  assert.equal(await f.connect(), "/");
+  await f.stopVault();
+  const started = Date.now();
+  assert.deepEqual(
+    await credential(f, `${OWNER}/${S1}`),
+    refused("vault_unavailable"),
+  );
+  assert.ok(Date.now() - started < 30_000);
 });

@@ -565,6 +565,8 @@ const GATEWAY_EDGE = [
   // Approval enrollment's bodies and poll limiter (Task-1410).
   "enrollmentApproval",
   "forward",
+  // The client's `git.credential` and its per-client gate (Task-1446).
+  "gitCredential",
   "leases",
   "logins",
   // Machine pools: a client's harness sessions pinned to accounts (Task-1424).

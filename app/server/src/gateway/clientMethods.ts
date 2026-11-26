@@ -102,6 +102,15 @@
  *   any failure answers `{ok: false, code: "tool_error", message}` with a
  *   fixed text, and a bad put or request discards the upload.
  *
+ * Git credentials (1.4, Task-1446): read installation tokens for git.
+ *
+ * - `git.credential {host, path, access}` answers `{token, expiresAt}`: a read
+ *   installation token for one GitHub repository the client's user can pull,
+ *   `expiresAt` in epoch milliseconds. `host` is `github.com`, `path` is
+ *   `owner/repo` or `owner/repo.git`, and `access` is exactly `read`; anything
+ *   else is `invalid_params` before the vault is asked. A failure is one of
+ *   `GIT_CREDENTIAL_FAILURES` with its fixed text, or `invalid_params`.
+ *
  * Gateway → client: `accounts.changed {accounts}`, the full list after any
  * change, and `logins.event {loginId, accountId, event}`, each answered `{}`.
  */
@@ -127,10 +136,10 @@ import type {
 
 /**
  * 1.1 (Task-1463 P6a) adds `tools.prepare` and `tools.apply`, 1.2 (Task-1441
- * P7a) file answers, 1.3 (Task-1441 P8a) the upload methods and fields; every
- * 1.x peer still connects.
+ * P7a) file answers, 1.3 (Task-1441 P8a) the upload methods and fields, 1.4
+ * (Task-1446) adds `git.credential`; every 1.x peer still connects.
  */
-export const GATEWAY_CLIENT_VERSION = "gateway-client/1.3";
+export const GATEWAY_CLIENT_VERSION = "gateway-client/1.4";
 
 const CLIENT_VERSION_RE =
   /^gateway-client\/(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/;
@@ -162,6 +171,7 @@ export const CLIENT_METHODS = {
   uploadsOpen: "uploads.open",
   uploadsPut: "uploads.put",
   uploadsRelease: "uploads.release",
+  gitCredential: "git.credential",
   /** Gateway → client. */
   accountsChanged: "accounts.changed",
   loginEvent: "logins.event",
@@ -200,6 +210,29 @@ export function isIntegrationFailure(code: string): code is IntegrationFailure {
 
 export function integrationFailure(code: IntegrationFailure): never {
   throw new WorkerMethodError(code, INTEGRATION_FAILURES[code]);
+}
+
+/**
+ * `git.credential`'s failures (1.4, Task-1446), each with one fixed text. Its
+ * own table, never routed through {@link integrationFailure}: the relay's git
+ * credential helper picks its own stderr line by code and never prints these.
+ */
+export const GIT_CREDENTIAL_FAILURES = {
+  git_not_connected:
+    "GitHub is not connected at the gateway; connect it on the gateway page.",
+  git_reconnect:
+    "The gateway's GitHub sign-in no longer works; connect GitHub again on the gateway page.",
+  git_denied:
+    "No read access to this repository, or the gateway's GitHub App is not installed on it.",
+  git_busy:
+    "Too many git credential requests from this machine at once; try again.",
+  vault_locked: "The vault is locked.",
+  vault_unavailable: "The gateway could not get a git credential; try again.",
+} as const;
+export type GitCredentialFailure = keyof typeof GIT_CREDENTIAL_FAILURES;
+
+export function gitCredentialFailure(code: GitCredentialFailure): never {
+  throw new WorkerMethodError(code, GIT_CREDENTIAL_FAILURES[code]);
 }
 
 /** Why a status answer is not connected. */
@@ -769,6 +802,43 @@ export function decodeToolApply(payload: Payload): {
     invalid("upload id");
   // The id is the listener's, never part of the request the tool sees.
   return { name, request: { site, items }, uploadId };
+}
+
+/** A `git.credential` request, as sent; the edge validates the values. */
+export interface GitCredentialRequest {
+  host: string;
+  path: string;
+  access: string;
+}
+
+/**
+ * `git.credential` (1.4): a JSON object with exactly `host`, `path` and
+ * `access`, each a string, and no stream; anything else is `invalid_params`.
+ */
+export function decodeGitCredentialRequest(
+  payload: Payload,
+): GitCredentialRequest {
+  const request = record(payload.json);
+  if (
+    !request ||
+    hasOtherStreams(payload) ||
+    Object.keys(request).sort().join(",") !== "access,host,path" ||
+    typeof request.host !== "string" ||
+    typeof request.path !== "string" ||
+    typeof request.access !== "string"
+  )
+    invalid("git credential request");
+  return { host: request.host, path: request.path, access: request.access };
+}
+
+/** `git.credential`'s answer: a fresh object, never the vault's own. */
+export function encodeGitCredential(credential: {
+  token: string;
+  expiresAt: number;
+}): Payload {
+  return {
+    json: { token: credential.token, expiresAt: credential.expiresAt },
+  };
 }
 
 /** Whether `payload` carries a text stream, or a bytes stream not in `allowed`. */
