@@ -32,6 +32,7 @@ import {
   WorkerMethodError,
 } from "../workerProtocol/connection.ts";
 import { socketEndpoint } from "../workerProtocol/unixSocketTransport.ts";
+import { endChildInput } from "../test/childInput.ts";
 import { GIT_CREDENTIAL_LINES } from "./gitCredential.ts";
 
 const run = promisify(execFile);
@@ -90,23 +91,36 @@ const env = (): NodeJS.ProcessEnv => ({
   GIT_TERMINAL_PROMPT: "0",
 });
 
-function git(
+/**
+ * `command` in the test's environment with `input` on stdin. A child that
+ * exits without reading its input is EPIPE, judged by its exit code and
+ * output; any other stdin error fails the call (F009).
+ */
+function runChild(
+  command: string,
   args: string[],
   input: string,
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  return new Promise((done) => {
-    const child = spawn("git", args, { cwd: join(dir, "home"), env: env() });
+  return new Promise((done, fail) => {
+    const child = spawn(command, args, {
+      cwd: join(dir, "home"),
+      env: env(),
+    });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
     child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-    child.on("close", (code) => done({ code, stdout, stderr }));
-    // Git may exit without reading stdin (`git config` never does); the
-    // write then fails with EPIPE, which says nothing about the answer.
-    child.stdin.on("error", () => {});
-    child.stdin.end(input);
+    child.on("error", fail);
+    const stdinError = endChildInput(child.stdin, input);
+    child.on("close", (code) => {
+      const failure = stdinError();
+      if (failure) fail(failure);
+      else done({ code, stdout, stderr });
+    });
   });
 }
+
+const git = (args: string[], input: string) => runChild("git", args, input);
 
 const markers = (): string[] =>
   existsSync(marker)
@@ -262,3 +276,12 @@ test("without useHttpPath the relay refuses with the hint", async (context) => {
   assert.ok(!filled.stdout.includes("password="));
   assert.match(filled.stderr, /set credential\.useHttpPath = true/);
 }, 60_000);
+
+test("F009: a child that exits without reading 1 MiB of stdin is an EPIPE the harness handles, not an unhandled error", async () => {
+  const answer = await runChild(
+    "sh",
+    ["-c", "exit 3"],
+    "x".repeat(1024 * 1024),
+  );
+  assert.deepEqual(answer, { code: 3, stdout: "", stderr: "" });
+});

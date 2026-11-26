@@ -28,6 +28,7 @@ import {
   type MethodHandler,
 } from "../workerProtocol/connection.ts";
 import { socketEndpoint } from "../workerProtocol/unixSocketTransport.ts";
+import { endChildInput } from "../test/childInput.ts";
 import {
   GIT_CREDENTIAL_CLIENT_VERSION,
   GIT_CREDENTIAL_LINES,
@@ -547,10 +548,11 @@ test("spawned: main.ts git-credential --socket <s> get prints the three lines an
   let stderr = "";
   child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
   child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-  child.stdin.end(GET);
+  const stdinError = endChildInput(child.stdin, GET);
   const code = await new Promise<number | null>((done) =>
     child.on("close", done),
   );
+  assert.equal(stdinError(), undefined);
   assert.equal(code, 0, stderr);
   assert.match(
     stdout,
@@ -559,4 +561,39 @@ test("spawned: main.ts git-credential --socket <s> get prints the three lines an
     ),
   );
   assert.equal(stderr, "");
+}, 30_000);
+
+test("spawned, F009: git closed the helper's stdout before the answer; the helper still exits 0 with no unhandled error", async () => {
+  const child = spawn(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      resolve("src", "relay/main.ts"),
+      "git-credential",
+      "--socket",
+      join(tmpdir(), "no-such-relay.sock"),
+      "get",
+    ],
+    { stdio: ["pipe", "pipe", "pipe"] },
+  );
+  // Git's end of the helper's stdout is gone before the helper writes.
+  child.stdout.destroy();
+  let stderr = "";
+  child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+  // No path: the helper refuses at once, writing quit=1 to the closed pipe.
+  const stdinError = endChildInput(
+    child.stdin,
+    "protocol=https\nhost=github.com\n\n",
+  );
+  const code = await new Promise<number | null>((done) =>
+    child.on("close", done),
+  );
+  assert.equal(stdinError(), undefined);
+  assert.equal(code, 0, stderr);
+  // Only the relay's own line: no EPIPE, no stack trace.
+  assert.match(
+    stderr,
+    /^pandeck relay: git sent no repository path; set credential\.useHttpPath = true\n$/,
+  );
 }, 30_000);

@@ -463,6 +463,11 @@ export function gitCredentialMain(
   args: string[],
   io: Pick<GitCredentialRun, "stdin" | "stdout" | "stderr">,
 ): Promise<number> {
+  // Git may close our stdout or stderr before we write (it gave up or was
+  // interrupted). The write then fails with EPIPE; nobody is left to tell,
+  // so the helper ends quietly with exit 0 instead of an unhandled error and
+  // a stack trace (F009). Each answer is one small write, never retried.
+  for (const stream of [io.stdout, io.stderr]) stream.on("error", () => {});
   let socket: string | undefined;
   let operation: string | undefined;
   try {
