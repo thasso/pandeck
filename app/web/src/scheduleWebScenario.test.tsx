@@ -82,7 +82,12 @@ let latestState: UIState;
 let latestActions: AssistantActions;
 let rowRenders = 0;
 
-/** A memoized list row, as the page's rows are: it renders on a new summary. */
+/**
+ * A memoized stand-in row: it renders only on a new summary object, so its
+ * count proves the replica's identity for unchanged Schedules. It is not
+ * the page's `ScheduleRow`, which is not memoized, so it says nothing about
+ * that row's redraws.
+ */
 const Row = memo(function Row({ schedule }: { schedule: ScheduleSummary }) {
   rowRenders += 1;
   return <span>{schedule.name}</span>;
