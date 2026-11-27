@@ -217,8 +217,11 @@ transcript — not that the session exists, and not that the turn finished.
   late-admission guard. A supersede, withdrawal or Stop that commits before that
   point prevents the append. After the append nothing retracts it: disabling the
   Schedule does not stop that turn, and a bookkeeping failure after the append
-  never stops it either: the occurrence stays `claimed` until recovery or the
-  next ending finds the key.
+  never stops it either. If the `delivered` settle at the append rolls back, the
+  lane retries it once, right after the turn's receipt, while the occurrence is
+  still `claimed`. A settle that committed but whose hand-off then failed is
+  already `delivered`. Only if that retry fails too does the occurrence stay
+  `claimed`, until recovery or the next ending finds the key.
 - **Recovery.** At boot, and before retrying a `claimed` occurrence the server
   may have tried before, the server looks for the admission key in the target's
   canonical transcript, as peer-prompt recovery does. It reads complete records

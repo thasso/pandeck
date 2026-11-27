@@ -203,6 +203,8 @@ const CLASSIFIED: Record<
       setArchived: "projected-write",
       archiveSettledBatch: "projected-write",
       isArchived: "read",
+      archiveFlags: "read",
+      restoreForScheduledDelivery: "projected-write",
       setSettled: "projected-write",
       settleWithPeers: "projected-write",
       isSettled: "read",

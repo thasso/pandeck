@@ -29,8 +29,9 @@
  * fails closed when none is registered. Only deleting a Schedule removes such
  * a row unasked, with its whole history.
  *
- * Nothing in production creates a Schedule yet: the agent tools arrive with
- * the scheduled prompts lane ([Task-1503](pa://task/1503)).
+ * In Phase 1 only the agent tools (`schedule_manage`) create or edit
+ * Schedules; the clock claims their due times and the scheduled prompts lane
+ * delivers them (`docs/schedules.md`).
  */
 import {
   canonicalScheduleTiming,

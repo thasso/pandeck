@@ -44,6 +44,8 @@ const { findAdmittedUserEntry } =
 const { canonicalSessionLogPath } = await import("../sessionStorage.ts");
 const { deliverScheduledPrompts, scheduledPromptHeader } =
   await import("../schedules/scheduledPrompts.ts");
+const { getSettings } = await import("../settings.ts");
+const { saveSettings } = await import("../settingsService.ts");
 
 /** The CLI's output stream, fed by the test. */
 class OutputQueue implements AsyncIterable<ClaudeSdkMessage> {
@@ -186,6 +188,12 @@ beforeAll(async () => {
   // Synthetic accounts in the temp registry; the integration is off by default.
   await seedLegacyDefaultAccounts();
   await enableClaudeSdkForTests();
+  // The visible prompt would otherwise name this unnamed session through a
+  // detached helper model run, outside the controlled query and past this
+  // file's cleanup. The deterministic fallback title needs no helper.
+  await saveSettings({
+    sessionNaming: { ...getSettings().sessionNaming, enabled: false },
+  });
 });
 
 afterAll(async () => {
@@ -231,6 +239,7 @@ test("the production lane delivers a claimed occurrence into a real Claude sessi
   assert.equal(scheduledPromptHeader(occurrence), header);
   // The session starts with no conversation at all.
   assert.deepEqual(canonicalRecords(SESSION_ID), []);
+  assert.equal(getSettings().sessionNaming.enabled, false, "naming is off");
 
   const seam: ClaudeSdkSeam = {
     query(params) {
