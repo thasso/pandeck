@@ -533,7 +533,10 @@ through the tools; there is no UI, card, grant, link or new-session target yet.
   arrive with Phase 2, below).
 - A failed `schedules` snapshot or digest read answers its own collection error
   (`Failed to list Schedules: …`, target `{type: "schedule"}`) and later topics
-  still answer; the page and the browser render it in place with Retry.
+  still answer; the page, the browser and the detail render it in place with
+  Retry. The detail is its home on a phone or behind a shut or other sidebar:
+  unanswered, it shows the failure instead of Loading; holding the summary, it
+  keeps it and shows the failure above it.
 - The agent tools (`app/server/src/tools/schedules/`), as "Agent tools"
   describes, for existing-session near targets only.
 
@@ -585,7 +588,11 @@ section, the header chip, the transcript label and their state:
   claims its Schedule's id for object failures. Each surface (the phone page,
   the wide page, the detail, the inspector section) reports its own claimed keys
   and the shell claims their union, so the inspector open beside the page or a
-  detail neither replaces nor drops the other's claim.
+  detail neither replaces nor drops the other's claim. A claim needs the control
+  ON SCREEN, not merely mounted: the shell frames that keep content mounted
+  while hidden (the right panel, its tabs) say so through `useOnScreen`
+  (`components/shell/onScreen.tsx`), and a surface hidden that way claims and
+  owns nothing, exactly as if it had closed.
 - A surface owns a write's outcome once it sent that write, or once it saw it
   pending, at mount included (`useScheduleOutcomes`). It claims exactly the keys
   it owns or sees pending and renders an outcome only for an owned key, so a
@@ -616,7 +623,11 @@ section, the header chip, the transcript label and their state:
   by the Schedule's name, under the same ownership rule: a refusal shows
   "Couldn't save: {reason}" with Try again on the surface that owns the write.
   While the list is unanswered or failed the section is absent; the collection
-  error lives on the page and the browser.
+  error lives on the page, the browser and the detail. The section claims only
+  while it is on screen: with the panel shut, the Inspector behind another tab,
+  a phone's dock not expanded, or the section folded (which unmounts its rows),
+  it claims nothing, so a refusal is announced and is not shown again when it
+  reappears; reappearing while a write is pending adopts it.
 - The session header chip (`components/schedules/ScheduleHeaderChip.tsx`,
   `nextRepeatingForSession`), beside the title and outside its links: the due
   label from `md` up, the icon alone on a phone, and at every width the

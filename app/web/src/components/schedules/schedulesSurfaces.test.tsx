@@ -285,6 +285,8 @@ function renderDetail(
         id="a"
         schedule={"schedule" in props ? props.schedule : summary()}
         answered={props.answered ?? true}
+        listError={null}
+        onRetry={vi.fn()}
         history={{ load: ready([]), revision: 2 }}
         mutations={props.mutations ?? {}}
         attempts={{}}

@@ -7703,6 +7703,8 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                             (item) => item.id === route.id,
                           )}
                           answered={schedulesAnswered}
+                          listError={state.scheduleListError}
+                          onRetry={actions.retrySchedules}
                           history={state.scheduleHistory[route.id]}
                           mutations={state.scheduleMutations}
                           attempts={state.scheduleAttempts}

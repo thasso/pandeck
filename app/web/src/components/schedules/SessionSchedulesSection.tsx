@@ -17,6 +17,7 @@ import {
   scheduleNextLabel,
 } from "../../lib/schedules.ts";
 import { openInApp } from "./scheduleLinks.ts";
+import { useOnScreen } from "../shell/onScreen.tsx";
 import { useScheduleOutcomes } from "./useScheduleOutcomes.ts";
 
 /**
@@ -29,16 +30,14 @@ import { useScheduleOutcomes } from "./useScheduleOutcomes.ts";
  *   `<id>:enabled`), so its outcome follows the same ownership rule
  *   (`useScheduleOutcomes`): shown here only if this section sent it or
  *   reopened while it was pending, and claimed as this surface's own, so a
- *   page open beside it neither overwrites nor steals the claim.
+ *   page open beside it neither overwrites nor steals the claim. Claims hold
+ *   only while the rows are on screen: a shut panel, another tab or a folded
+ *   section claims nothing, and its refusal is announced.
  */
 export function SessionSchedulesSection({
   sessionId,
   schedules,
-  mutations,
-  attempts,
-  onSetEnabled,
-  onOpen,
-  onClaimControls,
+  ...rows
 }: {
   sessionId: string;
   /** This session's Schedules (`schedulesForSession`), non-empty. */
@@ -47,15 +46,52 @@ export function SessionSchedulesSection({
   attempts: Record<string, ScheduleAttempt>;
   onSetEnabled: (id: string, enabled: boolean) => void;
   onOpen: (path: string) => void;
-  /** This surface's rendered control keys, `[]` on unmount. */
+  /** This surface's rendered, VISIBLE control keys; `[]` when hidden or gone. */
   onClaimControls: (keys: readonly string[]) => void;
 }) {
+  return (
+    <InspectorSection
+      id="schedules"
+      storageScope={`session:${sessionId}`}
+      title="Schedules"
+      icon={<CalendarClock size={13} />}
+      summary={`${schedules.length}`}
+    >
+      {/* Inside the collapsible body, so a collapsed section unmounts its
+          switches and with them its claims. */}
+      <SessionScheduleRows schedules={schedules} {...rows} />
+    </InspectorSection>
+  );
+}
+
+/**
+ * The rows and the outcomes they own. The panel and tab around the inspector
+ * keep it mounted while hidden, so ownership follows `useOnScreen`, not
+ * mounting: hidden, it claims nothing and a refusal is announced.
+ */
+function SessionScheduleRows({
+  schedules,
+  mutations,
+  attempts,
+  onSetEnabled,
+  onOpen,
+  onClaimControls,
+}: {
+  schedules: readonly ScheduleSummary[];
+  mutations: Record<string, LoadState<true>>;
+  attempts: Record<string, ScheduleAttempt>;
+  onSetEnabled: (id: string, enabled: boolean) => void;
+  onOpen: (path: string) => void;
+  onClaimControls: (keys: readonly string[]) => void;
+}) {
+  const onScreen = useOnScreen();
   const outcomes = useScheduleOutcomes(
     useMemo(
       () => schedules.map((row) => scheduleMutationKey(row.id, "enabled")),
       [schedules],
     ),
     mutations,
+    onScreen,
   );
   const { claims, own, errorFor } = outcomes;
   useEffect(() => onClaimControls(claims), [claims, onClaimControls]);
@@ -65,37 +101,25 @@ export function SessionSchedulesSection({
     onSetEnabled(id, enabled);
   };
   return (
-    <InspectorSection
-      id="schedules"
-      storageScope={`session:${sessionId}`}
-      title="Schedules"
-      icon={<CalendarClock size={13} />}
-      summary={`${schedules.length}`}
-    >
-      <div className="-mx-3">
-        {schedules.map((schedule) => {
-          const key = scheduleMutationKey(schedule.id, "enabled");
-          const attempt = attempts[key];
-          return (
-            <SessionScheduleRow
-              key={schedule.id}
-              schedule={schedule}
-              pending={
-                mutations[key] !== undefined && isPending(mutations[key])
-              }
-              error={errorFor(key)}
-              retryEnabled={
-                attempt?.kind === "enabled"
-                  ? attempt.enabled
-                  : !schedule.enabled
-              }
-              onSetEnabled={flip}
-              onOpen={onOpen}
-            />
-          );
-        })}
-      </div>
-    </InspectorSection>
+    <div className="-mx-3">
+      {schedules.map((schedule) => {
+        const key = scheduleMutationKey(schedule.id, "enabled");
+        const attempt = attempts[key];
+        return (
+          <SessionScheduleRow
+            key={schedule.id}
+            schedule={schedule}
+            pending={mutations[key] !== undefined && isPending(mutations[key])}
+            error={errorFor(key)}
+            retryEnabled={
+              attempt?.kind === "enabled" ? attempt.enabled : !schedule.enabled
+            }
+            onSetEnabled={flip}
+            onOpen={onOpen}
+          />
+        );
+      })}
+    </div>
   );
 }
 

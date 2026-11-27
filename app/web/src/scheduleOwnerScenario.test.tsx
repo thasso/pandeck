@@ -83,6 +83,8 @@ function Owner({ initial }: { initial: View }) {
         id="a"
         schedule={state.schedules.find((item) => item.id === "a")}
         answered={answered}
+        listError={state.scheduleListError}
+        onRetry={actions.retrySchedules}
         history={state.scheduleHistory.a}
         mutations={state.scheduleMutations}
         attempts={state.scheduleAttempts}

@@ -246,6 +246,8 @@ function renderDetail(schedule: ScheduleSummary, onSave = vi.fn()) {
         id="a"
         schedule={schedule}
         answered
+        listError={null}
+        onRetry={vi.fn()}
         history={{ load: ready([]), revision: 2 }}
         mutations={{}}
         attempts={{}}

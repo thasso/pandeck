@@ -984,7 +984,11 @@ renders in place with Try again on the surface that owns its write, the one that
 sent it or reopened while it was pending; a surface claims only those keys, so a
 refusal whose control is gone is announced instead (`lib/messageArrival.ts`).
 Each surface reports its claim separately and the shell claims their union, so
-the session inspector beside the page or a detail never overwrites theirs.
+the session inspector beside the page or a detail never overwrites theirs. A
+frame that keeps its content mounted while hidden (the right panel shut, a
+phone's dock not expanded, a right-panel tab behind another) wraps it in
+`OnScreen` (`components/shell/onScreen.tsx`); a surface claiming failures reads
+`useOnScreen()` rather than trusting that it is mounted.
 
 A session's Schedules also show in two places outside the section. The session
 inspector has a **Schedules** section, present only while the session has any:

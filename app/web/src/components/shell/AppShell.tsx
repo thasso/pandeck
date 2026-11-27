@@ -34,6 +34,7 @@ import {
   useEdgeSwipeBack,
   type EdgeSwipePhase,
 } from "./useEdgeSwipeBack.ts";
+import { OnScreen } from "./onScreen.tsx";
 
 const PANEL_ANIMATION_MS = 140;
 
@@ -505,7 +506,9 @@ export function AppShell({
               onCollapse={right.onDismiss ?? (() => {})}
               animate={right.animate ?? true}
             >
-              {right.content}
+              <OnScreen visible={rightDock === "expanded"}>
+                {right.content}
+              </OnScreen>
             </ObjectDock>
           )}
 
@@ -513,7 +516,7 @@ export function AppShell({
             <div
               className={`absolute inset-0 z-50 ${panelAnimationClass(overlayRight, "right")}`}
             >
-              {right.content}
+              <OnScreen visible={Boolean(right.open)}>{right.content}</OnScreen>
             </div>
           )}
 
@@ -537,7 +540,7 @@ export function AppShell({
                   rightMax,
                 )}
               />
-              {right.content}
+              <OnScreen visible={Boolean(right.open)}>{right.content}</OnScreen>
             </div>
           )}
 
@@ -546,7 +549,7 @@ export function AppShell({
           right.keepMountedWhenClosed &&
           !inlineRight.rendered ? (
             <div className="hidden" aria-hidden inert>
-              {right.content}
+              <OnScreen visible={false}>{right.content}</OnScreen>
             </div>
           ) : null}
         </div>

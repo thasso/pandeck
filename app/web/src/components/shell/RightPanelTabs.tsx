@@ -33,6 +33,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { SessionChatHost } from "../../hooks/useSessionChat.tsx";
 import { PersonalAssistantPanel } from "./PersonalAssistantPanel.tsx";
 import { SessionPanel } from "./SessionPanel.tsx";
+import { OnScreen } from "./onScreen.tsx";
 import { UnreadIcon } from "../UnreadDot.tsx";
 
 /**
@@ -408,7 +409,9 @@ export function RightPanelTabs({
             aria-hidden={activeTab !== id || undefined}
             inert={activeTab !== id || undefined}
           >
-            {panelBodies[id]}
+            <OnScreen visible={visible && activeTab === id}>
+              {panelBodies[id]}
+            </OnScreen>
           </div>
         ))}
         {activeTab === null ? (

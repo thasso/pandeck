@@ -71,6 +71,30 @@ function draftAfterSaved(
   return Object.keys(next).length === Object.keys(draft).length ? draft : next;
 }
 
+/** The id is really gone: the answered list does not hold it. */
+function NotFound({ onOpen }: { onOpen: (path: string) => void }) {
+  return (
+    <EmptyBox
+      action={
+        <Button
+          size="sm"
+          variant="outline"
+          render={
+            <a
+              href={SCHEDULES_PATH}
+              onClick={(event) => openInApp(event, SCHEDULES_PATH, onOpen)}
+            />
+          }
+        >
+          Back to Schedules
+        </Button>
+      }
+    >
+      Schedule not found
+    </EmptyBox>
+  );
+}
+
 function timingInput(schedule: ScheduleSummary): ScheduleTimingInput {
   const { timeZone: _zone, ...input } = schedule.timing;
   return input as ScheduleTimingInput;
@@ -83,6 +107,12 @@ interface Props {
   schedule: ScheduleSummary | undefined;
   /** The `schedules` topic has answered, so an absent id is really gone. */
   answered: boolean;
+  /**
+   * The collection's read failed (`scheduleListError`), a condition that is
+   * never announced: this page is its home whatever the sidebar shows.
+   */
+  listError: string | null;
+  onRetry: () => void;
   history: ScheduleHistoryEntry | undefined;
   mutations: Record<string, LoadState<true>>;
   /** `scheduleAttempts`: what each key's latest write asked for. */
@@ -112,13 +142,17 @@ interface Props {
  *   reopened while its save is pending adopts that save, so a refusal puts
  *   the sent fields back under the error. Leaving discards the draft. The zone is
  *   fixed and shown by name (R2). Not found only once the list answered, and
- *   never during this page's own delete.
+ *   never during this page's own delete. A failed list read shows here with
+ *   Retry, instead of Loading or above the held summary, since no sidebar
+ *   browser need be on screen.
  */
 export function ScheduleDetailPage({
   back,
   id,
   schedule,
   answered,
+  listError,
+  onRetry,
   history,
   mutations,
   attempts,
@@ -238,8 +272,14 @@ export function ScheduleDetailPage({
     onSave(id, patch);
   }, [id, patch, onSave, own, updateKey]);
 
+  const listNote = listError ? (
+    <ErrorNote message={listError} onRetry={onRetry} />
+  ) : null;
+
   if (!shown) {
-    if (!answered && !gone) return <PaneLoading />;
+    const known = answered || gone;
+    // Unanswered, the page waits for the list, or says why it cannot.
+    if (!known && !listError) return <PaneLoading />;
     return (
       <div className="flex h-full min-h-0 flex-col bg-background">
         <PageHeader
@@ -247,27 +287,9 @@ export function ScheduleDetailPage({
           icon={<CalendarClock size={16} />}
           title="Schedules"
         />
-        <div className="p-4">
-          <EmptyBox
-            action={
-              <Button
-                size="sm"
-                variant="outline"
-                render={
-                  <a
-                    href={SCHEDULES_PATH}
-                    onClick={(event) =>
-                      openInApp(event, SCHEDULES_PATH, onOpen)
-                    }
-                  />
-                }
-              >
-                Back to Schedules
-              </Button>
-            }
-          >
-            Schedule not found
-          </EmptyBox>
+        <div className="flex flex-col gap-4 p-4">
+          {listNote}
+          {known ? <NotFound onOpen={onOpen} /> : null}
         </div>
       </div>
     );
@@ -309,6 +331,7 @@ export function ScheduleDetailPage({
       />
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
+          {listNote}
           {failure ? <ErrorNote message={failure} /> : null}
           <dl className="grid grid-cols-1 gap-x-6 gap-y-1 text-sm sm:grid-cols-3">
             <div className="flex flex-col">
