@@ -153,6 +153,15 @@ occurrence. An occurrence is therefore claimed at most once across restarts.
   If the transaction throws before it commits, nothing of it stays. Once
   committed it stands, even when the settings save then fails.
 
+- **Edit and disable cut over the same way.** An edit first settles the
+  Schedule's due times at or before the write instant under the OLD definition,
+  exactly as a tick would (one late claim within the grace window, the rest
+  `missed`; paused, `missed`), then applies the change. A new timing takes
+  effect from its first occurrence after the write instant; a timing equal to
+  the stored one keeps `next_due_at_ms`. A disable settles the same way and then
+  withdraws what it claimed: a due time inside the grace window is `withdrawn`,
+  an older one `missed`.
+
 ### States
 
 `claimed` is the only open state: the occurrence is owed. It ends in exactly one
@@ -171,7 +180,15 @@ error.
   The survivor is delivered when the session can take it, with no expiry; its
   header shows the original due time.
 - **Disabling or deleting** a Schedule withdraws its `claimed` occurrence in the
-  same transaction.
+  same transaction. Deleting also removes the Schedule's history.
+- **An attempted occurrence ends by its evidence.** When a newer claim, a
+  disable, an edit or a Pause boundary ends a `claimed` occurrence whose
+  delivery was already attempted, the same transaction first looks for its
+  admission key: found, it is `delivered`; unreadable, `failed` with "delivery
+  uncertain"; absent, `superseded` or `withdrawn` as usual. This adds no state
+  and no hold, and it is how "after the append nothing retracts it" holds when
+  bookkeeping failed after an append.
+- **Terminal states are final.** A settled occurrence never changes again.
 - **What keeps it `claimed`.** A running turn, a Stop, a pending runtime
   selection that cannot apply, and a session that cannot be acquired right now
   are holds: the occurrence stays owed and is offered again on the next wake.
@@ -180,28 +197,39 @@ error.
   any other refusal or error before the append for an existing session (the
   bound account no longer offers the model, an unmet enterprise requirement, an
   unavailable checkout), recorded with its concrete reason; or delivery whose
-  outcome is unknown (below). Only the holds above keep an occurrence `claimed`.
-  A failed occurrence is never retried, and its Schedule needs attention.
+  outcome is unknown (below). A runtime that returns without admitting the
+  prompt, with no hold, is a refusal before the append, recorded as
+  `delivery failed: the target runtime returned without admitting the scheduled prompt`.
+  Only the four holds above keep an occurrence `claimed`; a recorded reason is
+  at most 500 characters. A failed occurrence is never retried, and its Schedule
+  needs attention.
 
 ### Admission and crash safety
 
 `delivered` and `started` mean the prompt was durably appended to the target's
 transcript — not that the session exists, and not that the turn finished.
 
-- **One admission key per occurrence**, derived from the occurrence id. It is
-  the `clientRequestId` of the append for an existing session and of the opening
+- **One admission key per occurrence**, `schedule:<occurrence id>`. It is the
+  `clientRequestId` of the append for an existing session and of the opening
   prompt for a new one, as the prompt queue uses for its rows.
 - **Final admission check.** The lane rechecks that the occurrence is still
   `claimed` at the last no-await admission boundary, through the lane's
   late-admission guard. A supersede, withdrawal or Stop that commits before that
   point prevents the append. After the append nothing retracts it: disabling the
-  Schedule does not stop that turn.
+  Schedule does not stop that turn, and a bookkeeping failure after the append
+  never stops it either. If the `delivered` settle at the append rolls back, the
+  lane retries it once, right after the turn's receipt, while the occurrence is
+  still `claimed`. A settle that committed but whose hand-off then failed is
+  already `delivered`. Only if that retry fails too does the occurrence stay
+  `claimed`, until recovery or the next ending finds the key.
 - **Recovery.** At boot, and before retrying a `claimed` occurrence the server
   may have tried before, the server looks for the admission key in the target's
-  canonical transcript, as peer-prompt recovery does. Found: the occurrence is
-  `delivered` or `started`. Absent: retry. Unreadable: the outcome is unknown,
-  never proof of absence, so the occurrence is `failed` with "delivery
-  uncertain" and the Schedule needs attention. It is never sent twice.
+  canonical transcript, as peer-prompt recovery does. It reads complete records
+  only; a corrupt or torn record that holds the key makes the outcome unknown.
+  Found: the occurrence is `delivered` or `started`. Absent: retry. Unreadable:
+  the outcome is unknown, never proof of absence, so the occurrence is `failed`
+  with "delivery uncertain" and the Schedule needs attention. It is never sent
+  twice.
 - **New sessions.** Creation is keyed to the occurrence on both harnesses. The
   Claude harness accepts a supplied session id; pi mints its own. So the
   occurrence is recorded on the session (its Schedule link, written when the
@@ -252,9 +280,10 @@ held and whose rows count as the user typing.
 - **Pending cards do not hold it.** A target waiting on an approval card or a
   question still gets the occurrence as a new turn, like a queued or peer
   prompt. The card stays pending.
-- **Archived and settled targets** are unarchived and unsettled, then delivered.
-  This differs from peer prompts on purpose: a weekly session the user settles
-  is auto-archived after seven days.
+- **Archived and settled targets** are unarchived and unsettled at the final
+  admission check, then delivered; the restore must succeed before the append,
+  or the occurrence is not delivered. This differs from peer prompts on purpose:
+  a weekly session the user settles is auto-archived after seven days.
 - **Deleted targets** delete the Schedules that target them.
 - **Never human intervention.** An occurrence does not close peer chains, does
   not reset the hop count, does not lift a Stop, and spends no hop.
@@ -295,9 +324,12 @@ the first matching row:
 
 The near-target row never overrides `controlledBy` or the card-always row.
 
-- **Cardless limit:** a session may control at most 10 active Schedules it
-  created without a card (setting). Card-approved and user-controlled Schedules
-  do not count.
+- **Cardless limit:** a session may control at most 10 Schedules it created
+  without a card (setting), disabled ones included; `done` ones do not count.
+  Card-approved and user-controlled Schedules do not count. The limit is checked
+  on every change that makes a Schedule count (a create, or an update or enable
+  that makes a `done` one active again), never on a change that adds nothing, so
+  a lowered limit never blocks edits, disabling or deleting.
 - **The card** shows name, prompt, timing with the next three occurrences,
   target and, for new sessions, agent, Project, account, model and effort. An
   update shows a diff. The prompt, timing and runtime are editable on the card;
@@ -314,14 +346,46 @@ The near-target row never overrides `controlledBy` or the card-always row.
 
 ## Agent tools
 
-Both deferred, for the developer and assistant personas.
+Both deferred, for the developer, assistant and personal-assistant personas; not
+for workshop or workflow coordinators. Plan mode keeps `schedule_read` and drops
+`schedule_manage`.
 
-- **`schedule_read`:** list and get, filtered by target session, creator or
-  state; includes history. Every Schedule is readable by every agent session.
-- **`schedule_manage`:** create, update, enable, disable, delete, in batches.
-  Timing accepts a local date-time in the user's zone, an ISO time with offset,
-  or a relative time ("in 45m"). Every result echoes the absolute local time and
-  the next three occurrences.
+- **`schedule_read`:** list and get, filtered by target session, creator
+  (`"user"` or a session id) or state (`enabled`, `disabled`, `done`). Every
+  Schedule is readable by every agent session. A list returns 50 by default and
+  at most 100, with `count` (rows returned) and `truncated`; each row shows its
+  next and last occurrence and the prompt clipped at 200 characters plus "…". By
+  id it returns the full prompt, the next three occurrences and at most 50
+  history entries, newest first; a history `error` is shown as stored.
+- **`schedule_manage`:** create, update, enable, disable, delete, 1 to 20
+  operations per call, applied in order; each operation is written whole or not
+  at all and fails alone, and the call fails only when its input is malformed or
+  every operation failed. Phase 1 writes only what needs no card (the
+  near-target row above): a create targets this session or a near child, and is
+  always created and controlled by this session and cardless; a change needs
+  this session as controller and a target that is still near, and a new target
+  must be near too. Nothing in an operation sets authority, cardlessness or a
+  zone.
+- **Timing input.** A row never names a zone: create uses the user's profile
+  zone, update the Schedule's stored zone. `once` takes a local date-time
+  (seconds round up to the minute; a skipped time keeps its wall time and occurs
+  when the gap ends), an ISO time with offset or `Z`, or a relative time ("in
+  45m", "in 2h", "in 1d", where 1d is 24 hours). The last two are instants,
+  rounded up to the minute; one that lands on the second pass of a repeated hour
+  is refused, since a Schedule occurs at the first. Every supplied timing, on
+  create and on update, must have a future occurrence: a past `once`, a repeat
+  whose `endsOn` has passed, or an expired timing equal to the stored one fails
+  its operation with `Schedule timing has no future occurrence` before anything
+  is written or cut over. An update without a timing keeps the rules above, so a
+  Schedule whose timing runs out by itself still becomes `done`; an agent ends a
+  Schedule by disabling or deleting it.
+- **Echoes.** Every create, update, enable and disable result echoes the
+  Schedule with up to three next occurrences, fewer when its timing runs out
+  sooner, and `[]` when it is disabled or `done`. A delete result is exactly
+  `{operation, ok, id, deleted}`. Every absolute time (echoes, `next`, history
+  `due`, `claimed` and `ended`) is `formatScheduleInstant` in the Schedule's
+  stored zone. The 500-character bound applies to delivery and history reasons
+  only, not to an operation's validation error.
 
 The tool description must say that Schedules are for wall-clock times and
 `Monitor` is for conditions, and that a prompt must stand on its own: after
@@ -363,8 +427,8 @@ projects `paused` from the store.
 ### Implemented so far
 
 Phase 1 lands in two pull requests ([Task-1502](pa://task/1502), then
-[Task-1503](pa://task/1503)). Built so far, and inert: nothing in production
-creates a Schedule yet.
+[Task-1503](pa://task/1503)). Agents create Schedules for existing sessions
+through the tools; there is no UI, card, grant, link or new-session target yet.
 
 - `app/shared/schedules.ts`: the model and `nextOccurrencesAfter`.
 - Migration `0108_schedule_pause.sql`: Pause all as one row with no seed. SQLite
@@ -408,14 +472,27 @@ creates a Schedule yet.
   hears every claim through `onClaimed`, its own and a Pause all switch's, and
   runs its `claimed` hook once per claim with the target from the occurrence's
   frozen copy. The hook is a wake, not a durable event: a claim committed while
-  the clock is stopped stays owed and is not replayed at start. Nothing is
-  attached to it yet, so a claimed occurrence stays `claimed`.
+  the clock is stopped stays owed and is not replayed at start. It wakes the
+  scheduled prompts lane for that target.
 - Deleting a session deletes the Schedules that target it; the boot sweep
   catches those whose target was deleted while the server was down.
 
-Not built yet ([Task-1503](pa://task/1503)): the scheduled prompts lane and its
-crash recovery, the `schedule` transcript origin and its label, and the agent
-tools. Until then nothing creates a Schedule.
+- The scheduled prompts lane and its recovery
+  (`app/server/src/schedules/scheduledPrompts.ts`, the lane in
+  `sessionDeliveryLanes.ts`), as "Delivering into an existing session" and
+  "Admission and crash safety" describe. Each turn admits one occurrence, the
+  oldest first. The model-only header line collapses and trims the name's
+  whitespace and gives the due time in the occurrence's frozen zone; the durable
+  transcript entry holds the raw prompt with `origin: { kind: "schedule", … }`.
+  Boot recovery runs after the peer-prompt recovery offers and before the clock
+  starts.
+- The `schedule` origin, labelled plain "Scheduled prompt" in the transcript,
+  with no ⏰ label or link until the Schedules page exists (Phase 2).
+- A failed `schedules` snapshot or digest read answers its own collection error
+  (`Failed to list Schedules: …`, target `{type: "schedule"}`) and later topics
+  still answer; the web holds it without rendering it until Phase 2.
+- The agent tools (`app/server/src/tools/schedules/`), as "Agent tools"
+  describes, for existing-session near targets only.
 
 ## Phases
 

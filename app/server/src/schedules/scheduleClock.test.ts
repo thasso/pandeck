@@ -28,6 +28,10 @@ import {
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
+/** The write policy a store edit or switch settles under: the default grace. */
+const GRACE = {
+  graceMs: DEFAULT_SCHEDULE_SETTINGS.graceWindowMinutes * MINUTE,
+};
 const at = (iso: string) => Date.parse(iso);
 
 /** 09:00 UTC daily: due instants are fixed strings, no zone arithmetic. */
@@ -165,7 +169,7 @@ describe("arming", () => {
     const soon = scheduleStore.create(input(), DEC1 - 10 * MINUTE);
     const h = started(harness(DEC1 - 10 * MINUTE));
     assert.equal(h.firesAt(), DEC1);
-    scheduleStore.setEnabled(soon.id, false, h.now());
+    scheduleStore.setEnabled(soon.id, false, h.now(), GRACE);
     assert.equal(h.firesAt(), DEC1 - 10 * MINUTE + DAY, "disabled: 24h");
     scheduleStore.create(input({ timing: once("2026-12-05") }), h.now());
     assert.equal(h.firesAt(), DEC1 - 10 * MINUTE + DAY, "3 days out: 24h");
@@ -216,6 +220,7 @@ describe("arming", () => {
     scheduleStore.update(
       schedule.id,
       { target: { kind: "session", sessionId: "moved-target" } },
+      GRACE,
       DEC1 + MINUTE,
     );
     assert.deepEqual(scheduleStore.getOccurrence(occurrence!.id)?.target, {
@@ -736,7 +741,7 @@ describe("maintenance", () => {
     const t0 = DEC1 + 5 * MINUTE;
     const done = doneAt(h, t0);
     const disabled = scheduleStore.create(input(), h.now());
-    scheduleStore.setEnabled(disabled.id, false, h.now());
+    scheduleStore.setEnabled(disabled.id, false, h.now(), GRACE);
     const doneRevision = scheduleStore.revision(done)!;
     events.length = 0;
     const bound = t0 + SCHEDULE_RETENTION_MS + DAY;
@@ -747,7 +752,7 @@ describe("maintenance", () => {
       const deadline = h.clock.maintenanceDueAtMs()!;
       flip = !flip;
       h.setSettings({ graceWindowMinutes: flip ? 30 : 31 });
-      scheduleStore.update(disabled.id, { name: `Renamed ${t}` }, t);
+      scheduleStore.update(disabled.id, { name: `Renamed ${t}` }, GRACE, t);
       assert.equal(h.clock.maintenanceDueAtMs(), deadline, "never postponed");
       assert.ok(h.firesAt()! <= deadline);
       if (deletedAt === undefined && !scheduleStore.get(done)) deletedAt = t;
@@ -763,7 +768,7 @@ describe("maintenance", () => {
     const t0 = DEC1 + 5 * MINUTE;
     const done = doneAt(h, t0);
     const disabled = scheduleStore.create(input(), h.now());
-    scheduleStore.setEnabled(disabled.id, false, h.now());
+    scheduleStore.setEnabled(disabled.id, false, h.now(), GRACE);
     const doneRevision = scheduleStore.revision(done)!;
     events.length = 0;
     h.advanceTo(t0 + SCHEDULE_RETENTION_MS - 1);
@@ -793,8 +798,8 @@ describe("maintenance", () => {
       h.now(),
     );
     const indefinite = scheduleStore.create(input(), h.now());
-    scheduleStore.setEnabled(finite.id, false, h.now());
-    scheduleStore.setEnabled(indefinite.id, false, h.now());
+    scheduleStore.setEnabled(finite.id, false, h.now(), GRACE);
+    scheduleStore.setEnabled(indefinite.id, false, h.now(), GRACE);
     // Last date Dec 2 09:00; the first sweep after it stamps done.
     h.advanceTo(DEC1 + 2 * DAY);
     const doneAtMs = scheduleStore.get(finite.id)?.doneAtMs;

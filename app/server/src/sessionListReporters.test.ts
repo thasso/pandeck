@@ -203,6 +203,8 @@ const CLASSIFIED: Record<
       setArchived: "projected-write",
       archiveSettledBatch: "projected-write",
       isArchived: "read",
+      archiveFlags: "read",
+      restoreForScheduledDelivery: "projected-write",
       setSettled: "projected-write",
       settleWithPeers: "projected-write",
       isSettled: "read",
@@ -988,6 +990,33 @@ describe("fan-out", () => {
       () => sessionRetitlePending.endSessionRetitle(s, token!),
       [s],
     );
+  });
+
+  test("a scheduled delivery's restore reports the archived and settled row it clears", async () => {
+    const s = seed("scheduled");
+    sessionStore.setArchived(s, true);
+    sessionStore.setSettled(s, true);
+    const before = sessionStore.archiveFlags(s);
+    assert.ok(before?.archivedAtMs != null && before.settledAtMs != null);
+    let restored: boolean | undefined;
+    await assertReported(
+      "restore for a scheduled prompt",
+      () => {
+        restored = sessionStore.restoreForScheduledDelivery(s);
+      },
+      [s],
+    );
+    assert.equal(restored, true);
+    assert.deepEqual(sessionStore.archiveFlags(s), {
+      archivedAtMs: null,
+      settledAtMs: null,
+    });
+    // Neither flag set: nothing written, so nothing to report.
+    const again = await reported(() => {
+      restored = sessionStore.restoreForScheduledDelivery(s);
+    });
+    assert.equal(restored, false);
+    assert.ok(!again.changed.has(s) && !again.touched.has(s));
   });
 });
 

@@ -1121,6 +1121,35 @@ describe("MessageList prompt origins", () => {
     expect(container.textContent).toContain("Background work finished.");
   });
 
+  it("labels a scheduled prompt plainly, with its prompt and no header", () => {
+    const message: DisplayMessage = {
+      id: "scheduled-turn",
+      role: "user",
+      promptOrigin: {
+        kind: "schedule",
+        scheduleId: "sch_12",
+        occurrenceId: "occ_7",
+        dueAtMs: Date.UTC(2026, 10, 25, 14, 45),
+      },
+      blocks: [{ kind: "text", text: "Check PR CI." }],
+    };
+
+    render(message);
+
+    expect(
+      [...container.querySelectorAll("*")].some(
+        (element) =>
+          element.children.length === 0 &&
+          element.textContent === "Scheduled prompt",
+      ),
+    ).toBe(true);
+    expect(container.textContent).not.toContain("System prompt");
+    expect(container.textContent).not.toContain("User prompt");
+    expect(container.textContent).not.toContain("⏰");
+    expect(container.textContent).toContain("Check PR CI.");
+    expect(container.querySelector('a[href*="schedule"]')).toBeNull();
+  });
+
   function backgroundMessage(
     update: Record<string, unknown>,
     omittedCount?: number,

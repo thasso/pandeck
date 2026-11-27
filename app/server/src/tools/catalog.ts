@@ -104,6 +104,7 @@ import {
   workflowCoordinatorTaskCreateTools,
 } from "./tasks/taskTools.ts";
 import { initiativeTools } from "./initiatives/initiativeTools.ts";
+import { scheduleTools } from "./schedules/scheduleTools.ts";
 import { assistantTempoTools } from "./tempo/tempoTools.ts";
 import { assistantTempoExportTools } from "./tempo/tempoExportTools.ts";
 import { context7Tools } from "./web/context7Tools.ts";
@@ -181,6 +182,8 @@ const TOOL_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
   task_manage: "local",
   initiative_read: "none",
   initiative_manage: "local",
+  schedule_read: "none",
+  schedule_manage: "local",
   list_attachments: "none",
   read_attachment: "none",
   kb_search: "none",
@@ -881,6 +884,23 @@ function initiativeToolGroup(): UnclassifiedToolGroup {
   };
 }
 
+/**
+ * Schedules: prompts delivered into a session at a wall-clock time
+ * (`docs/schedules.md`, Agent tools). Deferred, and only for the developer,
+ * assistant and personal-assistant personas the contract names.
+ */
+function scheduleToolGroup(): UnclassifiedToolGroup {
+  return {
+    id: "schedules",
+    label: "Schedules",
+    description:
+      "Schedules: prompts delivered into a session at a wall-clock time, once or repeating.",
+    loading: "deferred",
+    family: "shared",
+    tools: scheduleTools(),
+  };
+}
+
 /** Extra groups for the coding personas (workshop/developer). */
 function codingToolGroups(): UnclassifiedToolGroup[] {
   return [
@@ -1080,6 +1100,11 @@ export function toolGroupsFor(agentType: AgentType): ToolGroup[] {
     ...commonToolGroups(agentType),
     ...(agentType === "developer" || isPersonalAssistantAgentType(agentType)
       ? [initiativeToolGroup()]
+      : []),
+    ...(agentType === "developer" ||
+    agentType === "assistant" ||
+    isPersonalAssistantAgentType(agentType)
+      ? [scheduleToolGroup()]
       : []),
     ...(agentType === "workshop" || agentType === "developer"
       ? codingToolGroups()

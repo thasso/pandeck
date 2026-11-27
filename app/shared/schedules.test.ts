@@ -1,11 +1,15 @@
 import { describe, expect, test } from "vitest";
 import {
+  canonicalScheduleTiming,
   DEFAULT_SCHEDULE_SETTINGS,
+  formatScheduleDue,
+  formatScheduleInstant,
   SCHEDULE_OCCURRENCE_STATES,
   SCHEDULE_WEEKDAYS,
   nextOccurrencesAfter,
   normalizeScheduleSettings,
   scheduleTimingError,
+  scheduleTimingsEqual,
   type ScheduleTiming,
   type ScheduleWeekday,
 } from "./schedules.ts";
@@ -265,6 +269,97 @@ describe("scheduleTimingError", () => {
   });
 });
 
+describe("canonicalScheduleTiming and scheduleTimingsEqual (T1.14)", () => {
+  const weekly: ScheduleTiming = {
+    kind: "weekly",
+    days: ["mon", "fri"],
+    time: "09:00",
+    timeZone: BERLIN,
+    endsOn: "2026-12-31",
+  };
+
+  test("the canonical form has the kind's keys in a fixed order and days in weekday order", () => {
+    const shuffled = {
+      endsOn: "2026-12-31",
+      timeZone: BERLIN,
+      days: ["fri", "mon"],
+      time: "09:00",
+      startsOn: undefined,
+      kind: "weekly",
+    } as unknown as ScheduleTiming;
+    const canonical = canonicalScheduleTiming(shuffled);
+    expect(JSON.stringify(canonical)).toBe(
+      '{"kind":"weekly","days":["mon","fri"],"time":"09:00","timeZone":"Europe/Berlin","endsOn":"2026-12-31"}',
+    );
+    expect(Object.keys(canonical)).not.toContain("startsOn");
+    // A once has no repeat window; a stray key of another kind is dropped.
+    expect(
+      canonicalScheduleTiming({
+        timeZone: "UTC",
+        time: "08:00",
+        date: "2026-12-01",
+        kind: "once",
+        days: ["mon"],
+      } as unknown as ScheduleTiming),
+    ).toStrictEqual({
+      kind: "once",
+      date: "2026-12-01",
+      time: "08:00",
+      timeZone: "UTC",
+    });
+  });
+
+  test("equal across key order, days order and absent vs undefined", () => {
+    expect(
+      scheduleTimingsEqual(weekly, {
+        ...weekly,
+        days: ["fri", "mon"],
+        startsOn: undefined,
+      } as unknown as ScheduleTiming),
+    ).toBe(true);
+    expect(
+      scheduleTimingsEqual({ kind: "daily", time: "09:00", timeZone: BERLIN }, {
+        timeZone: BERLIN,
+        time: "09:00",
+        kind: "daily",
+        endsOn: undefined,
+      } as unknown as ScheduleTiming),
+    ).toBe(true);
+  });
+
+  test("unequal for a changed zone, time, day, endsOn or kind", () => {
+    for (const changed of [
+      { ...weekly, timeZone: "Europe/London" },
+      { ...weekly, time: "09:01" },
+      { ...weekly, days: ["mon", "thu"] },
+      { ...weekly, days: ["mon"] },
+      { ...weekly, endsOn: "2027-01-01" },
+      { ...weekly, endsOn: undefined },
+      { ...weekly, startsOn: "2026-12-01" },
+    ] as ScheduleTiming[])
+      expect(scheduleTimingsEqual(weekly, changed)).toBe(false);
+    const monthly: ScheduleTiming = {
+      kind: "monthly",
+      day: 31,
+      time: "09:00",
+      timeZone: BERLIN,
+    };
+    expect(scheduleTimingsEqual(monthly, { ...monthly, day: 30 })).toBe(false);
+    expect(
+      scheduleTimingsEqual(
+        { kind: "daily", time: "09:00", timeZone: BERLIN },
+        { kind: "weekdays", time: "09:00", timeZone: BERLIN },
+      ),
+    ).toBe(false);
+    expect(
+      scheduleTimingsEqual(
+        { kind: "once", date: "2026-12-01", time: "09:00", timeZone: BERLIN },
+        { kind: "once", date: "2026-12-02", time: "09:00", timeZone: BERLIN },
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("normalizeScheduleSettings", () => {
   test("fills defaults, clamps ranges and rejects wrong kinds", () => {
     expect(normalizeScheduleSettings(undefined)).toEqual(
@@ -293,4 +388,57 @@ describe("normalizeScheduleSettings", () => {
 
 test("claimed is the one open occurrence state", () => {
   expect(SCHEDULE_OCCURRENCE_STATES[0]).toBe("claimed");
+});
+
+describe("schedule time formatting", () => {
+  // 2026-11-25 14:45Z is a Wednesday, CET (UTC+1) in Berlin.
+  const winter = Date.UTC(2026, 10, 25, 14, 45);
+
+  test("a due time reads in the frozen zone, without the year", () => {
+    expect(formatScheduleDue(winter, "Europe/Berlin")).toBe("Wed 25 Nov 15:45");
+    expect(formatScheduleDue(winter, "UTC")).toBe("Wed 25 Nov 14:45");
+    // Single-digit days are not padded; Tokyo is already on the next day.
+    expect(formatScheduleDue(Date.UTC(2026, 2, 3, 23, 5), "Asia/Tokyo")).toBe(
+      "Wed 4 Mar 08:05",
+    );
+  });
+
+  test("an absolute instant carries its year, zone and UTC offset", () => {
+    expect(formatScheduleInstant(winter, "Europe/Berlin")).toBe(
+      "Wed 25 Nov 2026 15:45 Europe/Berlin (UTC+01:00)",
+    );
+    // CEST in summer.
+    expect(
+      formatScheduleInstant(Date.UTC(2026, 6, 15, 7, 30), "Europe/Berlin"),
+    ).toBe("Wed 15 Jul 2026 09:30 Europe/Berlin (UTC+02:00)");
+    // West of UTC: EST in winter, EDT in summer.
+    expect(formatScheduleInstant(winter, "America/New_York")).toBe(
+      "Wed 25 Nov 2026 09:45 America/New_York (UTC-05:00)",
+    );
+    expect(
+      formatScheduleInstant(Date.UTC(2026, 6, 15, 13, 0), "America/New_York"),
+    ).toBe("Wed 15 Jul 2026 09:00 America/New_York (UTC-04:00)");
+    expect(
+      formatScheduleInstant(Date.UTC(2026, 0, 1, 0, 0), "Asia/Kolkata"),
+    ).toBe("Thu 1 Jan 2026 05:30 Asia/Kolkata (UTC+05:30)");
+  });
+
+  test("the offset tells a fall-back night's repeated wall time apart", () => {
+    // Berlin falls back on 25 Oct 2026 at 01:00Z: 02:30 local happens twice.
+    expect(
+      formatScheduleInstant(Date.UTC(2026, 9, 25, 0, 30), "Europe/Berlin"),
+    ).toBe("Sun 25 Oct 2026 02:30 Europe/Berlin (UTC+02:00)");
+    expect(
+      formatScheduleInstant(Date.UTC(2026, 9, 25, 1, 30), "Europe/Berlin"),
+    ).toBe("Sun 25 Oct 2026 02:30 Europe/Berlin (UTC+01:00)");
+    // The due form has no offset: both read the same, which is why tool
+    // output uses the absolute form.
+    expect(
+      formatScheduleDue(Date.UTC(2026, 9, 25, 0, 30), "Europe/Berlin"),
+    ).toBe(formatScheduleDue(Date.UTC(2026, 9, 25, 1, 30), "Europe/Berlin"));
+    // Spring forward on 29 Mar 2026 at 01:00Z: 01:59 CET, then 03:00 CEST.
+    expect(
+      formatScheduleInstant(Date.UTC(2026, 2, 29, 1, 0), "Europe/Berlin"),
+    ).toBe("Sun 29 Mar 2026 03:00 Europe/Berlin (UTC+02:00)");
+  });
 });

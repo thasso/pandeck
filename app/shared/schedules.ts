@@ -5,7 +5,12 @@
  * schedule clock arms with it, and the web and the agent tools preview with it.
  */
 import { clampInt } from "./memoryValidation.ts";
-import { addDaysToDate, localDateOf, localWallTimeMs } from "./zonedTime.ts";
+import {
+  addDaysToDate,
+  localDateOf,
+  localWallTimeMs,
+  wallClockMs,
+} from "./zonedTime.ts";
 
 const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const TIME_OF_DAY_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -240,6 +245,48 @@ export function scheduleTimingError(timing: unknown): string | null {
   return null;
 }
 
+/**
+ * `timing` in its one stored form: only the keys of its kind, in a fixed
+ * order, `days` in {@link SCHEDULE_WEEKDAYS} order, and an absent optional
+ * date omitted. `timing` must be valid ({@link scheduleTimingError}).
+ */
+export function canonicalScheduleTiming(
+  timing: ScheduleTiming,
+): ScheduleTiming {
+  const clock = { time: timing.time, timeZone: timing.timeZone };
+  if (timing.kind === "once")
+    return { kind: "once", date: timing.date, ...clock };
+  const window = {
+    ...(timing.startsOn !== undefined ? { startsOn: timing.startsOn } : {}),
+    ...(timing.endsOn !== undefined ? { endsOn: timing.endsOn } : {}),
+  };
+  switch (timing.kind) {
+    case "daily":
+    case "weekdays":
+      return { kind: timing.kind, ...clock, ...window };
+    case "weekly":
+      return {
+        kind: "weekly",
+        days: SCHEDULE_WEEKDAYS.filter((day) => timing.days.includes(day)),
+        ...clock,
+        ...window,
+      };
+    case "monthly":
+      return { kind: "monthly", day: timing.day, ...clock, ...window };
+  }
+}
+
+/** Whether two valid timings describe the same occurrences, key order aside. */
+export function scheduleTimingsEqual(
+  a: ScheduleTiming,
+  b: ScheduleTiming,
+): boolean {
+  return (
+    JSON.stringify(canonicalScheduleTiming(a)) ===
+    JSON.stringify(canonicalScheduleTiming(b))
+  );
+}
+
 /** ISO weekday of a calendar date; zone-free. */
 function weekdayOf(date: string): ScheduleWeekday {
   // getUTCDay: 0 = Sunday.
@@ -281,13 +328,19 @@ function occursOn(timing: ScheduleTiming, date: string): boolean {
 const MAX_DAYS_WITHOUT_MATCH = 400;
 
 /**
+ * The last date a timing can name: dates have four-digit years, and the day
+ * after this one has no such date, so a scan stops here.
+ */
+const LAST_CALENDAR_DATE = "9999-12-31";
+
+/**
  * The next `n` due instants of `timing` strictly after `afterMs`, ascending.
  *
  * Each due instant is the local wall-clock `time` on a matching local date in
  * `timing.timeZone`: a time the date skips (spring forward) occurs when the gap
  * ends, a time it repeats (fall back) once, at the first pass. `startsOn` and
  * `endsOn` are inclusive local dates. Fewer than `n` come back when the timing
- * runs out, none for a `once` already past.
+ * runs out, none for a `once` already past; the calendar ends with 9999-12-31.
  */
 export function nextOccurrencesAfter(
   timing: ScheduleTiming,
@@ -298,9 +351,12 @@ export function nextOccurrencesAfter(
   if (n <= 0) return out;
   const { time, timeZone } = timing;
   const window: ScheduleRepeatWindow = timing.kind === "once" ? {} : timing;
+  const today = localDateOf(afterMs, timeZone);
+  // Past the calendar's end, no date is left.
+  if (!ISO_DATE_RE.test(today)) return out;
   // A gap at the end of a local day moves that day's time onto the next one,
   // so the day before afterMs's local date may still hold a later instant.
-  let date = addDaysToDate(localDateOf(afterMs, timeZone), -1);
+  let date = addDaysToDate(today, -1);
   if (timing.kind === "once" && date < timing.date) date = timing.date;
   if (window.startsOn && date < window.startsOn) date = window.startsOn;
   let sinceMatch = 0;
@@ -313,7 +369,63 @@ export function nextOccurrencesAfter(
       if (dueAtMs > afterMs && dueAtMs > (out.at(-1) ?? -Infinity))
         out.push(dueAtMs);
     } else sinceMatch += 1;
+    if (date === LAST_CALENDAR_DATE) break;
     date = addDaysToDate(date, 1);
   }
   return out;
+}
+
+const FORMAT_WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const FORMAT_MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
+const pad2 = (value: number) => String(value).padStart(2, "0");
+
+/**
+ * The local wall clock of `atMs` in `timeZone`, field by field. Fixed English
+ * names, so the text never depends on the host's locale data.
+ */
+function scheduleWallClock(atMs: number, timeZone: string) {
+  const wall = new Date(wallClockMs(atMs, timeZone));
+  return {
+    weekday: FORMAT_WEEKDAYS[wall.getUTCDay()]!,
+    day: wall.getUTCDate(),
+    month: FORMAT_MONTHS[wall.getUTCMonth()]!,
+    year: wall.getUTCFullYear(),
+    time: `${pad2(wall.getUTCHours())}:${pad2(wall.getUTCMinutes())}`,
+    offsetMinutes: Math.round((wall.getTime() - atMs) / 60_000),
+  };
+}
+
+/**
+ * A due time as the scheduled-prompt header shows it, in the occurrence's
+ * frozen zone, without the year: `Wed 25 Nov 15:45`.
+ */
+export function formatScheduleDue(dueAtMs: number, timeZone: string): string {
+  const wall = scheduleWallClock(dueAtMs, timeZone);
+  return `${wall.weekday} ${wall.day} ${wall.month} ${wall.time}`;
+}
+
+/**
+ * An absolute instant with its zone and UTC offset, so a repeated wall time
+ * of a fall-back night stays unambiguous:
+ * `Wed 25 Nov 2026 15:45 Europe/Berlin (UTC+01:00)`.
+ */
+export function formatScheduleInstant(atMs: number, timeZone: string): string {
+  const wall = scheduleWallClock(atMs, timeZone);
+  const offset = Math.abs(wall.offsetMinutes);
+  const sign = wall.offsetMinutes < 0 ? "-" : "+";
+  return `${wall.weekday} ${wall.day} ${wall.month} ${wall.year} ${wall.time} ${timeZone} (UTC${sign}${pad2(Math.floor(offset / 60))}:${pad2(offset % 60)})`;
 }

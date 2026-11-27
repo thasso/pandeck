@@ -664,11 +664,69 @@ describe("tool catalog", () => {
     const workshop = new Set(
       agentToolsFor("workshop").map((tool) => tool.name),
     );
+    // Schedules are for the personas the contract names; workshop is not one.
+    const notWorkshop = new Set(["schedule_read", "schedule_manage"]);
     for (const name of assistant)
-      assert.ok(
+      assert.equal(
         workshop.has(name),
-        `workshop is missing assistant tool ${name}`,
+        !notWorkshop.has(name),
+        `workshop ${notWorkshop.has(name) ? "must not expose" : "is missing"} assistant tool ${name}`,
       );
+  });
+
+  test("Schedules are one deferred group for the developer, assistant and personal-assistant personas", () => {
+    const expected = ["schedule_read", "schedule_manage"];
+    for (const persona of [
+      "developer",
+      "assistant",
+      "personal-assistant",
+    ] as const) {
+      const groups = toolGroupsFor(persona).filter(({ tools }) =>
+        tools.some((tool) => expected.includes(tool.name)),
+      );
+      assert.deepEqual(
+        groups.map(({ id, loading, family, gate, eagerWhen }) => ({
+          id,
+          loading,
+          family,
+          gate,
+          eagerWhen,
+        })),
+        [
+          {
+            id: "schedules",
+            loading: "deferred",
+            family: "shared",
+            gate: undefined,
+            eagerWhen: undefined,
+          },
+        ],
+        persona,
+      );
+      assert.deepEqual(
+        groups[0]!.tools.map(({ name, sideEffects }) => [name, sideEffects]),
+        [
+          ["schedule_read", "none"],
+          ["schedule_manage", "local"],
+        ],
+      );
+      for (const name of expected)
+        assert.ok(!eagerToolNamesFor(persona).has(name), `${name} is deferred`);
+      // Plan mode keeps the read and drops the write.
+      const tools = agentToolsFor(persona);
+      const plan = modeGatedActiveToolNames(
+        "plan",
+        tools,
+        new Set(tools.map((tool) => tool.name)),
+      );
+      assert.ok(plan.has("schedule_read"), `${persona}: Plan keeps the read`);
+      assert.ok(!plan.has("schedule_manage"), `${persona}: Plan drops manage`);
+    }
+    for (const persona of ["workshop", "workflow-coordinator"] as const) {
+      const names = new Set(agentToolsFor(persona).map((tool) => tool.name));
+      for (const name of expected)
+        assert.ok(!names.has(name), `${persona} must not expose ${name}`);
+    }
   });
 });
 

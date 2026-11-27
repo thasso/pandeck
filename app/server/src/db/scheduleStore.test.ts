@@ -9,8 +9,12 @@ import { closeDb, getDb } from "./index.ts";
 import {
   SCHEDULE_HISTORY_LIMIT,
   SCHEDULE_RETENTION_MS,
+  ScheduleAdmissionResolverMissingError,
+  ScheduleCardlessLimitError,
   scheduleStore,
+  type ScheduleAdmissionEvidence,
   type ScheduleCreateInput,
+  type ScheduleOccurrenceRecord,
 } from "./scheduleStore.ts";
 import { currentId } from "./sequences.ts";
 import { sessionStore } from "./sessionStore.ts";
@@ -165,6 +169,7 @@ describe("scheduleStore", () => {
         target: { kind: "session", sessionId: "other-target" },
         timing: { ...DAILY, timeZone: "Asia/Tokyo" },
       },
+      GRACE,
       DEC1 + MINUTE,
     );
     const frozen = scheduleStore.getOccurrence(claimed.id)!;
@@ -260,12 +265,12 @@ describe("scheduleStore", () => {
   it("disabling withdraws the claimed occurrence; enabling resumes from now without catch-up", () => {
     const { id } = scheduleStore.create(input(), DEC1 - DAY);
     const owed = scheduleStore.claimDue(id, DEC1, GRACE).claimed!;
-    const disabled = scheduleStore.setEnabled(id, false, DEC1 + MINUTE)!;
+    const disabled = scheduleStore.setEnabled(id, false, DEC1 + MINUTE, GRACE)!;
     assert.equal(disabled.enabled, false);
     assert.equal(disabled.nextDueAtMs, undefined);
     assert.equal(disabled.doneAtMs, undefined);
     assert.equal(scheduleStore.getOccurrence(owed.id)?.state, "withdrawn");
-    const enabled = scheduleStore.setEnabled(id, true, DEC1 + 3 * DAY)!;
+    const enabled = scheduleStore.setEnabled(id, true, DEC1 + 3 * DAY, GRACE)!;
     assert.equal(enabled.nextDueAtMs, DEC1 + 3 * DAY + DAY);
     assert.deepEqual(scheduleStore.claimDue(id, DEC1 + 3 * DAY, GRACE), {
       missed: 0,
@@ -275,7 +280,7 @@ describe("scheduleStore", () => {
   it("setting the enabled state it already has writes nothing", () => {
     const { id } = scheduleStore.create(input(), DEC1 - DAY);
     const before = scheduleStore.revision(id);
-    scheduleStore.setEnabled(id, true, DEC1);
+    scheduleStore.setEnabled(id, true, DEC1, GRACE);
     assert.equal(scheduleStore.revision(id), before);
   });
 
@@ -300,7 +305,7 @@ describe("scheduleStore", () => {
     const { id } = scheduleStore.create(input(), DEC1 - DAY);
     const owed = scheduleStore.claimDue(id, DEC1, GRACE).claimed!;
     withFailingStamp(() =>
-      assert.throws(() => scheduleStore.setEnabled(id, false, DEC1 + 1)),
+      assert.throws(() => scheduleStore.setEnabled(id, false, DEC1 + 1, GRACE)),
     );
     assert.equal(scheduleStore.getOccurrence(owed.id)?.state, "claimed");
     assert.equal(scheduleStore.get(id)?.enabled, true);
@@ -371,7 +376,7 @@ describe("scheduleStore", () => {
       DEC1 + 1,
     );
     scheduleStore.claimDue(id, DEC1 + DAY, GRACE);
-    scheduleStore.setEnabled(id, false, DEC1 + DAY + 1);
+    scheduleStore.setEnabled(id, false, DEC1 + DAY + 1, GRACE);
     assert.deepEqual(states(id), [
       "2026-12-02T09:00:00.000Z withdrawn",
       "2026-12-01T09:00:00.000Z failed",
@@ -442,8 +447,8 @@ describe("scheduleStore", () => {
     );
     assert.equal(scheduleStore.dueIds(DEC1 + DAY).includes(id), false);
     assert.equal(scheduleStore.delete(id), false);
-    assert.equal(scheduleStore.update(id, { name: "x" }), undefined);
-    assert.equal(scheduleStore.setEnabled(id, false), undefined);
+    assert.equal(scheduleStore.update(id, { name: "x" }, GRACE), undefined);
+    assert.equal(scheduleStore.setEnabled(id, false, DEC1, GRACE), undefined);
   });
 
   it("deletes every Schedule that targets a session", () => {
@@ -475,7 +480,7 @@ describe("scheduleStore", () => {
     };
     const { id } = scheduleStore.create(input(), DEC1 - DAY);
     record(id);
-    scheduleStore.update(id, { prompt: "new prompt" }, DEC1 - DAY + 1);
+    scheduleStore.update(id, { prompt: "new prompt" }, GRACE, DEC1 - DAY + 1);
     record(id);
     const claimed = scheduleStore.claimDue(id, DEC1, GRACE).claimed!;
     record(id);
@@ -483,9 +488,9 @@ describe("scheduleStore", () => {
     record(id);
     scheduleStore.settleOccurrence(claimed.id, "delivered", {}, DEC1 + 2);
     record(id);
-    scheduleStore.setEnabled(id, false, DEC1 + 3);
+    scheduleStore.setEnabled(id, false, DEC1 + 3, GRACE);
     record(id);
-    scheduleStore.setEnabled(id, true, DEC1 + 4);
+    scheduleStore.setEnabled(id, true, DEC1 + 4, GRACE);
     record(id);
     scheduleStore.delete(id, DEC1 + 5);
     record(id);
@@ -548,7 +553,7 @@ describe("scheduleStore", () => {
       DEC1 - 1,
     );
     scheduleStore.claimDue(id, DEC1, GRACE);
-    scheduleStore.setEnabled(id, false, DEC1 + 1);
+    scheduleStore.setEnabled(id, false, DEC1 + 1, GRACE);
     // Dec 2 is still ahead, so disabling does not make it done.
     assert.equal(scheduleStore.get(id)?.doneAtMs, undefined);
     assert.deepEqual(states(id), ["2026-12-01T09:00:00.000Z withdrawn"]);
@@ -591,9 +596,9 @@ describe("scheduleStore", () => {
       }),
       DEC1 - DAY,
     ).id;
-    scheduleStore.setEnabled(once, false, DEC1 - DAY + 1);
+    scheduleStore.setEnabled(once, false, DEC1 - DAY + 1, GRACE);
     const indefinite = scheduleStore.create(input(), DEC1 - DAY).id;
-    scheduleStore.setEnabled(indefinite, false, DEC1 - DAY + 1);
+    scheduleStore.setEnabled(indefinite, false, DEC1 - DAY + 1, GRACE);
     // Enabled, its last due time claimed and not settled: still owed.
     const owed = scheduleStore.create(
       input({
@@ -624,7 +629,7 @@ describe("scheduleStore", () => {
       input({ timing: { ...DAILY, endsOn: "2026-12-01" } }),
       DEC1 - DAY,
     );
-    scheduleStore.setEnabled(id, false, DEC1 - DAY + 1);
+    scheduleStore.setEnabled(id, false, DEC1 - DAY + 1, GRACE);
     const before = scheduleStore.revision(id);
     withFailingStamp(() =>
       assert.throws(
@@ -697,7 +702,12 @@ describe("scheduleStore", () => {
     );
     scheduleStore.claimDue(id, DEC1 + 2 * 60 * MINUTE, GRACE);
     assert.equal(scheduleStore.get(id)?.doneAtMs, DEC1 + 2 * 60 * MINUTE);
-    const revived = scheduleStore.update(id, { timing: DAILY }, DEC1 + DAY)!;
+    const revived = scheduleStore.update(
+      id,
+      { timing: DAILY },
+      GRACE,
+      DEC1 + DAY,
+    )!;
     assert.equal(revived.doneAtMs, undefined);
     assert.equal(revived.nextDueAtMs, DEC1 + 2 * DAY);
   });
@@ -725,7 +735,7 @@ describe("scheduleStore.onWrite", () => {
     try {
       const created = scheduleStore.create(input(), DEC1 - 1);
       assert.deepEqual(heard, [false], "after commit");
-      scheduleStore.setEnabled(created.id, true, DEC1 - 1);
+      scheduleStore.setEnabled(created.id, true, DEC1 - 1, GRACE);
       assert.equal(heard.length, 1, "a write that changed nothing");
       withFailingStamp(() =>
         assert.throws(() => scheduleStore.delete(created.id, DEC1)),
@@ -1130,5 +1140,783 @@ describe("scheduleStore Pause all", () => {
         tick(id);
         assert.deepEqual(states(id), [`2026-12-02T09:00:00.000Z ${expected}`]);
       });
+  });
+});
+
+/*
+ * Edit and disable cutovers, cardless capacity and admission-aware ending
+ * (Task-1503). Fixture: daily 09:00 Europe/Berlin (UTC+1 in December), grace
+ * 60 minutes, explicit instants. Tests that end an attempted occurrence
+ * register a stub resolver and the hooks reset it.
+ */
+describe("scheduleStore cutovers, capacity and admission (Task-1503)", () => {
+  const BERLIN: ScheduleTiming = {
+    kind: "daily",
+    time: "09:00",
+    timeZone: "Europe/Berlin",
+  };
+  /** Local Berlin wall time on a December 2026 day. */
+  const local = (day: number, time: string) =>
+    at(`2026-12-${String(day).padStart(2, "0")}T${time}:00+01:00`);
+  const D1_0900 = local(1, "09:00");
+  const D10 = "Delivery uncertain (stub)";
+
+  beforeEach(() => {
+    getDb().exec("DELETE FROM schedule_occurrences; DELETE FROM schedules;");
+    resetPause();
+    scheduleStore.setAdmissionResolver(undefined);
+  });
+  afterEach(() => {
+    scheduleStore.setAdmissionResolver(undefined);
+    resetPause();
+    vi.restoreAllMocks();
+  });
+
+  /** A Berlin daily created Dec 1 08:00: its cursor is Dec 1 09:00. */
+  function daily(patch: Partial<ScheduleCreateInput> = {}) {
+    return scheduleStore.create(
+      input({ timing: BERLIN, ...patch }),
+      local(1, "08:00"),
+    );
+  }
+
+  /** The Schedule's Dec 1 occurrence, claimed at 09:00 and attempted. */
+  function attempted(id: string) {
+    const occurrence = scheduleStore.claimDue(id, D1_0900, GRACE).claimed!;
+    assert.equal(scheduleStore.markAttempted(occurrence.id, D1_0900 + 1), true);
+    return occurrence;
+  }
+
+  /** Records the resolver's calls and answers with `evidence`. */
+  function resolveWith(
+    evidence: (o: ScheduleOccurrenceRecord) => ScheduleAdmissionEvidence,
+  ): string[] {
+    const asked: string[] = [];
+    scheduleStore.setAdmissionResolver((o) => {
+      asked.push(o.id);
+      assert.equal(getDb().isTransaction, true, "inside the write");
+      return evidence(o);
+    });
+    return asked;
+  }
+
+  function listen() {
+    const heard = { writes: 0, claims: [] as ScheduleOccurrenceRecord[] };
+    const offWrite = scheduleStore.onWrite(() => (heard.writes += 1));
+    const offClaimed = scheduleStore.onClaimed((o) => heard.claims.push(o));
+    return {
+      heard,
+      off() {
+        offWrite();
+        offClaimed();
+      },
+    };
+  }
+
+  const occurrence = (id: string) => scheduleStore.getOccurrence(id)!;
+
+  describe("edit cutover (A-F006)", () => {
+    it("T1.1 an edit exactly at due claims it with the OLD prompt, then patches", () => {
+      const s = daily({ prompt: "Old prompt" });
+      const l = listen();
+      try {
+        const updated = scheduleStore.update(
+          s.id,
+          { prompt: "New prompt" },
+          GRACE,
+          D1_0900,
+        )!;
+        const [claim] = scheduleStore.history(s.id);
+        assert.deepEqual(states(s.id), ["2026-12-01T08:00:00.000Z claimed"]);
+        assert.equal(occurrence(claim!.id).prompt, "Old prompt");
+        assert.equal(updated.prompt, "New prompt");
+        assert.equal(updated.nextDueAtMs, local(2, "09:00"));
+        assert.deepEqual(
+          l.heard.claims.map((o) => o.id),
+          [claim!.id],
+        );
+      } finally {
+        l.off();
+      }
+    });
+
+    it("T1.2 an identical timing save, keys and days reordered, keeps the cursor and adds no rows", () => {
+      const weekly: ScheduleTiming = {
+        kind: "weekly",
+        days: ["mon", "tue"],
+        time: "09:00",
+        timeZone: "Europe/Berlin",
+      };
+      const s = daily({ timing: weekly });
+      assert.equal(s.nextDueAtMs, D1_0900, "Dec 1 2026 is a Tuesday");
+      const reordered = {
+        timeZone: "Europe/Berlin",
+        time: "09:00",
+        days: ["tue", "mon"],
+        kind: "weekly",
+      } as ScheduleTiming;
+      const updated = scheduleStore.update(
+        s.id,
+        { timing: reordered },
+        GRACE,
+        local(1, "08:30"),
+      )!;
+      assert.equal(updated.nextDueAtMs, D1_0900);
+      assert.deepEqual(updated.timing, weekly, "the stored form is kept");
+      assert.deepEqual(states(s.id), []);
+    });
+
+    it("T1.3 a prompt-only edit before due keeps the cursor and adds no rows", () => {
+      const s = daily();
+      const updated = scheduleStore.update(
+        s.id,
+        { prompt: "Changed" },
+        GRACE,
+        local(1, "08:30"),
+      )!;
+      assert.equal(updated.nextDueAtMs, D1_0900);
+      assert.deepEqual(states(s.id), []);
+    });
+
+    it("T1.4 a changed timing settles the old due first, then runs from the first new occurrence after now", () => {
+      const s = daily({ prompt: "Old prompt" });
+      const ten = { ...BERLIN, time: "10:00" };
+      const late = scheduleStore.update(
+        s.id,
+        { timing: ten, prompt: "New prompt" },
+        GRACE,
+        local(1, "09:30"),
+      )!;
+      const [claim] = scheduleStore.history(s.id);
+      assert.deepEqual(states(s.id), ["2026-12-01T08:00:00.000Z claimed"]);
+      assert.equal(occurrence(claim!.id).prompt, "Old prompt");
+      assert.equal(late.nextDueAtMs, local(1, "10:00"));
+
+      const early = daily();
+      const before = scheduleStore.update(
+        early.id,
+        { timing: ten },
+        GRACE,
+        local(1, "08:00"),
+      )!;
+      assert.deepEqual(states(early.id), []);
+      assert.equal(before.nextDueAtMs, local(1, "10:00"));
+    });
+
+    it("T1.5 a combined prompt and target edit claims with the old prompt and target", () => {
+      const s = daily({
+        prompt: "Old prompt",
+        target: { kind: "session", sessionId: "old-target" },
+      });
+      const l = listen();
+      try {
+        scheduleStore.update(
+          s.id,
+          {
+            prompt: "New prompt",
+            target: { kind: "session", sessionId: "new-target" },
+          },
+          GRACE,
+          local(1, "09:10"),
+        );
+        const [claim] = l.heard.claims;
+        assert.equal(l.heard.claims.length, 1);
+        assert.equal(claim!.prompt, "Old prompt");
+        assert.deepEqual(claim!.target, {
+          kind: "session",
+          sessionId: "old-target",
+        });
+        assert.deepEqual(
+          scheduleStore.owedForTarget("old-target").map((o) => o.id),
+          [claim!.id],
+        );
+        assert.deepEqual(scheduleStore.owedForTarget("new-target"), []);
+        assert.deepEqual(scheduleStore.get(s.id)!.target, {
+          kind: "session",
+          sessionId: "new-target",
+        });
+      } finally {
+        l.off();
+      }
+    });
+
+    it("T1.6 under Pause all an edit records the due time missed and keeps an earlier claim owed", () => {
+      const s = daily();
+      const survivor = scheduleStore.claimDue(s.id, D1_0900, GRACE).claimed!;
+      scheduleStore.setPaused(true, local(2, "08:00"), GRACE.graceMs);
+      const updated = scheduleStore.update(
+        s.id,
+        { prompt: "Changed" },
+        GRACE,
+        local(2, "09:30"),
+      )!;
+      assert.deepEqual(states(s.id), [
+        "2026-12-02T08:00:00.000Z missed",
+        "2026-12-01T08:00:00.000Z claimed",
+      ]);
+      assert.equal(occurrence(survivor.id).state, "claimed");
+      assert.equal(updated.nextDueAtMs, local(3, "09:00"));
+    });
+
+    it("T1.7 after downtime an edit claims only the latest within grace and misses the rest", () => {
+      const s = daily();
+      const updated = scheduleStore.update(
+        s.id,
+        { prompt: "Changed" },
+        GRACE,
+        local(3, "09:20"),
+      )!;
+      assert.deepEqual(states(s.id), [
+        "2026-12-03T08:00:00.000Z claimed",
+        "2026-12-02T08:00:00.000Z missed",
+        "2026-12-01T08:00:00.000Z missed",
+      ]);
+      assert.equal(updated.nextDueAtMs, local(4, "09:00"));
+
+      const beyond = daily();
+      scheduleStore.update(
+        beyond.id,
+        { prompt: "Changed" },
+        GRACE,
+        local(3, "10:30"),
+      );
+      assert.deepEqual(states(beyond.id), [
+        "2026-12-03T08:00:00.000Z missed",
+        "2026-12-02T08:00:00.000Z missed",
+        "2026-12-01T08:00:00.000Z missed",
+      ]);
+    });
+
+    it("T1.8 an edit at due supersedes a not-attempted claim without asking the resolver", () => {
+      const s = daily();
+      const older = scheduleStore.claimDue(s.id, D1_0900, GRACE).claimed!;
+      const asked = resolveWith(() => ({ kind: "absent" }));
+      const now = local(2, "09:00");
+      scheduleStore.update(s.id, { prompt: "Changed" }, GRACE, now);
+      assert.equal(occurrence(older.id).state, "superseded");
+      assert.equal(occurrence(older.id).endedAtMs, now);
+      assert.deepEqual(asked, []);
+      assert.deepEqual(states(s.id), [
+        "2026-12-02T08:00:00.000Z claimed",
+        "2026-12-01T08:00:00.000Z superseded",
+      ]);
+    });
+
+    it("T1.9 an edit cutover rolls back whole, and a throwing hand-off after commit still tells the listeners", () => {
+      const s = daily();
+      const revision = scheduleStore.revision(s.id);
+      const l = listen();
+      try {
+        withFailingStamp(() =>
+          assert.throws(
+            () => scheduleStore.update(s.id, { prompt: "x" }, GRACE, D1_0900),
+            /stamp failed/,
+          ),
+        );
+        assert.deepEqual(states(s.id), []);
+        assert.equal(scheduleStore.get(s.id)!.nextDueAtMs, D1_0900);
+        assert.notEqual(scheduleStore.get(s.id)!.prompt, "x");
+        assert.equal(scheduleStore.revision(s.id), revision);
+        assert.deepEqual({ ...l.heard }, { writes: 0, claims: [] });
+
+        const previous = setStateChangeSink(() => {
+          throw new Error("sink broke");
+        });
+        try {
+          assert.throws(
+            () => scheduleStore.update(s.id, { prompt: "y" }, GRACE, D1_0900),
+            /sink broke/,
+          );
+        } finally {
+          setStateChangeSink(previous);
+        }
+        const [claim] = scheduleStore.history(s.id);
+        assert.equal(claim?.state, "claimed", "the cutover committed");
+        assert.equal(scheduleStore.get(s.id)!.prompt, "y");
+        assert.deepEqual(
+          l.heard.claims.map((o) => o.id),
+          [claim!.id],
+        );
+        assert.equal(l.heard.writes, 1);
+      } finally {
+        l.off();
+      }
+    });
+  });
+
+  describe("T1.10 disable cutover (D4)", () => {
+    function disabledAt(nowMs: number, s = daily()) {
+      const l = listen();
+      try {
+        const summary = scheduleStore.setEnabled(s.id, false, nowMs, GRACE)!;
+        assert.equal(summary.enabled, false);
+        assert.equal(summary.nextDueAtMs, undefined, "cursor null");
+        const row = getDb()
+          .prepare("SELECT enabled, next_due_at_ms FROM schedules WHERE id = ?")
+          .get(s.id);
+        assert.deepEqual({ ...row }, { enabled: 0, next_due_at_ms: null });
+        return { id: s.id, heard: l.heard };
+      } finally {
+        l.off();
+      }
+    }
+
+    it("a due time inside grace is claimed, then withdrawn, and never heard as a claim", () => {
+      const { id, heard } = disabledAt(local(1, "09:10"));
+      assert.deepEqual(states(id), ["2026-12-01T08:00:00.000Z withdrawn"]);
+      assert.deepEqual(heard.claims, []);
+      assert.equal(heard.writes, 1);
+    });
+
+    it("a due time beyond grace is missed", () => {
+      const { id } = disabledAt(local(1, "10:30"));
+      assert.deepEqual(states(id), ["2026-12-01T08:00:00.000Z missed"]);
+    });
+
+    it("under Pause all a due time is missed", () => {
+      scheduleStore.setPaused(true, local(1, "08:30"), GRACE.graceMs);
+      const { id } = disabledAt(local(1, "09:10"));
+      assert.deepEqual(states(id), ["2026-12-01T08:00:00.000Z missed"]);
+    });
+
+    it("an already-owed not-attempted claim is withdrawn", () => {
+      const s = daily();
+      const owed = scheduleStore.claimDue(s.id, D1_0900, GRACE).claimed!;
+      disabledAt(local(1, "12:00"), s);
+      assert.equal(occurrence(owed.id).state, "withdrawn");
+      assert.equal(occurrence(owed.id).endedAtMs, local(1, "12:00"));
+    });
+
+    it("an owed claim and a new due time inside grace both end withdrawn", () => {
+      const s = daily();
+      scheduleStore.claimDue(s.id, D1_0900, GRACE);
+      const { id } = disabledAt(local(2, "09:10"), s);
+      assert.deepEqual(states(id), [
+        "2026-12-02T08:00:00.000Z withdrawn",
+        "2026-12-01T08:00:00.000Z superseded",
+      ]);
+    });
+  });
+
+  describe("cardless capacity (F003)", () => {
+    const S = { kind: "session", sessionId: "controller" } as const;
+    const mine = (patch: Partial<ScheduleCreateInput> = {}) =>
+      input({ createdBy: S, cardless: true, timing: BERLIN, ...patch });
+    const NOW = local(1, "08:00");
+    const ONCE_PAST: ScheduleTiming = {
+      kind: "once",
+      date: "2026-12-01",
+      time: "09:00",
+      timeZone: "Europe/Berlin",
+    };
+    /** A counted once that is done after the clock passed it beyond grace. */
+    function doneOnce(): string {
+      const { id } = scheduleStore.create(mine({ timing: ONCE_PAST }), NOW);
+      scheduleStore.claimDue(id, local(1, "11:00"), GRACE);
+      assert.ok(scheduleStore.get(id)!.doneAtMs, "done");
+      return id;
+    }
+
+    it("T1.11 create counts enabled and disabled rows; done, deleted, carded and other sessions' rows do not", () => {
+      const limit = { cardlessLimit: 2 };
+      // Not counted: done, deleted, another session's, not cardless, or
+      // controlled by someone other than its creator.
+      doneOnce();
+      scheduleStore.delete(scheduleStore.create(mine(), NOW).id, NOW);
+      scheduleStore.create(
+        input({ createdBy: { kind: "session", sessionId: "other" } }),
+        NOW,
+        limit,
+      );
+      scheduleStore.create(mine({ cardless: false }), NOW);
+      scheduleStore.create(mine({ controlledBy: { kind: "user" } }), NOW);
+
+      scheduleStore.create(mine(), NOW, limit);
+      scheduleStore.create(mine({ enabled: false }), NOW, limit);
+      const before = scheduleStore.list().length;
+      const l = listen();
+      try {
+        assert.throws(
+          () => scheduleStore.create(mine(), NOW, limit),
+          (err: unknown) =>
+            err instanceof ScheduleCardlessLimitError &&
+            err.count === 2 &&
+            err.limit === 2,
+        );
+        assert.equal(scheduleStore.list().length, before, "rolled back");
+        assert.deepEqual({ ...l.heard }, { writes: 0, claims: [] });
+      } finally {
+        l.off();
+      }
+      // A carded write, or one without a limit, is never refused.
+      scheduleStore.create(mine({ cardless: false }), NOW, limit);
+      scheduleStore.create(mine(), NOW);
+    });
+
+    it("T1.12 reactivating a done Schedule counts it again, atomically", () => {
+      const a = doneOnce();
+      const b = scheduleStore.create(mine(), NOW).id;
+      const limit = { ...GRACE, cardlessLimit: 1 };
+      const future: ScheduleTiming = { ...ONCE_PAST, date: "2026-12-05" };
+      const revision = scheduleStore.revision(a);
+      const l = listen();
+      try {
+        assert.throws(
+          () =>
+            scheduleStore.update(
+              a,
+              { timing: future },
+              limit,
+              local(1, "12:00"),
+            ),
+          (err: unknown) =>
+            err instanceof ScheduleCardlessLimitError && err.count === 1,
+        );
+        assert.ok(scheduleStore.get(a)!.doneAtMs, "A is still done");
+        assert.equal(scheduleStore.get(a)!.nextDueAtMs, undefined);
+        assert.equal(scheduleStore.revision(a), revision);
+        assert.deepEqual({ ...l.heard }, { writes: 0, claims: [] });
+      } finally {
+        l.off();
+      }
+      scheduleStore.delete(b, local(1, "12:00"));
+      const revived = scheduleStore.update(
+        a,
+        { timing: future },
+        limit,
+        local(1, "12:00"),
+      )!;
+      assert.equal(revived.doneAtMs, undefined);
+      assert.equal(revived.nextDueAtMs, local(5, "09:00"));
+    });
+
+    it("T1.12 enabling a done, disabled Schedule is not refused and it stays done", () => {
+      const a = doneOnce();
+      scheduleStore.setEnabled(a, false, local(1, "12:00"), GRACE);
+      scheduleStore.create(mine(), NOW);
+      const enabled = scheduleStore.setEnabled(a, true, local(1, "13:00"), {
+        ...GRACE,
+        cardlessLimit: 1,
+      })!;
+      assert.equal(enabled.enabled, true);
+      assert.ok(enabled.doneAtMs, "still done");
+    });
+
+    it("T1.13 over a lowered limit every change that moves nothing into the count still works", () => {
+      const [a, b, c] = [1, 2, 3].map(
+        () => scheduleStore.create(mine(), NOW).id,
+      );
+      const lowered = { ...GRACE, cardlessLimit: 1 };
+      const at = local(1, "08:30");
+      assert.ok(scheduleStore.update(a!, { prompt: "Edited" }, lowered, at));
+      assert.equal(
+        scheduleStore.update(
+          b!,
+          { timing: { ...BERLIN, time: "10:00" } },
+          lowered,
+          at,
+        )!.nextDueAtMs,
+        local(1, "10:00"),
+      );
+      assert.equal(
+        scheduleStore.setEnabled(c!, false, at, lowered)!.enabled,
+        false,
+      );
+      assert.equal(
+        scheduleStore.setEnabled(c!, true, at, lowered)!.enabled,
+        true,
+        "a disabled Schedule still counts, so enabling moves nothing",
+      );
+      assert.equal(scheduleStore.delete(a!, at), true);
+      assert.throws(
+        () => scheduleStore.create(mine(), at, lowered),
+        (err: unknown) =>
+          err instanceof ScheduleCardlessLimitError && err.count === 2,
+      );
+    });
+  });
+
+  describe("admission-aware ending (B-P007)", () => {
+    const cases = [
+      {
+        evidence: (o: ScheduleOccurrenceRecord): ScheduleAdmissionEvidence => ({
+          kind: "present",
+          sessionId: o.target.sessionId,
+        }),
+        name: "present",
+      },
+      {
+        evidence: (): ScheduleAdmissionEvidence => ({ kind: "absent" }),
+        name: "absent",
+      },
+      {
+        evidence: (): ScheduleAdmissionEvidence => ({
+          kind: "unknown",
+          error: D10,
+        }),
+        name: "unknown",
+      },
+    ] as const;
+
+    /** What the attempted A must have become for each evidence case. */
+    function assertEnded(
+      a: ScheduleOccurrenceRecord,
+      name: (typeof cases)[number]["name"],
+      requested: "superseded" | "withdrawn",
+      nowMs: number,
+    ): void {
+      const ended = occurrence(a.id);
+      assert.equal(ended.endedAtMs, nowMs);
+      if (name === "present") {
+        assert.equal(ended.state, "delivered");
+        assert.equal(ended.sessionId, a.target.sessionId);
+        assert.equal(ended.error, undefined);
+      } else if (name === "unknown") {
+        assert.equal(ended.state, "failed");
+        assert.equal(ended.error, D10);
+        assert.equal(ended.sessionId, undefined);
+      } else {
+        assert.equal(ended.state, requested);
+        assert.equal(ended.error, undefined);
+        assert.equal(ended.sessionId, undefined);
+      }
+    }
+
+    for (const { name, evidence } of cases)
+      it(`T1.15 a clock claim supersedes an attempted claim by its evidence: ${name}`, () => {
+        const s = daily();
+        const a = attempted(s.id);
+        const asked = resolveWith(evidence);
+        const l = listen();
+        try {
+          const now = local(2, "09:00");
+          const b = scheduleStore.claimDue(s.id, now, GRACE).claimed!;
+          assert.deepEqual(asked, [a.id]);
+          assertEnded(a, name, "superseded", now);
+          assert.equal(occurrence(b.id).state, "claimed");
+          assert.deepEqual(
+            l.heard.claims.map((o) => o.id),
+            [b.id],
+            "only the new claim is heard",
+          );
+        } finally {
+          l.off();
+        }
+      });
+
+    it("T1.15 the evidence and the supersede roll back with the claim", () => {
+      const s = daily();
+      const a = attempted(s.id);
+      const asked = resolveWith((o) => ({
+        kind: "present",
+        sessionId: o.target.sessionId,
+      }));
+      withFailingStamp(() =>
+        assert.throws(
+          () => scheduleStore.claimDue(s.id, local(2, "09:00"), GRACE),
+          /stamp failed/,
+        ),
+      );
+      assert.deepEqual(asked, [a.id], "asked inside the rolled-back write");
+      assert.equal(occurrence(a.id).state, "claimed");
+      assert.equal(occurrence(a.id).endedAtMs, undefined);
+      assert.deepEqual(states(s.id), ["2026-12-01T08:00:00.000Z claimed"]);
+      assert.equal(scheduleStore.get(s.id)!.nextDueAtMs, local(2, "09:00"));
+    });
+
+    for (const { name, evidence } of cases) {
+      it(`T1.16 a disable ends an attempted claim by its evidence: ${name}`, () => {
+        const s = daily();
+        const a = attempted(s.id);
+        const asked = resolveWith(evidence);
+        const now = local(1, "09:10");
+        scheduleStore.setEnabled(s.id, false, now, GRACE);
+        assert.deepEqual(asked, [a.id]);
+        assertEnded(a, name, "withdrawn", now);
+        assert.equal(scheduleStore.get(s.id)!.enabled, false);
+      });
+
+      it(`T1.16 an edit at due supersedes an attempted claim by its evidence: ${name}`, () => {
+        const s = daily();
+        const a = attempted(s.id);
+        const asked = resolveWith(evidence);
+        const now = local(2, "09:00");
+        scheduleStore.update(s.id, { prompt: "Changed" }, GRACE, now);
+        assert.deepEqual(asked, [a.id]);
+        assertEnded(a, name, "superseded", now);
+        assert.equal(scheduleStore.history(s.id)[0]?.state, "claimed");
+      });
+
+      it(`T1.16 a Pause all claim supersedes an attempted claim by its evidence: ${name}`, () => {
+        const s = daily();
+        const a = attempted(s.id);
+        const asked = resolveWith(evidence);
+        const now = local(2, "09:05");
+        const outcome = scheduleStore.setPaused(true, now, GRACE.graceMs);
+        assert.equal(outcome.claimed.length, 1);
+        assert.deepEqual(asked, [a.id]);
+        assertEnded(a, name, "superseded", now);
+      });
+    }
+
+    it("T1.17 with no resolver, ending an attempted claim throws and rolls the whole write back", () => {
+      const s = daily();
+      const a = attempted(s.id);
+      const revision = scheduleStore.revision(s.id);
+      const l = listen();
+      try {
+        for (const write of [
+          () => scheduleStore.claimDue(s.id, local(2, "09:00"), GRACE),
+          () => scheduleStore.setEnabled(s.id, false, local(1, "10:00"), GRACE),
+          () =>
+            scheduleStore.update(
+              s.id,
+              { prompt: "x" },
+              GRACE,
+              local(2, "09:00"),
+            ),
+          () => scheduleStore.setPaused(true, local(2, "09:00"), GRACE.graceMs),
+        ])
+          assert.throws(write, ScheduleAdmissionResolverMissingError);
+        assert.equal(occurrence(a.id).state, "claimed");
+        assert.deepEqual(states(s.id), ["2026-12-01T08:00:00.000Z claimed"]);
+        assert.equal(scheduleStore.get(s.id)!.nextDueAtMs, local(2, "09:00"));
+        assert.equal(scheduleStore.get(s.id)!.enabled, true);
+        assert.equal(scheduleStore.paused(), false);
+        assert.equal(scheduleStore.revision(s.id), revision);
+        assert.deepEqual({ ...l.heard }, { writes: 0, claims: [] });
+      } finally {
+        l.off();
+      }
+
+      // A not-attempted claim needs no resolver.
+      const t = daily();
+      const owed = scheduleStore.claimDue(t.id, D1_0900, GRACE).claimed!;
+      scheduleStore.claimDue(t.id, local(2, "09:00"), GRACE);
+      assert.equal(occurrence(owed.id).state, "superseded");
+    });
+
+    it("T1.17 a resolver that throws or returns no evidence rolls the write back", () => {
+      const s = daily();
+      const a = attempted(s.id);
+      scheduleStore.setAdmissionResolver(() => {
+        throw new Error("resolver broke");
+      });
+      assert.throws(
+        () => scheduleStore.setEnabled(s.id, false, local(1, "10:00"), GRACE),
+        /resolver broke/,
+      );
+      scheduleStore.setAdmissionResolver(
+        () => undefined as unknown as ScheduleAdmissionEvidence,
+      );
+      assert.throws(
+        () => scheduleStore.setEnabled(s.id, false, local(1, "10:00"), GRACE),
+        /returned no evidence/,
+      );
+      assert.equal(occurrence(a.id).state, "claimed");
+      assert.equal(scheduleStore.get(s.id)!.enabled, true);
+    });
+
+    it("T1.18 a terminal row is never changed again, whoever ended it", () => {
+      const s = daily();
+      const a = attempted(s.id);
+      resolveWith((o) => ({ kind: "present", sessionId: o.target.sessionId }));
+      scheduleStore.claimDue(s.id, local(2, "09:00"), GRACE);
+      assert.equal(occurrence(a.id).state, "delivered");
+      for (const state of ["failed", "superseded", "withdrawn"] as const)
+        assert.equal(
+          scheduleStore.settleOccurrence(a.id, state, { error: "late" }),
+          false,
+        );
+      assert.equal(occurrence(a.id).state, "delivered");
+      assert.equal(occurrence(a.id).error, undefined);
+      assert.equal(scheduleStore.markAttempted(a.id), false);
+
+      // superseded, withdrawn and failed rows are as final.
+      const t = daily();
+      const superseded = scheduleStore.claimDue(t.id, D1_0900, GRACE).claimed!;
+      const withdrawn = scheduleStore.claimDue(
+        t.id,
+        local(2, "09:00"),
+        GRACE,
+      ).claimed!;
+      scheduleStore.setEnabled(t.id, false, local(2, "09:30"), GRACE);
+      const u = daily();
+      const failed = attempted(u.id);
+      resolveWith(() => ({ kind: "unknown", error: D10 }));
+      scheduleStore.setEnabled(u.id, false, local(1, "09:30"), GRACE);
+      for (const [row, state] of [
+        [superseded, "superseded"],
+        [withdrawn, "withdrawn"],
+        [failed, "failed"],
+      ] as const) {
+        assert.equal(occurrence(row.id).state, state);
+        assert.equal(
+          scheduleStore.settleOccurrence(row.id, "delivered", {
+            sessionId: "late",
+          }),
+          false,
+        );
+        assert.equal(occurrence(row.id).state, state);
+      }
+      assert.equal(occurrence(failed.id).error, D10);
+    });
+
+    it("T1.19 deleting a Schedule removes an attempted claim with its history, unasked", () => {
+      const s = daily({
+        target: { kind: "session", sessionId: "gone-target" },
+      });
+      const a = attempted(s.id);
+      const t = daily({
+        target: { kind: "session", sessionId: "gone-target" },
+      });
+      const b = attempted(t.id);
+      const asked = resolveWith(() => ({ kind: "absent" }));
+      assert.equal(scheduleStore.delete(s.id, local(1, "10:00")), true);
+      assert.equal(scheduleStore.getOccurrence(a.id), undefined);
+      assert.deepEqual(scheduleStore.history(s.id), []);
+      assert.deepEqual(
+        scheduleStore.deleteForTarget("gone-target", local(1, "10:00")),
+        [t.id],
+      );
+      assert.equal(scheduleStore.getOccurrence(b.id), undefined);
+      assert.deepEqual(asked, []);
+    });
+  });
+
+  describe("reads for the scheduled prompts lane and recovery", () => {
+    it("owesTarget and claimedOccurrences see only claimed rows; the resolver reads back", () => {
+      const s = daily({ target: { kind: "session", sessionId: "owed-a" } });
+      const t = daily({ target: { kind: "session", sessionId: "owed-b" } });
+      assert.equal(scheduleStore.owesTarget("owed-a"), false);
+      assert.deepEqual(scheduleStore.claimedOccurrences(), []);
+      const a = scheduleStore.claimDue(s.id, D1_0900, GRACE).claimed!;
+      const b = attempted(t.id);
+      assert.equal(scheduleStore.owesTarget("owed-a"), true);
+      assert.equal(scheduleStore.owesTarget("owed-b"), true);
+      assert.equal(scheduleStore.owesTarget("owed-c"), false);
+      const claimed = scheduleStore.claimedOccurrences();
+      assert.deepEqual(
+        claimed.map((o) => [o.id, o.target.sessionId, o.attemptedAtMs]),
+        [
+          [a.id, "owed-a", undefined],
+          [b.id, "owed-b", D1_0900 + 1],
+        ].sort((x, y) => String(x[0]).localeCompare(String(y[0]))),
+      );
+      scheduleStore.settleOccurrence(a.id, "delivered", {
+        sessionId: "owed-a",
+      });
+      assert.equal(scheduleStore.owesTarget("owed-a"), false);
+      assert.deepEqual(
+        scheduleStore.claimedOccurrences().map((o) => o.id),
+        [b.id],
+      );
+
+      assert.equal(scheduleStore.hasAdmissionResolver(), false);
+      resolveWith(() => ({ kind: "absent" }));
+      assert.equal(scheduleStore.hasAdmissionResolver(), true);
+      scheduleStore.setAdmissionResolver(undefined);
+      assert.equal(scheduleStore.hasAdmissionResolver(), false);
+    });
   });
 });

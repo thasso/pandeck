@@ -2,9 +2,9 @@
  * Kernel topics over the socket: `Connection` only routes. A `projects`,
  * `tasks` or `sessions` subscribe and `getStateItems` answer through the
  * topic's kernel (a `sessions` digest followed by the archived count), and a
- * Task, Project, Initiative or session subscribe that cannot read its
+ * Task, Project, Initiative, session or Schedule subscribe that cannot read its
  * collection answers that collection's `error`, so the pane owning it renders
- * the failure in place.
+ * the failure in place, and the topics after it still answer.
  *   pnpm --filter @assistant/server exec vitest run src/stateTopicSubscription.test.ts
  */
 import assert from "node:assert/strict";
@@ -18,8 +18,13 @@ import * as sessionList from "./harnesses/sessionList.ts";
 import { hub } from "./hub.ts";
 import { initiativeStore } from "./db/initiativeStore.ts";
 import { projectStore } from "./db/projectStore.ts";
+import { scheduleStore } from "./db/scheduleStore.ts";
 import { taskStore } from "./db/taskStore.ts";
 import { deleteProject, upsertProject } from "./projectRegistry.ts";
+import {
+  StateTopicInvariantError,
+  takeStateTopicInvariantsForTests,
+} from "./stateTopicKernel.ts";
 import { stateTopicFor } from "./stateTopics.ts";
 import { archiveTask, createTask, deleteTask } from "./tasks.ts";
 import { sessionListClient } from "./test/sessionListClient.ts";
@@ -136,6 +141,105 @@ test("an initiatives subscribe that cannot read answers the Initiative error", (
     ]);
   }
 });
+
+/** The topics one browser subscribes, with `schedules` between the others. */
+const SCHEDULE_NEIGHBOURS: BroadcastTopic[] = [
+  "sessions",
+  "schedules",
+  "tasks",
+  "projects",
+  "workflow",
+];
+
+test("a schedules snapshot that cannot read answers the Schedule error, and later topics still answer", () => {
+  const sent = failingSubscribeAll(false, () =>
+    vi.spyOn(scheduleStore, "list").mockImplementation(() => {
+      throw new Error("schedules unreadable");
+    }),
+  );
+  assert.deepEqual(
+    sent.map((message) => message.type),
+    ["sessionList", "error", "taskList", "projectList", "workflowRunList"],
+  );
+  assert.deepEqual(sent[1], {
+    type: "error",
+    message: "Failed to list Schedules: schedules unreadable",
+    target: { type: "schedule" },
+  });
+});
+
+test("a schedules digest that cannot read answers the Schedule error, and later topics still answer", () => {
+  const sent = failingSubscribeAll(true, () =>
+    vi.spyOn(scheduleStore, "digest").mockImplementation(() => {
+      throw new Error("schedules unreadable");
+    }),
+  );
+  assert.deepEqual(
+    sent.map((message) =>
+      message.type === "stateDigest"
+        ? `stateDigest:${message.topic}`
+        : message.type,
+    ),
+    [
+      "stateDigest:sessions",
+      "archivedSessionCount",
+      "error",
+      "stateDigest:tasks",
+      "stateDigest:projects",
+      "workflowRunList",
+    ],
+  );
+  assert.deepEqual(sent[2], {
+    type: "error",
+    message: "Failed to list Schedules: schedules unreadable",
+    target: { type: "schedule" },
+  });
+});
+
+test("a state-topic invariant from the schedules answer still propagates", () => {
+  for (const digest of [false, true]) {
+    const spy = vi
+      .spyOn(scheduleStore, digest ? "digest" : "list")
+      .mockImplementation(() => {
+        throw new StateTopicInvariantError("schedules unreported");
+      });
+    try {
+      const { connection, sent } = makeConnection();
+      assert.throws(
+        () =>
+          connection.onSubscribe(
+            ["schedules", "tasks"],
+            digest ? ["schedules", "tasks"] : [],
+          ),
+        (err: Error) => err.name === "StateTopicInvariantError",
+      );
+      assert.deepEqual(sent, []);
+    } finally {
+      spy.mockRestore();
+    }
+    const violations = takeStateTopicInvariantsForTests();
+    assert.equal(violations.length, 1);
+    assert.equal(violations[0]!.message, "schedules unreported");
+  }
+});
+
+/** {@link failingSubscribe} over every {@link SCHEDULE_NEIGHBOURS} topic. */
+function failingSubscribeAll(
+  digest: boolean,
+  fail: () => { mockRestore(): void },
+): ServerMessage[] {
+  const spy = fail();
+  try {
+    const { connection, sent } = makeConnection();
+    connection.onSubscribe(
+      SCHEDULE_NEIGHBOURS,
+      digest ? SCHEDULE_NEIGHBOURS.filter((topic) => topic !== "workflow") : [],
+    );
+    return sent;
+  } finally {
+    spy.mockRestore();
+  }
+}
 
 test("a tasks subscribe answers through the kernel: digest, snapshot and items", () => {
   const make = (title: string) =>

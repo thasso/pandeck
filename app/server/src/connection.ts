@@ -1918,6 +1918,12 @@ export class Connection implements Viewer {
           message: `Failed to list Initiatives: ${errorText(err)}`,
           target: { type: "initiative" },
         });
+      else if (topic === "schedules")
+        this.send({
+          type: "error",
+          message: `Failed to list Schedules: ${errorText(err)}`,
+          target: { type: "schedule" },
+        });
       else throw err;
     }
   }

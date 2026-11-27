@@ -601,6 +601,12 @@ export interface UIState {
    */
   schedules: ScheduleSummary[];
   /**
+   * The Schedule list could not be read; cleared by the next snapshot, an
+   * unchanged digest or a catch-up answer. Held only: nothing renders it until
+   * the Schedules page does (Task-1500).
+   */
+  scheduleListError: string | null;
+  /**
    * The inspector's last compaction-window save, by session id: busy while it
    * is unanswered, then its refusal (if any) until the next save.
    */
@@ -1067,6 +1073,7 @@ const emptyInitial: UIState = {
   initiativesRefreshing: false,
   initiativeListError: null,
   schedules: [],
+  scheduleListError: null,
   compactionWindowEdits: {},
   initiativeDetails: {},
   initiativeDetailRevisions: {},
@@ -4211,6 +4218,7 @@ const scheduleReplica: TopicDescriptor<
     revisions: message.revisions,
   }),
   place: (items, item) => [...items, item],
+  adoptSnapshot: (state) => ({ ...state, scheduleListError: null }),
   digest: {
     // A baseline exists only once this hook instance applied an answer.
     baseline: (state) => {
@@ -4224,8 +4232,10 @@ const scheduleReplica: TopicDescriptor<
         )
       );
     },
-    adoptDigest: (state) => state,
-    adoptItems: (state) => state,
+    // With changes, the error stands until the catch-up answers.
+    adoptDigest: (state, _message, changedIds) =>
+      changedIds.length === 0 ? { ...state, scheduleListError: null } : state,
+    adoptItems: (state) => ({ ...state, scheduleListError: null }),
   },
 };
 
@@ -6843,6 +6853,10 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
     case "error":
       // Collection reads belong to the replica/archive scheduler, not the chat.
       if (msg.target?.type === "session" && !msg.target.id) return state;
+      // The Schedules collection's condition, held apart from the chat: no
+      // chat error, no run reset.
+      if (msg.target?.type === "schedule" && !msg.target.id)
+        return { ...state, scheduleListError: msg.message };
       return withChat(
         {
           ...state,
@@ -8266,6 +8280,15 @@ export function useAssistant({
         episodeListReadsRef.current.tasks = false;
         if (!msg.requestId) replicaTransport.snapshotFailed("tasks");
       }
+      // Unstamped, the `schedules` snapshot read failed: the awaited answer
+      // will not come. It still reaches the reducer as `scheduleListError`.
+      if (
+        msg.type === "error" &&
+        msg.target?.type === "schedule" &&
+        !msg.target.id &&
+        !msg.requestId
+      )
+        replicaTransport.snapshotFailed("schedules");
       // The session collection's failures: unstamped, the `sessions` snapshot
       // read (the awaited answer will not come); stamped with the archived
       // flight's id, that read, whose flight it releases. A stale flight's

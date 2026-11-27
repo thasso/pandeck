@@ -36,6 +36,8 @@ const {
   SteerWithdrawnError,
 } = await import("./errors.ts");
 const { SessionLogStore } = await import("../log/store.ts");
+const { scheduledPromptHeader } =
+  await import("../../schedules/scheduledPrompts.ts");
 const { createPiAdapter } = await import("../adapters/pi.ts");
 const { createClaudeSdkAdapter } = await import("../adapters/claudeSdk.ts");
 const { NativeAdapterEventSource } =
@@ -1205,6 +1207,42 @@ test("model-only structured context stays out of the durable log", async () => {
     [{ type: "text", text: "Visible user instruction" }],
     "durable user entry excludes structured context",
   );
+  adapter.finishRun({ stopReason: "end" });
+  await run;
+});
+
+/* -------- a scheduled prompt: header model-only, origin durable ---------- */
+// Adapter-level (ScriptedAdapter), not native evidence: the lane and the real
+// harnesses prove the same through production delivery (T4.1, T7).
+test("a scheduled prompt's header reaches the model only; its origin is durable", async () => {
+  const { runtime, adapter } = makeRuntime();
+  const origin = {
+    kind: "schedule",
+    scheduleId: "sch_12",
+    occurrenceId: "occ_7",
+    dueAtMs: Date.UTC(2026, 10, 25, 14, 45),
+  } as const;
+  const header = scheduledPromptHeader({
+    scheduleId: "sch_12",
+    name: "PR CI check",
+    dueAtMs: origin.dueAtMs,
+    timeZone: "Europe/Berlin",
+  });
+  const run = runtime.prompt("s1", "Check PR CI", {
+    origin,
+    contextBlock: header,
+  });
+  await tick();
+  assert.equal(
+    adapter.lastPromptText,
+    '⏰ Scheduled prompt "PR CI check" · schedule `sch_12` · due Wed 25 Nov 15:45 Europe/Berlin\n\nCheck PR CI',
+  );
+  const userEntry = runtime
+    .get("s1")!
+    .getSnapshot()
+    .entries.find((e) => e.role === "user")!;
+  assert.deepEqual(userEntry.content, [{ type: "text", text: "Check PR CI" }]);
+  assert.deepEqual(userEntry.role === "user" && userEntry.origin, origin);
   adapter.finishRun({ stopReason: "end" });
   await run;
 });

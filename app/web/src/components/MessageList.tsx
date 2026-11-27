@@ -818,6 +818,8 @@ function promptOriginLabel(origin: DisplayMessage["promptOrigin"]): string {
     return origin.agentId === "post-reload-continuation"
       ? "Agent continuation"
       : "Agent prompt";
+  // Plain: the Schedule link and ⏰ label are the Schedules page's (P2).
+  if (origin.kind === "schedule") return "Scheduled prompt";
   // Delivered through the durable handoff queue since a Stop can hold it.
   if (origin.source === "post-reload-continuation") return "Agent continuation";
   return origin.source ? `System prompt · ${origin.source}` : "System prompt";

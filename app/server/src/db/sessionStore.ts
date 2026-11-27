@@ -53,6 +53,7 @@ import {
   type UsageCounters,
 } from "./sessionEngineBinding.ts";
 import { touchSessionRows } from "./sessionListChanges.ts";
+import { withChangeSet } from "./changeSet.ts";
 
 /**
  * Receives the ids of sessions whose LIVENESS may have changed: archived or
@@ -1428,6 +1429,52 @@ function dismissRunFailure(
   }
 }
 
+/**
+ * A live session's archive and settle flags, read strictly: a database error
+ * throws, and a missing or tombstoned session is undefined.
+ */
+function archiveFlags(
+  id: string,
+): { archivedAtMs: number | null; settledAtMs: number | null } | undefined {
+  const row = getDb()
+    .prepare(
+      "SELECT archived_at_ms, settled_at_ms FROM session_index WHERE id = ? AND deleted_at_ms IS NULL",
+    )
+    .get(id) as
+    { archived_at_ms: number | null; settled_at_ms: number | null } | undefined;
+  return row
+    ? { archivedAtMs: row.archived_at_ms, settledAtMs: row.settled_at_ms }
+    : undefined;
+}
+
+/**
+ * Unarchive and unsettle a session a scheduled prompt is about to be appended
+ * to, as `setArchived(false)` plus `setSettled(false)` would, but strictly and
+ * in one top-level change set (`docs/schedules.md`, "Delivering into an
+ * existing session"). True when it cleared a flag; false, with nothing
+ * written, when neither was set. A missing or tombstoned session throws, and
+ * so does any failure of the update or of the session-row and counterpart
+ * touches, rolling the write back. The liveness listeners keep their own
+ * best-effort catches. A throw after commit (the change set's hand-off) leaves
+ * the write standing; {@link archiveFlags} tells the two apart.
+ */
+function restoreForScheduledDelivery(id: string): boolean {
+  return withChangeSet(() => {
+    const flags = archiveFlags(id);
+    if (!flags) throw new Error(`Session not found: ${id}`);
+    if (flags.archivedAtMs === null && flags.settledAtMs === null) return false;
+    const changed = getDb()
+      .prepare(
+        "UPDATE session_index SET archived_at_ms = NULL, settled_at_ms = NULL WHERE id = ? AND deleted_at_ms IS NULL",
+      )
+      .run(id).changes;
+    if (Number(changed) !== 1)
+      throw new Error(`Session ${id} could not be unarchived`);
+    noteLiveness([id]);
+    return true;
+  });
+}
+
 function isArchived(id: string): boolean {
   const row = getDb()
     .prepare("SELECT archived_at_ms FROM session_index WHERE id = ?")
@@ -2486,6 +2533,8 @@ export const sessionStore = {
   setArchived,
   archiveSettledBatch,
   isArchived,
+  archiveFlags,
+  restoreForScheduledDelivery,
   setSettled,
   settleWithPeers,
   isSettled,

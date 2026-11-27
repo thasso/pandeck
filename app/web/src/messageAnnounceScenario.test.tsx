@@ -306,6 +306,23 @@ describe("what an arriving server message says", () => {
     expect(announced()).toEqual([]);
   });
 
+  // The Schedules list's failure is a condition the same way, held until its
+  // page renders it in place (Task-1500): never a toast, never the chat's.
+  it("keeps a Schedule list failure off the toasts and the chat", async () => {
+    await act(async () =>
+      socket.receive({
+        type: "error",
+        message: "Failed to list Schedules: disk full",
+        target: { type: "schedule" },
+      }),
+    );
+    expect(announced()).toEqual([]);
+    expect(latestState.scheduleListError).toBe(
+      "Failed to list Schedules: disk full",
+    );
+    expect(latestState.error).toBeNull();
+  });
+
   // The permanent Assistant's queue states are CONDITIONS on one message, not
   // events: they are rendered on that prompt's own row and never announced.
   // Each of them used to raise an info toast.
