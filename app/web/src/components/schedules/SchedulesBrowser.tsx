@@ -4,8 +4,7 @@ import type { ScheduleSummary } from "@assistant/shared/schedules";
 import { ListRow } from "../common/ListRow.tsx";
 import { EmptyBox, ErrorNote, PaneLoading } from "../common/load.tsx";
 import type { RowDensity } from "../../lib/rowDensity.ts";
-import { visibleSchedules } from "../../lib/schedules.ts";
-import { scheduleNextLabel } from "./SchedulesPage.tsx";
+import { scheduleNextLabel, visibleSchedules } from "../../lib/schedules.ts";
 
 /**
  * @component SchedulesBrowser

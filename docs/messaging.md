@@ -244,10 +244,12 @@ resolves it to a control key (`<id>:enabled`, `<id>:delete`, `<id>:update`,
 `schedules:pause`) before the record finishes. The key decides ahead of every
 claim below it, the staged send's included: the refusal is kept only while a
 mounted surface lists that key in `FailureHomes.controls`, and announced
-otherwise. Without this, a pause failure landing during a staged first send
-would be read as that send's untargeted blocker and narrated by a composer that
-knows nothing about it. An error that carries no control key still falls to the
-staged send as before.
+otherwise. `FailureHomes.controls` is the union of each surface's own claim
+(page, detail, session inspector), so one surface leaving never drops a key
+another still shows. Without this, a pause failure landing during a staged first
+send would be read as that send's untargeted blocker and narrated by a composer
+that knows nothing about it. An error that carries no control key still falls to
+the staged send as before.
 
 A collection's load failure needs no claim: it is a condition, kept on the
 collection and rendered by the pane whenever the user arrives, on screen or not,

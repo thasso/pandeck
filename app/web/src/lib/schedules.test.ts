@@ -6,10 +6,16 @@ import {
   formatScheduleDate,
   historyRequestNeeded,
   needsAttentionCount,
+  NO_SCHEDULE_CLAIMS,
+  nextRepeatingForSession,
+  scheduleClaimedKeys,
   scheduleDraftPatch,
   scheduleDraftTimingError,
   scheduleFailureReason,
+  scheduleNextLabel,
+  schedulesForSession,
   visibleSchedules,
+  withScheduleClaim,
 } from "./schedules.ts";
 
 function summary(overrides: Partial<ScheduleSummary> = {}): ScheduleSummary {
@@ -214,5 +220,108 @@ describe("historyRequestNeeded (F006)", () => {
     };
     expect(historyRequestNeeded(failed, 3, true)).toBe(false);
     expect(historyRequestNeeded(failed, 4, true)).toBe(true);
+  });
+});
+
+describe("schedulesForSession (AC11)", () => {
+  it("keeps only the Schedules targeting the session, in list order", () => {
+    const list = [
+      summary({ id: "a" }),
+      summary({ id: "b", target: { kind: "session", sessionId: "s2" } }),
+      summary({ id: "c", doneAtMs: 5 }),
+    ];
+    expect(schedulesForSession(list, "s1").map((item) => item.id)).toEqual([
+      "a",
+      "c",
+    ]);
+    expect(schedulesForSession(list, "s3")).toEqual([]);
+  });
+});
+
+describe("nextRepeatingForSession (AC12)", () => {
+  const weekly = {
+    kind: "weekly" as const,
+    days: ["mon" as const],
+    time: "11:00",
+    timeZone: "Europe/Berlin",
+  };
+  it("is the earliest enabled repeating Schedule with a next occurrence", () => {
+    const later = summary({ id: "later", nextDueAtMs: 2_000 });
+    const earlier = summary({
+      id: "earlier",
+      timing: weekly,
+      nextDueAtMs: 1_000,
+    });
+    const list = [later, earlier];
+    // The replica's own row, so a memoized chip keeps its props.
+    expect(nextRepeatingForSession(list, "s1")).toBe(earlier);
+  });
+
+  it("never a once, disabled, done or next-less Schedule, nor another session's", () => {
+    const once = summary({
+      id: "once",
+      timing: {
+        kind: "once",
+        date: "2026-12-01",
+        time: "11:00",
+        timeZone: "Europe/Berlin",
+      },
+      nextDueAtMs: 1,
+    });
+    const off = summary({ id: "off", enabled: false, nextDueAtMs: 2 });
+    const done = summary({ id: "done", doneAtMs: 3, nextDueAtMs: 3 });
+    const noNext = summary({ id: "none" });
+    const elsewhere = summary({
+      id: "elsewhere",
+      target: { kind: "session", sessionId: "s2" },
+      nextDueAtMs: 4,
+    });
+    expect(
+      nextRepeatingForSession([once, off, done, noNext, elsewhere], "s1"),
+    ).toBeUndefined();
+    const daily = summary({ id: "daily", nextDueAtMs: 9 });
+    expect(
+      nextRepeatingForSession(
+        [once, off, done, noNext, elsewhere, daily],
+        "s1",
+      ),
+    ).toBe(daily);
+  });
+});
+
+describe("scheduleNextLabel", () => {
+  it("says Done, Off, the due time, or none", () => {
+    expect(scheduleNextLabel(summary({ doneAtMs: 1 }))).toBe("Done");
+    expect(scheduleNextLabel(summary({ enabled: false }))).toBe("Off");
+    expect(scheduleNextLabel(summary())).toBe("—");
+    expect(
+      scheduleNextLabel(summary({ nextDueAtMs: Date.UTC(2026, 9, 19, 9, 0) })),
+    ).toBe("Mon 19 Oct 11:00");
+  });
+});
+
+describe("per-surface Schedule claims", () => {
+  it("keeps each surface's report apart and unions them", () => {
+    let claims = withScheduleClaim(NO_SCHEDULE_CLAIMS, "inspector", [
+      "a:enabled",
+    ]);
+    claims = withScheduleClaim(claims, "page", ["a:enabled", "b:enabled"]);
+    expect(scheduleClaimedKeys(claims)).toEqual(["a:enabled", "b:enabled"]);
+    // The page leaving clears only its own keys.
+    claims = withScheduleClaim(claims, "page", []);
+    expect(scheduleClaimedKeys(claims)).toEqual(["a:enabled"]);
+    claims = withScheduleClaim(claims, "detail", ["a:update"]);
+    expect(scheduleClaimedKeys(claims).sort()).toEqual([
+      "a:enabled",
+      "a:update",
+    ]);
+  });
+
+  it("returns the same object for an unchanged report", () => {
+    const claims = withScheduleClaim(NO_SCHEDULE_CLAIMS, "phone", ["x"]);
+    expect(withScheduleClaim(claims, "phone", ["x"])).toBe(claims);
+    expect(withScheduleClaim(NO_SCHEDULE_CLAIMS, "page", [])).toBe(
+      NO_SCHEDULE_CLAIMS,
+    );
   });
 });

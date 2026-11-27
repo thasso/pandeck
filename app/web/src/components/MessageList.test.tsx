@@ -1089,6 +1089,7 @@ describe("MessageList prompt origins", () => {
   function render(
     message: DisplayMessage,
     onOpenBackgroundWork?: (taskId: string) => void,
+    onOpenSchedule?: (scheduleId: string) => void,
   ): void {
     act(() =>
       root.render(
@@ -1097,6 +1098,7 @@ describe("MessageList prompt origins", () => {
           messages={[message]}
           view={view}
           {...(onOpenBackgroundWork ? { onOpenBackgroundWork } : {})}
+          {...(onOpenSchedule ? { onOpenSchedule } : {})}
         />,
       ),
     );
@@ -1121,33 +1123,75 @@ describe("MessageList prompt origins", () => {
     expect(container.textContent).toContain("Background work finished.");
   });
 
-  it("labels a scheduled prompt plainly, with its prompt and no header", () => {
-    const message: DisplayMessage = {
-      id: "scheduled-turn",
+  function scheduledMessage(scheduleId: string): DisplayMessage {
+    return {
+      id: `scheduled-turn-${scheduleId}`,
       role: "user",
       promptOrigin: {
         kind: "schedule",
-        scheduleId: "sch_12",
+        scheduleId,
         occurrenceId: "occ_7",
         dueAtMs: Date.UTC(2026, 10, 25, 14, 45),
       },
       blocks: [{ kind: "text", text: "Check PR CI." }],
     };
+  }
 
-    render(message);
+  /** The label link, opening the collapsed row first when it hides it. */
+  function scheduleLink(): HTMLAnchorElement | null {
+    const shown = container.querySelector<HTMLAnchorElement>(
+      'a[href^="/schedules/"]',
+    );
+    if (shown) return shown;
+    const row = [...container.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("⏰ Scheduled prompt"),
+    );
+    if (row)
+      act(() => {
+        row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+    return container.querySelector<HTMLAnchorElement>('a[href^="/schedules/"]');
+  }
 
-    expect(
-      [...container.querySelectorAll("*")].some(
-        (element) =>
-          element.children.length === 0 &&
-          element.textContent === "Scheduled prompt",
-      ),
-    ).toBe(true);
+  it("labels a scheduled prompt ⏰ Scheduled prompt, linked to its Schedule (AC13)", () => {
+    const onOpenSchedule = vi.fn();
+    render(scheduledMessage("sch_12"), undefined, onOpenSchedule);
+    expect(container.textContent).toContain("⏰ Scheduled prompt");
     expect(container.textContent).not.toContain("System prompt");
     expect(container.textContent).not.toContain("User prompt");
-    expect(container.textContent).not.toContain("⏰");
+    const link = scheduleLink()!;
+    expect(link.textContent).toBe("⏰ Scheduled prompt");
+    expect(link.getAttribute("href")).toBe("/schedules/sch_12");
     expect(container.textContent).toContain("Check PR CI.");
-    expect(container.querySelector('a[href*="schedule"]')).toBeNull();
+    act(() => {
+      link.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    });
+    expect(onOpenSchedule).toHaveBeenCalledWith("sch_12");
+  });
+
+  it("takes the href from the origin alone: no Schedule list, a deleted or unloaded id still links", () => {
+    // MessageList holds no Schedules at all, so a deleted or not-yet-loaded
+    // Schedule renders exactly as a held one does.
+    render(scheduledMessage("sch_gone"));
+    expect(scheduleLink()?.getAttribute("href")).toBe("/schedules/sch_gone");
+  });
+
+  it("leaves a modified click to the browser", () => {
+    const onOpenSchedule = vi.fn();
+    render(scheduledMessage("sch_12"), undefined, onOpenSchedule);
+    const link = scheduleLink()!;
+    const event = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      metaKey: true,
+    });
+    act(() => {
+      link.dispatchEvent(event);
+    });
+    expect(onOpenSchedule).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
   });
 
   function backgroundMessage(

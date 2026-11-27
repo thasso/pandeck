@@ -249,9 +249,11 @@ before calling a terminal hook, so completion, stamped error, timeout and
 unknown retire it once. The core owns each record's settled bit; a descriptor
 can wait for fresh authoritative evidence after settle without resetting the
 deadline. Its first-settle hook runs once. Descriptors keep domain deadlines,
-control keys, recovery and failure policy. Task, Project, workflow delivery,
-compaction and PR-card correlation live in those records, not separate control
-maps. Replica item reads retain their own request table and deadlines.
+control keys, recovery and failure policy. Task, Project, Schedule, workflow
+delivery, compaction and PR-card correlation live in those records, not separate
+control maps; a Schedules record resolves its refusal to a control key
+(`docs/messaging.md`). Replica item reads retain their own request table and
+deadlines.
 
 For Tasks and Projects, loss of a connected socket is terminal with **outcome
 unknown**. Failed connection attempts do not retire queued, unsent writes: their

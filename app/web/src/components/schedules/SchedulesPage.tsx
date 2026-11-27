@@ -1,11 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useId,
-  useMemo,
-  useState,
-  type MouseEvent,
-} from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { CalendarClock, Trash2 } from "lucide-react";
 import {
   formatScheduleDue,
@@ -31,6 +24,7 @@ import { sessionPath } from "../../lib/sessionRoutes.ts";
 import {
   describeScheduleTiming,
   scheduleFailureReason,
+  scheduleNextLabel,
   visibleSchedules,
   type ScheduleFilter,
 } from "../../lib/schedules.ts";
@@ -40,6 +34,7 @@ import {
 } from "./ScheduleDeleteDialog.tsx";
 import { useScheduleSessionTitles } from "./useScheduleSessionTitles.ts";
 import { useScheduleOutcomes } from "./useScheduleOutcomes.ts";
+import { openInApp } from "./scheduleLinks.ts";
 
 /** The approved U6 note, shown while Pause all is on. */
 const SCHEDULES_PAUSED_NOTE =
@@ -52,29 +47,6 @@ const SCHEDULES_PAUSED_NOTE =
  */
 const SCHEDULE_GRID =
   "flex w-full flex-wrap items-center gap-x-3 gap-y-0.5 sm:grid sm:grid-cols-16";
-
-/**
- * Follow an in-app link like the router does, leaving modified clicks (new
- * tab, new window) to the browser.
- */
-export function openInApp(
-  event: MouseEvent<HTMLAnchorElement>,
-  path: string,
-  onOpen: (path: string) => void,
-) {
-  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-  event.preventDefault();
-  onOpen(path);
-}
-
-/** The Next column (U8): Off, Done, a due time, or none. */
-export function scheduleNextLabel(schedule: ScheduleSummary): string {
-  if (schedule.doneAtMs !== undefined) return "Done";
-  if (!schedule.enabled) return "Off";
-  return schedule.nextDueAtMs !== undefined
-    ? formatScheduleDue(schedule.nextDueAtMs, schedule.timing.timeZone)
-    : "—";
-}
 
 /** The creator/controller label (U8): You, the session's title, or gone. */
 export function scheduleActorLabel(

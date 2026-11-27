@@ -2,13 +2,15 @@
  * @module schedules
  * @purpose The pure reads behind the Schedules surfaces (`docs/schedules.md`,
  *   Web): the needs-attention count, the Active/Done filter, the timing
- *   summaries, the editor's changed-fields patch and the history read's
- *   request predicate.
+ *   summaries, the editor's changed-fields patch, the history read's
+ *   request predicate, the session's Schedules and header chip, and the
+ *   per-surface control claims.
  * @intent Framework-free, so the rules the page, the nav count and the history
  *   effect share are decided once and tested without a DOM.
  */
 import {
   SCHEDULE_WEEKDAYS,
+  formatScheduleDue,
   scheduleTimingError,
   scheduleTimingFutureError,
   scheduleTimingsEqual,
@@ -51,6 +53,93 @@ export function visibleSchedules(
       ? schedule.doneAtMs !== undefined
       : schedule.doneAtMs === undefined,
   );
+}
+
+/**
+ * The Schedules targeting one session, in list order: the inspector's section
+ * (AC11). Read from the subscribed topic, so `SessionListItem` carries nothing.
+ */
+export function schedulesForSession(
+  schedules: readonly ScheduleSummary[],
+  sessionId: string,
+): ScheduleSummary[] {
+  return schedules.filter(
+    (schedule) =>
+      schedule.target.kind === "session" &&
+      schedule.target.sessionId === sessionId,
+  );
+}
+
+/**
+ * The header chip's Schedule (AC12, U3): among this session's enabled,
+ * repeating Schedules with a next occurrence, the earliest one. A Schedule
+ * that runs once never shows; ties keep list order.
+ */
+export function nextRepeatingForSession(
+  schedules: readonly ScheduleSummary[],
+  sessionId: string,
+): (ScheduleSummary & { nextDueAtMs: number }) | undefined {
+  let next: (ScheduleSummary & { nextDueAtMs: number }) | undefined;
+  for (const schedule of schedulesForSession(schedules, sessionId)) {
+    if (
+      !schedule.enabled ||
+      schedule.timing.kind === "once" ||
+      schedule.doneAtMs !== undefined ||
+      !hasNextDue(schedule)
+    )
+      continue;
+    // The replica's own row, never a copy: the chip memoizes on it.
+    if (next === undefined || schedule.nextDueAtMs < next.nextDueAtMs)
+      next = schedule;
+  }
+  return next;
+}
+
+function hasNextDue(
+  schedule: ScheduleSummary,
+): schedule is ScheduleSummary & { nextDueAtMs: number } {
+  return schedule.nextDueAtMs !== undefined;
+}
+
+/**
+ * The mounted surfaces that render Schedule write outcomes, each reporting its
+ * own claimed control keys (`docs/schedules.md`, Web): the phone's page screen,
+ * the main page, the detail and the session inspector. Claims are kept per
+ * surface so one surface's report never overwrites another's.
+ */
+export type ScheduleClaimSurface = "phone" | "page" | "detail" | "inspector";
+
+export const NO_SCHEDULE_CLAIMS: Readonly<
+  Record<ScheduleClaimSurface, string>
+> = { phone: "", page: "", detail: "", inspector: "" };
+
+/** One surface's report, as a joined key; the same object when unchanged. */
+export function withScheduleClaim(
+  claims: Readonly<Record<ScheduleClaimSurface, string>>,
+  surface: ScheduleClaimSurface,
+  keys: readonly string[],
+): Readonly<Record<ScheduleClaimSurface, string>> {
+  const joined = keys.join("\n");
+  return claims[surface] === joined ? claims : { ...claims, [surface]: joined };
+}
+
+/** Every surface's claimed keys together, each once. */
+export function scheduleClaimedKeys(
+  claims: Readonly<Record<ScheduleClaimSurface, string>>,
+): string[] {
+  const keys = new Set<string>();
+  for (const joined of Object.values(claims))
+    if (joined) for (const key of joined.split("\n")) keys.add(key);
+  return [...keys];
+}
+
+/** The Next column (U8): Off, Done, a due time, or none. */
+export function scheduleNextLabel(schedule: ScheduleSummary): string {
+  if (schedule.doneAtMs !== undefined) return "Done";
+  if (!schedule.enabled) return "Off";
+  return schedule.nextDueAtMs !== undefined
+    ? formatScheduleDue(schedule.nextDueAtMs, schedule.timing.timeZone)
+    : "—";
 }
 
 const DAY_LABEL: Record<ScheduleWeekday, string> = {

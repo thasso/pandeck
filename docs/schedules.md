@@ -411,14 +411,28 @@ compaction the session that wrote it may no longer know why ("check CI for PR
 
 - **Schedules page** (`/schedules`, a nav item): name, target, timing, next
   occurrence, last occurrence with its session, creator, on/off, delete, the
-  Done filter and Pause all. A needs-attention count on the nav item counts
-  Schedules whose last occurrence `failed`.
+  Done filter and Pause all. Active and Done are exclusive filters: a disabled
+  Schedule that is not `done` stays under Active and shows Off. While paused the
+  page shows the note "Paused. No new occurrences are claimed: due times are
+  recorded as missed and do not catch up on resume. An occurrence already
+  claimed, including one that fell due just before pausing, may still be
+  delivered."
+- **Needs-attention count** on the nav item: the literal number of Schedules
+  whose last occurrence `failed`, `done` and disabled ones included. There is no
+  acknowledge action; deleting the Schedule or a later last occurrence clears
+  it.
 - **Detail** (`/schedules/:id`): editable prompt, timing and target, the
-  new-session runtime, the next three occurrences, history.
+  new-session runtime, the next three occurrences, history (the 50 newest). The
+  zone is read-only and shown by name ("Time zone"); every instant the detail
+  shows names it through `formatScheduleInstant`.
 - **Session inspector:** the session's Schedules with an on/off switch each. A
   session a Schedule started links back to it.
-- **Session header:** a badge with the next occurrence, for repeating Schedules
-  only.
+- **Session header:** a chip with the next occurrence of the earliest enabled
+  repeating Schedule targeting the session, linked to its detail; a `once`, a
+  disabled or a `done` Schedule shows none.
+- **Transcript:** a scheduled prompt's row is titled "⏰ Scheduled prompt",
+  linked to `/schedules/<origin.scheduleId>` from the origin alone, so it links
+  even once the Schedule is deleted (the detail then shows not found).
 - There is no create button and no "Send later" in the composer: Schedules are
   created through agents.
 - Occurrences notify nothing of their own; the Sessions inbox signals as for any
@@ -515,17 +529,16 @@ through the tools; there is no UI, card, grant, link or new-session target yet.
   transcript entry holds the raw prompt with `origin: { kind: "schedule", … }`.
   Boot recovery runs after the peer-prompt recovery offers and before the clock
   starts.
-- The `schedule` origin, labelled plain "Scheduled prompt" in the transcript,
-  with no ⏰ label or link until the Schedules page exists (Phase 2).
+- The `schedule` origin on the durable transcript entry (its label and link
+  arrive with Phase 2, below).
 - A failed `schedules` snapshot or digest read answers its own collection error
   (`Failed to list Schedules: …`, target `{type: "schedule"}`) and later topics
   still answer; the page and the browser render it in place with Retry.
 - The agent tools (`app/server/src/tools/schedules/`), as "Agent tools"
   describes, for existing-session near targets only.
 
-Phase 2 ([Task-1500](pa://task/1500)) is in progress. The page, the detail and
-their state have landed; the inspector section, the header badge and the
-transcript label have not:
+Phase 2 ([Task-1500](pa://task/1500)): the page, the detail, the inspector
+section, the header chip, the transcript label and their state:
 
 - The user's commands (`app/server/src/schedules/scheduleUserCommands.ts`) and
   their messages, as "Who may change what" and "Sync and storage" describe. The
@@ -569,7 +582,10 @@ transcript label have not:
   carries that write's control key, and it is kept only while a mounted surface
   claims that key (`FailureHomes.controls`); otherwise it is announced, even
   while a staged first send is claiming untargeted errors. The open detail
-  claims its Schedule's id for object failures.
+  claims its Schedule's id for object failures. Each surface (the phone page,
+  the wide page, the detail, the inspector section) reports its own claimed keys
+  and the shell claims their union, so the inspector open beside the page or a
+  detail neither replaces nor drops the other's claim.
 - A surface owns a write's outcome once it sent that write, or once it saw it
   pending, at mount included (`useScheduleOutcomes`). It claims exactly the keys
   it owns or sees pending and renders an outcome only for an owned key, so a
@@ -593,6 +609,23 @@ transcript label have not:
   instead of an empty group. The Personal Assistant is never offered, and the
   current target stays listed, titled through its `pa://session` link, when no
   list holds it.
+- The session inspector's Schedules section
+  (`components/schedules/SessionSchedulesSection.tsx`), shown only when the
+  session has Schedules (`schedulesForSession`). Each row links its name to the
+  detail and carries the same `<id>:enabled` write as the page, its switch named
+  by the Schedule's name, under the same ownership rule: a refusal shows
+  "Couldn't save: {reason}" with Try again on the surface that owns the write.
+  While the list is unanswered or failed the section is absent; the collection
+  error lives on the page and the browser.
+- The session header chip (`components/schedules/ScheduleHeaderChip.tsx`,
+  `nextRepeatingForSession`), beside the title and outside its links: the due
+  label from `md` up, the icon alone on a phone, and at every width the
+  accessible label and tooltip "Next scheduled prompt: {instant with zone} ·
+  {name}". The shell derives it from the replica; `SessionListItem` carries
+  nothing.
+- The transcript label: the prompt row's collapsed title is the link, through
+  the host's stable `onOpenSchedule`; a modified click is left to the browser.
+  The assistant reply's origin badge shows the same text unlinked.
 
 ## Phases
 

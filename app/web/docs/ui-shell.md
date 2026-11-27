@@ -111,8 +111,11 @@ therefore lists no Actions and no View section on any layout — it holds the
 session's relations and sections. Neither the composer nor the dock row offers
 Comment any more, and the session header has no separate worktree button: in a
 worktree its title block (title, branch, uncommitted counts) is the link to the
-worktree's changes. Documents and worktree changes still follow the split above
-until they move to the same model.
+worktree's changes. The one other thing beside the title is the **next scheduled
+prompt** chip (Schedules, below): a sibling of the title, never nested in the
+title block's link, shown only while an enabled repeating Schedule targets the
+session. Documents and worktree changes still follow the split above until they
+move to the same model.
 
 Until every bottom-edge surface has migrated into shell furniture, the shell
 keeps `--app-bottom-chrome-inset` equal to the resting bottom card plus the safe
@@ -980,6 +983,18 @@ summary rather than "not found"; success navigates to the index. Every refusal
 renders in place with Try again on the surface that owns its write, the one that
 sent it or reopened while it was pending; a surface claims only those keys, so a
 refusal whose control is gone is announced instead (`lib/messageArrival.ts`).
+Each surface reports its claim separately and the shell claims their union, so
+the session inspector beside the page or a detail never overwrites theirs.
+
+A session's Schedules also show in two places outside the section. The session
+inspector has a **Schedules** section, present only while the session has any:
+each row's name links to the detail and its switch is the page's own on/off
+write. The session header carries a chip beside the title for the earliest
+enabled repeating Schedule: the next due time from `md` up, and on a phone the
+icon alone, the one header element that shrinks to an icon there; at every width
+its accessible label and tooltip name the instant with its zone and the
+Schedule. Both read the shell's Schedules state; neither adds to the session
+list items.
 
 ## Navigation Rules
 

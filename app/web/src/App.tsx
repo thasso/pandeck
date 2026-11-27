@@ -353,6 +353,16 @@ import {
   type PageHeaderBack,
 } from "./components/PageHeader.tsx";
 import { SessionContextSections } from "./components/SessionContextSections.tsx";
+import { SessionSchedulesSection } from "./components/schedules/SessionSchedulesSection.tsx";
+import { ScheduleHeaderChip } from "./components/schedules/ScheduleHeaderChip.tsx";
+import {
+  NO_SCHEDULE_CLAIMS,
+  nextRepeatingForSession,
+  scheduleClaimedKeys,
+  schedulesForSession,
+  withScheduleClaim,
+  type ScheduleClaimSurface,
+} from "./lib/schedules.ts";
 import { ToastViewport } from "./components/ToastViewport.tsx";
 import { AppStatus } from "./components/AppStatus.tsx";
 import { WorkflowRunStartSheet } from "./components/WorkflowRunStartSheet.tsx";
@@ -2684,12 +2694,39 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     (id: string) => navigate(schedulePath(id)),
     [navigate],
   );
-  // The Schedule controls on screen, by mutation key, as the pages report
-  // them: the arrival rules show a refusal for one of these in place.
-  const [scheduleControlsKey, setScheduleControlsKey] = useState("");
-  const claimScheduleControls = useCallback(
-    (keys: readonly string[]) => setScheduleControlsKey(keys.join("\n")),
+  // The Schedule controls on screen, by mutation key, PER SURFACE: the
+  // arrival rules show a refusal for one of these in place. Each surface
+  // reports only its own keys, so the inspector beside the page or a detail
+  // neither overwrites nor clears the other's claims.
+  const [scheduleClaims, setScheduleClaims] =
+    useState<Readonly<Record<ScheduleClaimSurface, string>>>(
+      NO_SCHEDULE_CLAIMS,
+    );
+  const claimPhonePageControls = useCallback(
+    (keys: readonly string[]) =>
+      setScheduleClaims((claims) => withScheduleClaim(claims, "phone", keys)),
     [],
+  );
+  const claimPageControls = useCallback(
+    (keys: readonly string[]) =>
+      setScheduleClaims((claims) => withScheduleClaim(claims, "page", keys)),
+    [],
+  );
+  const claimDetailControls = useCallback(
+    (keys: readonly string[]) =>
+      setScheduleClaims((claims) => withScheduleClaim(claims, "detail", keys)),
+    [],
+  );
+  const claimInspectorControls = useCallback(
+    (keys: readonly string[]) =>
+      setScheduleClaims((claims) =>
+        withScheduleClaim(claims, "inspector", keys),
+      ),
+    [],
+  );
+  const scheduleControlsKey = useMemo(
+    () => scheduleClaimedKeys(scheduleClaims).join("\n"),
+    [scheduleClaims],
   );
   const archivedTargets = useMemo(
     () => ({
@@ -2726,7 +2763,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
             onSetEnabled={actions.setScheduleEnabled}
             onDelete={actions.deleteSchedule}
             onOpen={navigate}
-            onClaimControls={claimScheduleControls}
+            onClaimControls={claimPhonePageControls}
           />
         </Suspense>
       ) : undefined,
@@ -2740,7 +2777,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       state.scheduleAttempts,
       actions,
       navigate,
-      claimScheduleControls,
+      claimPhonePageControls,
     ],
   );
   const initiativeSelectedTaskId = selectedInitiativeId
@@ -4571,14 +4608,34 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   // The title is a heading; the line under it says where the work lives —
   // its project and its worktree (branch and uncommitted changes) — and each
   // of those is a link of its own.
+  // The header chip's Schedule (AC12): the replica's own row, so the memoized
+  // chip redraws only when that Schedule changes.
+  const displaySessionId = displaySession?.sessionId;
+  const headerSchedule = useMemo(
+    () =>
+      displaySessionId
+        ? nextRepeatingForSession(state.schedules, displaySessionId)
+        : undefined,
+    [state.schedules, displaySessionId],
+  );
+  const sessionTitleLine = headerSchedule ? (
+    <div className="flex min-w-0 items-center gap-1.5">
+      <h2 className="min-w-0 truncate text-sm font-semibold tracking-tight text-foreground">
+        {sessionTitleText}
+      </h2>
+      <ScheduleHeaderChip schedule={headerSchedule} onOpen={navigate} />
+    </div>
+  ) : (
+    <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
+      {sessionTitleText}
+    </h2>
+  );
   const titleLink =
     "h-auto min-w-0 cursor-pointer justify-start gap-1 p-0 text-left text-xs font-normal text-muted-foreground hover:text-foreground hover:no-underline";
   const sessionTitleHeading =
     displayProject || displayWorktreeBranch || displayTask ? (
       <div className="flex min-w-0 flex-col">
-        <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
-          {sessionTitleText}
-        </h2>
+        {sessionTitleLine}
         {/* Responsive by its own width (`@container`): the project gives way
             to its key first, then the branch shortens with an ellipsis — the
             line never runs into the header's buttons. */}
@@ -4672,9 +4729,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         </div>
       </div>
     ) : (
-      <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
-        {sessionTitleText}
-      </h2>
+      sessionTitleLine
     );
   // The agentType applied to whatever harness the new chat picks (the top-left
   // agent picker drives this for ALL harnesses now).
@@ -5680,6 +5735,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       onOpenSession: openSession,
       onOpenTask: openTaskById,
       onOpenBackgroundWork: openBackgroundWork,
+      onOpenSchedule: openSchedule,
       onOpenWorktree: openWorktree,
       onDismissSessionFailure: dismissSessionFailure,
       onForkSession: actions.forkSession,
@@ -5698,6 +5754,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       openSession,
       openTaskById,
       openBackgroundWork,
+      openSchedule,
       openWorktree,
       dismissSessionFailure,
       actions.forkSession,
@@ -6317,6 +6374,37 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       navigate(path);
     },
     [mobileLayout, navigate, setInspectorOpen],
+  );
+  // The inspector's Schedules section (AC11), only when the session has any.
+  const sessionSchedules = useMemo(
+    () =>
+      displaySessionId
+        ? schedulesForSession(state.schedules, displaySessionId)
+        : [],
+    [state.schedules, displaySessionId],
+  );
+  const sessionSchedulesSection = useMemo(
+    () =>
+      displaySessionId && sessionSchedules.length > 0 ? (
+        <SessionSchedulesSection
+          sessionId={displaySessionId}
+          schedules={sessionSchedules}
+          mutations={state.scheduleMutations}
+          attempts={state.scheduleAttempts}
+          onSetEnabled={actions.setScheduleEnabled}
+          onOpen={navigateFromInspector}
+          onClaimControls={claimInspectorControls}
+        />
+      ) : undefined,
+    [
+      displaySessionId,
+      sessionSchedules,
+      state.scheduleMutations,
+      state.scheduleAttempts,
+      actions.setScheduleEnabled,
+      navigateFromInspector,
+      claimInspectorControls,
+    ],
   );
   /**
    * A worktree file picked in the session inspector opens in the right
@@ -7260,6 +7348,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
           sessionId={displaySession?.sessionId}
           toolExposure={displaySession?.toolExposure}
           agent={displaySession?.agent}
+          schedulesSection={sessionSchedulesSection}
           harness={displaySession?.harness}
           compactionWindow={displaySession?.compactionWindow}
           compactionWindowEdit={
@@ -7627,7 +7716,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                           onCloseHistory={actions.closeScheduleHistory}
                           onRetryHistory={actions.retryScheduleHistory}
                           onOpen={navigate}
-                          onClaimControls={claimScheduleControls}
+                          onClaimControls={claimDetailControls}
                         />
                       ) : browserScreen ? null : (
                         <SchedulesPage
@@ -7643,7 +7732,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                           onSetEnabled={actions.setScheduleEnabled}
                           onDelete={actions.deleteSchedule}
                           onOpen={navigate}
-                          onClaimControls={claimScheduleControls}
+                          onClaimControls={claimPageControls}
                         />
                       )}
                     </Suspense>

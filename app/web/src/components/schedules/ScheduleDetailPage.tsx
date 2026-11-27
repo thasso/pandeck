@@ -47,8 +47,8 @@ import {
   type ArchivedTargetsRead,
 } from "./ScheduleTargetPicker.tsx";
 import { ScheduleTimingFields } from "./ScheduleTimingFields.tsx";
+import { openInApp } from "./scheduleLinks.ts";
 import {
-  openInApp,
   scheduleActorLabel,
   scheduleSessionIds,
   useScheduleControlClaims,
