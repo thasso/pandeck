@@ -71,7 +71,12 @@ import type {
   SessionRuntimeAccount,
 } from "./sessionRuntime.ts";
 import { clampInt } from "./memoryValidation.ts";
-import type { ScheduleSettings, ScheduleSummary } from "./schedules.ts";
+import type {
+  ScheduleOccurrenceSummary,
+  ScheduleSettings,
+  ScheduleSummary,
+  ScheduleUserPatch,
+} from "./schedules.ts";
 import type {
   MemoryListFilter,
   MemoryListResult,
@@ -1803,7 +1808,7 @@ export type SessionTaskProgress = Record<TaskStatus, number>;
 export interface SessionObjectRef {
   objectType: Exclude<
     import("./objectLinks.ts").PaObjectType,
-    "session" | "approval" | "initiative"
+    "session" | "approval" | "initiative" | "schedule"
   >;
   id: string;
   source: "initial-context" | "comment-handoff" | "manual";
@@ -4899,21 +4904,12 @@ export type NoticeSeverity = "info" | "warning" | "error";
  * by something the client renders (the pane), so it needs a target for the same
  * reason a single object's does; what it does not have is a member to name.
  */
-export type MessageTarget = ObjectMessageTarget | ScheduleCollectionTarget;
+export type MessageTarget = ObjectMessageTarget;
 
 /** One app object, or (without `id`) its collection. */
 export interface ObjectMessageTarget {
   type: import("./objectLinks.ts").PaObjectType;
   id?: string;
-}
-
-/**
- * The Schedules collection, as the home of a list failure only. It has no
- * member id and is NOT a `pa://` object type: Schedule links are Task-1500.
- */
-export interface ScheduleCollectionTarget {
-  type: "schedule";
-  id?: undefined;
 }
 
 export interface SessionForkOrigin {
@@ -8379,6 +8375,37 @@ export type ClientMessage =
    */
   | { type: "archiveTask"; id: string; archived?: boolean; requestId?: string }
   | { type: "deleteTask"; id: string; requestId?: string }
+  /**
+   * The user's edit of a Schedule (`docs/schedules.md`, Web). Only the fields
+   * the user changed travel; a timing carries no zone, it keeps the stored
+   * one. Cardless and authoritative: `controlledBy` becomes the user. Answered
+   * by {@link ServerMessage} `scheduleSaved` before `mutationSettled`.
+   */
+  | {
+      type: "updateSchedule";
+      id: string;
+      patch: ScheduleUserPatch;
+      requestId: string;
+    }
+  /**
+   * The user's on/off. An edit too: `controlledBy` becomes the user even when
+   * the enabled state does not change. Answered by `scheduleSaved`.
+   */
+  | {
+      type: "setScheduleEnabled";
+      id: string;
+      enabled: boolean;
+      requestId: string;
+    }
+  /** Delete a Schedule with its history; settled by `mutationSettled`. */
+  | { type: "deleteSchedule"; id: string; requestId: string }
+  /**
+   * Pause all. The server merges it into the stored Schedules section and
+   * settles only once that save has completed.
+   */
+  | { type: "setSchedulesPaused"; paused: boolean; requestId: string }
+  /** A Schedule's history: a read outside the live projection. */
+  | { type: "getScheduleHistory"; id: string; requestId: string }
   /** Fetch the full markdown description for a single task (on-demand from the drawer). */
   | { type: "getTask"; id: string; requestId: string }
   | {
@@ -9103,6 +9130,30 @@ export type ServerMessage =
    * revision as of this reply: only a NEWER event marks the detail stale.
    */
   | { type: "taskSaved"; item: TaskItem; revision?: number; requestId?: string }
+  /**
+   * The direct reply to `updateSchedule` and `setScheduleEnabled`, sent before
+   * `mutationSettled`: ONE authoritative Schedule at `revision`, the state
+   * revision as of the write, never a list. A no-op on/off answers too.
+   */
+  | {
+      type: "scheduleSaved";
+      item: ScheduleSummary;
+      revision: number;
+      requestId: string;
+    }
+  /**
+   * The answer to `getScheduleHistory`: the newest occurrences, read in one
+   * step with the Schedule's `revision`. `items: null` without `error` means
+   * the Schedule is gone; `error` is a failed read.
+   */
+  | {
+      type: "scheduleHistory";
+      id: string;
+      requestId: string;
+      revision?: number;
+      items: ScheduleOccurrenceSummary[] | null;
+      error?: string;
+    }
   /**
    * Response to a `getTask` request. `item: null` without `error` is an
    * authoritative not-found answer; `error` is a failed read. Correlation lets

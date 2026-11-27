@@ -19,10 +19,10 @@
 // an attempted occurrence this tool triggers never runs without it.
 import "../../schedules/scheduledPrompts.ts";
 import {
-  canonicalScheduleTiming,
   nextOccurrencesAfter,
   formatScheduleInstant,
   scheduleTimingError,
+  scheduleTimingFutureError,
   type ScheduleActor,
   type ScheduleOccurrenceSummary,
   type ScheduleSummary,
@@ -542,12 +542,9 @@ function timingOf(
 ): ScheduleTiming {
   const timing = suppliedTiming(value, timeZone, nowMs);
   // The store's own validation message, for a timing it would refuse anyway.
-  const reason = scheduleTimingError(timing);
+  const reason =
+    scheduleTimingError(timing) ?? scheduleTimingFutureError(timing, nowMs);
   if (reason) throw new Error(reason);
-  if (
-    nextOccurrencesAfter(canonicalScheduleTiming(timing), nowMs, 1).length === 0
-  )
-    throw new Error("Schedule timing has no future occurrence");
   return timing;
 }
 

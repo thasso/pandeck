@@ -1498,6 +1498,133 @@ describe("scheduleStore cutovers, capacity and admission (Task-1503)", () => {
     });
   });
 
+  describe("on/off with a controller transfer (Task-1500, R1)", () => {
+    const USER = { kind: "user" } as const;
+    const controllerOf = (id: string) =>
+      (
+        getDb()
+          .prepare("SELECT controlled_by_json FROM schedules WHERE id = ?")
+          .get(id) as { controlled_by_json: string }
+      ).controlled_by_json;
+
+    it("the same enabled state with another controller writes only the controller", () => {
+      const s = daily();
+      const before = scheduleStore.revision(s.id)!;
+      const l = listen();
+      try {
+        // 09:10: the 09:00 due time is inside grace and unticked, yet a pure
+        // transfer settles nothing.
+        const summary = scheduleStore.setEnabled(
+          s.id,
+          true,
+          local(1, "09:10"),
+          GRACE,
+          { controlledBy: USER },
+        )!;
+        assert.deepEqual(summary.controlledBy, USER);
+        assert.deepEqual(summary.createdBy, s.createdBy);
+        assert.equal(summary.enabled, true);
+        assert.equal(summary.nextDueAtMs, D1_0900, "next due kept");
+        assert.equal(summary.updatedAtMs, local(1, "09:10"));
+        assert.deepEqual(states(s.id), [], "no settle, no claim");
+        assert.ok(scheduleStore.revision(s.id)! > before, "revision moves");
+        assert.equal(l.heard.writes, 1);
+        assert.deepEqual(l.heard.claims, []);
+      } finally {
+        l.off();
+      }
+    });
+
+    it("the same state and the same controller write nothing", () => {
+      const s = daily({ controlledBy: USER });
+      const before = scheduleStore.revision(s.id)!;
+      const l = listen();
+      try {
+        const summary = scheduleStore.setEnabled(
+          s.id,
+          true,
+          local(1, "08:30"),
+          GRACE,
+          { controlledBy: USER },
+        )!;
+        assert.deepEqual(summary, scheduleStore.get(s.id));
+        assert.equal(scheduleStore.revision(s.id), before);
+        assert.equal(l.heard.writes, 0);
+      } finally {
+        l.off();
+      }
+    });
+
+    it("an agent caller passes no controller: unchanged behaviour", () => {
+      const s = daily();
+      const before = scheduleStore.revision(s.id)!;
+      const l = listen();
+      try {
+        scheduleStore.setEnabled(s.id, true, local(1, "08:30"), GRACE);
+        assert.equal(scheduleStore.revision(s.id), before);
+        assert.equal(l.heard.writes, 0);
+        assert.equal(controllerOf(s.id), JSON.stringify(s.createdBy));
+        const off = scheduleStore.setEnabled(
+          s.id,
+          false,
+          local(1, "08:40"),
+          GRACE,
+        )!;
+        assert.deepEqual(off.controlledBy, s.createdBy, "control stays");
+      } finally {
+        l.off();
+      }
+    });
+
+    it("a disable with a transfer cuts over and moves control in one write", () => {
+      const s = daily();
+      const l = listen();
+      try {
+        const summary = scheduleStore.setEnabled(
+          s.id,
+          false,
+          local(1, "09:10"),
+          GRACE,
+          { controlledBy: USER },
+        )!;
+        assert.equal(summary.enabled, false);
+        assert.deepEqual(summary.controlledBy, USER);
+        assert.deepEqual(summary.createdBy, s.createdBy);
+        assert.deepEqual(states(s.id), ["2026-12-01T08:00:00.000Z withdrawn"]);
+        assert.equal(l.heard.writes, 1);
+      } finally {
+        l.off();
+      }
+    });
+
+    it("an enable with a transfer starts from the next occurrence", () => {
+      const s = daily({ enabled: false });
+      const summary = scheduleStore.setEnabled(
+        s.id,
+        true,
+        local(1, "09:10"),
+        GRACE,
+        { controlledBy: USER },
+      )!;
+      assert.equal(summary.enabled, true);
+      assert.equal(summary.nextDueAtMs, local(2, "09:00"));
+      assert.deepEqual(summary.controlledBy, USER);
+      assert.deepEqual(states(s.id), []);
+    });
+
+    it("a transfer out of the cardless count is never refused at limit 0", () => {
+      const s = daily();
+      const summary = scheduleStore.setEnabled(
+        s.id,
+        false,
+        local(1, "08:30"),
+        { ...GRACE, cardlessLimit: 0 },
+        { controlledBy: USER },
+      )!;
+      assert.deepEqual(summary.controlledBy, USER);
+    });
+  });
+
   describe("cardless capacity (F003)", () => {
     const S = { kind: "session", sessionId: "controller" } as const;
     const mine = (patch: Partial<ScheduleCreateInput> = {}) =>

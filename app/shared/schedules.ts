@@ -58,10 +58,30 @@ export type ScheduleTiming =
       ScheduleRepeatWindow);
 
 /**
+ * A timing as a client supplies it: no zone. A Schedule's zone is fixed when it
+ * is created; an edit's timing takes the stored one.
+ */
+export type ScheduleTimingInput = WithoutTimeZone<ScheduleTiming>;
+
+/** `Omit` per union member, so each kind keeps its own fields. */
+type WithoutTimeZone<T> = T extends unknown ? Omit<T, "timeZone"> : never;
+
+/**
  * Where an occurrence goes. Phase 1 targets an existing session only; the
  * new-session target ([Task-1501](pa://task/1501)) joins this union.
  */
 export type ScheduleTarget = { kind: "session"; sessionId: string };
+
+/**
+ * The fields a user edit may change, each only when the user changed it
+ * (`updateSchedule`). The name, the zone and every authority field are not
+ * among them.
+ */
+export interface ScheduleUserPatch {
+  prompt?: string;
+  timing?: ScheduleTimingInput;
+  targetSessionId?: string;
+}
 
 /** Who created a Schedule, or who may change it without a card. */
 export type ScheduleActor =
@@ -274,6 +294,26 @@ export function canonicalScheduleTiming(
     case "monthly":
       return { kind: "monthly", day: timing.day, ...clock, ...window };
   }
+}
+
+/** The contract text for a supplied timing that can never occur again. */
+export const SCHEDULE_NO_FUTURE_OCCURRENCE =
+  "Schedule timing has no future occurrence";
+
+/**
+ * Why a supplied, valid `timing` may not be written at `nowMs`, or null: every
+ * supplied timing needs an occurrence strictly after now (`docs/schedules.md`,
+ * Timing). One rule for the agent tools, the user's commands and the web
+ * editor; a timing equal to a stored, spent one is refused the same way.
+ */
+export function scheduleTimingFutureError(
+  timing: ScheduleTiming,
+  nowMs: number,
+): string | null {
+  return nextOccurrencesAfter(canonicalScheduleTiming(timing), nowMs, 1)
+    .length === 0
+    ? SCHEDULE_NO_FUTURE_OCCURRENCE
+    : null;
 }
 
 /** Whether two valid timings describe the same occurrences, key order aside. */

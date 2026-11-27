@@ -309,6 +309,17 @@ The user changes any Schedule directly in the UI; no card. When the user edits
 an agent-controlled Schedule, `controlledBy` becomes the user and `createdBy`
 stays as history.
 
+- **The user's writes** are an edit (prompt, timing, existing-session target),
+  on/off, delete and Pause all: cardless, with no cardless limit. An edit and an
+  on/off both make the user the controller, an on/off even when the enabled
+  state does not change; a switch to the state the Schedule already has, with
+  the user already in control, writes nothing. Only the fields the user changed
+  travel, and the last write wins: there is no revision precondition.
+- **The zone** is fixed at creation and is never edited: an edit's timing
+  carries no zone and takes the stored one.
+- **A user target** is any session the user can see, archived included, except
+  the Personal Assistant singleton. An unchanged target is not checked again.
+
 A **near target** is the agent's own session or a direct child it still owns: a
 `spawned` edge from the agent AND the child still coordinator-owned. A child the
 user has taken over is not a near target, though the edge remains.
@@ -424,6 +435,20 @@ Pause all is a registry field of the Schedules section, but the schedule store
 keeps its value: the settings file holds only the other two, and the section
 projects `paused` from the store.
 
+The user's commands each carry a `requestId`. `updateSchedule` and
+`setScheduleEnabled` answer their own connection with ONE authoritative
+`scheduleSaved {item, revision, requestId}` before `mutationSettled`, a no-op
+on/off included; `deleteSchedule` settles through `mutationSettled`, and the
+tombstone event follows. A refusal is an error naming the Schedule (target
+`{type: "schedule", id}`) and never settles. `setSchedulesPaused` merges
+`paused` into the current stored Schedules section in the same synchronous step
+that starts the save, so a grace window or limit saved meanwhile survives, and
+settles only once that save has completed; a failed save is an error stamped
+with the request alone, since a `{type: "schedule"}` target without an id names
+the list failure. `getScheduleHistory` answers `scheduleHistory` with the 50
+newest occurrences and the Schedule's revision, read in one step; `items: null`
+once the Schedule is gone, `error` for a failed read.
+
 ### Implemented so far
 
 Phase 1 lands in two pull requests ([Task-1502](pa://task/1502), then
@@ -493,6 +518,17 @@ through the tools; there is no UI, card, grant, link or new-session target yet.
   still answer; the web holds it without rendering it until Phase 2.
 - The agent tools (`app/server/src/tools/schedules/`), as "Agent tools"
   describes, for existing-session near targets only.
+
+Phase 2 ([Task-1500](pa://task/1500)) is in progress, server side only so far:
+
+- The user's commands (`app/server/src/schedules/scheduleUserCommands.ts`) and
+  their messages, as "Who may change what" and "Sync and storage" describe. The
+  store's `setEnabled` takes the new controller and moves it in the same
+  transaction as the switch, or alone when the enabled state stays.
+- `pa://schedule/<id>` links, routed to `/schedules/<id>` and resolved to the
+  Schedule's name.
+- `scheduleTimingFutureError` in `app/shared/schedules.ts`: the one
+  future-occurrence rule the tools, the user's commands and the editor share.
 
 ## Phases
 

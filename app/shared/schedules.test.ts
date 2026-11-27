@@ -8,7 +8,9 @@ import {
   SCHEDULE_WEEKDAYS,
   nextOccurrencesAfter,
   normalizeScheduleSettings,
+  SCHEDULE_NO_FUTURE_OCCURRENCE,
   scheduleTimingError,
+  scheduleTimingFutureError,
   scheduleTimingsEqual,
   type ScheduleTiming,
   type ScheduleWeekday,
@@ -201,6 +203,88 @@ describe("nextOccurrencesAfter", () => {
     };
     expect(nextOccurrencesAfter(timing, 0, 3)).toHaveLength(3);
     expect(nextOccurrencesAfter(timing, 0, 0)).toEqual([]);
+  });
+});
+
+describe("scheduleTimingFutureError", () => {
+  const message = "Schedule timing has no future occurrence";
+
+  test("is the contract text", () => {
+    expect(SCHEDULE_NO_FUTURE_OCCURRENCE).toBe(message);
+  });
+
+  test("refuses a past once, and a once exactly now", () => {
+    const once: ScheduleTiming = {
+      kind: "once",
+      date: "2026-11-25",
+      time: "15:45",
+      timeZone: BERLIN,
+    };
+    // 15:45 CET is 14:45Z.
+    expect(scheduleTimingFutureError(once, at("2026-11-25T14:44:59Z"))).toBe(
+      null,
+    );
+    expect(scheduleTimingFutureError(once, at("2026-11-25T14:45:00Z"))).toBe(
+      message,
+    );
+    expect(scheduleTimingFutureError(once, at("2026-11-26T00:00:00Z"))).toBe(
+      message,
+    );
+  });
+
+  test("refuses a repeat whose endsOn has passed, not one ending today later", () => {
+    const daily: ScheduleTiming = {
+      kind: "daily",
+      time: "11:00",
+      timeZone: BERLIN,
+      endsOn: "2026-11-25",
+    };
+    // 11:00 CET on the last date is 10:00Z.
+    expect(scheduleTimingFutureError(daily, at("2026-11-25T09:59:00Z"))).toBe(
+      null,
+    );
+    expect(scheduleTimingFutureError(daily, at("2026-11-25T10:00:00Z"))).toBe(
+      message,
+    );
+  });
+
+  test("judges a timing on its own, so one equal to a spent stored timing fails too", () => {
+    const stored: ScheduleTiming = {
+      kind: "weekly",
+      days: ["mon"],
+      time: "11:00",
+      timeZone: BERLIN,
+      endsOn: "2026-11-23",
+    };
+    // The same occurrences written in another key and day order.
+    const same = {
+      endsOn: "2026-11-23",
+      timeZone: BERLIN,
+      time: "11:00",
+      days: ["mon"],
+      kind: "weekly",
+    } as ScheduleTiming;
+    expect(scheduleTimingsEqual(stored, same)).toBe(true);
+    expect(scheduleTimingFutureError(same, at("2026-11-25T12:00:00Z"))).toBe(
+      message,
+    );
+  });
+
+  test("a time the spring-forward gap skips still occurs, when the gap ends", () => {
+    // 02:30 on 29 March 2026 does not exist in Berlin: it occurs at 03:00
+    // CEST, 01:00Z.
+    const once: ScheduleTiming = {
+      kind: "once",
+      date: "2026-03-29",
+      time: "02:30",
+      timeZone: BERLIN,
+    };
+    expect(scheduleTimingFutureError(once, at("2026-03-29T00:59:59Z"))).toBe(
+      null,
+    );
+    expect(scheduleTimingFutureError(once, at("2026-03-29T01:00:00Z"))).toBe(
+      message,
+    );
   });
 });
 

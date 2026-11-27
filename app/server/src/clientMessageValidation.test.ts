@@ -167,3 +167,117 @@ test("dispatch never resolves prototype keys and ignores unknown payload fields"
     true,
   );
 });
+
+const scheduleMessages = [
+  { type: "updateSchedule", id: "sch_1", patch: { prompt: "p" } },
+  { type: "setScheduleEnabled", id: "sch_1", enabled: false },
+  { type: "deleteSchedule", id: "sch_1" },
+  { type: "setSchedulesPaused", paused: true },
+  { type: "getScheduleHistory", id: "sch_1" },
+];
+
+test.each(scheduleMessages)("$type requires its correlation id", (msg) => {
+  assert.equal(validateClientMessage({ ...msg, requestId: "req-1" }).ok, true);
+  for (const extra of [{}, { requestId: 42 }]) {
+    const result = validateClientMessage({ ...msg, ...extra });
+    assert.equal(result.ok, false);
+  }
+});
+
+function updateSchedule(patch: unknown) {
+  return validateClientMessage({
+    type: "updateSchedule",
+    id: "sch_1",
+    patch,
+    requestId: "req-1",
+  });
+}
+
+function reason(result: ReturnType<typeof validateClientMessage>) {
+  assert.equal(result.ok, false);
+  return result.ok ? "" : result.reason;
+}
+
+test("updateSchedule takes only the user's editable fields, never authority or a zone", () => {
+  assert.equal(
+    updateSchedule({
+      prompt: "Check CI",
+      targetSessionId: "s",
+      timing: { kind: "weekly", days: ["mon"], time: "11:00" },
+    }).ok,
+    true,
+  );
+  assert.equal(
+    reason(updateSchedule({})),
+    "patch must change at least one field",
+  );
+  assert.equal(reason(updateSchedule([])), "patch must be an object");
+  for (const field of [
+    "controlledBy",
+    "createdBy",
+    "cardless",
+    "enabled",
+    "name",
+    "timeZone",
+  ])
+    assert.equal(
+      reason(updateSchedule({ prompt: "p", [field]: "x" })),
+      `patch.${field} is not editable`,
+    );
+  assert.equal(
+    reason(updateSchedule({ prompt: 42 })),
+    "patch.prompt must be a string",
+  );
+  assert.equal(
+    reason(updateSchedule({ targetSessionId: "" })),
+    "patch.targetSessionId must be a non-empty string",
+  );
+});
+
+test("updateSchedule timings carry exactly their kind's keys", () => {
+  const ok = [
+    { kind: "once", date: "2026-12-01", time: "15:45" },
+    { kind: "daily", time: "11:00", endsOn: "2026-12-31" },
+    { kind: "weekdays", time: "11:00", startsOn: "2026-12-01" },
+    { kind: "weekly", days: ["mon", "thu"], time: "11:00" },
+    { kind: "monthly", day: 31, time: "09:00" },
+  ];
+  for (const timing of ok) assert.equal(updateSchedule({ timing }).ok, true);
+  assert.equal(
+    reason(
+      updateSchedule({
+        timing: { kind: "daily", time: "11:00", timeZone: "UTC" },
+      }),
+    ),
+    "patch.timing.timeZone is not a daily timing field",
+  );
+  assert.equal(
+    reason(
+      updateSchedule({
+        timing: {
+          kind: "once",
+          date: "2026-12-01",
+          time: "11:00",
+          endsOn: "x",
+        },
+      }),
+    ),
+    "patch.timing.endsOn is not a once timing field",
+  );
+  assert.equal(
+    reason(updateSchedule({ timing: { kind: "weekly", time: "11:00" } })),
+    "patch.timing.days is required and must be a string array",
+  );
+  assert.equal(
+    reason(updateSchedule({ timing: { kind: "hourly", time: "11:00" } })),
+    "patch.timing.kind must be once, daily, weekdays, weekly or monthly",
+  );
+  assert.equal(
+    reason(
+      updateSchedule({
+        timing: { kind: "monthly", day: 1, time: "09:00", endsOn: 5 },
+      }),
+    ),
+    "patch.timing.endsOn must be a string",
+  );
+});

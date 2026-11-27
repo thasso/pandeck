@@ -51,7 +51,8 @@ failure, and explicit recovery reads.
 - Event payloads are summaries only (`taskSummaryOf` remains the one narrowing).
   The mutator's direct reply (`taskSaved`) keeps the full item — that is how
   detail views adopt the authoritative body and how a create settles its temp id
-  — and drops its full-list rider.
+  — and drops its full-list rider. Schedules' direct reply (`scheduleSaved`) is
+  one summary with the revision it is as of (`docs/schedules.md`).
 - Broadcast events carry NO `clientRequestId`. A flush coalesces writes from
   several actors, so an event cannot honestly carry one request's id.
   Correlation rides the existing per-mutation channel: `mutationSettled` and

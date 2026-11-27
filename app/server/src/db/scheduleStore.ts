@@ -36,6 +36,7 @@
 import {
   canonicalScheduleTiming,
   nextOccurrencesAfter,
+  SCHEDULE_NO_FUTURE_OCCURRENCE,
   scheduleTimingError,
   scheduleTimingsEqual,
   type ScheduleActor,
@@ -788,8 +789,7 @@ export const scheduleStore = {
     const controlledBy = checkActor(input.controlledBy ?? input.createdBy);
     const enabled = input.enabled ?? true;
     const [first] = nextOccurrencesAfter(timing, nowMs, 1);
-    if (first === undefined)
-      throw new Error("Schedule timing has no future occurrence");
+    if (first === undefined) throw new Error(SCHEDULE_NO_FUTURE_OCCURRENCE);
     return write((touched) => {
       const id = `sch_${nextId("schedule")}`;
       getDb()
@@ -908,17 +908,40 @@ export const scheduleStore = {
    * `nowMs`, with no catch-up. Setting the state it already has writes
    * nothing. With `policy.cardlessLimit`, a switch that makes the Schedule
    * count again throws {@link ScheduleCardlessLimitError} over the limit.
+   *
+   * `opts.controlledBy` (the user's on/off, which is an edit) moves control in
+   * the same transaction. With the enabled state unchanged and a different
+   * controller, only the controller is written: no settle, no withdrawal, the
+   * next due time kept, yet the revision moves and an event follows. With the
+   * same controller too, nothing is written.
    */
   setEnabled(
     id: string,
     enabled: boolean,
     nowMs: number,
     policy: ScheduleWritePolicy,
+    opts: { controlledBy?: ScheduleActor } = {},
   ): ScheduleSummary | undefined {
+    const controlledBy =
+      opts.controlledBy === undefined
+        ? undefined
+        : JSON.stringify(checkActor(opts.controlledBy));
     return write((touched, claimed) => {
       const row = liveRow(id);
       if (!row) return undefined;
-      if ((row.enabled === 1) === enabled) return summaryOf(row);
+      const transfer =
+        controlledBy !== undefined &&
+        !sameActor(row.controlled_by_json, controlledBy);
+      if ((row.enabled === 1) === enabled) {
+        if (!transfer) return summaryOf(row);
+        getDb()
+          .prepare(
+            "UPDATE schedules SET controlled_by_json = ?, updated_at_ms = ? WHERE id = ?",
+          )
+          .run(controlledBy, nowMs, id);
+        touched.add(id);
+        return summaryOf(liveRow(id)!);
+      }
       const wasCounted = countsTowardCardless(row);
       let nextDue: number | null = null;
       if (enabled)
@@ -939,9 +962,15 @@ export const scheduleStore = {
       }
       getDb()
         .prepare(
-          "UPDATE schedules SET enabled = ?, next_due_at_ms = ?, updated_at_ms = ? WHERE id = ?",
+          "UPDATE schedules SET enabled = ?, next_due_at_ms = ?, controlled_by_json = ?, updated_at_ms = ? WHERE id = ?",
         )
-        .run(enabled ? 1 : 0, nextDue, nowMs, id);
+        .run(
+          enabled ? 1 : 0,
+          nextDue,
+          transfer ? controlledBy : row.controlled_by_json,
+          nowMs,
+          id,
+        );
       refreshDone(id, nowMs);
       prune(id);
       assertCardlessCapacity(id, wasCounted, policy.cardlessLimit);

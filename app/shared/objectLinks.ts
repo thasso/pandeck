@@ -14,6 +14,7 @@ export const PA_OBJECT_TYPES = [
   "worktree",
   "approval",
   "initiative",
+  "schedule",
 ] as const;
 
 export type PaObjectType = (typeof PA_OBJECT_TYPES)[number];
@@ -207,6 +208,8 @@ export function paObjectPath(type: string, id: string): string {
       return `/worktrees/${encoded}`;
     case "initiative":
       return `/initiatives/${encoded}`;
+    case "schedule":
+      return `/schedules/${encoded}`;
     // No route of its own: a card lives in its session's transcript, which the
     // bare id cannot name. Resolvers that know the session use
     // `approvalCardHref` instead.
@@ -232,6 +235,8 @@ export function paObjectTypeLabel(type: string): string {
       return "Approval";
     case "initiative":
       return "Initiative";
+    case "schedule":
+      return "Schedule";
     default:
       return "Object";
   }

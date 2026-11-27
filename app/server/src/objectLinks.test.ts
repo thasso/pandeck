@@ -9,6 +9,7 @@ import {
 import { createTask } from "./tasks.ts";
 import { createInitiative } from "./initiatives.ts";
 import { resolvePaObjectLinks } from "./objectLinkResolver.ts";
+import { scheduleStore } from "./db/scheduleStore.ts";
 import { KnowledgeBaseStore } from "./knowledgeBaseStore.ts";
 
 describe("pa:// object links", () => {
@@ -159,6 +160,37 @@ describe("pa:// object links", () => {
       existence: "missing",
       title: "Initiative 999999",
     });
+  });
+
+  it("resolves Schedule links to their name and detail page", async () => {
+    const schedule = scheduleStore.create({
+      name: "Roadmap update",
+      prompt: "Update the roadmap",
+      timing: { kind: "weekly", days: ["mon"], time: "11:00", timeZone: "UTC" },
+      target: { kind: "session", sessionId: "schedule-link-target" },
+      createdBy: { kind: "user" },
+    });
+    try {
+      const links = await resolvePaObjectLinks([
+        `pa://schedule/${schedule.id}`,
+        "pa://schedule/sch_missing",
+      ]);
+      expect(links[0]).toMatchObject({
+        knownType: true,
+        href: `/schedules/${schedule.id}`,
+        title: "Roadmap update",
+        typeLabel: "Schedule",
+        existence: "exists",
+      });
+      expect(links[1]).toMatchObject({
+        knownType: true,
+        href: "/schedules/sch_missing",
+        typeLabel: "Schedule",
+        existence: "missing",
+      });
+    } finally {
+      scheduleStore.delete(schedule.id);
+    }
   });
 
   it("resolves knowledge links to indexed entry titles", async () => {
