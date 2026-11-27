@@ -333,6 +333,80 @@ describe("updateScheduleAsUser", () => {
         else permanentAssistantStore.clearSessionId();
       }
     });
+
+    /** A Personal Assistant persona row with a conversation, not bound. */
+    function unboundAssistantPersona(): string {
+      const id = seedSession();
+      sessionStore.upsert({
+        id,
+        harness: "pi",
+        agentType: "personal-assistant",
+        messageCount: 1,
+      });
+      return id;
+    }
+
+    it("T6 refuses a retired Personal Assistant predecessor the lists hide", () => {
+      const s = agentSchedule();
+      const predecessor = unboundAssistantPersona();
+      const current = visibleSession();
+      const previous = permanentAssistantStore.sessionId();
+      // A rotation: the binding moved on, the old conversation stays behind.
+      permanentAssistantStore.setSessionId(current);
+      try {
+        const before = snapshot(s.id);
+        assert.throws(
+          () =>
+            updateScheduleAsUser(
+              s.id,
+              { targetSessionId: predecessor },
+              local(1, "08:30"),
+            ),
+          new RegExp(`^Error: Session not found: ${predecessor}$`),
+        );
+        assert.deepEqual(snapshot(s.id), before);
+      } finally {
+        if (previous) permanentAssistantStore.setSessionId(previous);
+        else permanentAssistantStore.clearSessionId();
+      }
+    });
+
+    it("T7 refuses a minted Personal Assistant session before it is bound", () => {
+      const s = agentSchedule();
+      const minted = unboundAssistantPersona();
+      const previous = permanentAssistantStore.sessionId();
+      permanentAssistantStore.clearSessionId();
+      try {
+        assert.throws(
+          () =>
+            updateScheduleAsUser(
+              s.id,
+              { targetSessionId: minted },
+              local(1, "08:30"),
+            ),
+          new RegExp(`^Error: Session not found: ${minted}$`),
+        );
+      } finally {
+        if (previous) permanentAssistantStore.setSessionId(previous);
+      }
+    });
+
+    it("T8 accepts an ordinary session once a legacy binding to it is gone", () => {
+      const s = agentSchedule();
+      const legacy = visibleSession();
+      const previous = permanentAssistantStore.sessionId();
+      permanentAssistantStore.clearSessionId();
+      try {
+        const saved = updateScheduleAsUser(
+          s.id,
+          { targetSessionId: legacy },
+          local(1, "08:30"),
+        );
+        assert.equal(saved.item.target.sessionId, legacy);
+      } finally {
+        if (previous) permanentAssistantStore.setSessionId(previous);
+      }
+    });
   });
 });
 

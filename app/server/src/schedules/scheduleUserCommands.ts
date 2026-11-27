@@ -26,6 +26,7 @@ import {
 import { scheduleStore, type ScheduleUpdate } from "../db/scheduleStore.ts";
 import { hub } from "../hub.ts";
 import { isPermanentAssistantSession } from "../permanentAssistant.ts";
+import { sessionListHiddenProbe } from "../permanentAssistantVisibility.ts";
 import { getSettings } from "../settings.ts";
 import { saveSettings } from "../settingsService.ts";
 
@@ -76,15 +77,21 @@ function userTiming(
 /**
  * Refuse a target the user may not schedule into (U4): any session the user
  * can see, archived included, except the Personal Assistant singleton.
+ *
+ * "Can see" is the PUBLIC session list, the picker's source: `hub.listSessions`
+ * is the internal list and still returns the rows `sessionListHiddenProbe`
+ * hides (a rotated Personal Assistant predecessor, a minted but unbound one),
+ * which the singleton check alone does not catch.
  */
 function assertUserTarget(sessionId: string): void {
   if (isPermanentAssistantSession(sessionId))
     throw new Error("The Personal Assistant can't be a Schedule target");
-  const [visible] = hub.listSessions({
+  const [row] = hub.listSessions({
     includeArchived: true,
     onlyIds: new Set([sessionId]),
   });
-  if (!visible) throw new Error(`Session not found: ${sessionId}`);
+  if (!row || sessionListHiddenProbe()(row))
+    throw new Error(`Session not found: ${sessionId}`);
 }
 
 /**

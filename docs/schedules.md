@@ -318,7 +318,11 @@ stays as history.
 - **The zone** is fixed at creation and is never edited: an edit's timing
   carries no zone and takes the stored one.
 - **A user target** is any session the user can see, archived included, except
-  the Personal Assistant singleton. An unchanged target is not checked again.
+  the Personal Assistant singleton. "Can see" means the public session list, the
+  picker's own source: a session that list hides, such as a retired Personal
+  Assistant conversation or one not yet bound, is refused as
+  `Session not found`, like a deleted one. An unchanged target is not checked
+  again.
 
 A **near target** is the agent's own session or a direct child it still owns: a
 `spawned` edge from the agent AND the child still coordinator-owned. A child the
