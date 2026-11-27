@@ -489,7 +489,7 @@ through the tools; there is no UI, card, grant, link or new-session target yet.
 - The `schedules` topic (`app/server/src/schedules/scheduleTopic.ts`): every
   write stamps through a change set, a live Schedule (`done` included) is a
   member, a tombstone leaves as a delete at its delete's revision. Every web
-  connection holds it and diffs a digest on resubscribe; nothing renders it.
+  connection holds it and diffs a digest on resubscribe.
 - The `schedules` Settings section, rendered from its three registry fields. A
   save with `paused` writes the file first, then switches Pause all through
   `setPaused`; reading the settings opens the database, since `paused` comes
@@ -519,11 +519,13 @@ through the tools; there is no UI, card, grant, link or new-session target yet.
   with no ⏰ label or link until the Schedules page exists (Phase 2).
 - A failed `schedules` snapshot or digest read answers its own collection error
   (`Failed to list Schedules: …`, target `{type: "schedule"}`) and later topics
-  still answer; the web holds it without rendering it until Phase 2.
+  still answer; the page and the browser render it in place with Retry.
 - The agent tools (`app/server/src/tools/schedules/`), as "Agent tools"
   describes, for existing-session near targets only.
 
-Phase 2 ([Task-1500](pa://task/1500)) is in progress, server side only so far:
+Phase 2 ([Task-1500](pa://task/1500)) is in progress. The page, the detail and
+their state have landed; the inspector section, the header badge and the
+transcript label have not:
 
 - The user's commands (`app/server/src/schedules/scheduleUserCommands.ts`) and
   their messages, as "Who may change what" and "Sync and storage" describe. The
@@ -533,6 +535,33 @@ Phase 2 ([Task-1500](pa://task/1500)) is in progress, server side only so far:
   Schedule's name.
 - `scheduleTimingFutureError` in `app/shared/schedules.ts`: the one
   future-occurrence rule the tools, the user's commands and the editor share.
+- The web state (`useAssistant`, `lib/schedules.ts`). The replica applies
+  `scheduleList` and `stateEvents`; `stateEventRevisions.schedules` is defined
+  only once this client applied an answer, which is what "answered" means for
+  the empty state. Each user operation is a tracked mutation keyed
+  `<id>:update`, `<id>:enabled`, `<id>:delete` or `schedules:pause`: on/off and
+  delete apply optimistically and roll back on a refusal, the edit waits for its
+  `scheduleSaved`, and a timeout or disconnect recovers the touched rows with
+  `getStateItems` (Pause all with `requestSettings`). The detail sends only the
+  fields that differ from what the server holds now.
+- History reads are per open detail. A Schedule's revision moving past the one
+  the held history answered (from `scheduleList`, a `stateDigest` without
+  catch-up, or a recovery `stateItems`) asks again; a failed read holds its
+  barrier up to the revision it was sent for, so it never loops.
+- Failures stay on their surface. A refusal stamped with a Schedules request id
+  carries that write's control key, and it is kept only while a mounted surface
+  claims that key (`FailureHomes.controls`); otherwise it is announced, even
+  while a staged first send is claiming untargeted errors. The open detail
+  claims its Schedule's id for object failures.
+- The routes `/schedules` and `/schedules/:id`, and a Schedules section in the
+  primary nav with its own browser. `/schedules` is a section index route: the
+  browser screen on a phone, the page on a wide layout. The nav slot carries the
+  needs-attention count, the one count the bar shows.
+- The target picker lists live sessions and, on first open, the archived ones
+  (`loadArchivedSessions`); a failed archived read shows its error with Retry
+  instead of an empty group. The Personal Assistant is never offered, and the
+  current target stays listed, titled through its `pa://session` link, when no
+  list holds it.
 
 ## Phases
 

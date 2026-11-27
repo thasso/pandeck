@@ -49,7 +49,10 @@ import {
 } from "./worktree/WorktreeFileTree.tsx";
 import { navigableSettingsGroups } from "./settingsSections.tsx";
 import { PRIMARY_NAV_SLOTS } from "./primaryNavSections.tsx";
-import { UnreadIcon } from "./UnreadDot.tsx";
+import { CountIcon, UnreadIcon } from "./UnreadDot.tsx";
+import { SchedulesBrowser } from "./schedules/SchedulesBrowser.tsx";
+import { needsAttentionCount } from "../lib/schedules.ts";
+import type { ScheduleSummary } from "@assistant/shared/schedules";
 import {
   NAV_CARD_INSET,
   PrimaryNav,
@@ -268,6 +271,15 @@ interface Props {
   knowledgeRefreshToken?: number;
   /** Open one Knowledge Base file in the main pane. */
   onOpenKnowledgeFile: (path: string) => void;
+  /** The live Schedules (`docs/schedules.md`, Web): browser rows and nav count. */
+  schedules: readonly ScheduleSummary[];
+  /** The `schedules` topic has answered, so an empty list is really empty. */
+  schedulesAnswered: boolean;
+  scheduleListError: string | null;
+  onRetrySchedules: () => void;
+  /** The Schedule open in the detail route, for highlighting. */
+  selectedScheduleId?: string | null;
+  onOpenSchedule: (id: string) => void;
   /** Fetch the worktree list (called when a section that joins worktrees is shown). */
   onLoadWorktrees: () => void;
   /** Open a worktree's detail route. */
@@ -532,6 +544,12 @@ function SidebarImpl({
   knowledgeFilePath,
   knowledgeRefreshToken = 0,
   onOpenKnowledgeFile,
+  schedules,
+  schedulesAnswered,
+  scheduleListError,
+  onRetrySchedules,
+  selectedScheduleId,
+  onOpenSchedule,
   onLoadWorktrees,
   onOpenWorktree,
   onStartSessionInWorktree,
@@ -854,6 +872,7 @@ function SidebarImpl({
       }),
     [onUpdatePrefs],
   );
+  const scheduleAttention = needsAttentionCount(schedules);
   const navSlots: Array<PrimaryNavSection<NavSlot>> = prefs.navSlots
     .filter((id) => !firstRunNav || id === "new-session" || id === "settings")
     .filter((id) => id !== "knowledge" || knowledgeEnabled)
@@ -869,6 +888,18 @@ function SidebarImpl({
                 unread={assistantUnread}
               />
             ),
+          }
+        : {}),
+      // The one counted slot (U1): an overlay, so the slot keeps its width.
+      ...(id === "schedules" && scheduleAttention > 0
+        ? {
+            icon: (
+              <CountIcon
+                icon={PRIMARY_NAV_SLOTS[id].icon}
+                count={scheduleAttention}
+              />
+            ),
+            accessibleLabel: `Schedules, ${scheduleAttention} need attention`,
           }
         : {}),
     }));
@@ -1018,6 +1049,16 @@ function SidebarImpl({
             density={browserRowDensity(mobile)}
             idle={idleWorktrees}
             listView={pullRequestListView}
+          />
+        ) : section === "schedules" ? (
+          <SchedulesBrowser
+            schedules={schedules}
+            answered={schedulesAnswered}
+            listError={scheduleListError}
+            onRetry={onRetrySchedules}
+            selectedId={selectedScheduleId ?? null}
+            density={browserRowDensity(mobile)}
+            onOpen={onOpenSchedule}
           />
         ) : section === "knowledge" && !knowledgeEnabled ? (
           <p className="px-2.5 py-2 text-sm text-muted-foreground">

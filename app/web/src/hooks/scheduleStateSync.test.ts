@@ -2,9 +2,9 @@
  * The reducer half of the always-held `schedules` topic (docs/schedules.md):
  * a snapshot is authoritative, a newly seen row goes last, a same-revision echo
  * keeps the held row, a delete removes it, and a digest prunes what it leaves
- * out and its catch-up applies the rest. Nothing renders the list yet. The
- * generic mechanics are the replica contract's (`lib/stateReplica.test.ts`).
- *   pnpm --filter @assistant/web test src/hooks/scheduleStateSync.test.ts
+ * out and its catch-up applies the rest. The generic mechanics are the replica
+ * contract's (`lib/stateReplica.test.ts`).
+ *   cd app/web && pnpm exec vitest run src/hooks/scheduleStateSync.test.ts
  */
 import { describe, expect, it } from "vitest";
 import type { ServerMessage } from "@assistant/shared";

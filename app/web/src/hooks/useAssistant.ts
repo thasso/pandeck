@@ -18,7 +18,13 @@ import {
 import {
   DEFAULT_SCHEDULE_SETTINGS,
   type ScheduleSummary,
+  type ScheduleUserPatch,
 } from "@assistant/shared/schedules";
+import {
+  historyRequestNeeded,
+  inStoredZone,
+  type ScheduleHistoryEntry,
+} from "../lib/schedules.ts";
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import {
   readAppShellCacheRecord,
@@ -37,6 +43,7 @@ import {
   type ReplicaTransport,
   type RequestPurpose,
   revisionSidecar,
+  STATE_ITEMS_TIMEOUT_MS,
   type TopicDescriptor,
 } from "../lib/stateReplica.ts";
 import { wireValueEqual } from "../lib/wireValueEqual.ts";
@@ -537,6 +544,12 @@ export interface UIState {
   archivedReadQueued: boolean;
   /** The `requestId` of the archived read in flight; only its answer counts. */
   archivedReadFlight: string | null;
+  /**
+   * Why the last archived read released without an answer (the server's
+   * refusal, or no answer in time); cleared by the next send. Lets a surface
+   * offer Retry instead of reading the unanswered slice as empty.
+   */
+  archivedReadError: string | null;
   session: SessionState | null;
   settings: AppSettings;
   /** Deployment dictation availability from `ready`; null before first connect. */
@@ -597,15 +610,26 @@ export interface UIState {
   initiativeListError: string | null;
   /**
    * Live Schedule summaries from the always-held `schedules` topic, `done`
-   * ones included. Nothing renders them yet (`docs/schedules.md`).
+   * ones included (`docs/schedules.md`, Web).
    */
   schedules: ScheduleSummary[];
   /**
    * The Schedule list could not be read; cleared by the next snapshot, an
-   * unchanged digest or a catch-up answer. Held only: nothing renders it until
-   * the Schedules page does (Task-1500).
+   * unchanged digest or a catch-up answer. A condition the Schedules page
+   * renders with Retry, never announced.
    */
   scheduleListError: string | null;
+  /**
+   * The user's Schedule writes by control key (`<id>:update`, `<id>:enabled`,
+   * `<id>:delete`, `schedules:pause`): pending, failed with the refusal, or
+   * idle once released.
+   */
+  scheduleMutations: Record<string, LoadState<true>>;
+  /**
+   * The history of each OPEN Schedule detail, keyed by id: present only while
+   * that detail is mounted, never part of the topic (`docs/schedules.md`).
+   */
+  scheduleHistory: Record<string, ScheduleHistoryEntry>;
   /**
    * The inspector's last compaction-window save, by session id: busy while it
    * is unanswered, then its refusal (if any) until the next save.
@@ -1046,6 +1070,7 @@ const emptyInitial: UIState = {
   archivedSessionsLoaded: false,
   archivedReadQueued: false,
   archivedReadFlight: null,
+  archivedReadError: null,
   session: null,
   settings: defaultSettings,
   speechToText: null,
@@ -1074,6 +1099,8 @@ const emptyInitial: UIState = {
   initiativeListError: null,
   schedules: [],
   scheduleListError: null,
+  scheduleMutations: {},
+  scheduleHistory: {},
   compactionWindowEdits: {},
   initiativeDetails: {},
   initiativeDetailRevisions: {},
@@ -1146,7 +1173,7 @@ const emptyInitial: UIState = {
   streamingMessageId: null,
   sessionFailures: {},
   unopenableSessions: {},
-  objectFailures: { project: {}, task: {} },
+  objectFailures: { project: {}, task: {}, schedule: {} },
   taskProjectsAssignedSeq: 0,
   error: null,
   forkDraft: null,
@@ -1820,6 +1847,17 @@ export function taskMutationKey(
   return `${taskId ?? "new"}:${operation}`;
 }
 
+/** A Schedule control's lifecycle key (`docs/messaging.md`, control claims). */
+export function scheduleMutationKey(
+  scheduleId: string,
+  operation: "update" | "enabled" | "delete",
+): string {
+  return `${scheduleId}:${operation}`;
+}
+
+/** The Pause all switch's control key. */
+export const SCHEDULES_PAUSE_KEY = "schedules:pause";
+
 function taskSaveOperation(request: TaskSaveRequest): TaskMutationOperation {
   if (!request.id) return "create";
   if (request.description !== undefined) return "description";
@@ -1906,7 +1944,7 @@ function touchedSessionIds(mutation: PendingMutation): string[] {
 type MutationContext =
   | (PendingMutation & {
       pullRequestCardId?: string;
-      control?: { domain: "tasks" | "projects"; key?: string };
+      control?: { domain: "tasks" | "projects" | "schedules"; key?: string };
       compactionSessionId?: never;
     })
   | {
@@ -1952,6 +1990,64 @@ function withPromptQueueState(
   return next;
 }
 
+/** The Schedules page's writes and its open detail's history read. */
+type ScheduleAction =
+  | { kind: "scheduleMutationStart"; key: string }
+  | { kind: "scheduleMutationResult"; key: string; error?: string }
+  | { kind: "scheduleMutationRelease"; key: string }
+  /** The optimistic guess of a user edit or on/off: control moves to the user. */
+  | {
+      kind: "optimisticScheduleUpdate";
+      id: string;
+      patch: ScheduleUserPatch & { enabled?: boolean };
+    }
+  | { kind: "optimisticScheduleRemove"; id: string }
+  /** The authoritative one-item reply to the user's update or on/off. */
+  | { kind: "scheduleSaved"; item: ScheduleSummary; revision: number }
+  | { kind: "scheduleHistoryOpened"; id: string }
+  | { kind: "scheduleHistoryClosed"; id: string }
+  | {
+      kind: "scheduleHistoryRequested";
+      id: string;
+      requestId: string;
+      generation: number;
+    }
+  | {
+      kind: "scheduleHistoryAnswered";
+      message: Extract<ServerMessage, { type: "scheduleHistory" }>;
+    }
+  | {
+      kind: "scheduleHistoryFailed";
+      id: string;
+      requestId: string;
+      error?: string;
+    }
+  /** The connection dropped: in-flight reads failed; Reconnect re-arms them. */
+  | { kind: "scheduleHistoryDisconnected" }
+  | { kind: "scheduleHistoryRearm" };
+
+const SCHEDULE_ACTION_KINDS: ReadonlySet<Action["kind"]> = new Set<
+  ScheduleAction["kind"]
+>([
+  "scheduleMutationStart",
+  "scheduleMutationResult",
+  "scheduleMutationRelease",
+  "optimisticScheduleUpdate",
+  "optimisticScheduleRemove",
+  "scheduleSaved",
+  "scheduleHistoryOpened",
+  "scheduleHistoryClosed",
+  "scheduleHistoryRequested",
+  "scheduleHistoryAnswered",
+  "scheduleHistoryFailed",
+  "scheduleHistoryDisconnected",
+  "scheduleHistoryRearm",
+]);
+
+function isScheduleAction(action: Action): action is ScheduleAction {
+  return SCHEDULE_ACTION_KINDS.has(action.kind);
+}
+
 type Action =
   | { kind: "status"; connected: boolean }
   | {
@@ -1995,6 +2091,7 @@ type Action =
   | { kind: "taskMutationStart"; key: string }
   | { kind: "taskMutationResult"; key: string; error?: string }
   | { kind: "taskMutationRelease"; key: string }
+  | ScheduleAction
   | { kind: "setOpenTaskProjection"; id: string | null }
   /**
    * The server's direct answer to `saveTask`, carrying the temp id its pending
@@ -2128,7 +2225,7 @@ type Action =
   /** The scheduler sent the due archived read under `requestId`. */
   | { kind: "archivedReadSent"; requestId: string }
   /** That read's error or timeout: it no longer holds the flight. */
-  | { kind: "archivedReadReleased"; requestId: string }
+  | { kind: "archivedReadReleased"; requestId: string; error: string }
 
   /** A human Stop left this browser; the server's answer retires it. */
   | { kind: "backgroundStopSent"; itemId?: string; ownerSessionId?: string }
@@ -4219,6 +4316,45 @@ const scheduleReplica: TopicDescriptor<
   }),
   place: (items, item) => [...items, item],
   adoptSnapshot: (state) => ({ ...state, scheduleListError: null }),
+  // A deleted Schedule's open history goes with it: a late reply finds no
+  // entry and is ignored (`docs/schedules.md`, Sync).
+  afterEvents: (state, applied) => {
+    let history = state.scheduleHistory;
+    for (const event of applied)
+      if (event.kind === "delete" && event.id in history) {
+        if (history === state.scheduleHistory) history = { ...history };
+        delete history[event.id];
+      }
+    return history === state.scheduleHistory
+      ? state
+      : { ...state, scheduleHistory: history };
+  },
+  // The user's own update or on/off reply (`scheduleSaved`): authoritative at
+  // or above the held revision, so it replaces the optimistic guess even when
+  // nothing changed on the server, and it advances the sidecar so the event
+  // at that revision is the no-op it is. A value-equal item keeps the held
+  // object. A lower revision is older than what is held and changes nothing.
+  settle: (state, { id, item, revision }) => {
+    if (!item || revision === undefined) return state;
+    const held = state.stateEventRevisions.schedules ?? {};
+    if (held[id] !== undefined && revision < held[id]) return state;
+    const index = state.schedules.findIndex((row) => row.id === id);
+    let schedules = state.schedules;
+    if (index < 0) schedules = [...schedules, item];
+    else if (!wireValueEqual(schedules[index], item)) {
+      schedules = schedules.slice();
+      schedules[index] = item;
+    }
+    if (schedules === state.schedules && held[id] === revision) return state;
+    return {
+      ...state,
+      schedules,
+      stateEventRevisions: {
+        ...state.stateEventRevisions,
+        schedules: { ...held, [id]: revision },
+      },
+    };
+  },
   digest: {
     // A baseline exists only once this hook instance applied an answer.
     baseline: (state) => {
@@ -4682,6 +4818,191 @@ function applyTaskDetailAnswer(
  * The replica input for the mutator's direct reply to `saveTask`: the row it
  * settles (`taskReplica.settle`), or none for an archived Task.
  */
+/** What a write or read the server never answered says, as its reason. */
+const SERVER_DID_NOT_ANSWER = "The server did not answer. Try again.";
+
+/** One Schedule history entry replaced, or the state itself when unchanged. */
+function withScheduleHistory(
+  state: UIState,
+  id: string,
+  entry: ScheduleHistoryEntry | undefined,
+): UIState {
+  if (state.scheduleHistory[id] === entry) return state;
+  const scheduleHistory = { ...state.scheduleHistory };
+  if (entry) scheduleHistory[id] = entry;
+  else delete scheduleHistory[id];
+  return { ...state, scheduleHistory };
+}
+
+/**
+ * The Schedules page's writes and the open details' history reads
+ * (`docs/schedules.md`, Web and Sync), or `undefined` for any other action.
+ */
+function scheduleReducer(state: UIState, action: ScheduleAction): UIState {
+  switch (action.kind) {
+    case "scheduleMutationStart":
+      return {
+        ...state,
+        scheduleMutations: {
+          ...state.scheduleMutations,
+          [action.key]: beginLoad(
+            state.scheduleMutations[action.key] ?? idle<true>(),
+          ),
+        },
+      };
+    case "scheduleMutationRelease": {
+      const current = state.scheduleMutations[action.key];
+      if (!current || !isPending(current)) return state;
+      return {
+        ...state,
+        scheduleMutations: {
+          ...state.scheduleMutations,
+          [action.key]: idle<true>(),
+        },
+      };
+    }
+    case "scheduleMutationResult": {
+      const current = state.scheduleMutations[action.key] ?? idle<true>();
+      return {
+        ...state,
+        scheduleMutations: {
+          ...state.scheduleMutations,
+          [action.key]: action.error
+            ? failFrom(current, action.error)
+            : ready(true),
+        },
+      };
+    }
+    case "optimisticScheduleUpdate": {
+      const index = state.schedules.findIndex((row) => row.id === action.id);
+      const row = state.schedules[index];
+      if (!row) return state;
+      const { patch } = action;
+      const next: ScheduleSummary = {
+        ...row,
+        ...(patch.prompt !== undefined ? { prompt: patch.prompt } : {}),
+        ...(patch.timing !== undefined
+          ? { timing: inStoredZone(patch.timing, row) }
+          : {}),
+        ...(patch.targetSessionId !== undefined
+          ? {
+              target: { kind: "session", sessionId: patch.targetSessionId },
+            }
+          : {}),
+        ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+        controlledBy: { kind: "user" },
+      };
+      const schedules = state.schedules.slice();
+      schedules[index] = next;
+      return { ...state, schedules };
+    }
+    case "optimisticScheduleRemove":
+      return state.schedules.some((row) => row.id === action.id)
+        ? {
+            ...state,
+            schedules: state.schedules.filter((row) => row.id !== action.id),
+          }
+        : state;
+    case "scheduleSaved":
+      return applyTopicMessage(scheduleReplica, state, {
+        kind: "settled",
+        id: action.item.id,
+        item: action.item,
+        revision: action.revision,
+      });
+    case "scheduleHistoryOpened":
+      return state.scheduleHistory[action.id]
+        ? state
+        : withScheduleHistory(state, action.id, { load: idle() });
+    case "scheduleHistoryClosed":
+      return withScheduleHistory(state, action.id, undefined);
+    case "scheduleHistoryRequested": {
+      const entry = state.scheduleHistory[action.id];
+      if (!entry) return state;
+      return withScheduleHistory(state, action.id, {
+        ...entry,
+        load: beginLoad(entry.load),
+        attempt: {
+          requestId: action.requestId,
+          generation: action.generation,
+          status: "inflight",
+        },
+      });
+    }
+    case "scheduleHistoryAnswered": {
+      const { message } = action;
+      const entry = state.scheduleHistory[message.id];
+      // Only the current attempt's answer counts, in flight or already timed
+      // out; anything else was superseded.
+      if (!entry?.attempt || entry.attempt.requestId !== message.requestId)
+        return state;
+      if (message.error !== undefined)
+        return withScheduleHistory(state, message.id, {
+          ...entry,
+          load: failFrom(entry.load, message.error),
+          attempt: { ...entry.attempt, status: "failed" },
+        });
+      if (message.items === null)
+        return withScheduleHistory(state, message.id, { load: ready(null) });
+      const revision = message.revision ?? entry.attempt.generation;
+      return withScheduleHistory(state, message.id, {
+        load: ready(message.items),
+        revision,
+        // Older than the revision this attempt was meant to reach cannot
+        // happen; held as failed at that generation so nothing loops on it.
+        ...(revision < entry.attempt.generation
+          ? { attempt: { ...entry.attempt, status: "failed" as const } }
+          : {}),
+      });
+    }
+    case "scheduleHistoryFailed": {
+      const entry = state.scheduleHistory[action.id];
+      if (
+        !entry?.attempt ||
+        entry.attempt.requestId !== action.requestId ||
+        entry.attempt.status !== "inflight"
+      )
+        return state;
+      return withScheduleHistory(state, action.id, {
+        ...entry,
+        load:
+          action.error !== undefined
+            ? failFrom(entry.load, action.error)
+            : entry.load,
+        attempt: { ...entry.attempt, status: "failed" },
+      });
+    }
+    case "scheduleHistoryDisconnected":
+    case "scheduleHistoryRearm": {
+      let scheduleHistory = state.scheduleHistory;
+      for (const [id, entry] of Object.entries(state.scheduleHistory)) {
+        const attempt = entry.attempt;
+        if (!attempt) continue;
+        const next: ScheduleHistoryEntry | undefined =
+          action.kind === "scheduleHistoryDisconnected"
+            ? attempt.status === "inflight"
+              ? { ...entry, attempt: { ...attempt, status: "failed" } }
+              : undefined
+            : attempt.status === "failed"
+              ? {
+                  load: entry.load,
+                  ...(entry.revision !== undefined
+                    ? { revision: entry.revision }
+                    : {}),
+                }
+              : undefined;
+        if (!next) continue;
+        if (scheduleHistory === state.scheduleHistory)
+          scheduleHistory = { ...scheduleHistory };
+        scheduleHistory[id] = next;
+      }
+      return scheduleHistory === state.scheduleHistory
+        ? state
+        : { ...state, scheduleHistory };
+    }
+  }
+}
+
 function taskSavedSettle(item: TaskItem, tempId?: string) {
   return {
     kind: "settled",
@@ -4827,6 +5148,7 @@ function announceArrival(
   msg: ServerMessage,
   state: UIState,
   connection: "main" | "panel",
+  controlKey?: string,
 ): void {
   const reveal = state.revealRequest;
   const arrival = arrivalMessage(msg, {
@@ -4839,7 +5161,14 @@ function announceArrival(
         : null,
     revealTargetKind: reveal?.target.kind ?? null,
   });
-  if (!arrival || arrivalHasHome(arrival, connection)) return;
+  if (
+    !arrival ||
+    arrivalHasHome(
+      controlKey !== undefined ? { ...arrival, controlKey } : arrival,
+      connection,
+    )
+  )
+    return;
   const resolvedName = targetTitle(arrival.target, state);
   const announcement = announceMessage({
     severity: arrival.severity,
@@ -4887,6 +5216,8 @@ function targetTitle(
       );
       return initiative ? initiativeName(initiative) : undefined;
     }
+    case "schedule":
+      return state.schedules.find((item) => item.id === target.id)?.name;
     default:
       return undefined;
   }
@@ -5563,10 +5894,11 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       ...state,
       archivedReadQueued: false,
       archivedReadFlight: action.requestId,
+      archivedReadError: null,
     };
   if (action.kind === "archivedReadReleased")
     return state.archivedReadFlight === action.requestId
-      ? { ...state, archivedReadFlight: null }
+      ? { ...state, archivedReadFlight: null, archivedReadError: action.error }
       : state;
 
   if (action.kind === "accountMoveTargetsRequested") {
@@ -5963,6 +6295,7 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       },
     };
   }
+  if (isScheduleAction(action)) return scheduleReducer(state, action);
   if (action.kind === "setOpenTaskProjection") {
     return state.openTaskProjectionId === action.id
       ? state
@@ -6857,6 +7190,10 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       // chat error, no run reset.
       if (msg.target?.type === "schedule" && !msg.target.id)
         return { ...state, scheduleListError: msg.message };
+      // A Schedule's own refusal arrives correlated and never gets here; one
+      // that outlived its write is kept on the Schedule (`objectFailures`),
+      // never in the viewed chat.
+      if (msg.target?.type === "schedule") return state;
       return withChat(
         {
           ...state,
@@ -7400,6 +7737,24 @@ export interface AssistantActions {
   /** Hide a Task from the Backlog; `archived=false` restores it (the archive Undo). */
   archiveTask: (id: string, archived?: boolean) => void;
   deleteTask: (id: string) => void;
+  /**
+   * The user's Schedule writes (`docs/schedules.md`, Web): optimistic, one
+   * pending write per control key, a second call while it is pending ignored.
+   * Update sends only the fields the user changed; update and on/off move
+   * control to the user.
+   */
+  updateSchedule: (id: string, patch: ScheduleUserPatch) => void;
+  setScheduleEnabled: (id: string, enabled: boolean) => void;
+  deleteSchedule: (id: string) => void;
+  /** Pause all, merged into the stored section by the server. */
+  setSchedulesPaused: (paused: boolean) => void;
+  /** Read the Schedule list again after it failed. */
+  retrySchedules: () => void;
+  /** A Schedule detail mounted or unmounted: its history read lives with it. */
+  openScheduleHistory: (id: string) => void;
+  closeScheduleHistory: (id: string) => void;
+  /** The history error note's explicit Retry: one request at the held revision. */
+  retryScheduleHistory: (id: string) => void;
   /** Pin/unpin the Task route's keyed detail entry in its LRU cache. */
   setOpenTaskProjection: (id: string | null) => void;
   /** Request the full task body for the Task surface; same-id reads are correlated. */
@@ -7664,6 +8019,21 @@ export function useAssistant({
   );
   /** Latest in-flight keyed reads; a superseded same-id answer is ignored. */
   const taskDetailRequestsRef = useRef(new Map<string, string>());
+  /** Each in-flight Schedule history read's timeout, by request id. */
+  const scheduleHistoryTimersRef = useRef(
+    new Map<string, ReturnType<typeof setTimeout>>(),
+  );
+  /**
+   * The newest history request per open detail id, until the state shows it
+   * as that detail's attempt: a re-run effect never sends it twice.
+   */
+  const scheduleHistorySentRef = useRef(new Map<string, string>());
+  /** The actions' history request, for the effect that decides when to ask. */
+  const scheduleHistoryRequestRef = useRef<
+    ((id: string, generation: number) => void) | null
+  >(null);
+  /** A connection was lost since the last `schedules` catch-up. */
+  const scheduleHistoryRearmRef = useRef(false);
   const projectDetailRequestsRef = useRef(new Map<string, string>());
   /**
    * The one live `getInitiative` per id, with the collapsed set it asked for
@@ -7880,7 +8250,12 @@ export function useAssistant({
     const flight = state.archivedReadFlight;
     if (flight === null) return;
     const timer = setTimeout(
-      () => dispatch({ kind: "archivedReadReleased", requestId: flight }),
+      () =>
+        dispatch({
+          kind: "archivedReadReleased",
+          requestId: flight,
+          error: SERVER_DID_NOT_ANSWER,
+        }),
       ARCHIVED_READ_TIMEOUT_MS,
     );
     return () => clearTimeout(timer);
@@ -7977,6 +8352,11 @@ export function useAssistant({
 
     /** Retries scheduled by failed durable-body reads; torn down with the socket. */
     const lazyBlockRetryTimers = new Set<ReturnType<typeof setTimeout>>();
+    const rearmScheduleHistory = () => {
+      if (!scheduleHistoryRearmRef.current) return;
+      scheduleHistoryRearmRef.current = false;
+      dispatch({ kind: "scheduleHistoryRearm" });
+    };
     const offMsg = socket.onMessage((incoming) => {
       // A production tab can survive a deployment and reconnect with its OLD JS
       // bundle. If that bundle speaks an earlier protocol (for example, before
@@ -8127,15 +8507,22 @@ export function useAssistant({
         replicaTransport.snapshotReceived("sessions", msg.seq);
       if (msg.type === "scheduleList")
         replicaTransport.snapshotReceived("schedules", msg.seq);
+      // The reconnect catch-up of `schedules` re-arms each open detail's
+      // failed history read, once: the snapshot, an unchanged digest, or the
+      // item answer a changed digest asked for.
+      let scheduleCatchUpPending = false;
       if (msg.type === "stateDigest") {
         // A digest the transport fell back from never reaches the reducer.
         const answer = replicaTransport.digestReceived(msg, stateRef.current);
         for (const out of answer.send) socket.send(out);
+        scheduleCatchUpPending =
+          msg.topic === "schedules" && answer.send.length > 0;
         if (!answer.apply) return;
       }
       if (msg.type === "stateItems") {
         const purpose = replicaTransport.itemsReceived(msg);
         if (purpose) dispatch({ kind: "replicaItems", purpose, msg });
+        if (purpose && msg.topic === "schedules") rearmScheduleHistory();
         return;
       }
       // A replica request's failure is consumed by its own fallback, never
@@ -8300,7 +8687,11 @@ export function useAssistant({
       ) {
         if (!msg.requestId) replicaTransport.snapshotFailed("sessions");
         else
-          dispatch({ kind: "archivedReadReleased", requestId: msg.requestId });
+          dispatch({
+            kind: "archivedReadReleased",
+            requestId: msg.requestId,
+            error: msg.message,
+          });
         // In particular, a stale archive error must have no other effect.
         return;
       }
@@ -8381,6 +8772,35 @@ export function useAssistant({
         }
         if (mutation?.control?.domain === "projects" && mutation.control.key)
           controlOwned = true;
+        // A Schedule write's refusal belongs to its control, by the key the
+        // request resolved to: in place while that control is on screen, else
+        // announced — even during a staged send (`docs/messaging.md`). It never
+        // reaches the reducer: Pause all names no target, and must not become
+        // the chat's error or the list's condition.
+        if (mutation?.control?.domain === "schedules") {
+          announceArrival(
+            msg,
+            stateRef.current,
+            isolated ? "panel" : "main",
+            mutation.control.key,
+          );
+          return;
+        }
+      }
+      if (msg.type === "scheduleSaved") {
+        dispatch({
+          kind: "scheduleSaved",
+          item: msg.item,
+          revision: msg.revision,
+        });
+        return;
+      }
+      if (msg.type === "scheduleHistory") {
+        const timer = scheduleHistoryTimersRef.current.get(msg.requestId);
+        if (timer !== undefined) clearTimeout(timer);
+        scheduleHistoryTimersRef.current.delete(msg.requestId);
+        dispatch({ kind: "scheduleHistoryAnswered", message: msg });
+        return;
       }
       // A failed Initiative LIST read is a condition on that list, kept
       // for its panes to render with their Retry — and nothing else. It
@@ -8481,6 +8901,13 @@ export function useAssistant({
         msg,
         ...(controlOwned ? { controlOwned } : {}),
       });
+      if (
+        msg.type === "scheduleList" ||
+        (msg.type === "stateDigest" &&
+          msg.topic === "schedules" &&
+          !scheduleCatchUpPending)
+      )
+        rearmScheduleHistory();
     });
     const offStatus = socket.onStatus((connected) => {
       const lostConnection = socketConnected && !connected;
@@ -8548,6 +8975,15 @@ export function useAssistant({
         // unknown.
         if (lostConnection)
           mutationLifecycleRef.current.disconnect(socket.unsentRequestIds());
+        // A history read lost with its socket failed; nothing is sent while
+        // disconnected, and the reconnect catch-up re-arms it.
+        for (const timer of scheduleHistoryTimersRef.current.values())
+          clearTimeout(timer);
+        scheduleHistoryTimersRef.current.clear();
+        if (lostConnection) {
+          scheduleHistoryRearmRef.current = true;
+          dispatch({ kind: "scheduleHistoryDisconnected" });
+        }
         commentResyncRef.current.clear();
         commentRequestsRef.current.clear();
         for (const id of taskDetailRequestsRef.current.keys())
@@ -8698,13 +9134,29 @@ export function useAssistant({
       dispatch({ kind: "projectDetailLoad", id: openId });
       send({ type: "getProject", id: openId, requestId });
     };
+    // A Schedule write re-reads the Schedules it touched; Pause all re-reads
+    // the settings, which own the switch's value.
+    const recoverSchedules = (mutation: PendingMutation) => {
+      if (mutation.topic === "settings") {
+        refetchSettings();
+        return;
+      }
+      const ids = [...new Set(mutation.objectIds)];
+      if (ids.length > 0)
+        send(replicaTransport.recoveryRequest("schedules", ids));
+    };
     const trackDomainMutation = (
       mutation: PendingMutation,
-      domain: "tasks" | "projects",
+      domain: "tasks" | "projects" | "schedules",
       key?: string,
       timeoutMs = MUTATION_SETTLE_TIMEOUT_MS,
     ) => {
-      const recover = domain === "tasks" ? resyncTasks : recoverProjects;
+      const recover =
+        domain === "tasks"
+          ? resyncTasks
+          : domain === "projects"
+            ? recoverProjects
+            : recoverSchedules;
       const context: MutationContext = {
         ...mutation,
         objectIds: [...mutation.objectIds],
@@ -8725,7 +9177,9 @@ export function useAssistant({
               kind:
                 domain === "tasks"
                   ? "taskMutationRelease"
-                  : "projectMutationRelease",
+                  : domain === "projects"
+                    ? "projectMutationRelease"
+                    : "scheduleMutationRelease",
               key,
             });
             return;
@@ -8734,16 +9188,40 @@ export function useAssistant({
             outcome.type === "error"
               ? outcome.message
               : outcome.type === "timeout"
-                ? `The server did not answer this ${domain === "tasks" ? "Task" : "Project"} change. Try again.`
+                ? domain === "schedules"
+                  ? SERVER_DID_NOT_ANSWER
+                  : `The server did not answer this ${domain === "tasks" ? "Task" : "Project"} change. Try again.`
                 : undefined;
           dispatch({
             kind:
               domain === "tasks"
                 ? "taskMutationResult"
-                : "projectMutationResult",
+                : domain === "projects"
+                  ? "projectMutationResult"
+                  : "scheduleMutationResult",
             key,
             ...(error ? { error } : {}),
           });
+          // A timed-out Schedule write is announced unless its control is on
+          // screen to say so; a refusal is judged where it arrives.
+          if (outcome.type === "timeout" && domain === "schedules")
+            announceArrival(
+              {
+                type: "error",
+                message: error!,
+                ...(mutation.topic === "schedules" && mutation.objectIds[0]
+                  ? {
+                      target: {
+                        type: "schedule" as const,
+                        id: mutation.objectIds[0],
+                      },
+                    }
+                  : {}),
+              },
+              stateRef.current,
+              isolated ? "panel" : "main",
+              key,
+            );
           const taskId = mutation.objectIds[0];
           if (
             outcome.type === "timeout" &&
@@ -8763,6 +9241,45 @@ export function useAssistant({
         },
       });
     };
+    /**
+     * Take the Schedule control `<id>:<operation>` for this write, or refuse
+     * it while a write under the same key is pending. Its own next write
+     * retires the failure the Schedule is carrying.
+     */
+    const startScheduleMutation = (
+      id: string,
+      operation: "update" | "enabled" | "delete",
+    ): string | undefined => {
+      const key = scheduleMutationKey(id, operation);
+      const current = stateRef.current.scheduleMutations[key];
+      if (current && isPending(current)) return undefined;
+      const requestId = trackDomainMutation(
+        { topic: "schedules", objectIds: [id] },
+        "schedules",
+        key,
+      );
+      dispatch({ kind: "scheduleMutationStart", key });
+      dispatch({ kind: "clearObjectFailure", type: "schedule", id });
+      return requestId;
+    };
+    /** Ask for one open detail's history, meant to reach `generation`. */
+    const requestScheduleHistory = (id: string, generation: number) => {
+      const requestId = createClientId();
+      scheduleHistorySentRef.current.set(id, requestId);
+      dispatch({ kind: "scheduleHistoryRequested", id, requestId, generation });
+      send({ type: "getScheduleHistory", id, requestId });
+      const timer = setTimeout(() => {
+        scheduleHistoryTimersRef.current.delete(requestId);
+        dispatch({
+          kind: "scheduleHistoryFailed",
+          id,
+          requestId,
+          error: SERVER_DID_NOT_ANSWER,
+        });
+      }, STATE_ITEMS_TIMEOUT_MS);
+      scheduleHistoryTimersRef.current.set(requestId, timer);
+    };
+    scheduleHistoryRequestRef.current = requestScheduleHistory;
     const startProjectMutation = (
       id: string | null,
       operation: ProjectMutationOperation,
@@ -9548,6 +10065,75 @@ export function useAssistant({
         dispatch({ kind: "clearObjectFailure", type: "task", id });
         send({ type: "deleteTask", id, requestId });
       },
+      updateSchedule: (id, patch) => {
+        const requestId = startScheduleMutation(id, "update");
+        if (!requestId) return;
+        dispatch({ kind: "optimisticScheduleUpdate", id, patch });
+        send({ type: "updateSchedule", id, patch, requestId });
+      },
+      setScheduleEnabled: (id, enabled) => {
+        const requestId = startScheduleMutation(id, "enabled");
+        if (!requestId) return;
+        dispatch({
+          kind: "optimisticScheduleUpdate",
+          id,
+          patch: { enabled },
+        });
+        send({ type: "setScheduleEnabled", id, enabled, requestId });
+      },
+      deleteSchedule: (id) => {
+        const requestId = startScheduleMutation(id, "delete");
+        if (!requestId) return;
+        dispatch({ kind: "optimisticScheduleRemove", id });
+        send({ type: "deleteSchedule", id, requestId });
+      },
+      setSchedulesPaused: (paused) => {
+        const key = SCHEDULES_PAUSE_KEY;
+        const current = stateRef.current.scheduleMutations[key];
+        if (current && isPending(current)) return;
+        const requestId = trackDomainMutation(
+          { topic: "settings", objectIds: ["schedules"] },
+          "schedules",
+          key,
+        );
+        dispatch({ kind: "scheduleMutationStart", key });
+        dispatch({
+          kind: "optimisticSettings",
+          patch: {
+            schedules: { ...stateRef.current.settings.schedules, paused },
+          },
+        });
+        send({ type: "setSchedulesPaused", paused, requestId });
+      },
+      retrySchedules: () => {
+        for (const message of replicaTransport.resync("schedules", []))
+          send(message);
+      },
+      openScheduleHistory: (id) => {
+        scheduleHistorySentRef.current.delete(id);
+        dispatch({ kind: "scheduleHistoryOpened", id });
+      },
+      closeScheduleHistory: (id) => {
+        const requestId = scheduleHistorySentRef.current.get(id);
+        scheduleHistorySentRef.current.delete(id);
+        const attempt = stateRef.current.scheduleHistory[id]?.attempt;
+        for (const pending of [requestId, attempt?.requestId]) {
+          if (!pending) continue;
+          const timer = scheduleHistoryTimersRef.current.get(pending);
+          if (timer !== undefined) clearTimeout(timer);
+          scheduleHistoryTimersRef.current.delete(pending);
+        }
+        dispatch({ kind: "scheduleHistoryClosed", id });
+      },
+      retryScheduleHistory: (id) => {
+        const entry = stateRef.current.scheduleHistory[id];
+        if (!entry || entry.attempt?.status === "inflight") return;
+        if (!stateRef.current.connected) return;
+        requestScheduleHistory(
+          id,
+          stateRef.current.stateEventRevisions.schedules?.[id] ?? 0,
+        );
+      },
       setOpenTaskProjection: (id) =>
         dispatch({ kind: "setOpenTaskProjection", id }),
       requestTaskDetail: (id) => {
@@ -9746,7 +10332,7 @@ export function useAssistant({
               ...(outcome.type === "error"
                 ? { error: outcome.message }
                 : outcome.type === "timeout"
-                  ? { error: "The server did not answer. Try again." }
+                  ? { error: SERVER_DID_NOT_ANSWER }
                   : {}),
             }),
         });
@@ -10062,6 +10648,27 @@ export function useAssistant({
     replicaTransport,
     scheduleLiveBodySubscriptions,
   ]);
+
+  // Each open Schedule detail asks for its history only when
+  // `historyRequestNeeded` says so (`docs/schedules.md`, Sync): renders and
+  // unrelated state never re-ask, and a failed attempt waits for Retry, a
+  // newer revision or the reconnect catch-up.
+  const scheduleRevisions = state.stateEventRevisions.schedules;
+  useEffect(() => {
+    const request = scheduleHistoryRequestRef.current;
+    if (!request) return;
+    const sent = scheduleHistorySentRef.current;
+    for (const [id, entry] of Object.entries(state.scheduleHistory)) {
+      const last = sent.get(id);
+      if (last !== undefined) {
+        // Sent but not rendered yet: wait for the attempt to show it.
+        if (entry.attempt?.requestId !== last) continue;
+        sent.delete(id);
+      }
+      const want = scheduleRevisions?.[id] ?? 0;
+      if (historyRequestNeeded(entry, want, state.connected)) request(id, want);
+    }
+  }, [state.scheduleHistory, scheduleRevisions, state.connected]);
 
   /**
    * Load a reveal's target INTO the window. The transcript is a windowed suffix,

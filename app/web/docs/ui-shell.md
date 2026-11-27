@@ -185,12 +185,16 @@ The nav bar carries **no counts or badges**: uniform slot widths are what make
 the overflow fold exact. The Personal Assistant is the one unread-dot exception:
 its singleton is absent from session lists, so an absolute icon overlay signals
 unseen content without changing slot width. It also appears on the folded icon
-in the overflow menu. `docs/notifications.md` owns its read and Slack rules. The
-active section renders as an icon + label pill, every other slot is icon-only,
-and whatever does not fit at the bar's current width folds away. The bar
-measures itself, so a resizable desktop panel and a full-width mobile browser
-screen share one presentation; the active section is never folded away. Slot
-order is a browser-local user preference edited in Settings → Appearance.
+in the overflow menu. `docs/notifications.md` owns its read and Slack rules.
+Schedules is the one count exception: the number of Schedules whose last
+occurrence failed sits in an absolute badge on its icon (`CountIcon`), hidden at
+zero, so the slot keeps its width; the slot's accessible name carries the count,
+in the bar and in the overflow (`docs/schedules.md`). The active section renders
+as an icon + label pill, every other slot is icon-only, and whatever does not
+fit at the bar's current width folds away. The bar measures itself, so a
+resizable desktop panel and a full-width mobile browser screen share one
+presentation; the active section is never folded away. Slot order is a
+browser-local user preference edited in Settings → Appearance.
 
 Where the folded slots live differs by viewport, and only there. A wide layout
 puts them behind a trailing **More** popover. A phone has no More control at
@@ -952,6 +956,26 @@ next attempt and merely brought up to date). An answer that lands after its
 panel is gone neither navigates nor vanishes: it becomes the sanctioned toast
 naming the pull request, with the hand-off as its action.
 
+## Schedules
+
+The **Schedules** section (`docs/schedules.md` owns the contract) has a minimal
+browser: the active Schedules, each with its next due time and a warning marker
+when its last occurrence failed. On/off, delete, Pause all and the Done filter
+are on the page, not in the browser.
+
+`/schedules` is the section index route, as Pull Requests' is: the browser
+screen on a phone, the **Schedules page** on a wide layout. The page is one
+table of rows (`ListRow`, `interaction="content"`) with the Active/Done filter
+and the Pause all switch in its header; the delete confirmation belongs to the
+page, not the row, so an optimistic removal cannot unmount the dialog holding
+its own error and retry. `/schedules/:id` is one Schedule's detail: the editable
+prompt, timing and target, the next three occurrences in the Schedule's fixed
+zone, and the history read. While its own delete is in flight the detail keeps
+showing the last summary rather than "not found"; success navigates to the
+index. Every refusal renders in place with Try again, and a surface claims the
+control keys it renders so a refusal whose control is gone is announced instead
+(`lib/messageArrival.ts`).
+
 ## Navigation Rules
 
 The left sidebar and main pane are decoupled: the selected section is UI state,
@@ -972,14 +996,14 @@ left at the top edge, not a pixel offset — these lists re-sort under them.
 
 Routes identify objects, not sidebar state: one canonical route shape per object
 type (`/sessions/:id`, `/tasks/:id`, `/worktrees/:id`, …) plus section index
-routes such as `/knowledge`. `/initiatives/:id` is one Initiative and
-`/initiatives` its index, a real page rather than a browser screen; both belong
-to the Projects section, so Back from either goes to `/projects`. The member
-Task selected on an Initiative page is a fragment, `#task-<id>` (see below), so
-a selection survives a reload and back/forward pass through it. The singleton
-Personal Assistant has the dedicated `/assistant` route so its empty first-use
-state is not mistaken for the ordinary `/sessions/create` draft surface. No
-legacy aliases.
+routes such as `/knowledge` and `/schedules`. `/initiatives/:id` is one
+Initiative and `/initiatives` its index, a real page rather than a browser
+screen; both belong to the Projects section, so Back from either goes to
+`/projects`. The member Task selected on an Initiative page is a fragment,
+`#task-<id>` (see below), so a selection survives a reload and back/forward pass
+through it. The singleton Personal Assistant has the dedicated `/assistant`
+route so its empty first-use state is not mistaken for the ordinary
+`/sessions/create` draft surface. No legacy aliases.
 
 Document routes share one navigation shell around source-specific renderers
 (`docs/document-presentation.md`). `/files/<absolute path>` addresses a live
@@ -1233,11 +1257,11 @@ the wide header, so the first row of the page clears them and the window can
 still be moved.
 
 - A **browser screen** is a section index route (`/sessions`, `/tasks`,
-  `/projects`, `/pull-requests`, `/knowledge`, `/settings`): the left sidebar
-  fills the viewport — object browser above, and the nav bar at the bottom as
-  the resting header of the same bottom card every other screen has, its folded
-  slots one drag up. Nothing competes with it there, since the composer only
-  exists on session routes.
+  `/projects`, `/pull-requests`, `/knowledge`, `/schedules`, `/settings`): the
+  left sidebar fills the viewport — object browser above, and the nav bar at the
+  bottom as the resting header of the same bottom card every other screen has,
+  its folded slots one drag up. Nothing competes with it there, since the
+  composer only exists on session routes.
 - An **object screen** is any other route: the main pane fills the viewport and
   carries a **back** control. Its own header is not automatic: on a phone a
   surface earns one only if it says something the content does not. Identity

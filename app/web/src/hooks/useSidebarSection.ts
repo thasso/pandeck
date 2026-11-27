@@ -9,6 +9,7 @@ export type SidebarSection =
   | "projects"
   | "pull-requests"
   | "knowledge"
+  | "schedules"
   | "settings";
 
 const SIDEBAR_SECTION_KEY = "assistant.sidebarSection.v1";
@@ -19,6 +20,7 @@ const PERSISTED_SECTIONS: readonly SidebarSection[] = [
   "projects",
   "pull-requests",
   "knowledge",
+  "schedules",
 ];
 
 /**
@@ -56,6 +58,7 @@ export const DEFAULT_NAV_SLOTS: readonly NavSlot[] = [
   "pull-requests",
   "projects",
   "knowledge",
+  "schedules",
   "settings",
   "usage",
   "background-tasks",
@@ -133,6 +136,8 @@ export function canonicalSidebarSection(route: Route): SidebarSection {
       return "projects";
     case "knowledge":
       return "knowledge";
+    case "schedules":
+      return "schedules";
     case "settings":
       return "settings";
     default:

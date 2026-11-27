@@ -359,7 +359,11 @@ Initiatives, Sessions and Schedules. The module has no React and two halves, and
   replaces the rows even at the held revision. A lost baseline forgets the named
   revisions and keeps every row. A `settled` input, a direct mutation reply
   pairing a browser-local id with the server's, goes to the topic's `settle`
-  hook alone; revisions belong to events, so it never touches the sidecar.
+  hook alone; revisions belong to events, so it leaves the sidecar alone unless
+  the reply names the revision it was read at. Schedules' `scheduleSaved` does,
+  and its `settle` takes the row and that revision at or above the one held and
+  never below, so an event that landed first is never rolled back and a
+  value-equal reply keeps the row by identity.
 - A topic's DESCRIPTOR lends the replica its existing `UIState` fields through
   `read`/`write` lenses, so no component changes. It adapts the topic's own list
   message into the snapshot input (no wire change), and carries the topic's
@@ -630,7 +634,11 @@ per-surface sub-tasks — no page invents its own delta format.
   publishes as a `delete` at its delete's revision until the maintenance sweep
   purges it. Occurrence history is a request/response read, never on the topic.
   The client keeps no shell cache, so its digest baseline exists only after an
-  answer this hook instance applied.
+  answer this hook instance applied, and `stateEventRevisions.schedules` being
+  defined is what the page reads as "answered". The user's writes are tracked
+  mutations (`mutationLifecycle`) whose timeout or disconnect recovers the
+  touched rows with `getStateItems`; Pause all recovers through
+  `requestSettings`.
 
 ## Enforcement
 

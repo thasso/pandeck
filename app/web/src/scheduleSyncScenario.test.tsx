@@ -4,8 +4,9 @@
  * read fails (Task-1513): an unstamped Schedule collection error is held as
  * `scheduleListError`, apart from the chat and never announced, and it releases
  * the snapshot a resubscribe was awaiting, so the next resync sends its own.
- * The next snapshot clears the condition. Nothing renders it until P2.
- *   pnpm --filter @assistant/web test src/scheduleSyncScenario.test.tsx
+ * The next snapshot clears the condition; the Schedules page and browser
+ * render it in place (`schedulesSurfaces.test.tsx`).
+ *   cd app/web && pnpm exec vitest run src/scheduleSyncScenario.test.tsx
  */
 import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";

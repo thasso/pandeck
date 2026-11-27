@@ -141,6 +141,7 @@ import {
   initiativePath,
   INITIATIVES_PATH,
   isSectionIndexRoute,
+  schedulePath,
   knowledgePath,
   parseRoute,
   PERMANENT_ASSISTANT_PATH,
@@ -514,6 +515,16 @@ const InitiativeDetailPage = lazy(() =>
 const InitiativesIndexPage = lazy(() =>
   import("./components/initiative/InitiativesIndexPage.tsx").then((module) => ({
     default: module.InitiativesIndexPage,
+  })),
+);
+const SchedulesPage = lazy(() =>
+  import("./components/schedules/SchedulesPage.tsx").then((module) => ({
+    default: module.SchedulesPage,
+  })),
+);
+const ScheduleDetailPage = lazy(() =>
+  import("./components/schedules/ScheduleDetailPage.tsx").then((module) => ({
+    default: module.ScheduleDetailPage,
   })),
 );
 const SessionStatusPanel = lazy(() =>
@@ -2663,6 +2674,38 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   // object panel (`lib/initiativeView.ts`).
   const selectedInitiativeId =
     route.name === "initiatives" ? (route.id ?? null) : null;
+  // The Schedules surfaces (`docs/schedules.md`, Web). The list has answered
+  // once this hook instance applied a `schedules` answer: only then is an
+  // empty list or an absent id a fact.
+  const selectedScheduleId =
+    route.name === "schedules" ? (route.id ?? null) : null;
+  const schedulesAnswered = state.stateEventRevisions.schedules !== undefined;
+  const openSchedule = useCallback(
+    (id: string) => navigate(schedulePath(id)),
+    [navigate],
+  );
+  // The Schedule controls on screen, by mutation key, as the pages report
+  // them: the arrival rules show a refusal for one of these in place.
+  const [scheduleControlsKey, setScheduleControlsKey] = useState("");
+  const claimScheduleControls = useCallback(
+    (keys: readonly string[]) => setScheduleControlsKey(keys.join("\n")),
+    [],
+  );
+  const archivedTargets = useMemo(
+    () => ({
+      sessions: state.archivedSessions,
+      loaded: state.archivedSessionsLoaded,
+      pending: state.archivedReadQueued || state.archivedReadFlight !== null,
+      error: state.archivedReadError,
+    }),
+    [
+      state.archivedSessions,
+      state.archivedSessionsLoaded,
+      state.archivedReadQueued,
+      state.archivedReadFlight,
+      state.archivedReadError,
+    ],
+  );
   const initiativeSelectedTaskId = selectedInitiativeId
     ? selectedTaskFromHash(locationHash)
     : null;
@@ -5119,7 +5162,9 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       openObjects: {
         project: selectedProjectId ? [selectedProjectId] : [],
         task: failureHomeTaskId ? [failureHomeTaskId] : [],
+        schedule: selectedScheduleId ? [selectedScheduleId] : [],
       },
+      controls: scheduleControlsKey ? scheduleControlsKey.split("\n") : [],
     });
   }, [
     displayCurrentId,
@@ -5128,6 +5173,8 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     stagedSendSessionId,
     selectedProjectId,
     failureHomeTaskId,
+    selectedScheduleId,
+    scheduleControlsKey,
   ]);
 
   // Leaving settings returns to the chat we were in, or to /sessions/create for a fresh start.
@@ -6704,6 +6751,12 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
             state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID]?.updatedAt ?? 0
           }
           onOpenKnowledgeFile={openKnowledgeFile}
+          schedules={state.schedules}
+          schedulesAnswered={schedulesAnswered}
+          scheduleListError={state.scheduleListError}
+          onRetrySchedules={actions.retrySchedules}
+          selectedScheduleId={selectedScheduleId}
+          onOpenSchedule={openSchedule}
           onLoadWorktrees={actions.listWorktrees}
           onOpenWorktree={openWorktree}
           onStartSessionInWorktree={startSessionInWorktree}
@@ -7510,6 +7563,49 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                         onOpenSession={openSession}
                         workflowIndicators={workflowIndicators}
                       />
+                    </Suspense>
+                  ) : route.name === "schedules" ? (
+                    <Suspense fallback={<LazySurfaceFallback />}>
+                      {route.id ? (
+                        <ScheduleDetailPage
+                          // Another Schedule is another draft.
+                          key={route.id}
+                          back={screenBack}
+                          id={route.id}
+                          schedule={state.schedules.find(
+                            (item) => item.id === route.id,
+                          )}
+                          answered={schedulesAnswered}
+                          history={state.scheduleHistory[route.id]}
+                          mutations={state.scheduleMutations}
+                          failure={state.objectFailures.schedule[route.id]}
+                          liveSessions={state.liveSessions}
+                          archived={archivedTargets}
+                          onRequestArchived={actions.loadArchivedSessions}
+                          onSave={actions.updateSchedule}
+                          onDelete={actions.deleteSchedule}
+                          onOpenHistory={actions.openScheduleHistory}
+                          onCloseHistory={actions.closeScheduleHistory}
+                          onRetryHistory={actions.retryScheduleHistory}
+                          onOpen={navigate}
+                          onClaimControls={claimScheduleControls}
+                        />
+                      ) : (
+                        <SchedulesPage
+                          back={screenBack}
+                          schedules={state.schedules}
+                          answered={schedulesAnswered}
+                          listError={state.scheduleListError}
+                          onRetry={actions.retrySchedules}
+                          paused={state.settings.schedules.paused}
+                          mutations={state.scheduleMutations}
+                          onSetPaused={actions.setSchedulesPaused}
+                          onSetEnabled={actions.setScheduleEnabled}
+                          onDelete={actions.deleteSchedule}
+                          onOpen={navigate}
+                          onClaimControls={claimScheduleControls}
+                        />
+                      )}
                     </Suspense>
                   ) : route.name === "initiatives" ? (
                     <Suspense

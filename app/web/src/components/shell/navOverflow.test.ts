@@ -140,7 +140,7 @@ describe("the shipped default order", () => {
   // 374px, not 390: on a phone the bar is a `BottomCard` header, and the card's side
   // gutter costs about what the removed More trigger gave back — so the row shows the
   // same seven slots it did with a trigger, and what the card buys is the gesture.
-  it("shows seven of its ten slots in the phone's bottom card", () => {
+  it("shows seven of its eleven slots in the phone's bottom card", () => {
     const plan = planNavSlots({
       width: 374,
       sectionIds: [...DEFAULT_NAV_SLOTS],
@@ -156,7 +156,12 @@ describe("the shipped default order", () => {
       "projects",
       "knowledge",
     ]);
-    expect(plan.overflow).toEqual(["settings", "usage", "background-tasks"]);
+    expect(plan.overflow).toEqual([
+      "schedules",
+      "settings",
+      "usage",
+      "background-tasks",
+    ]);
   });
 
   it("gives one of those slots up when a wide layout reserves a More trigger", () => {

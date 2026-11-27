@@ -3329,6 +3329,7 @@ describe("archived session reads", () => {
       reduceAssistantState(state, {
         kind: "archivedReadReleased",
         requestId: "r1",
+        error: "Failed to load archived sessions: boom",
       }),
     ).toBe(state);
     expect(
@@ -3346,11 +3347,22 @@ describe("archived session reads", () => {
 
   it("is released by its own error or timeout, and by a disconnect", () => {
     const state = inFlight("r1");
+    const released = reduceAssistantState(state, {
+      kind: "archivedReadReleased",
+      requestId: "r1",
+      error: "Failed to load archived sessions: boom",
+    });
+    expect(released).toMatchObject({
+      archivedReadFlight: null,
+      // Kept for the surface that asked, so it offers Retry rather than
+      // reading the unanswered slice as empty; the next send clears it.
+      archivedReadError: "Failed to load archived sessions: boom",
+    });
     expect(
-      reduceAssistantState(state, {
-        kind: "archivedReadReleased",
-        requestId: "r1",
-      }).archivedReadFlight,
+      reduceAssistantState(released, {
+        kind: "archivedReadSent",
+        requestId: "r2",
+      }).archivedReadError,
     ).toBeNull();
     const queued = reduceAssistantState(state, {
       kind: "archivedReadRequested",

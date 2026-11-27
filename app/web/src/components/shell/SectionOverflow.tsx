@@ -18,6 +18,7 @@ interface SectionOverflowItem<Id extends string = string> {
   id: Id;
   label: string;
   icon: ReactNode;
+  accessibleLabel?: string | undefined;
 }
 
 interface Props<Id extends string> {
@@ -48,6 +49,7 @@ export function OverflowList<Id extends string>({
     label: string,
     run: () => void,
     active = false,
+    accessibleLabel?: string,
   ) => (
     <Item
       key={key}
@@ -55,6 +57,7 @@ export function OverflowList<Id extends string>({
       variant={active ? "muted" : "default"}
       render={<button type="button" />}
       aria-current={active ? "true" : undefined}
+      aria-label={accessibleLabel}
       onClick={() => {
         run();
         close();
@@ -78,6 +81,7 @@ export function OverflowList<Id extends string>({
           item.label,
           () => onSelect(item.id),
           item.id === activeId,
+          item.accessibleLabel,
         ),
       )}
       {onCustomize ? (
@@ -120,6 +124,7 @@ export function SectionOverflow<Id extends string>({
         <DropdownMenuItem
           key={item.id}
           aria-current={item.id === activeId ? "true" : undefined}
+          aria-label={item.accessibleLabel}
           onClick={() => onSelect(item.id)}
         >
           {item.icon}

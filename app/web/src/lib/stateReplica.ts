@@ -120,7 +120,10 @@ export interface TopicDescriptor<
   /**
    * Settles optimism the server never saw: a direct mutation reply pairs a
    * browser-local id with the server's, which only the topic knows how to
-   * place. Revisions belong to events, so this never touches the sidecar.
+   * place. Revisions belong to events, so this leaves the sidecar alone —
+   * unless the reply names the revision it was read at (`scheduleSaved`),
+   * which the topic may then hold, since the reply is that object's
+   * authoritative state as of that revision.
    */
   settle?(state: State, settled: SettledInput<Item>): State;
   /**
@@ -139,6 +142,8 @@ interface SettledInput<Item> {
   localId?: string;
   id: string;
   item: Item | null;
+  /** The object's revision as of the reply, when the reply carries one. */
+  revision?: number;
 }
 
 /**
