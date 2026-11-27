@@ -1093,7 +1093,23 @@ export const spawnedSessions: SessionListItem[] = [
   },
   ...(
     [
-      ["impl", "Implementer: retry backoff", { isStreaming: true }],
+      // Waits on a job: its row carries the badge the strip's "1 job" counts.
+      [
+        "impl",
+        "Implementer: retry backoff",
+        {
+          isStreaming: true,
+          backgroundActivity: {
+            activeCount: 1,
+            shellCount: 1,
+            monitorCommandCount: 0,
+            monitorWebsocketCount: 0,
+            startingCount: 0,
+            stoppingCount: 0,
+            oldestStartedAt: NOW - 90_000,
+          },
+        },
+      ],
       ["review", "Reviewer: retry backoff", { attention: "question" }],
       [
         "docs",
