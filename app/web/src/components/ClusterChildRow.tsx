@@ -1,6 +1,5 @@
 import { memo } from "react";
-import { Activity, Users } from "lucide-react";
-import { awaitedBackgroundCount } from "@assistant/shared";
+import { Users } from "lucide-react";
 import {
   sameClusterChildProps,
   sessionClusterSummary,
@@ -12,6 +11,7 @@ import type { RowDensity } from "../lib/rowDensity.ts";
 import { SessionTitleRow } from "./SessionTitleRow.tsx";
 import { ListRow } from "./common/ListRow.tsx";
 import { identityLabel } from "./SessionRow.tsx";
+import { SessionJobsBadge, sessionJobs } from "./SessionJobsBadge.tsx";
 
 export interface ClusterChildRowProps {
   card: SessionInboxCard;
@@ -97,19 +97,7 @@ function ClusterChildRowImpl({
 }: ClusterChildRowProps) {
   const { session, status } = card;
   const title = session.title.trim() || "Untitled session";
-  // The badge counts every process; the words keep the fold's split between
-  // jobs somebody waits on and services nobody does.
-  const jobs = Math.max(0, session.backgroundActivity?.activeCount ?? 0);
-  const services = session.backgroundActivity?.serviceCount ?? 0;
-  const awaited = awaitedBackgroundCount(session.backgroundActivity);
-  const jobsText = `${[
-    ...(awaited > 0
-      ? [`${awaited} background job${awaited === 1 ? "" : "s"}`]
-      : []),
-    ...(services > 0
-      ? [`${services} service${services === 1 ? "" : "s"}`]
-      : []),
-  ].join(" and ")} running`;
+  const jobs = sessionJobs(session.backgroundActivity);
   const peers = card.peers;
   // The composer ledge lists what a chat SPAWNED, owned or not, so its rows
   // claim no coordination either.
@@ -132,7 +120,7 @@ function ClusterChildRowImpl({
       tabIndex={tabbable ? 0 : -1}
       aria-label={`Open ${relation} ${identityLabel(session)} session: ${title} — ${[
         sessionStatusText(session, status, now),
-        jobs > 0 ? jobsText : "",
+        jobs.count > 0 ? jobs.text : "",
         peersText,
       ]
         .filter(Boolean)
@@ -167,12 +155,7 @@ function ClusterChildRowImpl({
       identity={<SessionTitleRow session={session} status={status} />}
       trailing={
         <span className="flex items-center gap-1.5 text-xs tabular-nums text-muted-foreground">
-          {jobs > 0 ? (
-            <span title={jobsText} className="flex items-center gap-0.5">
-              <Activity className="size-3" aria-hidden />
-              {jobs}
-            </span>
-          ) : null}
+          <SessionJobsBadge activity={session.backgroundActivity} />
           {peers ? (
             <span
               title={sessionClusterSummary(peers)}

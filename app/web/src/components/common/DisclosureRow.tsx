@@ -26,6 +26,7 @@ export function DisclosureRow({
   inset = 0,
   depth = 0,
   action,
+  meta,
   children,
 }: {
   /** The list row's id, for scroll restoration (`data-list-row-id`). */
@@ -47,6 +48,11 @@ export function DisclosureRow({
    * work), before the age.
    */
   action?: ReactNode;
+  /**
+   * A fact that must stay in view without unfolding the row (a session's
+   * running-jobs count), between the action and the age.
+   */
+  meta?: ReactNode;
   /** The unfolded details, rendered only while open. */
   children: ReactNode;
 }) {
@@ -74,6 +80,7 @@ export function DisclosureRow({
         </Button>
         <ItemActions className="gap-1.5">
           {action}
+          {meta}
           <span
             className="text-xs whitespace-nowrap tabular-nums"
             title={ageTitle}

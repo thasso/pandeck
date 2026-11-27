@@ -149,6 +149,10 @@ export const LedgesOpenDark: Story = {
   globals: { theme: "dark" },
 };
 export const LedgesPhone: Story = { args: { frameWidth: 375 } };
+// The peer rows open on a phone: a job badge beside the age and Open.
+export const LedgesOpenPhone: Story = {
+  args: { open: true, frameWidth: 375 },
+};
 export const PromptCard: Story = { args: { surface: "prompt-card" } };
 export const PromptCardDark: Story = {
   args: { surface: "prompt-card" },

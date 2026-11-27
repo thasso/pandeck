@@ -190,6 +190,41 @@ describe("the composer's spawned-session ledge", () => {
     expect(markup).not.toContain("Archive");
   });
 
+  it("marks the peer that runs the jobs the summary counts", () => {
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    act(() => {
+      root?.render(
+        ledge(
+          [
+            session("idle"),
+            session("busy", {
+              backgroundActivity: {
+                activeCount: 1,
+                shellCount: 1,
+                monitorCommandCount: 0,
+                monitorWebsocketCount: 0,
+                startingCount: 0,
+                stoppingCount: 0,
+                oldestStartedAt: NOW - 30_000,
+              },
+            }),
+          ],
+          { open: true },
+        ),
+      );
+    });
+    expect(container.textContent).toContain("2 sessions · 1 job");
+    // Without the badge the "1 job" could only be found by opening each peer.
+    const badge = (id: string) =>
+      container
+        ?.querySelector(`li[data-list-row-id="${id}"]`)
+        ?.querySelector('[aria-label="1 background job running"]');
+    expect(badge("busy")?.textContent).toBe("1");
+    expect(badge("idle")).toBeNull();
+  });
+
   it("opens the peer the row names, and the one it bubbles", () => {
     container = document.createElement("div");
     document.body.append(container);

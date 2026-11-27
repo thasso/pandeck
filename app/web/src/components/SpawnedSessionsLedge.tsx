@@ -34,6 +34,7 @@ import { relativeAge } from "../lib/relativeTime.ts";
 import { AGENT_TYPE_DISPLAY } from "./agentTypeDisplay.ts";
 import { ProviderIcon } from "./common/ProviderIcon.tsx";
 import { SessionTitleRow } from "./SessionTitleRow.tsx";
+import { SessionJobsBadge } from "./SessionJobsBadge.tsx";
 import { Spinner } from "./common/load.tsx";
 import { useElapsedNow } from "./useElapsedNow.ts";
 import { Button } from "@/components/ui/button";
@@ -457,6 +458,9 @@ export const SpawnedSessionLedgeRow = memo(function SpawnedSessionLedgeRow({
       // The attention cards' title line, so a session reads the same in the
       // strip, the inspector and the Projects tree.
       head={<SessionTitleRow session={session} status={status} />}
+      // The strip's summary counts the cluster's jobs; the badge says which
+      // peer runs them, as the Sessions fold's row does.
+      meta={<SessionJobsBadge activity={session.backgroundActivity} labelled />}
       age={relativeAge(session.updatedAt, now)}
       openLabel={`Open ${title}`}
       onOpen={() => onOpen(session.id)}
