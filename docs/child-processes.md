@@ -283,3 +283,33 @@ reported as terminated but not killed. A platform with neither table finds
 nothing. A removal only waits when something was actually running. Without it, a
 dev server left running recreated its cache (`.vite/deps`) in the deleted
 folder.
+
+## Test environment
+
+Children started by tests inherit the test worker's environment, so the server
+suite's setup (`app/server/src/test/setup.ts`) removes what could route a child
+off this machine or hand it a real credential before any test runs:
+
+- proxies: `HTTP(S)_PROXY`, `ALL_PROXY` (both cases), `NODE_USE_ENV_PROXY`,
+  `GIT_PROXY_COMMAND`. A git child once inherited the launching session's
+  `HTTPS_PROXY` and sent `CONNECT github.com` to the real proxy;
+- tokens and helpers: `GITHUB_TOKEN`, `GH_TOKEN`, `GIT_ASKPASS`, `SSH_ASKPASS`,
+  `SSH_AUTH_SOCK`;
+- foreign CA trust and TLS-off switches, and git config injected through
+  `GIT_CONFIG_PARAMETERS`/`GIT_CONFIG_COUNT`.
+
+It also sets `GIT_CONFIG_NOSYSTEM=1`, because a system gitconfig can name a
+credential helper that holds real logins (macOS ships `osxkeychain`), and
+`GIT_TERMINAL_PROMPT=0`, so a missing credential fails instead of hanging. A
+test that exercises one of these variables sets its own.
+
+`pnpm test:loopback <command>` runs a command where nothing can leave the
+machine: a fresh network namespace with only loopback up, entered as your own
+uid and gid, with the same variables removed and `NO_PROXY=*`. It is Linux-only
+and refuses to run where it cannot build that namespace. Run tests that drive
+git, the git broker or the push path against loopback fakes through it while
+developing them:
+
+    pnpm test:loopback pnpm --filter @assistant/server exec vitest run src/relay/gitCredentialGit.test.ts
+
+The rest of the suite, and CI, run as usual.

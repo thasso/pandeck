@@ -21,6 +21,42 @@ if (
     `Bun test runs must be launched with HOME set to a fresh temp directory, not ${homedir()}: HOME="$(mktemp -d)" bun ...`,
   );
 
+// No test inherits a route or a credential off this machine. A git child once
+// inherited the launching session's HTTPS_PROXY and sent CONNECT for
+// github.com to the real proxy; tokens, askpass helpers, foreign CA trust and
+// injected git config reach children the same way. A system gitconfig can name
+// a credential helper holding real logins (macOS ships osxkeychain), and a
+// prompt would hang the run. Tests that exercise these variables set their own
+// (docs/child-processes.md#test-environment).
+for (const key of [
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+  "NODE_USE_ENV_PROXY",
+  "GIT_PROXY_COMMAND",
+  "GITHUB_TOKEN",
+  "GH_TOKEN",
+  "GIT_ASKPASS",
+  "SSH_ASKPASS",
+  "SSH_AUTH_SOCK",
+  "NODE_EXTRA_CA_CERTS",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "CURL_CA_BUNDLE",
+  "GIT_SSL_CAINFO",
+  "GIT_SSL_CAPATH",
+  "GIT_SSL_NO_VERIFY",
+  "NODE_TLS_REJECT_UNAUTHORIZED",
+  "GIT_CONFIG_PARAMETERS",
+  "GIT_CONFIG_COUNT",
+])
+  delete process.env[key];
+process.env.GIT_CONFIG_NOSYSTEM = "1";
+process.env.GIT_TERMINAL_PROMPT = "0";
+
 // Every database a test opens is a throwaway in a temp directory, so durability
 // across a power cut is not under test, and waiting on fsync for every commit
 // was half the suite's time. Mocking the module here keeps the setting out of

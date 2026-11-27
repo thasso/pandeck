@@ -34,6 +34,7 @@
     "test": "pnpm run check:instructions && pnpm run check:migrations && pnpm run check:package-config-secrets && pnpm run lint && pnpm run lint:deadcode && pnpm run test:suites && pnpm run test:engine-contract",
     "test:engine-contract": "node scripts/run-engine-contract.mjs",
     "test:kb": "node scripts/run-kb-tests.mjs all",
+    "test:loopback": "sh scripts/test-loopback.sh",
     "test:package-config-secrets": "node --test scripts/check-package-config-secrets.test.mjs",
     "test:release": "node --test scripts/release-utils.test.mjs",
     "test:server": "pnpm --filter @assistant/server test",
