@@ -16,8 +16,13 @@ import {
   CLIENT_METHODS,
   GATEWAY_CLIENT_PROTOCOL,
   GATEWAY_CLIENT_VERSION,
+  GIT_CREDENTIAL_FAILURES,
   PREPARE_ANSWER_MAX_BYTES,
   decodeApplyAnswer,
+  decodeGitCredentialRequest,
+  encodeGitCredential,
+  integrationFailure,
+  isIntegrationFailure,
   decodePrepareAnswer,
   decodeToolApply,
   decodeToolPrepare,
@@ -35,13 +40,14 @@ function invalidParams(run: () => unknown): void {
 }
 
 describe("the version", () => {
-  test("is 1.3; every 1.x peer is compatible, another major is not", () => {
-    expect(GATEWAY_CLIENT_VERSION).toBe("gateway-client/1.3");
+  test("is 1.4; every 1.x peer is compatible, another major is not", () => {
+    expect(GATEWAY_CLIENT_VERSION).toBe("gateway-client/1.4");
     const { compatible } = GATEWAY_CLIENT_PROTOCOL;
     expect(compatible("gateway-client/1.0")).toBe(true);
     expect(compatible("gateway-client/1.1")).toBe(true);
     expect(compatible("gateway-client/1.2")).toBe(true);
     expect(compatible("gateway-client/1.3")).toBe(true);
+    expect(compatible("gateway-client/1.4")).toBe(true);
     expect(compatible("gateway-client/1.7")).toBe(true);
     expect(compatible("gateway-client/2.0")).toBe(false);
     expect(compatible("gateway-client/0.9")).toBe(false);
@@ -259,5 +265,72 @@ describe("the client's answer decoders", () => {
         }),
       }),
     ).toThrow(/over its size/);
+  });
+});
+
+describe("git.credential (1.4, Task-1446)", () => {
+  test("its name, and its failure texts are its own, never the integration table's", () => {
+    expect(CLIENT_METHODS.gitCredential).toBe("git.credential");
+    const integrationTexts = [
+      "integration_invalid",
+      "integration_rejected",
+      "integration_unreachable",
+      "vault_unavailable",
+      "tools_unavailable",
+      "integration_busy",
+      "integration_sign_in_required",
+    ].map((code) => {
+      expect(isIntegrationFailure(code)).toBe(true);
+      try {
+        integrationFailure(code as Parameters<typeof integrationFailure>[0]);
+      } catch (err) {
+        return (err as WorkerMethodError).message;
+      }
+      throw new Error("no refusal");
+    });
+    expect(Object.keys(GIT_CREDENTIAL_FAILURES).sort()).toEqual([
+      "git_busy",
+      "git_denied",
+      "git_not_connected",
+      "git_reconnect",
+      "vault_locked",
+      "vault_unavailable",
+    ]);
+    // `vault_locked` is the one code whose plain text both tables share by
+    // design (plan v03 §2); every other git text is its own.
+    for (const [code, text] of Object.entries(GIT_CREDENTIAL_FAILURES))
+      if (code !== "vault_locked") expect(integrationTexts).not.toContain(text);
+  });
+
+  test("the decoder takes exactly host, path and access as strings and no stream", () => {
+    const ok = { host: "github.com", path: "o/r", access: "read" };
+    expect(decodeGitCredentialRequest({ json: ok })).toEqual(ok);
+    for (const json of [
+      { host: "github.com", path: "o/r" },
+      { ...ok, userId: "u2" },
+      { ...ok, host: 1 },
+      { ...ok, path: null },
+      { ...ok, access: ["read"] },
+      null,
+      [],
+      "o/r",
+    ])
+      invalidParams(() => decodeGitCredentialRequest({ json }));
+    invalidParams(() =>
+      decodeGitCredentialRequest({ json: ok, text: { message: "x" } }),
+    );
+    invalidParams(() =>
+      decodeGitCredentialRequest({
+        json: ok,
+        bytes: { chunk: Buffer.from("x") },
+      }),
+    );
+  });
+
+  test("the answer is a fresh object of exactly token and expiresAt", () => {
+    const vault = { ok: true, token: "fake-t", expiresAt: 5, extra: "x" };
+    const payload = encodeGitCredential(vault);
+    expect(payload.json).toEqual({ token: "fake-t", expiresAt: 5 });
+    expect(payload.json).not.toBe(vault);
   });
 });

@@ -72,6 +72,7 @@ import { LeaseTable } from "./leases.ts";
 import { UserOperationRefusal } from "./userOperations.ts";
 import { ProfileRegistry } from "./profiles.ts";
 import type {
+  GithubToken,
   IntegrationConnect,
   IntegrationRecord,
   IntegrationWrite,
@@ -1131,7 +1132,39 @@ function stubVault() {
     connectHeld: false,
     connectReleases: [] as (() => void)[],
     connectRequests: [] as unknown[],
+    /** `githubToken` calls as `${userId} ${owner}/${repo}`, with signals. */
+    githubCalls: [] as { call: string; signal: AbortSignal | undefined }[],
+    githubAnswer: undefined as GithubToken | undefined,
+    /** Holds every `githubToken` until the test calls a pushed release. */
+    githubHeld: false,
+    githubReleases: [] as (() => void)[],
     port: {
+      githubToken: async (
+        userId: string,
+        request: { owner: string; repo: string },
+        options?: { signal?: AbortSignal },
+      ): Promise<GithubToken> => {
+        stub.githubCalls.push({
+          call: `${userId} ${request.owner}/${request.repo}`,
+          signal: options?.signal,
+        });
+        if (stub.githubHeld)
+          await new Promise<void>((resolve) => {
+            stub.githubReleases.push(resolve);
+            // As `remoteVault`: an abort answers unavailable at once.
+            options?.signal?.addEventListener("abort", () => resolve(), {
+              once: true,
+            });
+          });
+        if (options?.signal?.aborted) return { ok: false, unavailable: true };
+        return (
+          stub.githubAnswer ?? {
+            ok: true,
+            token: "fake-install-token",
+            expiresAt: 4_102_444_800_000,
+          }
+        );
+      },
       login: () => undefined,
       newTokenFile: () => {
         throw new Error("no token files here");
@@ -1195,6 +1228,7 @@ async function listenerWith(
   integrationCheckMs?: number,
   options: { atlassianSignIn?: boolean } = {},
   fileOutputMs?: number,
+  logs?: string[],
 ): Promise<Edge> {
   const clients = await startClientListener(
     {
@@ -1207,7 +1241,7 @@ async function listenerWith(
         observeLocal: () => ({ refuse: () => {} }),
         refuseConnect: (_req, socket) => socket.destroy(),
       }),
-      log: () => {},
+      log: (line) => logs?.push(line),
       vault: vault.port,
       tools,
       ...(integrationCheckMs !== undefined ? { integrationCheckMs } : {}),
@@ -3855,4 +3889,130 @@ test("P8a S1: an upload apply whose answer cannot drain ends the connection at t
   assert.equal(await pending, "ended");
   assert.equal(other.isEnded, false);
   assert.equal(budget.releases, 1);
+});
+
+// --- git.credential (gateway-client 1.4, Task-1446) -------------------------
+
+test("git.credential asks the vault for the client's registry user only; the edge logs the method and code, never the request", async () => {
+  const vault = stubVault();
+  const logs: string[] = [];
+  const edge = await listenerWith(
+    vault,
+    undefined,
+    undefined,
+    {},
+    undefined,
+    logs,
+  );
+  const identity = await enroll(edge, "u1");
+  const connection = await dialClient(edge, identity);
+  const other = await dialClient(edge, await enroll(edge, "u2"));
+  const ask = (json: object, via = connection) =>
+    via.request(CLIENT_METHODS.gitCredential, encodeClientMessage(json));
+  const request = {
+    host: "github.com",
+    path: "fake-owner/fake-repo.git",
+    access: "read",
+  };
+
+  assert.deepEqual((await ask(request)).json, {
+    token: "fake-install-token",
+    expiresAt: 4_102_444_800_000,
+  });
+  assert.deepEqual((await ask(request, other)).json, {
+    token: "fake-install-token",
+    expiresAt: 4_102_444_800_000,
+  });
+  assert.deepEqual(
+    vault.githubCalls.map((entry) => entry.call),
+    ["u1 fake-owner/fake-repo", "u2 fake-owner/fake-repo"],
+  );
+  // A user named in the request is refused, never used.
+  assert.equal(
+    failureOf(await ask({ ...request, userId: "u2" }).catch((e) => e)).code,
+    "invalid_params",
+  );
+  vault.githubAnswer = { ok: false, denied: true };
+  assert.deepEqual(failureOf(await ask(request).catch((e) => e)), {
+    code: "git_denied",
+    text: "No read access to this repository, or the gateway's GitHub App is not installed on it.",
+  });
+  assert.equal(vault.githubCalls.length, 3);
+
+  // The ninth call in flight for one client is busy, before the vault.
+  vault.githubAnswer = undefined;
+  vault.githubHeld = true;
+  const held = Array.from({ length: 8 }, () => ask(request));
+  await vi.waitFor(() => assert.equal(vault.githubCalls.length, 11));
+  assert.equal(failureOf(await ask(request).catch((e) => e)).code, "git_busy");
+  assert.equal(vault.githubCalls.length, 11);
+  for (const release of vault.githubReleases.splice(0)) release();
+  await Promise.all(held);
+
+  const ours = logs.filter((line) => line.includes("git.credential"));
+  assert.ok(ours.length > 0);
+  for (const line of ours)
+    assert.match(
+      line,
+      /^client c_[A-Za-z0-9_-]+ git\.credential: (ok|git_denied|git_busy|invalid_params)$/,
+    );
+  for (const line of logs)
+    assert.doesNotMatch(line, /fake-owner|fake-repo|fake-install|github\.com/);
+});
+
+test("git.credential: a call whose connection ended keeps its slot until the vault answers (F006)", async () => {
+  const vault = stubVault();
+  vault.githubHeld = true;
+  const edge = await listenerWith(vault, undefined);
+  const identity = await enroll(edge, "u1");
+  const ending = await dialClient(edge, identity);
+  const staying = await dialClient(edge, identity);
+  const ask = (via: WorkerConnection) =>
+    via.request(
+      CLIENT_METHODS.gitCredential,
+      encodeClientMessage({
+        host: "github.com",
+        path: "fake-owner/fake-repo",
+        access: "read",
+      }),
+    );
+  void ask(ending).catch(() => {});
+  await vi.waitFor(() => assert.equal(vault.githubCalls.length, 1));
+  const held = Array.from({ length: 7 }, () => ask(staying));
+  await vi.waitFor(() => assert.equal(vault.githubCalls.length, 8));
+  assert.ok(
+    vault.githubCalls.every((entry) => entry.signal === undefined),
+    "no abort signal reaches the vault",
+  );
+
+  // The first call's connection ends while its vault call runs. For half a
+  // second, every further call from the same client is still busy and never
+  // reaches the vault: the ended call holds its slot. (Before F006 the end
+  // aborted the vault call and freed the slot at once.)
+  ending.end("test over");
+  for (const until = Date.now() + 500; Date.now() < until;) {
+    // A call that got a slot would wait on the held vault: 1 s says so.
+    const answer: unknown = await Promise.race([
+      ask(staying).catch((e: unknown) => e),
+      new Promise((resolve) => setTimeout(() => resolve("held"), 1_000)),
+    ]);
+    assert.notEqual(answer, "held", "a call got the ended call's slot");
+    assert.equal(failureOf(answer).code, "git_busy");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(vault.githubCalls.length, 8);
+
+  // Once the vault answers the ended call, its slot frees: the next call
+  // reaches the vault.
+  vault.githubReleases.shift()!();
+  vault.githubHeld = false;
+  await vi.waitFor(async () =>
+    assert.deepEqual((await ask(staying).catch((e) => e)).json, {
+      token: "fake-install-token",
+      expiresAt: 4_102_444_800_000,
+    }),
+  );
+  assert.equal(vault.githubCalls.length, 9);
+  for (const release of vault.githubReleases.splice(0)) release();
+  await Promise.all(held);
 });

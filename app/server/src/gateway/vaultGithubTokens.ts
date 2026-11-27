@@ -9,6 +9,9 @@
  * 2. The user's access view, as a get answers it, noting the record's
  *    generation first; absent, rejected and locked pass through.
  * 3. The repository check with the user's token (`denied` or the id, rid).
+ *    A 401 forces one refresh of the access view, keyed to the refused
+ *    token, and one repeated check (Task-1508 O1): GitHub refusing the
+ *    refresh answers `rejected` at once; a second 401 is unavailable.
  * 4. A cached token for (installation, rid) with over 10 minutes left is
  *    answered, if the generation still holds.
  * 5. The App's JWT (reused until a minute before its expiry), the
@@ -63,9 +66,19 @@ const UNAVAILABLE = { ok: false, unavailable: true } as const;
 const INVALID = { ok: false, invalid: true } as const;
 const DENIED = { ok: false, denied: true } as const;
 
-/** The user's token, with whether the record is still the one it came from. */
+/**
+ * The user's token, with whether the record is still the one it came from.
+ * `renew` refreshes because GitHub refused this token (Task-1508 O1): the new
+ * view keeps this one's generation baseline and cannot renew again.
+ */
 export type GithubAccess =
-  | { ok: true; dirId: string; accessToken: string; current(): boolean }
+  | {
+      ok: true;
+      dirId: string;
+      accessToken: string;
+      current(): boolean;
+      renew(signal: AbortSignal): Promise<GithubAccess>;
+    }
   | Exclude<IntegrationRecord, { ok: true }>;
 
 export interface GithubTokenDeps {
@@ -129,13 +142,31 @@ export function createGithubTokens(deps: GithubTokenDeps): GithubTokens {
     const { dirId } = access;
     const answerable = (): boolean => !stop.aborted && access.current();
 
-    const repo = await within(() =>
+    let repo = await within(() =>
       githubRepo(access.accessToken, name, deps.endpoint),
     );
     if (repo === CUT) return UNAVAILABLE;
     // A check against a record that has since moved proves nothing, either
     // way: the fence comes before any outcome, `denied` included.
     if (!answerable()) return UNAVAILABLE;
+    if (repo.kind === "unauthorized") {
+      // GitHub refused the user's token: one forced refresh, then one more
+      // check with the new token. The renewed view keeps the call's fence.
+      deps.log(`github.token ${dirId}: user token refused; refreshing`);
+      const renewed = await within(() => access.renew(stop));
+      if (renewed === CUT) return UNAVAILABLE;
+      if (!renewed.ok) return renewed;
+      repo = await within(() =>
+        githubRepo(renewed.accessToken, name, deps.endpoint),
+      );
+      if (repo === CUT || !answerable()) return UNAVAILABLE;
+      if (repo.kind === "unauthorized") {
+        deps.log(
+          `github.token ${dirId}: repository check failed (401 after refresh)`,
+        );
+        return UNAVAILABLE;
+      }
+    }
     if (repo.kind === "denied") return DENIED;
     if (repo.kind === "unavailable") {
       deps.log(`github.token ${dirId}: repository check failed (${repo.code})`);

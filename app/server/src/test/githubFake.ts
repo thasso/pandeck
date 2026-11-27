@@ -155,6 +155,11 @@ export interface GithubFake {
   on(route: GithubRoute): SeenGithubRequest[];
   /** Adds a repository `owner/name` with id `id` that `pullers` may pull. */
   addRepository(fullName: string, id: number, pullers: string[]): void;
+  /**
+   * Revokes the user token `token`: the default `user` and `repo` routes
+   * answer 401 to it from now on, as GitHub does to a revoked grant's token.
+   */
+  revokeAccess(token: string): void;
   /** Back to the default answers, forgetting what was seen. */
   reset(): void;
   close(): Promise<void>;
@@ -233,6 +238,8 @@ export async function startGithubFake(): Promise<GithubFake> {
   const refreshUsers = new Map<string, FakeGithubUser>();
   /** Each minted token's repository ids. */
   const mintedRepos = new Map<string, number[]>();
+  /** User tokens `revokeAccess` revoked. */
+  const revoked = new Set<string>();
   const holds = new Map<
     GithubRoute,
     { arrived: () => void; released: Promise<void> }
@@ -301,7 +308,9 @@ export async function startGithubFake(): Promise<GithubFake> {
       res.status(200, issueUserTokens(fake.identity));
     },
     user(request, res) {
-      const user = accessUsers.get(request.bearer ?? "");
+      const user = revoked.has(request.bearer ?? "")
+        ? undefined
+        : accessUsers.get(request.bearer ?? "");
       if (!user) res.status(401, { message: "Bad credentials" });
       else
         res.status(200, {
@@ -313,7 +322,9 @@ export async function startGithubFake(): Promise<GithubFake> {
         });
     },
     repo(request, res) {
-      const user = accessUsers.get(request.bearer ?? "");
+      const user = revoked.has(request.bearer ?? "")
+        ? undefined
+        : accessUsers.get(request.bearer ?? "");
       const key = request.path.slice("/repos/".length).toLowerCase();
       const repo = repositories.get(key);
       if (!user) {
@@ -403,6 +414,9 @@ export async function startGithubFake(): Promise<GithubFake> {
         pullers: new Set(pullers),
       });
     },
+    revokeAccess(token) {
+      revoked.add(token);
+    },
     reset() {
       seen.length = 0;
       for (const route of Object.keys(script) as GithubRoute[])
@@ -412,6 +426,7 @@ export async function startGithubFake(): Promise<GithubFake> {
       fake.delayMs = 0;
       delete fake.endpoint.timeoutMs;
       repositories.clear();
+      revoked.clear();
       holds.clear();
     },
     close: () =>

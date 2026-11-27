@@ -95,18 +95,23 @@ function jsonObjectOf(text: string): Record<string, unknown> | undefined {
   }
 }
 
-/** An OAuth token-endpoint answer's body, or its classified failure. */
+/**
+ * An OAuth token-endpoint answer's body, or its classified failure. The status
+ * comes first: 400, 401 and 403 are GitHub's refusals; any other non-2xx is
+ * unreachable whatever its body holds. An `error` member counts only on a 2xx,
+ * which is how GitHub refuses a code or refresh token (`bad_refresh_token`).
+ */
 function classifyOAuth(
   answer: HttpAnswer,
 ): { kind: "ok"; body: Record<string, unknown> } | Failure {
   if (answer.kind === "unreachable") return answer;
-  const body = jsonObjectOf(answer.body);
-  if (body?.error !== undefined) return { kind: "rejected" };
   const { status } = answer;
   if (status === 400 || status === 401 || status === 403)
     return { kind: "rejected" };
   if (status < 200 || status >= 300)
     return { kind: "unreachable", code: String(status) };
+  const body = jsonObjectOf(answer.body);
+  if (body?.error !== undefined) return { kind: "rejected" };
   return body
     ? { kind: "ok", body }
     : { kind: "unreachable", code: "bad_response" };
@@ -262,13 +267,15 @@ export async function githubUser(
 export type GithubRepoResult =
   | { kind: "ok"; rid: number }
   | { kind: "denied" }
+  | { kind: "unauthorized" }
   | { kind: "unavailable"; code: string };
 
 /**
  * `GET /repos/{owner}/{repo}` with the user's token: the repository's id when
  * GitHub names it exactly `owner/repo` (any case) and grants the user `pull`.
  * A redirect (renamed or moved), 404 or 403 is `denied`, as is any other
- * name, id or permission; every other failure is `unavailable`.
+ * name, id or permission; a 401 is `unauthorized` (GitHub refused the token,
+ * the cue for one refresh, Task-1508 O1); every other failure is `unavailable`.
  */
 export async function githubRepo(
   accessToken: string,
@@ -288,6 +295,7 @@ export async function githubRepo(
       ? { kind: "denied" }
       : { kind: "unavailable", code: answer.code };
   if (answer.status === 404 || answer.status === 403) return { kind: "denied" };
+  if (answer.status === 401) return { kind: "unauthorized" };
   if (answer.status !== 200)
     return { kind: "unavailable", code: String(answer.status) };
   const body = jsonObjectOf(answer.body);

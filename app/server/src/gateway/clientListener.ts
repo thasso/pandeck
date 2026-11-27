@@ -68,6 +68,7 @@ import {
   UNKNOWN_ACCOUNT,
   decodeAccountId,
   decodeClientGrant,
+  decodeGitCredentialRequest,
   decodeIntegration,
   decodeIntegrationSet,
   decodeIntegrationStatusRequest,
@@ -95,6 +96,7 @@ import {
   type GatewayClient,
 } from "./clientRegistry.ts";
 import type { DevboxApproval } from "./devboxProof.ts";
+import { createGitCredentialGate, gitCredentialFor } from "./gitCredential.ts";
 import type { CredentialOutcome, EdgeTools, UploadScope } from "./edgeTools.ts";
 import type {
   AdmittedClient,
@@ -305,6 +307,7 @@ interface ClientListenerDeps {
     | "integrationGet"
     | "integrationClear"
     | "integrationConnect"
+    | "githubToken"
   >;
   /** The edge's tools; without them `/mcp` is 404 and integrations refuse. */
   tools?: EdgeTools | undefined;
@@ -745,6 +748,12 @@ export async function startClientListener(
     }
   };
 
+  /**
+   * At most 8 `git.credential` calls in flight per client (Task-1446 P-8),
+   * each holding its slot until the vault answers or times out.
+   */
+  const gitCredentials = createGitCredentialGate(8);
+
   const methods: Record<string, ClientMethod> = {
     [CLIENT_METHODS.hello]: (_payload, client) =>
       encodeClientMessage({ clientId: client.id, userId: client.userId }),
@@ -1007,6 +1016,15 @@ export async function startClientListener(
       const uploadId = decodeUploadRelease(payload);
       return encodeClientMessage(
         uploadId === undefined ? scope.invalid() : scope.release(uploadId),
+      );
+    },
+    [CLIENT_METHODS.gitCredential]: (payload, client) => {
+      // A request that does not decode is refused before it takes a slot.
+      // The connection's signal is not passed on: the slot is held until the
+      // vault answers or times out, also when the connection ends (F006).
+      const request = decodeGitCredentialRequest(payload);
+      return gitCredentials.run(client.id, () =>
+        gitCredentialFor(deps.vault, client.userId, request),
       );
     },
     [CLIENT_METHODS.removeAccount]: (payload, client) => {
