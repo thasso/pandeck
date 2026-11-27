@@ -59,22 +59,28 @@ function withScheduleKind(
  *   Timing): kind, date or days, time, and the repeat window.
  * @useWhen The Schedule detail's Timing section.
  * @intent Controlled and zone-free: the zone is fixed at creation and shown
- *   read-only by the page (R2). An incomplete value is marked invalid rather
- *   than explained; the page keeps Save off until it validates.
+ *   read-only by the page (R2). The page renders why a changed value cannot
+ *   be saved and passes that note's id as `describedBy`, so the group is
+ *   announced invalid together with its reason (AC8).
  */
 export function ScheduleTimingFields({
   value,
   invalid,
+  describedBy,
   onChange,
 }: {
   value: ScheduleTimingInput;
   invalid: boolean;
+  /** The id of the page's note saying why the value is invalid. */
+  describedBy?: string | undefined;
   onChange: (next: ScheduleTimingInput) => void;
 }) {
   const field = "flex flex-col gap-1.5";
   return (
     <fieldset
+      aria-labelledby="schedule-timing"
       aria-invalid={invalid || undefined}
+      aria-describedby={describedBy}
       className="grid grid-cols-1 gap-3 sm:grid-cols-2"
     >
       <div className={field}>

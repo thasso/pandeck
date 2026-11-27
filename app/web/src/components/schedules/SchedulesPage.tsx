@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useState,
   type MouseEvent,
@@ -23,8 +24,10 @@ import { schedulePath } from "../../hooks/useSessionRouting.ts";
 import {
   SCHEDULES_PAUSE_KEY,
   scheduleMutationKey,
+  type ScheduleAttempt,
 } from "../../hooks/useAssistant.ts";
-import { errorOf, isPending, type LoadState } from "../../lib/loadState.ts";
+import { isPending, type LoadState } from "../../lib/loadState.ts";
+import { sessionPath } from "../../lib/sessionRoutes.ts";
 import {
   describeScheduleTiming,
   scheduleFailureReason,
@@ -36,13 +39,19 @@ import {
   type ScheduleDeleteTarget,
 } from "./ScheduleDeleteDialog.tsx";
 import { useScheduleSessionTitles } from "./useScheduleSessionTitles.ts";
+import { useScheduleOutcomes } from "./useScheduleOutcomes.ts";
 
 /** The approved U6 note, shown while Pause all is on. */
 const SCHEDULES_PAUSED_NOTE =
   "Paused. No new occurrences are claimed: due times are recorded as missed and do not catch up on resume. An occurrence already claimed, including one that fell due just before pausing, may still be delivered.";
 
-/** One grid for the column heads and every row, so the columns line up. */
-const SCHEDULE_GRID = "grid w-full grid-cols-16 items-center gap-x-3";
+/**
+ * One grid for the column heads and every row, so the columns line up. Below
+ * `sm` a row wraps instead: the name on its own line, the other cells and the
+ * controls wrapping under it, and the column heads are not drawn.
+ */
+const SCHEDULE_GRID =
+  "flex w-full flex-wrap items-center gap-x-3 gap-y-0.5 sm:grid sm:grid-cols-16";
 
 /**
  * Follow an in-app link like the router does, leaving modified clicks (new
@@ -119,6 +128,8 @@ interface Props {
   paused: boolean;
   /** `scheduleMutations`, by `scheduleMutationKey`/`SCHEDULES_PAUSE_KEY`. */
   mutations: Record<string, LoadState<true>>;
+  /** `scheduleAttempts`: what each key's latest write asked for. */
+  attempts: Record<string, ScheduleAttempt>;
   onSetPaused: (paused: boolean) => void;
   onSetEnabled: (id: string, enabled: boolean) => void;
   onDelete: (id: string) => void;
@@ -130,7 +141,8 @@ interface Props {
  * @component SchedulesPage
  * @purpose The Schedules index (`/schedules`): every live Schedule, Active or
  *   Done, with on/off, delete and Pause all (`docs/schedules.md`, Web).
- * @useWhen The Schedules route without an id, in the desktop main pane.
+ * @useWhen The Schedules route without an id, on every layout: a phone shows
+ *   this page too, not the section's browser.
  * @intent The list is the `schedules` topic itself; it is empty only once the
  *   topic answered. A write's refusal shows on the control that sent it while
  *   that control is on screen, which the page reports as its claims; the
@@ -144,6 +156,7 @@ export function SchedulesPage({
   onRetry,
   paused,
   mutations,
+  attempts,
   onSetPaused,
   onSetEnabled,
   onDelete,
@@ -153,9 +166,7 @@ export function SchedulesPage({
   const scrollRef = useListScroll({ listKey: "schedules" });
   const [filter, setFilter] = useState<ScheduleFilter>("active");
   const [deleting, setDeleting] = useState<ScheduleDeleteTarget | null>(null);
-  // The value the last Pause all click asked for: Try again repeats it, and
-  // a refusal left from before this page opened is not repeated here.
-  const [pauseAsked, setPauseAsked] = useState<boolean | null>(null);
+  const onHeadId = useId();
   const rows = useMemo(
     () => visibleSchedules(schedules, filter),
     [schedules, filter],
@@ -164,10 +175,22 @@ export function SchedulesPage({
     useMemo(() => scheduleSessionIds(rows), [rows]),
   );
 
+  // Pause all and every row's switch show their own write's outcome, adopted
+  // when this page opens while that write is still pending.
+  const outcomes = useScheduleOutcomes(
+    useMemo(
+      () => [
+        SCHEDULES_PAUSE_KEY,
+        ...rows.map((row) => scheduleMutationKey(row.id, "enabled")),
+      ],
+      [rows],
+    ),
+    mutations,
+  );
+  const { own, errorFor } = outcomes;
   useScheduleControlClaims(
     [
-      SCHEDULES_PAUSE_KEY,
-      ...rows.map((row) => scheduleMutationKey(row.id, "enabled")),
+      ...outcomes.claims,
       ...(deleting ? [scheduleMutationKey(deleting.id, "delete")] : []),
     ],
     onClaimControls,
@@ -175,16 +198,21 @@ export function SchedulesPage({
 
   const pauseMutation = mutations[SCHEDULES_PAUSE_KEY];
   const pausePending = pauseMutation !== undefined && isPending(pauseMutation);
-  const pauseError =
-    pauseAsked !== null && pauseMutation && !pausePending
-      ? errorOf(pauseMutation)
-      : undefined;
+  const pauseError = errorFor(SCHEDULES_PAUSE_KEY);
+  const pauseAttempt = attempts[SCHEDULES_PAUSE_KEY];
   const askPause = useCallback(
     (next: boolean) => {
-      setPauseAsked(next);
+      own(SCHEDULES_PAUSE_KEY);
       onSetPaused(next);
     },
-    [onSetPaused],
+    [own, onSetPaused],
+  );
+  const flip = useCallback(
+    (id: string, enabled: boolean) => {
+      own(scheduleMutationKey(id, "enabled"));
+      onSetEnabled(id, enabled);
+    },
+    [own, onSetEnabled],
   );
 
   const deleteMutation = deleting
@@ -221,7 +249,13 @@ export function SchedulesPage({
           {pauseError ? (
             <ErrorNote
               message={`Couldn't change Pause all: ${scheduleFailureReason(pauseError)}`}
-              onRetry={() => askPause(pauseAsked ?? !paused)}
+              onRetry={() =>
+                askPause(
+                  pauseAttempt?.kind === "pause"
+                    ? pauseAttempt.paused
+                    : !paused,
+                )
+              }
               retryLabel="Try again"
             />
           ) : null}
@@ -236,6 +270,7 @@ export function SchedulesPage({
           <ToggleGroup
             size="sm"
             variant="outline"
+            aria-label="Schedules"
             value={[filter]}
             onValueChange={(next) => {
               const picked = next[0];
@@ -258,7 +293,7 @@ export function SchedulesPage({
           ) : (
             <div className="flex flex-col">
               <div
-                className={`${SCHEDULE_GRID} border-b border-border px-3 pb-1.5 text-xs text-muted-foreground`}
+                className={`${SCHEDULE_GRID} hidden border-b border-border px-3 pb-1.5 text-xs text-muted-foreground sm:grid`}
               >
                 <span className="col-span-3">Name</span>
                 <span className="col-span-2">Target</span>
@@ -266,17 +301,24 @@ export function SchedulesPage({
                 <span className="col-span-2">Next</span>
                 <span className="col-span-2">Last</span>
                 <span className="col-span-2">Created by</span>
-                <span className="col-span-2">On</span>
+                <span id={onHeadId} className="col-span-2">
+                  On
+                </span>
               </div>
               {rows.map((schedule) => (
                 <ScheduleRow
                   key={schedule.id}
                   schedule={schedule}
                   titleOf={titleOf}
+                  onHeadId={onHeadId}
                   enabledMutation={
                     mutations[scheduleMutationKey(schedule.id, "enabled")]
                   }
-                  onSetEnabled={onSetEnabled}
+                  error={errorFor(scheduleMutationKey(schedule.id, "enabled"))}
+                  attempt={
+                    attempts[scheduleMutationKey(schedule.id, "enabled")]
+                  }
+                  onSetEnabled={flip}
                   onAskDelete={setDeleting}
                   onOpen={onOpen}
                 />
@@ -300,32 +342,41 @@ export function SchedulesPage({
 function ScheduleRow({
   schedule,
   titleOf,
+  onHeadId,
   enabledMutation,
+  error,
+  attempt,
   onSetEnabled,
   onAskDelete,
   onOpen,
 }: {
   schedule: ScheduleSummary;
   titleOf: ReturnType<typeof useScheduleSessionTitles>;
+  /** The On column head, which names every row's switch with its row. */
+  onHeadId: string;
   enabledMutation: LoadState<true> | undefined;
+  /** The refusal of the switch's write this page owns, if any. */
+  error: string | undefined;
+  /** What that write asked for: Try again repeats it. */
+  attempt: ScheduleAttempt | undefined;
   onSetEnabled: (id: string, enabled: boolean) => void;
   onAskDelete: (target: ScheduleDeleteTarget) => void;
   onOpen: (path: string) => void;
 }) {
-  // A refusal shows here only for a switch flipped while this row is shown.
-  const [asked, setAsked] = useState<boolean | null>(null);
+  const nameId = useId();
+  const deleteId = useId();
   const pending = enabledMutation !== undefined && isPending(enabledMutation);
-  const error =
-    asked !== null && enabledMutation && !pending
-      ? errorOf(enabledMutation)
-      : undefined;
-  const flip = (enabled: boolean) => {
-    setAsked(enabled);
-    onSetEnabled(schedule.id, enabled);
-  };
   const href = schedulePath(schedule.id);
   const last = schedule.lastOccurrence;
   const target = titleOf(schedule.target.sessionId);
+  // The session the last occurrence went to, which a retarget since does not
+  // change (AC1).
+  const lastSession = last?.sessionId;
+  const lastSessionLabel = lastSession
+    ? titleOf(lastSession)?.existence === "missing"
+      ? "Deleted session"
+      : (titleOf(lastSession)?.title ?? lastSession)
+    : undefined;
   return (
     <ListRow
       interaction="content"
@@ -334,9 +385,10 @@ function ScheduleRow({
       <div className="flex w-full min-w-0 flex-col gap-1.5 py-1">
         <div className={`${SCHEDULE_GRID} text-sm`}>
           <a
+            id={nameId}
             href={href}
             onClick={(event) => openInApp(event, href, onOpen)}
-            className="col-span-3 truncate font-medium hover:underline"
+            className="min-w-0 flex-1 basis-full truncate font-medium hover:underline sm:col-span-3 sm:basis-auto"
           >
             {schedule.name}
           </a>
@@ -350,11 +402,28 @@ function ScheduleRow({
             {scheduleNextLabel(schedule)}
           </span>
           <span
-            className={`col-span-2 truncate tabular-nums ${last?.state === "failed" ? "text-destructive" : "text-muted-foreground"}`}
+            className={`col-span-2 flex min-w-0 flex-col tabular-nums ${last?.state === "failed" ? "text-destructive" : "text-muted-foreground"}`}
           >
-            {last
-              ? `${formatScheduleDue(last.dueAtMs, schedule.timing.timeZone)} ${last.state}`
-              : "—"}
+            <span className="truncate">
+              {last
+                ? `${formatScheduleDue(last.dueAtMs, schedule.timing.timeZone)} ${last.state}`
+                : "—"}
+            </span>
+            {lastSession && lastSessionLabel ? (
+              lastSessionLabel === "Deleted session" ? (
+                <span className="truncate">{lastSessionLabel}</span>
+              ) : (
+                <a
+                  href={sessionPath(lastSession)}
+                  onClick={(event) =>
+                    openInApp(event, sessionPath(lastSession), onOpen)
+                  }
+                  className="truncate hover:underline"
+                >
+                  {lastSessionLabel}
+                </a>
+              )
+            ) : null}
           </span>
           <span className="col-span-2 truncate text-muted-foreground">
             {scheduleActorLabel(
@@ -367,14 +436,16 @@ function ScheduleRow({
           <span className="col-span-2 flex items-center justify-between gap-1">
             <Switch
               size="sm"
-              aria-label="On"
+              aria-labelledby={`${nameId} ${onHeadId}`}
               checked={schedule.enabled}
               disabled={pending}
               aria-busy={pending || undefined}
-              onCheckedChange={(checked) => flip(checked)}
+              onCheckedChange={(checked) => onSetEnabled(schedule.id, checked)}
             />
             <IconButton
+              id={deleteId}
               label="Delete Schedule"
+              aria-labelledby={`${deleteId} ${nameId}`}
               onClick={() =>
                 onAskDelete({ id: schedule.id, name: schedule.name })
               }
@@ -386,7 +457,14 @@ function ScheduleRow({
         {error ? (
           <ErrorNote
             message={`Couldn't save: ${scheduleFailureReason(error)}`}
-            onRetry={() => flip(asked ?? !schedule.enabled)}
+            onRetry={() =>
+              onSetEnabled(
+                schedule.id,
+                attempt?.kind === "enabled"
+                  ? attempt.enabled
+                  : !schedule.enabled,
+              )
+            }
             retryLabel="Try again"
           />
         ) : null}

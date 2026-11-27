@@ -539,11 +539,28 @@ transcript label have not:
   `scheduleList` and `stateEvents`; `stateEventRevisions.schedules` is defined
   only once this client applied an answer, which is what "answered" means for
   the empty state. Each user operation is a tracked mutation keyed
-  `<id>:update`, `<id>:enabled`, `<id>:delete` or `schedules:pause`: on/off and
-  delete apply optimistically and roll back on a refusal, the edit waits for its
-  `scheduleSaved`, and a timeout or disconnect recovers the touched rows with
-  `getStateItems` (Pause all with `requestSettings`). The detail sends only the
-  fields that differ from what the server holds now.
+  `<id>:update`, `<id>:enabled`, `<id>:delete` or `schedules:pause`, and
+  `scheduleAttempts` keeps what the latest write per key asked for, which Try
+  again repeats. An edit, an on/off and a delete apply optimistically; nothing
+  is undone by inverse. A refusal, a timeout or a disconnect recovers the
+  touched rows authoritatively with `getStateItems` (Pause all with
+  `requestSettings`), and `scheduleSaved` replaces the row with the server's.
+  Two calls in the same tick, before React re-renders, can both send; the
+  surfaces disable the control while its write is pending.
+- The detail sends only the fields that differ from what the server holds now. A
+  save's success clears from the draft only the fields it sent whose draft value
+  is still the one sent; a field edited while the save was pending stays in the
+  draft and goes with the next Save. A refusal puts the sent fields back under
+  any newer edit. The fields stay editable while a save is pending.
+- An invalid changed timing shows its reason under the timing fields, described
+  on the fieldset (`aria-describedby`), and Save stays off: the shared
+  `scheduleTimingError` reason, or the approved no-future text from
+  `scheduleTimingFutureError`. An unchanged timing is not checked, so an expired
+  `once` Schedule can still save a prompt-only edit.
+- The page's Last cell shows the last occurrence's due time and state, and under
+  them the session that occurrence went to, linked, whatever the Schedule
+  targets now: "Deleted session", unlinked, once it is deleted, and nothing for
+  an occurrence that reached no session.
 - History reads are per open detail. A Schedule's revision moving past the one
   the held history answered (from `scheduleList`, a `stateDigest` without
   catch-up, or a recovery `stateItems`) asks again; a failed read holds its
@@ -553,10 +570,24 @@ transcript label have not:
   claims that key (`FailureHomes.controls`); otherwise it is announced, even
   while a staged first send is claiming untargeted errors. The open detail
   claims its Schedule's id for object failures.
+- A surface owns a write's outcome once it sent that write, or once it saw it
+  pending, at mount included (`useScheduleOutcomes`). It claims exactly the keys
+  it owns or sees pending and renders an outcome only for an owned key, so a
+  page or detail reopened before a refusal lands shows it in place, with Try
+  again repeating the attempt, and a refusal that lands while no surface is open
+  is announced. A refusal that landed before a surface mounted is not shown
+  again there. The delete dialog closes with its page; a refusal after that is
+  announced.
 - The routes `/schedules` and `/schedules/:id`, and a Schedules section in the
-  primary nav with its own browser. `/schedules` is a section index route: the
-  browser screen on a phone, the page on a wide layout. The nav slot carries the
-  needs-attention count, the one count the bar shows.
+  primary nav with its own browser. `/schedules` is a section index route. On a
+  wide layout the sidebar keeps the minimal browser of active Schedules beside
+  the page. On a phone the browser screen IS the full page (responsive rows, the
+  Active/Done filter, Pause all, each row's switch and delete), so nothing is
+  reachable only behind an inert pane; a detail is an ordinary phone screen. The
+  nav slot carries the needs-attention count, the one count the bar shows.
+- Each row's switch is named by the Schedule's name and the "On" column, and its
+  delete by "Delete Schedule" and the name; the Active/Done filter is named
+  "Schedules".
 - The target picker lists live sessions and, on first open, the archived ones
   (`loadArchivedSessions`); a failed archived read shows its error with Retry
   instead of an empty group. The Personal Assistant is never offered, and the

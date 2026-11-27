@@ -958,23 +958,28 @@ naming the pull request, with the hand-off as its action.
 
 ## Schedules
 
-The **Schedules** section (`docs/schedules.md` owns the contract) has a minimal
-browser: the active Schedules, each with its next due time and a warning marker
-when its last occurrence failed. On/off, delete, Pause all and the Done filter
-are on the page, not in the browser.
+The **Schedules** section (`docs/schedules.md` owns the contract) has, on a wide
+layout, a minimal browser: the active Schedules, each with its next due time and
+a warning marker when its last occurrence failed. On/off, delete, Pause all and
+the Done filter are on the page, not in the browser.
 
-`/schedules` is the section index route, as Pull Requests' is: the browser
-screen on a phone, the **Schedules page** on a wide layout. The page is one
-table of rows (`ListRow`, `interaction="content"`) with the Active/Done filter
-and the Pause all switch in its header; the delete confirmation belongs to the
-page, not the row, so an optimistic removal cannot unmount the dialog holding
-its own error and retry. `/schedules/:id` is one Schedule's detail: the editable
-prompt, timing and target, the next three occurrences in the Schedule's fixed
-zone, and the history read. While its own delete is in flight the detail keeps
-showing the last summary rather than "not found"; success navigates to the
-index. Every refusal renders in place with Try again, and a surface claims the
-control keys it renders so a refusal whose control is gone is announced instead
-(`lib/messageArrival.ts`).
+`/schedules` is the section index route, as Pull Requests' is. On a wide layout
+it is the **Schedules page** beside that browser. On a phone the browser screen
+renders the full page in the minimal browser's place (`Sidebar`'s
+`schedulesScreen` slot, keeping the section's nav bar), and the main pane
+renders nothing behind it, so the page's controls are never only behind the
+inert main pane. Its rows wrap to compact lines below the `sm` breakpoint and
+the column header hides. The page is one table of rows (`ListRow`,
+`interaction="content"`) with the Active/Done filter and the Pause all switch in
+its header; the delete confirmation belongs to the page, not the row, so an
+optimistic removal cannot unmount the dialog holding its own error and retry.
+`/schedules/:id` is one Schedule's detail: the editable prompt, timing and
+target, the next three occurrences in the Schedule's fixed zone, and the history
+read. While its own delete is in flight the detail keeps showing the last
+summary rather than "not found"; success navigates to the index. Every refusal
+renders in place with Try again on the surface that owns its write, the one that
+sent it or reopened while it was pending; a surface claims only those keys, so a
+refusal whose control is gone is announced instead (`lib/messageArrival.ts`).
 
 ## Navigation Rules
 

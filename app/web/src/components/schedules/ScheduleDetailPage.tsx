@@ -16,7 +16,11 @@ import { Button } from "../ui/button.tsx";
 import { Label } from "../ui/label.tsx";
 import { Textarea } from "../ui/textarea.tsx";
 import { EmptyBox, ErrorNote, PaneLoading } from "../common/load.tsx";
-import { scheduleMutationKey } from "../../hooks/useAssistant.ts";
+import {
+  scheduleMutationKey,
+  type ScheduleAttempt,
+} from "../../hooks/useAssistant.ts";
+import { wireValueEqual } from "../../lib/wireValueEqual.ts";
 import { SCHEDULES_PATH } from "../../hooks/useSessionRouting.ts";
 import { useNow } from "../../hooks/useNow.ts";
 import { sessionPath } from "../../lib/sessionRoutes.ts";
@@ -50,8 +54,23 @@ import {
   useScheduleControlClaims,
 } from "./SchedulesPage.tsx";
 import { useScheduleSessionTitles } from "./useScheduleSessionTitles.ts";
+import { useScheduleOutcomes } from "./useScheduleOutcomes.ts";
 
 /** A stored timing as the editor holds it: without its fixed zone. */
+/**
+ * The draft after a save of `sent` succeeded: the fields it sent drop out, and
+ * a field the user changed again while it was pending stays (F102).
+ */
+function draftAfterSaved(
+  draft: ScheduleUserPatch,
+  sent: ScheduleUserPatch,
+): ScheduleUserPatch {
+  const next: ScheduleUserPatch = { ...draft };
+  for (const field of Object.keys(sent) as (keyof ScheduleUserPatch)[])
+    if (wireValueEqual(draft[field], sent[field])) delete next[field];
+  return Object.keys(next).length === Object.keys(draft).length ? draft : next;
+}
+
 function timingInput(schedule: ScheduleSummary): ScheduleTimingInput {
   const { timeZone: _zone, ...input } = schedule.timing;
   return input as ScheduleTimingInput;
@@ -66,6 +85,8 @@ interface Props {
   answered: boolean;
   history: ScheduleHistoryEntry | undefined;
   mutations: Record<string, LoadState<true>>;
+  /** `scheduleAttempts`: what each key's latest write asked for. */
+  attempts: Record<string, ScheduleAttempt>;
   /** A failure about this Schedule that outlived its control. */
   failure: string | undefined;
   liveSessions: readonly SessionListItem[];
@@ -86,8 +107,10 @@ interface Props {
  *   editor, the next occurrences, and its history (`docs/schedules.md`, Web).
  * @useWhen The Schedules route with an id.
  * @intent The draft holds only the fields the user touched; the rest follow
- *   the server, and Save sends only what differs (R4). A refused save keeps
- *   the draft; leaving discards it (the page remounts per id). The zone is
+ *   the server, and Save sends only what differs (R4). A save's success drops
+ *   only the fields it sent; a refused save keeps the draft, and a page
+ *   reopened while its save is pending adopts that save, so a refusal puts
+ *   the sent fields back under the error. Leaving discards the draft. The zone is
  *   fixed and shown by name (R2). Not found only once the list answered, and
  *   never during this page's own delete.
  */
@@ -98,6 +121,7 @@ export function ScheduleDetailPage({
   answered,
   history,
   mutations,
+  attempts,
   failure,
   liveSessions,
   archived,
@@ -111,7 +135,6 @@ export function ScheduleDetailPage({
   onClaimControls,
 }: Props) {
   const [draft, setDraft] = useState<ScheduleUserPatch>({});
-  const [saveAsked, setSaveAsked] = useState(false);
   const [deleting, setDeleting] = useState<ScheduleDeleteTarget | null>(null);
 
   const updateKey = scheduleMutationKey(id, "update");
@@ -140,20 +163,32 @@ export function ScheduleDetailPage({
     return () => onCloseHistory(id);
   }, [id, onOpenHistory, onCloseHistory]);
 
+  const outcomes = useScheduleOutcomes(
+    useMemo(() => [updateKey], [updateKey]),
+    mutations,
+  );
+  const { own, owns, errorFor } = outcomes;
   useScheduleControlClaims(
-    [updateKey, ...(deleting ? [deleteKey] : [])],
+    [...outcomes.claims, ...(deleting ? [deleteKey] : [])],
     onClaimControls,
   );
 
-  // A save's outcome: success drops the draft (the summary now carries it); a
-  // refusal keeps it under the error.
+  // An owned save's outcome, once each: success drops the fields it sent (the
+  // summary now carries them) and keeps any edited since; a refusal keeps the
+  // draft, and puts back what it sent where the draft no longer holds it.
+  const updateAttempt = attempts[updateKey];
+  const settledSave = useRef(updateMutation);
   useEffect(() => {
-    if (!saveAsked || !updateMutation || isPending(updateMutation)) return;
-    if (updateMutation.status === "ready") {
-      setDraft({});
-      setSaveAsked(false);
-    }
-  }, [saveAsked, updateMutation]);
+    if (settledSave.current === updateMutation) return;
+    settledSave.current = updateMutation;
+    if (!owns.has(updateKey) || !updateMutation || isPending(updateMutation))
+      return;
+    const sent = updateAttempt?.kind === "update" ? updateAttempt.patch : {};
+    if (updateMutation.status === "ready")
+      setDraft((current) => draftAfterSaved(current, sent));
+    else if (updateMutation.status === "error")
+      setDraft((current) => ({ ...sent, ...current }));
+  }, [owns, updateKey, updateMutation, updateAttempt]);
 
   // The delete's success leaves for the index.
   useEffect(() => {
@@ -199,9 +234,9 @@ export function ScheduleDetailPage({
 
   const save = useCallback(() => {
     if (Object.keys(patch).length === 0) return;
-    setSaveAsked(true);
+    own(updateKey);
     onSave(id, patch);
-  }, [id, patch, onSave]);
+  }, [id, patch, onSave, own, updateKey]);
 
   if (!shown) {
     if (!answered && !gone) return <PaneLoading />;
@@ -240,10 +275,7 @@ export function ScheduleDetailPage({
 
   const zone = shown.timing.timeZone;
   const savePending = updateMutation !== undefined && isPending(updateMutation);
-  const saveError =
-    saveAsked && updateMutation && !savePending
-      ? errorOf(updateMutation)
-      : undefined;
+  const saveError = errorFor(updateKey);
   const dirty = Object.keys(draft).length > 0;
   const historyItems = history ? dataOf(history.load) : undefined;
   const historyError = history ? errorOf(history.load) : undefined;
@@ -330,13 +362,19 @@ export function ScheduleDetailPage({
             </h2>
             <ScheduleTimingFields
               value={draftTiming!}
-              invalid={timingInvalid}
+              invalid={timingInvalid || timingError !== null}
+              describedBy={timingError ? "schedule-timing-error" : undefined}
               onChange={(timing) =>
                 setDraft((current) => ({ ...current, timing }))
               }
             />
-            {timingError === SCHEDULE_NO_FUTURE_OCCURRENCE ? (
-              <p className="text-sm text-destructive">{timingError}</p>
+            {timingError ? (
+              <p
+                id="schedule-timing-error"
+                className="text-sm text-destructive"
+              >
+                {timingError}
+              </p>
             ) : null}
           </section>
 
@@ -370,10 +408,7 @@ export function ScheduleDetailPage({
                 variant="outline"
                 size="sm"
                 disabled={!dirty || savePending}
-                onClick={() => {
-                  setDraft({});
-                  setSaveAsked(false);
-                }}
+                onClick={() => setDraft({})}
               >
                 Cancel
               </Button>

@@ -626,6 +626,13 @@ export interface UIState {
    */
   scheduleMutations: Record<string, LoadState<true>>;
   /**
+   * What the latest write under each control key asked for, kept until the
+   * next one starts. A surface mounted while that write was pending adopts
+   * its outcome from here, Try again included, and a save's success clears
+   * only the draft fields it sent (`docs/schedules.md`, Web).
+   */
+  scheduleAttempts: Record<string, ScheduleAttempt>;
+  /**
    * The history of each OPEN Schedule detail, keyed by id: present only while
    * that detail is mounted, never part of the topic (`docs/schedules.md`).
    */
@@ -1100,6 +1107,7 @@ const emptyInitial: UIState = {
   schedules: [],
   scheduleListError: null,
   scheduleMutations: {},
+  scheduleAttempts: {},
   scheduleHistory: {},
   compactionWindowEdits: {},
   initiativeDetails: {},
@@ -1858,6 +1866,13 @@ export function scheduleMutationKey(
 /** The Pause all switch's control key. */
 export const SCHEDULES_PAUSE_KEY = "schedules:pause";
 
+/** What one Schedule write asked for (`UIState.scheduleAttempts`). */
+export type ScheduleAttempt =
+  | { kind: "update"; patch: ScheduleUserPatch }
+  | { kind: "enabled"; enabled: boolean }
+  | { kind: "delete" }
+  | { kind: "pause"; paused: boolean };
+
 function taskSaveOperation(request: TaskSaveRequest): TaskMutationOperation {
   if (!request.id) return "create";
   if (request.description !== undefined) return "description";
@@ -1992,7 +2007,7 @@ function withPromptQueueState(
 
 /** The Schedules page's writes and its open detail's history read. */
 type ScheduleAction =
-  | { kind: "scheduleMutationStart"; key: string }
+  | { kind: "scheduleMutationStart"; key: string; attempt: ScheduleAttempt }
   | { kind: "scheduleMutationResult"; key: string; error?: string }
   | { kind: "scheduleMutationRelease"; key: string }
   /** The optimistic guess of a user edit or on/off: control moves to the user. */
@@ -4848,6 +4863,10 @@ function scheduleReducer(state: UIState, action: ScheduleAction): UIState {
           [action.key]: beginLoad(
             state.scheduleMutations[action.key] ?? idle<true>(),
           ),
+        },
+        scheduleAttempts: {
+          ...state.scheduleAttempts,
+          [action.key]: action.attempt,
         },
       };
     case "scheduleMutationRelease": {
@@ -9248,9 +9267,9 @@ export function useAssistant({
      */
     const startScheduleMutation = (
       id: string,
-      operation: "update" | "enabled" | "delete",
+      attempt: Exclude<ScheduleAttempt, { kind: "pause" }>,
     ): string | undefined => {
-      const key = scheduleMutationKey(id, operation);
+      const key = scheduleMutationKey(id, attempt.kind);
       const current = stateRef.current.scheduleMutations[key];
       if (current && isPending(current)) return undefined;
       const requestId = trackDomainMutation(
@@ -9258,7 +9277,7 @@ export function useAssistant({
         "schedules",
         key,
       );
-      dispatch({ kind: "scheduleMutationStart", key });
+      dispatch({ kind: "scheduleMutationStart", key, attempt });
       dispatch({ kind: "clearObjectFailure", type: "schedule", id });
       return requestId;
     };
@@ -10066,13 +10085,16 @@ export function useAssistant({
         send({ type: "deleteTask", id, requestId });
       },
       updateSchedule: (id, patch) => {
-        const requestId = startScheduleMutation(id, "update");
+        const requestId = startScheduleMutation(id, { kind: "update", patch });
         if (!requestId) return;
         dispatch({ kind: "optimisticScheduleUpdate", id, patch });
         send({ type: "updateSchedule", id, patch, requestId });
       },
       setScheduleEnabled: (id, enabled) => {
-        const requestId = startScheduleMutation(id, "enabled");
+        const requestId = startScheduleMutation(id, {
+          kind: "enabled",
+          enabled,
+        });
         if (!requestId) return;
         dispatch({
           kind: "optimisticScheduleUpdate",
@@ -10082,7 +10104,7 @@ export function useAssistant({
         send({ type: "setScheduleEnabled", id, enabled, requestId });
       },
       deleteSchedule: (id) => {
-        const requestId = startScheduleMutation(id, "delete");
+        const requestId = startScheduleMutation(id, { kind: "delete" });
         if (!requestId) return;
         dispatch({ kind: "optimisticScheduleRemove", id });
         send({ type: "deleteSchedule", id, requestId });
@@ -10096,7 +10118,11 @@ export function useAssistant({
           "schedules",
           key,
         );
-        dispatch({ kind: "scheduleMutationStart", key });
+        dispatch({
+          kind: "scheduleMutationStart",
+          key,
+          attempt: { kind: "pause", paused },
+        });
         dispatch({
           kind: "optimisticSettings",
           patch: {

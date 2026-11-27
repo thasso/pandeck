@@ -105,6 +105,7 @@ function renderPage(props: PageProps, spies: ReturnType<typeof pageSpies>) {
         onRetry={spies.onRetry}
         paused={props.paused ?? false}
         mutations={props.mutations ?? {}}
+        attempts={{}}
         onSetPaused={spies.onSetPaused}
         onSetEnabled={spies.onSetEnabled}
         onDelete={spies.onDelete}
@@ -189,11 +190,9 @@ describe("the Schedules page", () => {
     click(buttonNamed("Delete"));
     expect(spies.onDelete).toHaveBeenCalledTimes(1);
     expect(spies.onDelete).toHaveBeenCalledWith("a");
-    expect(spies.onClaimControls).toHaveBeenLastCalledWith([
-      "schedules:pause",
-      "a:enabled",
-      "a:delete",
-    ]);
+    // Only what it renders an outcome for: the open dialog's delete, not
+    // Pause all or the switch, which it neither sent nor saw pending (F105).
+    expect(spies.onClaimControls).toHaveBeenLastCalledWith(["a:delete"]);
 
     // The optimistic removal, then the refusal: still mounted, claimed.
     renderPage({ schedules: [], mutations: { "a:delete": loading() } }, spies);
@@ -208,10 +207,7 @@ describe("the Schedules page", () => {
       spies,
     );
     expect(text()).toContain("Couldn't delete: database is locked");
-    expect(spies.onClaimControls).toHaveBeenLastCalledWith([
-      "schedules:pause",
-      "a:delete",
-    ]);
+    expect(spies.onClaimControls).toHaveBeenLastCalledWith(["a:delete"]);
     click(buttonNamed("Try again"));
     expect(spies.onDelete).toHaveBeenCalledTimes(2);
 
@@ -291,6 +287,7 @@ function renderDetail(
         answered={props.answered ?? true}
         history={{ load: ready([]), revision: 2 }}
         mutations={props.mutations ?? {}}
+        attempts={{}}
         failure={undefined}
         liveSessions={[]}
         archived={{ sessions: [], loaded: true, pending: false, error: null }}

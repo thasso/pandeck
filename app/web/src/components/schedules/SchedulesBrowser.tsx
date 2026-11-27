@@ -11,7 +11,8 @@ import { scheduleNextLabel } from "./SchedulesPage.tsx";
  * @component SchedulesBrowser
  * @purpose The Schedules section's browser: the active Schedules, each with
  *   its next due time and a marker when its last occurrence failed (U2).
- * @useWhen The sidebar's Schedules section.
+ * @useWhen The sidebar's Schedules section on a wide layout; a phone's
+ *   browser screen shows the full page instead.
  * @intent Minimal on purpose: on/off, delete, Pause all and the Done filter
  *   live on the page. The host's scroll container keeps position by row id.
  */

@@ -2706,6 +2706,43 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       state.archivedReadError,
     ],
   );
+  // A phone's Schedules browser screen is the whole page, so the Done filter,
+  // Pause all and each Schedule's switch and delete stay reachable there; the
+  // wide sidebar keeps the minimal browser (`docs/schedules.md`, Web). The main
+  // pane does not mount a second page behind it.
+  const phoneSchedulesScreen = useMemo(
+    () =>
+      mobileLayout ? (
+        <Suspense fallback={<LazySurfaceFallback />}>
+          <SchedulesPage
+            schedules={state.schedules}
+            answered={schedulesAnswered}
+            listError={state.scheduleListError}
+            onRetry={actions.retrySchedules}
+            paused={state.settings.schedules.paused}
+            mutations={state.scheduleMutations}
+            attempts={state.scheduleAttempts}
+            onSetPaused={actions.setSchedulesPaused}
+            onSetEnabled={actions.setScheduleEnabled}
+            onDelete={actions.deleteSchedule}
+            onOpen={navigate}
+            onClaimControls={claimScheduleControls}
+          />
+        </Suspense>
+      ) : undefined,
+    [
+      mobileLayout,
+      state.schedules,
+      schedulesAnswered,
+      state.scheduleListError,
+      state.settings.schedules.paused,
+      state.scheduleMutations,
+      state.scheduleAttempts,
+      actions,
+      navigate,
+      claimScheduleControls,
+    ],
+  );
   const initiativeSelectedTaskId = selectedInitiativeId
     ? selectedTaskFromHash(locationHash)
     : null;
@@ -6757,6 +6794,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
           onRetrySchedules={actions.retrySchedules}
           selectedScheduleId={selectedScheduleId}
           onOpenSchedule={openSchedule}
+          schedulesScreen={phoneSchedulesScreen}
           onLoadWorktrees={actions.listWorktrees}
           onOpenWorktree={openWorktree}
           onStartSessionInWorktree={startSessionInWorktree}
@@ -7578,6 +7616,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                           answered={schedulesAnswered}
                           history={state.scheduleHistory[route.id]}
                           mutations={state.scheduleMutations}
+                          attempts={state.scheduleAttempts}
                           failure={state.objectFailures.schedule[route.id]}
                           liveSessions={state.liveSessions}
                           archived={archivedTargets}
@@ -7590,7 +7629,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                           onOpen={navigate}
                           onClaimControls={claimScheduleControls}
                         />
-                      ) : (
+                      ) : browserScreen ? null : (
                         <SchedulesPage
                           back={screenBack}
                           schedules={state.schedules}
@@ -7599,6 +7638,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                           onRetry={actions.retrySchedules}
                           paused={state.settings.schedules.paused}
                           mutations={state.scheduleMutations}
+                          attempts={state.scheduleAttempts}
                           onSetPaused={actions.setSchedulesPaused}
                           onSetEnabled={actions.setScheduleEnabled}
                           onDelete={actions.deleteSchedule}
