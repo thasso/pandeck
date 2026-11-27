@@ -9,7 +9,6 @@ reading or binding.
 
 ## Workspace
 
-- Use Claude implementer and reviewer subagents.
 - `app/shared/` owns the wire model, `app/server/` the runtime and integrations,
   `app/web/` the browser client.
 - `app/shell/` (the Rust/Tauri wrapper) is deliberately outside the pnpm
