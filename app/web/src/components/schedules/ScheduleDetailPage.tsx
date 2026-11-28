@@ -47,6 +47,7 @@ import {
   type ArchivedTargetsRead,
 } from "./ScheduleTargetPicker.tsx";
 import { ScheduleTimingFields } from "./ScheduleTimingFields.tsx";
+import { useOnScreen } from "../shell/onScreen.tsx";
 import { openInApp } from "./scheduleLinks.ts";
 import {
   scheduleActorLabel,
@@ -144,7 +145,8 @@ interface Props {
  *   fixed and shown by name (R2). Not found only once the list answered, and
  *   never during this page's own delete. A failed list read shows here with
  *   Retry, instead of Loading or above the held summary, since no sidebar
- *   browser need be on screen.
+ *   browser need be on screen. Covered on a phone, it claims no outcome, so
+ *   one landing then is announced. Save and Try again share one guard.
  */
 export function ScheduleDetailPage({
   back,
@@ -197,32 +199,44 @@ export function ScheduleDetailPage({
     return () => onCloseHistory(id);
   }, [id, onOpenHistory, onCloseHistory]);
 
+  // Covered on a phone (the expanded object sheet over the main pane), the
+  // page claims and owns no outcome, so a refusal then is announced (F113).
+  // The delete dialog is portaled above everything and keeps its own claim.
+  const onScreen = useOnScreen();
   const outcomes = useScheduleOutcomes(
     useMemo(() => [updateKey], [updateKey]),
     mutations,
+    onScreen,
   );
-  const { own, owns, errorFor } = outcomes;
+  const { own, errorFor } = outcomes;
   useScheduleControlClaims(
     [...outcomes.claims, ...(deleting ? [deleteKey] : [])],
     onClaimControls,
   );
 
-  // An owned save's outcome, once each: success drops the fields it sent (the
-  // summary now carries them) and keeps any edited since; a refusal keeps the
-  // draft, and puts back what it sent where the draft no longer holds it.
+  // A save this page saw pending, once each, on screen or not, since the
+  // draft is this page's whatever announces the outcome: success drops the
+  // fields it sent (the summary now carries them) and keeps any edited since;
+  // a refusal keeps the draft, and puts back what it sent where the draft no
+  // longer holds it. A save that settled before this page mounted is not its.
   const updateAttempt = attempts[updateKey];
-  const settledSave = useRef(updateMutation);
+  const followsSave = useRef(
+    updateMutation !== undefined && isPending(updateMutation),
+  );
   useEffect(() => {
-    if (settledSave.current === updateMutation) return;
-    settledSave.current = updateMutation;
-    if (!owns.has(updateKey) || !updateMutation || isPending(updateMutation))
+    if (!updateMutation) return;
+    if (isPending(updateMutation)) {
+      followsSave.current = true;
       return;
+    }
+    if (!followsSave.current) return;
+    followsSave.current = false;
     const sent = updateAttempt?.kind === "update" ? updateAttempt.patch : {};
     if (updateMutation.status === "ready")
       setDraft((current) => draftAfterSaved(current, sent));
     else if (updateMutation.status === "error")
       setDraft((current) => ({ ...sent, ...current }));
-  }, [owns, updateKey, updateMutation, updateAttempt]);
+  }, [updateMutation, updateAttempt]);
 
   // The delete's success leaves for the index.
   useEffect(() => {
@@ -266,11 +280,20 @@ export function ScheduleDetailPage({
       ? nextOccurrencesAfter(previewTiming, nowMs, 3)
       : [];
 
+  // A changed prompt must hold text, as the server requires; an unchanged one
+  // is not judged, like an unchanged timing.
+  const promptInvalid = patch.prompt !== undefined && !patch.prompt.trim();
+  // Save and Try again share this one guard (F110, F111).
+  const saveBlocked =
+    Object.keys(patch).length === 0 ||
+    promptInvalid ||
+    timingInvalid ||
+    timingError !== null;
   const save = useCallback(() => {
-    if (Object.keys(patch).length === 0) return;
+    if (saveBlocked) return;
     own(updateKey);
     onSave(id, patch);
-  }, [id, patch, onSave, own, updateKey]);
+  }, [saveBlocked, id, patch, onSave, own, updateKey]);
 
   const listNote = listError ? (
     <ErrorNote message={listError} onRetry={onRetry} />
@@ -369,6 +392,7 @@ export function ScheduleDetailPage({
             <Textarea
               id="schedule-prompt"
               rows={5}
+              aria-invalid={promptInvalid || undefined}
               value={draft.prompt ?? shown.prompt}
               onChange={(event) =>
                 setDraft((current) => ({
@@ -422,7 +446,7 @@ export function ScheduleDetailPage({
             {saveError ? (
               <ErrorNote
                 message={`Couldn't save: ${scheduleFailureReason(saveError)}`}
-                onRetry={save}
+                onRetry={saveBlocked ? undefined : save}
                 retryLabel="Try again"
               />
             ) : null}
@@ -438,11 +462,7 @@ export function ScheduleDetailPage({
               <Button
                 size="sm"
                 busy={savePending}
-                disabled={
-                  Object.keys(patch).length === 0 ||
-                  timingInvalid ||
-                  timingError !== null
-                }
+                disabled={saveBlocked}
                 onClick={save}
               >
                 Save

@@ -986,9 +986,11 @@ refusal whose control is gone is announced instead (`lib/messageArrival.ts`).
 Each surface reports its claim separately and the shell claims their union, so
 the session inspector beside the page or a detail never overwrites theirs. A
 frame that keeps its content mounted while hidden (the right panel shut, a
-phone's dock not expanded, a right-panel tab behind another) wraps it in
-`OnScreen` (`components/shell/onScreen.tsx`); a surface claiming failures reads
-`useOnScreen()` rather than trusting that it is mounted.
+phone's dock not expanded, a right-panel tab behind another, a phone's main pane
+under a screen, an overlay or the expanded dock's sheet) wraps it in `OnScreen`
+(`components/shell/onScreen.tsx`); a surface claiming failures reads
+`useOnScreen()` rather than trusting that it is mounted. A delete dialog is
+portaled above any cover, so its owner claims its key while it is open.
 
 A session's Schedules also show in two places outside the section. The session
 inspector has a **Schedules** section, present only while the session has any:

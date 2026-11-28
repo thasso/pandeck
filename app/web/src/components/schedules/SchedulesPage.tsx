@@ -34,6 +34,7 @@ import {
 } from "./ScheduleDeleteDialog.tsx";
 import { useScheduleSessionTitles } from "./useScheduleSessionTitles.ts";
 import { useScheduleOutcomes } from "./useScheduleOutcomes.ts";
+import { useOnScreen } from "../shell/onScreen.tsx";
 import { openInApp } from "./scheduleLinks.ts";
 
 /** The approved U6 note, shown while Pause all is on. */
@@ -148,7 +149,8 @@ export function SchedulesPage({
   );
 
   // Pause all and every row's switch show their own write's outcome, adopted
-  // when this page opens while that write is still pending.
+  // when this page opens, or is uncovered, while that write is still pending.
+  // Its delete dialog is portaled above any cover and keeps its own claim.
   const outcomes = useScheduleOutcomes(
     useMemo(
       () => [
@@ -158,6 +160,7 @@ export function SchedulesPage({
       [rows],
     ),
     mutations,
+    useOnScreen(),
   );
   const { own, errorFor } = outcomes;
   useScheduleControlClaims(

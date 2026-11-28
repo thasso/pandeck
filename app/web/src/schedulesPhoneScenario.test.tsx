@@ -5,6 +5,10 @@
  * the full page, so the Done filter, Pause all and each Schedule's named
  * switch and delete are reachable and not inert; the wide sidebar keeps the
  * minimal browser beside the page; a detail is an ordinary phone screen.
+ * F113: a phone detail covered by the expanded object sheet claims nothing,
+ * so a Save refusal or no-answer outcome is announced and not shown again;
+ * uncovered while pending it adopts the outcome; its delete dialog keeps its
+ * own refusal.
  *   cd app/web && pnpm exec vitest run src/schedulesPhoneScenario.test.tsx
  */
 import { act } from "react";
@@ -249,5 +253,130 @@ describe("the Schedules index on a wide layout", () => {
     expect(aside.textContent).not.toContain("Old report");
     expect(document.querySelectorAll("#schedules-pause-all")).toHaveLength(1);
     expect(reachable("#schedules-pause-all")).toHaveLength(1);
+  });
+});
+
+async function click(element: Element | undefined): Promise<void> {
+  expect(element).toBeTruthy();
+  await act(async () => {
+    element!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  await settle(2);
+}
+
+/** Edit the detail's prompt and press Save; the update's request id. */
+async function editPromptAndSave(socket: FakeSocket): Promise<string> {
+  const area = document.querySelector<HTMLTextAreaElement>("#schedule-prompt")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!.call(area, "Check the build and report");
+    area.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await settle(1);
+  await click(buttonNamed("Save"));
+  const sent = socket.sent.filter((m) => m.type === "updateSchedule");
+  expect(sent).toHaveLength(1);
+  return (sent[0] as { requestId: string }).requestId;
+}
+
+async function refuse(
+  socket: FakeSocket,
+  requestId: string,
+  message = "Failed to update Schedule: Session not found: s9",
+): Promise<void> {
+  await act(async () => {
+    socket.receive({
+      type: "error",
+      message,
+      target: { type: "schedule", id: "a" },
+      requestId,
+    } as ServerMessage);
+  });
+  await settle(2);
+}
+
+const toastMessages = () => getToasts().map((toast) => toast.message);
+const shownAnywhere = (text: string) =>
+  document.body.textContent?.includes(text) ?? false;
+const coveredPrompt = () =>
+  document.querySelector("#schedule-prompt")?.closest("[inert]") ?? null;
+
+describe("a phone detail covered by the object sheet (F113)", () => {
+  it("claims nothing while covered: a Save refusal is announced, and not shown again", async () => {
+    const socket = await boot("/schedules/a", true);
+    await until("#schedule-prompt");
+    const requestId = await editPromptAndSave(socket);
+    await click(buttonNamed("Open details"));
+    expect(coveredPrompt()).not.toBeNull();
+    await refuse(socket, requestId);
+    expect(toastMessages()).toEqual([
+      expect.stringContaining("Session not found: s9"),
+    ]);
+    // Leaving from the sheet, and coming back, repeats nothing.
+    await click(buttonNamed("Back to Schedules"));
+    expect(window.location.pathname).toBe("/schedules");
+    await click(reachable("a").find((a) => a.textContent === "Morning check"));
+    await until("#schedule-prompt");
+    expect(shownAnywhere("Couldn't save")).toBe(false);
+    expect(getToasts()).toHaveLength(1);
+  });
+
+  it("claims nothing while covered: a Save with no answer is announced", async () => {
+    const socket = await boot("/schedules/a", true);
+    await until("#schedule-prompt");
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await editPromptAndSave(socket);
+    await click(buttonNamed("Open details"));
+    expect(coveredPrompt()).not.toBeNull();
+    await act(async () => {
+      vi.advanceTimersByTime(30_000);
+    });
+    await settle(2);
+    expect(getToasts()).toHaveLength(1);
+  });
+
+  it("revealed while its Save is pending, adopts it: shown in place, unannounced", async () => {
+    const socket = await boot("/schedules/a", true);
+    await until("#schedule-prompt");
+    const requestId = await editPromptAndSave(socket);
+    await click(buttonNamed("Open details"));
+    expect(coveredPrompt()).not.toBeNull();
+    await click(buttonNamed("Collapse details"));
+    expect(coveredPrompt()).toBeNull();
+    await refuse(socket, requestId);
+    expect(
+      reachable("[role='alert'], [data-slot='alert']").some((element) =>
+        element.textContent?.includes("Couldn't save: Session not found: s9"),
+      ),
+    ).toBe(true);
+    expect(getToasts()).toHaveLength(0);
+  });
+
+  it("uncovered, a Save refusal stays in place, unannounced", async () => {
+    const socket = await boot("/schedules/a", true);
+    await until("#schedule-prompt");
+    const requestId = await editPromptAndSave(socket);
+    await refuse(socket, requestId);
+    expect(coveredPrompt()).toBeNull();
+    expect(shownAnywhere("Couldn't save: Session not found: s9")).toBe(true);
+    expect(getToasts()).toHaveLength(0);
+  });
+
+  it("the delete dialog over the detail keeps its own refusal, unannounced", async () => {
+    const socket = await boot("/schedules/a", true);
+    await until("#schedule-prompt");
+    await click(buttonNamed("Delete Schedule"));
+    await click(buttonNamed("Delete"));
+    const sent = socket.sent.filter((m) => m.type === "deleteSchedule");
+    expect(sent).toHaveLength(1);
+    await refuse(
+      socket,
+      (sent[0] as { requestId: string }).requestId,
+      "Failed to delete Schedule: database is locked",
+    );
+    expect(shownAnywhere("Couldn't delete: database is locked")).toBe(true);
+    expect(getToasts()).toHaveLength(0);
   });
 });

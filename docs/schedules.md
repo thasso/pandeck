@@ -572,7 +572,13 @@ section, the header chip, the transcript label and their state:
   on the fieldset (`aria-describedby`), and Save stays off: the shared
   `scheduleTimingError` reason, or the approved no-future text from
   `scheduleTimingFutureError`. An unchanged timing is not checked, so an expired
-  `once` Schedule can still save a prompt-only edit.
+  `once` Schedule can still save a prompt-only edit. A cleared Day of month
+  stays empty and shows that reason; it is never day 0.
+- A changed prompt that is empty or only whitespace keeps Save off and marks the
+  prompt field invalid (`aria-invalid`), with no reason text, as the other
+  required-text editors do; the server refuses it too.
+- Try again after a refused save passes the same guards as Save: it is offered
+  only while Save could send, and it sends the current draft.
 - The page's Last cell shows the last occurrence's due time and state, and under
   them the session that occurrence went to, linked, whatever the Schedule
   targets now: "Deleted session", unlinked, once it is deleted, and nothing for
@@ -590,9 +596,14 @@ section, the header chip, the transcript label and their state:
   and the shell claims their union, so the inspector open beside the page or a
   detail neither replaces nor drops the other's claim. A claim needs the control
   ON SCREEN, not merely mounted: the shell frames that keep content mounted
-  while hidden (the right panel, its tabs) say so through `useOnScreen`
+  while hidden (the right panel, its tabs, and a phone's main pane under the
+  expanded dock's sheet, a screen or an overlay) say so through `useOnScreen`
   (`components/shell/onScreen.tsx`), and a surface hidden that way claims and
-  owns nothing, exactly as if it had closed.
+  owns nothing, exactly as if it had closed. So a Save or no-answer outcome
+  landing while a phone's detail is covered is announced, and uncovering it
+  while the write is pending adopts it. The detail's draft is its own whether
+  covered or not: a save it saw pending still updates the draft when it settles.
+  A delete dialog is portaled above any cover and keeps its claim.
 - A surface owns a write's outcome once it sent that write, or once it saw it
   pending, at mount included (`useScheduleOutcomes`). It claims exactly the keys
   it owns or sees pending and renders an outcome only for an owned key, so a

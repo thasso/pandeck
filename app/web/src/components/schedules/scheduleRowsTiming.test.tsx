@@ -7,6 +7,8 @@
  * - F104: every invalid changed timing shows the shared validator's reason,
  *   described on the timing fieldset; an unchanged expired timing still lets
  *   a prompt-only edit save.
+ * - F110: an emptied or whitespace-only prompt keeps Save off, marked invalid.
+ * - F112: a cleared monthly day stays empty, with the shared reason.
  * - Accessibility: each row's switch and delete name their Schedule; the
  *   Active/Done filter is named.
  *   cd app/web && pnpm exec vitest run src/components/schedules/scheduleRowsTiming.test.tsx
@@ -375,5 +377,64 @@ describe("an invalid changed timing says why (F104)", () => {
     expect(fieldset.getAttribute("aria-describedby")).toBeNull();
     click(buttonNamed("Save"));
     expect(onSave).toHaveBeenCalledWith("a", { prompt: "Check the deploy" });
+  });
+});
+
+describe("an emptied prompt cannot be saved (F110)", () => {
+  const prompt = () =>
+    document.getElementById("schedule-prompt") as HTMLTextAreaElement;
+
+  it("empty or whitespace-only: Save stays off, the prompt is marked invalid", () => {
+    const onSave = renderDetail(summary());
+    for (const value of ["", "   \n"]) {
+      setValue("schedule-prompt", value);
+      expect(prompt().value).toBe(value);
+      expect(prompt().getAttribute("aria-invalid")).toBe("true");
+      expect(buttonNamed("Save").disabled).toBe(true);
+      click(buttonNamed("Save"));
+    }
+    // A changed timing beside it does not make the empty prompt savable.
+    setValue("schedule-timing-time", "12:00");
+    expect(buttonNamed("Save").disabled).toBe(true);
+    expect(onSave).not.toHaveBeenCalled();
+    // Cancel is still the way back, and the draft is otherwise kept.
+    expect(buttonNamed("Cancel").disabled).toBe(false);
+    expect(
+      (document.getElementById("schedule-timing-time") as HTMLInputElement)
+        .value,
+    ).toBe("12:00");
+  });
+
+  it("a prompt with text saves only what changed, unmarked", () => {
+    const onSave = renderDetail(summary());
+    setValue("schedule-prompt", "  ");
+    setValue("schedule-prompt", "Check the deploy");
+    expect(prompt().getAttribute("aria-invalid")).toBeNull();
+    click(buttonNamed("Save"));
+    expect(onSave).toHaveBeenCalledWith("a", { prompt: "Check the deploy" });
+  });
+});
+
+describe("the monthly day can be emptied (F112)", () => {
+  it("shows the cleared field empty, with the shared reason, and Save off", () => {
+    renderDetail(summary());
+    setValue("schedule-timing-kind", "monthly");
+    setValue("schedule-timing-day", "");
+    const day = document.getElementById(
+      "schedule-timing-day",
+    ) as HTMLInputElement;
+    expect(day.value).toBe("");
+    expectReason(
+      scheduleTimingError({
+        kind: "monthly",
+        day: Number.NaN,
+        time: "11:00",
+        timeZone: "Europe/Berlin",
+      }),
+    );
+    setValue("schedule-timing-day", "15");
+    expect(day.value).toBe("15");
+    expect(document.getElementById("schedule-timing-error")).toBeNull();
+    expect(buttonNamed("Save").disabled).toBe(false);
   });
 });

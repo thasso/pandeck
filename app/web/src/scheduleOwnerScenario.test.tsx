@@ -8,6 +8,8 @@
  * - F105: a page or detail reopened while its write is pending adopts the
  *   outcome, shows it with Try again repeating what was sent, and a refusal
  *   whose control is gone is announced, never neither.
+ * - F111: Try again passes Save's guards: no send for an invalid timing or an
+ *   empty prompt, and it sends the current draft.
  *   cd app/web && pnpm exec vitest run src/scheduleOwnerScenario.test.tsx
  */
 import { act, useCallback, useEffect, useState } from "react";
@@ -295,6 +297,41 @@ describe("a save's success keeps newer edits (F102)", () => {
     });
   });
 
+  it("Try again keeps Save's guards: no send for an invalid timing or an empty prompt (F111)", async () => {
+    const socket = await boot("detail");
+    await type("schedule-prompt", "Check A");
+    await click(button("Save"));
+    await refuse(
+      socket,
+      sentOf(socket, "updateSchedule")[0]!.requestId,
+      "Failed to update Schedule: Session not found",
+    );
+    expect(text()).toContain("Couldn't save: Session not found");
+    const tryAgain = () =>
+      [...document.querySelectorAll("button")].find(
+        (element) => element.textContent?.trim() === "Try again",
+      );
+    // An invalid timing: Save is off, and so is Try again.
+    await type("schedule-timing-time", "");
+    expect(button("Save").disabled).toBe(true);
+    expect(tryAgain()).toBeUndefined();
+    await type("schedule-timing-time", "11:00");
+    // An emptied prompt: the same.
+    await type("schedule-prompt", "  ");
+    expect(button("Save").disabled).toBe(true);
+    expect(tryAgain()).toBeUndefined();
+    expect(sentOf(socket, "updateSchedule")).toHaveLength(1);
+    // Valid again, Try again repeats the attempt with the current draft.
+    await type("schedule-prompt", "Check B");
+    expect(text()).toContain("Couldn't save: Session not found");
+    await click(tryAgain()!);
+    expect(sentOf(socket, "updateSchedule")).toHaveLength(2);
+    expect(sentOf(socket, "updateSchedule").at(-1)!.patch).toEqual({
+      prompt: "Check B",
+    });
+    expect(getToasts()).toHaveLength(0);
+  });
+
   it("keeps the newer edit when another write's summary lands meanwhile", async () => {
     const socket = await boot("detail");
     await type("schedule-prompt", "Check A");
@@ -393,7 +430,20 @@ describe("a reopened surface adopts its pending write (F105)", () => {
     expect(text()).toContain("Couldn't save: Session not found");
     expect(promptValue()).toBe("Check A");
     expect(getToasts()).toHaveLength(0);
+    // Once recovery restores the server's prompt, the edit differs again and
+    // Try again repeats it (until then nothing differs, so it is not offered).
+    const [recovery] = sentOf(socket, "getStateItems");
+    await act(async () =>
+      socket.receive({
+        type: "stateItems",
+        topic: "schedules",
+        requestId: recovery!.requestId,
+        events: [{ kind: "upsert", id: "a", revision: 3, item: summary() }],
+      }),
+    );
+    expect(promptValue()).toBe("Check A");
     await click(button("Try again"));
+    expect(sentOf(socket, "updateSchedule")).toHaveLength(2);
     expect(sentOf(socket, "updateSchedule").at(-1)!.patch).toEqual({
       prompt: "Check A",
     });

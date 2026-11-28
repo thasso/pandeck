@@ -271,6 +271,11 @@ export function AppShell({
     Boolean(right?.open) && mobile && !rightIsDock,
     rightIsScreen ? false : (right?.animate ?? true),
   );
+  // A phone's main pane under a screen, an overlay or the expanded dock's
+  // modal sheet: mounted, but neither reachable nor on screen.
+  const mainCovered =
+    mobile &&
+    (overlayLeft.rendered || overlayRight.rendered || rightDock === "expanded");
 
   // The edge gesture exists only where back is the screen's own answer: not on
   // the browser screen (it IS the destination), and not under a surface stacked
@@ -481,20 +486,17 @@ export function AppShell({
             // Fully covered by a mobile screen/overlay: keep it out of the focus
             // order and away from assistive tech instead of leaving a hidden pane
             // tabbable behind the visible one.
-            inert={
-              mobile &&
-              (overlayLeft.rendered ||
-                overlayRight.rendered ||
-                rightDock === "expanded")
-            }
+            inert={mainCovered}
           >
             {/* A sheet opened in the main pane covers the main pane, as a side
-              panel's covers its panel; a phone's covers the screen. */}
+              panel's covers its panel; a phone's covers the screen. Covered,
+              it stays mounted but is not on screen, so it claims no failure
+              home (`docs/messaging.md`). */}
             <EdgeSheetContainer
               bound={!mobile}
               className="flex min-h-0 min-w-0 flex-1 flex-col"
             >
-              {children}
+              <OnScreen visible={!mainCovered}>{children}</OnScreen>
             </EdgeSheetContainer>
           </div>
 

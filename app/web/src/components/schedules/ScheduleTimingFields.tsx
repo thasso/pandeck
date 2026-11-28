@@ -157,8 +157,15 @@ export function ScheduleTimingFields({
             max={31}
             step={1}
             value={Number.isFinite(value.day) ? String(value.day) : ""}
+            // A cleared field is no day, not day 0: it stays empty and invalid.
             onChange={(event) =>
-              onChange({ ...value, day: Number(event.target.value) })
+              onChange({
+                ...value,
+                day:
+                  event.target.value === ""
+                    ? Number.NaN
+                    : Number(event.target.value),
+              })
             }
           />
         </div>
