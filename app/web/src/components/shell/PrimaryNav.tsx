@@ -10,6 +10,11 @@ export interface PrimaryNavSection<Id extends string = string> {
   id: Id;
   label: string;
   icon: ReactNode;
+  /**
+   * What assistive technology hears instead of `label` when the icon carries
+   * more than the name (the Schedules count).
+   */
+  accessibleLabel?: string;
 }
 
 interface Props<Id extends string> {
@@ -100,6 +105,7 @@ export function PrimaryNav<Id extends string>({
             aria-current="true"
             onClick={() => select(section.id)}
             title={section.label}
+            aria-label={section.accessibleLabel}
             className="w-26 justify-start"
           >
             {section.icon}
@@ -108,7 +114,7 @@ export function PrimaryNav<Id extends string>({
         ) : (
           <IconButton
             key={section.id}
-            label={section.label}
+            label={section.accessibleLabel ?? section.label}
             size="icon-lg"
             onClick={() => select(section.id)}
           >

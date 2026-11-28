@@ -98,6 +98,11 @@ function SidebarStory({ scenario, section, mobile, width }: SidebarStoryProps) {
         knowledgeUncommitted={3}
         onOpenKnowledge={noop}
         onOpenKnowledgeFile={noop}
+        schedules={[]}
+        schedulesAnswered
+        scheduleListError={null}
+        onRetrySchedules={noop}
+        onOpenSchedule={noop}
         onLoadWorktrees={noop}
         onOpenWorktree={noop}
         onStartSessionInWorktree={noop}

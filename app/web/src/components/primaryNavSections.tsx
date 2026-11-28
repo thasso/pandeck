@@ -2,6 +2,7 @@ import {
   Activity,
   BookOpen,
   Bot,
+  CalendarClock,
   ClipboardList,
   FolderKanban,
   Gauge,
@@ -19,8 +20,11 @@ import type { NavSlot } from "../hooks/useSidebarSection.ts";
  * app-level actions that share the bar are one flat table here, because in the
  * bar they are one flat row: same slot width, same treatment, one user order.
  *
- * Slots carry NO counts: they add no decision value in the nav, and uniform slot
- * widths are what make the bar's overflow math exact (see `shell/navOverflow.ts`).
+ * Slots carry no counts, with ONE exception: Schedules overlays the number
+ * whose last occurrence failed (`docs/schedules.md`, Web), because nothing
+ * else surfaces a failure that happened while nobody watched. The count is an
+ * overlay like the unread dot, so slot widths stay uniform and the bar's
+ * overflow math exact (see `shell/navOverflow.ts`).
  * Order is a user preference (`prefs.navSlots`), not a property of this registry,
  * and the Personal Assistant's label is overridden with its configured name by
  * the host that knows it.
@@ -42,6 +46,7 @@ export const PRIMARY_NAV_SLOTS: Record<
   },
   projects: { label: "Projects", icon: <FolderKanban size={17} /> },
   knowledge: { label: "Knowledge", icon: <BookOpen size={17} /> },
+  schedules: { label: "Schedules", icon: <CalendarClock size={17} /> },
   settings: { label: "Settings", icon: <Settings size={17} /> },
   usage: { label: "Usage", icon: <Gauge size={17} /> },
   "background-tasks": {

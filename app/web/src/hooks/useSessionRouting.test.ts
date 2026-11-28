@@ -13,6 +13,8 @@ import {
   PERMANENT_ASSISTANT_PATH,
   projectPath,
   pullRequestPath,
+  SCHEDULES_PATH,
+  schedulePath,
   sessionArtifactPath,
   settingsPath,
   stagedSendCreatedSession,
@@ -53,6 +55,19 @@ describe("parseRoute", () => {
       name: "projects",
       id: "proj_1",
     });
+  });
+
+  it("parses Schedule routes: a section index page and one detail shape", () => {
+    expect(parseRoute(SCHEDULES_PATH)).toEqual({ name: "schedules" });
+    expect(parseRoute(schedulePath("sch_1"))).toEqual({
+      name: "schedules",
+      id: "sch_1",
+    });
+    expect(isSectionIndexRoute({ name: "schedules" })).toBe(true);
+    expect(isSectionIndexRoute({ name: "schedules", id: "sch_1" })).toBe(false);
+    expect(canonicalSidebarSection({ name: "schedules", id: "sch_1" })).toBe(
+      "schedules",
+    );
   });
 
   it("parses Initiative routes, whose browse home is the Projects section", () => {
@@ -336,6 +351,7 @@ describe("section index routes", () => {
     "projects",
     "pull-requests",
     "knowledge",
+    "schedules",
     "settings",
   ];
 

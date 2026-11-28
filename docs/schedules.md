@@ -309,6 +309,21 @@ The user changes any Schedule directly in the UI; no card. When the user edits
 an agent-controlled Schedule, `controlledBy` becomes the user and `createdBy`
 stays as history.
 
+- **The user's writes** are an edit (prompt, timing, existing-session target),
+  on/off, delete and Pause all: cardless, with no cardless limit. An edit and an
+  on/off both make the user the controller, an on/off even when the enabled
+  state does not change; a switch to the state the Schedule already has, with
+  the user already in control, writes nothing. Only the fields the user changed
+  travel, and the last write wins: there is no revision precondition.
+- **The zone** is fixed at creation and is never edited: an edit's timing
+  carries no zone and takes the stored one.
+- **A user target** is any session the user can see, archived included, except
+  the Personal Assistant singleton. "Can see" means the public session list, the
+  picker's own source: a session that list hides, such as a retired Personal
+  Assistant conversation or one not yet bound, is refused as
+  `Session not found`, like a deleted one. An unchanged target is not checked
+  again.
+
 A **near target** is the agent's own session or a direct child it still owns: a
 `spawned` edge from the agent AND the child still coordinator-owned. A child the
 user has taken over is not a near target, though the edge remains.
@@ -396,14 +411,28 @@ compaction the session that wrote it may no longer know why ("check CI for PR
 
 - **Schedules page** (`/schedules`, a nav item): name, target, timing, next
   occurrence, last occurrence with its session, creator, on/off, delete, the
-  Done filter and Pause all. A needs-attention count on the nav item counts
-  Schedules whose last occurrence `failed`.
+  Done filter and Pause all. Active and Done are exclusive filters: a disabled
+  Schedule that is not `done` stays under Active and shows Off. While paused the
+  page shows the note "Paused. No new occurrences are claimed: due times are
+  recorded as missed and do not catch up on resume. An occurrence already
+  claimed, including one that fell due just before pausing, may still be
+  delivered."
+- **Needs-attention count** on the nav item: the literal number of Schedules
+  whose last occurrence `failed`, `done` and disabled ones included. There is no
+  acknowledge action; deleting the Schedule or a later last occurrence clears
+  it.
 - **Detail** (`/schedules/:id`): editable prompt, timing and target, the
-  new-session runtime, the next three occurrences, history.
+  new-session runtime, the next three occurrences, history (the 50 newest). The
+  zone is read-only and shown by name ("Time zone"); every instant the detail
+  shows names it through `formatScheduleInstant`.
 - **Session inspector:** the session's Schedules with an on/off switch each. A
   session a Schedule started links back to it.
-- **Session header:** a badge with the next occurrence, for repeating Schedules
-  only.
+- **Session header:** a chip with the next occurrence of the earliest enabled
+  repeating Schedule targeting the session, linked to its detail; a `once`, a
+  disabled or a `done` Schedule shows none.
+- **Transcript:** a scheduled prompt's row is titled "⏰ Scheduled prompt",
+  linked to `/schedules/<origin.scheduleId>` from the origin alone, so it links
+  even once the Schedule is deleted (the detail then shows not found).
 - There is no create button and no "Send later" in the composer: Schedules are
   created through agents.
 - Occurrences notify nothing of their own; the Sessions inbox signals as for any
@@ -423,6 +452,20 @@ through the registry: grace window (60 minutes), cardless limit (10), Pause all.
 Pause all is a registry field of the Schedules section, but the schedule store
 keeps its value: the settings file holds only the other two, and the section
 projects `paused` from the store.
+
+The user's commands each carry a `requestId`. `updateSchedule` and
+`setScheduleEnabled` answer their own connection with ONE authoritative
+`scheduleSaved {item, revision, requestId}` before `mutationSettled`, a no-op
+on/off included; `deleteSchedule` settles through `mutationSettled`, and the
+tombstone event follows. A refusal is an error naming the Schedule (target
+`{type: "schedule", id}`) and never settles. `setSchedulesPaused` merges
+`paused` into the current stored Schedules section in the same synchronous step
+that starts the save, so a grace window or limit saved meanwhile survives, and
+settles only once that save has completed; a failed save is an error stamped
+with the request alone, since a `{type: "schedule"}` target without an id names
+the list failure. `getScheduleHistory` answers `scheduleHistory` with the 50
+newest occurrences and the Schedule's revision, read in one step; `items: null`
+once the Schedule is gone, `error` for a failed read.
 
 ### Implemented so far
 
@@ -460,7 +503,7 @@ through the tools; there is no UI, card, grant, link or new-session target yet.
 - The `schedules` topic (`app/server/src/schedules/scheduleTopic.ts`): every
   write stamps through a change set, a live Schedule (`done` included) is a
   member, a tombstone leaves as a delete at its delete's revision. Every web
-  connection holds it and diffs a digest on resubscribe; nothing renders it.
+  connection holds it and diffs a digest on resubscribe.
 - The `schedules` Settings section, rendered from its three registry fields. A
   save with `paused` writes the file first, then switches Pause all through
   `setPaused`; reading the settings opens the database, since `paused` comes
@@ -486,13 +529,125 @@ through the tools; there is no UI, card, grant, link or new-session target yet.
   transcript entry holds the raw prompt with `origin: { kind: "schedule", … }`.
   Boot recovery runs after the peer-prompt recovery offers and before the clock
   starts.
-- The `schedule` origin, labelled plain "Scheduled prompt" in the transcript,
-  with no ⏰ label or link until the Schedules page exists (Phase 2).
+- The `schedule` origin on the durable transcript entry (its label and link
+  arrive with Phase 2, below).
 - A failed `schedules` snapshot or digest read answers its own collection error
   (`Failed to list Schedules: …`, target `{type: "schedule"}`) and later topics
-  still answer; the web holds it without rendering it until Phase 2.
+  still answer; the page, the browser and the detail render it in place with
+  Retry. The detail is its home on a phone or behind a shut or other sidebar:
+  unanswered, it shows the failure instead of Loading; holding the summary, it
+  keeps it and shows the failure above it.
 - The agent tools (`app/server/src/tools/schedules/`), as "Agent tools"
   describes, for existing-session near targets only.
+
+Phase 2 ([Task-1500](pa://task/1500)): the page, the detail, the inspector
+section, the header chip, the transcript label and their state:
+
+- The user's commands (`app/server/src/schedules/scheduleUserCommands.ts`) and
+  their messages, as "Who may change what" and "Sync and storage" describe. The
+  store's `setEnabled` takes the new controller and moves it in the same
+  transaction as the switch, or alone when the enabled state stays.
+- `pa://schedule/<id>` links, routed to `/schedules/<id>` and resolved to the
+  Schedule's name.
+- `scheduleTimingFutureError` in `app/shared/schedules.ts`: the one
+  future-occurrence rule the tools, the user's commands and the editor share.
+- The web state (`useAssistant`, `lib/schedules.ts`). The replica applies
+  `scheduleList` and `stateEvents`; `stateEventRevisions.schedules` is defined
+  only once this client applied an answer, which is what "answered" means for
+  the empty state. Each user operation is a tracked mutation keyed
+  `<id>:update`, `<id>:enabled`, `<id>:delete` or `schedules:pause`, and
+  `scheduleAttempts` keeps what the latest write per key asked for, which Try
+  again repeats. An edit, an on/off and a delete apply optimistically; nothing
+  is undone by inverse. A refusal, a timeout or a disconnect recovers the
+  touched rows authoritatively with `getStateItems` (Pause all with
+  `requestSettings`), and `scheduleSaved` replaces the row with the server's.
+  Two calls in the same tick, before React re-renders, can both send; the
+  surfaces disable the control while its write is pending.
+- The detail sends only the fields that differ from what the server holds now. A
+  save's success clears from the draft only the fields it sent whose draft value
+  is still the one sent; a field edited while the save was pending stays in the
+  draft and goes with the next Save. A refusal puts the sent fields back under
+  any newer edit. The fields stay editable while a save is pending.
+- An invalid changed timing shows its reason under the timing fields, described
+  on the fieldset (`aria-describedby`), and Save stays off: the shared
+  `scheduleTimingError` reason, or the approved no-future text from
+  `scheduleTimingFutureError`. An unchanged timing is not checked, so an expired
+  `once` Schedule can still save a prompt-only edit. A cleared Day of month
+  stays empty and shows that reason; it is never day 0.
+- A changed prompt that is empty or only whitespace keeps Save off and marks the
+  prompt field invalid (`aria-invalid`), with no reason text, as the other
+  required-text editors do; the server refuses it too.
+- Try again after a refused save passes the same guards as Save: it is offered
+  only while Save could send, and it sends the current draft.
+- The page's Last cell shows the last occurrence's due time and state, and under
+  them the session that occurrence went to, linked, whatever the Schedule
+  targets now: "Deleted session", unlinked, once it is deleted, and nothing for
+  an occurrence that reached no session.
+- History reads are per open detail. A Schedule's revision moving past the one
+  the held history answered (from `scheduleList`, a `stateDigest` without
+  catch-up, or a recovery `stateItems`) asks again; a failed read holds its
+  barrier up to the revision it was sent for, so it never loops.
+- Failures stay on their surface. A refusal stamped with a Schedules request id
+  carries that write's control key, and it is kept only while a mounted surface
+  claims that key (`FailureHomes.controls`); otherwise it is announced, even
+  while a staged first send is claiming untargeted errors. The open detail
+  claims its Schedule's id for object failures. Each surface (the phone page,
+  the wide page, the detail, the inspector section) reports its own claimed keys
+  and the shell claims their union, so the inspector open beside the page or a
+  detail neither replaces nor drops the other's claim. A claim needs the control
+  ON SCREEN, not merely mounted: the shell frames that keep content mounted
+  while hidden (the right panel, its tabs, and a phone's main pane under the
+  expanded dock's sheet, a screen or an overlay) say so through `useOnScreen`
+  (`components/shell/onScreen.tsx`), and a surface hidden that way claims and
+  owns nothing, exactly as if it had closed. So a Save or no-answer outcome
+  landing while a phone's detail is covered is announced, and uncovering it
+  while the write is pending adopts it. The detail's draft is its own whether
+  covered or not: a save it saw pending still updates the draft when it settles.
+  A delete dialog is portaled above any cover and keeps its claim.
+- A surface owns a write's outcome once it sent that write, or once it saw it
+  pending, at mount included (`useScheduleOutcomes`). It claims exactly the keys
+  it owns or sees pending and renders an outcome only for an owned key, so a
+  page or detail reopened before a refusal lands shows it in place, with Try
+  again repeating the attempt, and a refusal that lands while no surface is open
+  is announced. A refusal that landed before a surface mounted is not shown
+  again there. The delete dialog closes with its page; a refusal after that is
+  announced.
+- The routes `/schedules` and `/schedules/:id`, and a Schedules section in the
+  primary nav with its own browser. `/schedules` is a section index route. On a
+  wide layout the sidebar keeps the minimal browser of active Schedules beside
+  the page. On a phone the browser screen IS the full page (responsive rows, the
+  Active/Done filter, Pause all, each row's switch and delete), so nothing is
+  reachable only behind an inert pane; a detail is an ordinary phone screen. The
+  nav slot carries the needs-attention count, the one count the bar shows.
+- Each row's switch is named by the Schedule's name and the "On" column, and its
+  delete by "Delete Schedule" and the name; the Active/Done filter is named
+  "Schedules".
+- The target picker lists live sessions and, on first open, the archived ones
+  (`loadArchivedSessions`); a failed archived read shows its error with Retry
+  instead of an empty group. The Personal Assistant is never offered, and the
+  current target stays listed, titled through its `pa://session` link, when no
+  list holds it.
+- The session inspector's Schedules section
+  (`components/schedules/SessionSchedulesSection.tsx`), shown only when the
+  session has Schedules (`schedulesForSession`). Each row links its name to the
+  detail and carries the same `<id>:enabled` write as the page, its switch named
+  by the Schedule's name, under the same ownership rule: a refusal shows
+  "Couldn't save: {reason}" with Try again on the surface that owns the write.
+  While the list is unanswered or failed the section is absent; the collection
+  error lives on the page, the browser and the detail. The section claims only
+  while it is on screen: with the panel shut, the Inspector behind another tab,
+  a phone's dock not expanded, or the section folded (which unmounts its rows),
+  it claims nothing, so a refusal is announced and is not shown again when it
+  reappears; reappearing while a write is pending adopts it.
+- The session header chip (`components/schedules/ScheduleHeaderChip.tsx`,
+  `nextRepeatingForSession`), beside the title and outside its links: the due
+  label from `md` up, the icon alone on a phone, and at every width the
+  accessible label and tooltip "Next scheduled prompt: {instant with zone} ·
+  {name}". The shell derives it from the replica; `SessionListItem` carries
+  nothing.
+- The transcript label: the prompt row's collapsed title is the link, through
+  the host's stable `onOpenSchedule`; a modified click is left to the browser.
+  The assistant reply's origin badge shows the same text unlinked.
 
 ## Phases
 

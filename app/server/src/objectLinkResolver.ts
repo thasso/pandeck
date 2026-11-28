@@ -12,6 +12,7 @@ import { readTask } from "./tasks.ts";
 import { getInitiative } from "./initiatives.ts";
 import { approvalForId } from "./pendingApprovals.ts";
 import { getProject } from "./projectRegistry.ts";
+import { scheduleStore } from "./db/scheduleStore.ts";
 import { hub } from "./hub.ts";
 import { resolveWorktreeRow } from "./worktrees/worktreeResolve.ts";
 import { knowledgeFiles, type KbFileInfo } from "./knowledgeBaseIndex.ts";
@@ -72,6 +73,10 @@ async function resolveOne(
     case "initiative": {
       const initiative = getInitiative(parsed.id);
       return resolved(parsed, initiative?.title, Boolean(initiative));
+    }
+    case "schedule": {
+      const schedule = scheduleStore.get(parsed.id);
+      return resolved(parsed, schedule?.name, Boolean(schedule));
     }
     case "project": {
       const project = getProject(parsed.id);

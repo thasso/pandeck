@@ -141,6 +141,7 @@ import {
   initiativePath,
   INITIATIVES_PATH,
   isSectionIndexRoute,
+  schedulePath,
   knowledgePath,
   parseRoute,
   PERMANENT_ASSISTANT_PATH,
@@ -352,6 +353,16 @@ import {
   type PageHeaderBack,
 } from "./components/PageHeader.tsx";
 import { SessionContextSections } from "./components/SessionContextSections.tsx";
+import { SessionSchedulesSection } from "./components/schedules/SessionSchedulesSection.tsx";
+import { ScheduleHeaderChip } from "./components/schedules/ScheduleHeaderChip.tsx";
+import {
+  NO_SCHEDULE_CLAIMS,
+  nextRepeatingForSession,
+  scheduleClaimedKeys,
+  schedulesForSession,
+  withScheduleClaim,
+  type ScheduleClaimSurface,
+} from "./lib/schedules.ts";
 import { ToastViewport } from "./components/ToastViewport.tsx";
 import { AppStatus } from "./components/AppStatus.tsx";
 import { WorkflowRunStartSheet } from "./components/WorkflowRunStartSheet.tsx";
@@ -514,6 +525,16 @@ const InitiativeDetailPage = lazy(() =>
 const InitiativesIndexPage = lazy(() =>
   import("./components/initiative/InitiativesIndexPage.tsx").then((module) => ({
     default: module.InitiativesIndexPage,
+  })),
+);
+const SchedulesPage = lazy(() =>
+  import("./components/schedules/SchedulesPage.tsx").then((module) => ({
+    default: module.SchedulesPage,
+  })),
+);
+const ScheduleDetailPage = lazy(() =>
+  import("./components/schedules/ScheduleDetailPage.tsx").then((module) => ({
+    default: module.ScheduleDetailPage,
   })),
 );
 const SessionStatusPanel = lazy(() =>
@@ -2663,6 +2684,102 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   // object panel (`lib/initiativeView.ts`).
   const selectedInitiativeId =
     route.name === "initiatives" ? (route.id ?? null) : null;
+  // The Schedules surfaces (`docs/schedules.md`, Web). The list has answered
+  // once this hook instance applied a `schedules` answer: only then is an
+  // empty list or an absent id a fact.
+  const selectedScheduleId =
+    route.name === "schedules" ? (route.id ?? null) : null;
+  const schedulesAnswered = state.stateEventRevisions.schedules !== undefined;
+  const openSchedule = useCallback(
+    (id: string) => navigate(schedulePath(id)),
+    [navigate],
+  );
+  // The Schedule controls on screen, by mutation key, PER SURFACE: the
+  // arrival rules show a refusal for one of these in place. Each surface
+  // reports only its own keys, so the inspector beside the page or a detail
+  // neither overwrites nor clears the other's claims.
+  const [scheduleClaims, setScheduleClaims] =
+    useState<Readonly<Record<ScheduleClaimSurface, string>>>(
+      NO_SCHEDULE_CLAIMS,
+    );
+  const claimPhonePageControls = useCallback(
+    (keys: readonly string[]) =>
+      setScheduleClaims((claims) => withScheduleClaim(claims, "phone", keys)),
+    [],
+  );
+  const claimPageControls = useCallback(
+    (keys: readonly string[]) =>
+      setScheduleClaims((claims) => withScheduleClaim(claims, "page", keys)),
+    [],
+  );
+  const claimDetailControls = useCallback(
+    (keys: readonly string[]) =>
+      setScheduleClaims((claims) => withScheduleClaim(claims, "detail", keys)),
+    [],
+  );
+  const claimInspectorControls = useCallback(
+    (keys: readonly string[]) =>
+      setScheduleClaims((claims) =>
+        withScheduleClaim(claims, "inspector", keys),
+      ),
+    [],
+  );
+  const scheduleControlsKey = useMemo(
+    () => scheduleClaimedKeys(scheduleClaims).join("\n"),
+    [scheduleClaims],
+  );
+  const archivedTargets = useMemo(
+    () => ({
+      sessions: state.archivedSessions,
+      loaded: state.archivedSessionsLoaded,
+      pending: state.archivedReadQueued || state.archivedReadFlight !== null,
+      error: state.archivedReadError,
+    }),
+    [
+      state.archivedSessions,
+      state.archivedSessionsLoaded,
+      state.archivedReadQueued,
+      state.archivedReadFlight,
+      state.archivedReadError,
+    ],
+  );
+  // A phone's Schedules browser screen is the whole page, so the Done filter,
+  // Pause all and each Schedule's switch and delete stay reachable there; the
+  // wide sidebar keeps the minimal browser (`docs/schedules.md`, Web). The main
+  // pane does not mount a second page behind it.
+  const phoneSchedulesScreen = useMemo(
+    () =>
+      mobileLayout ? (
+        <Suspense fallback={<LazySurfaceFallback />}>
+          <SchedulesPage
+            schedules={state.schedules}
+            answered={schedulesAnswered}
+            listError={state.scheduleListError}
+            onRetry={actions.retrySchedules}
+            paused={state.settings.schedules.paused}
+            mutations={state.scheduleMutations}
+            attempts={state.scheduleAttempts}
+            onSetPaused={actions.setSchedulesPaused}
+            onSetEnabled={actions.setScheduleEnabled}
+            onDelete={actions.deleteSchedule}
+            onOpen={navigate}
+            onClaimControls={claimPhonePageControls}
+          />
+        </Suspense>
+      ) : undefined,
+    [
+      mobileLayout,
+      state.schedules,
+      schedulesAnswered,
+      state.scheduleListError,
+      state.settings.schedules.paused,
+      state.scheduleMutations,
+      state.scheduleAttempts,
+      actions,
+      navigate,
+      claimPhonePageControls,
+    ],
+  );
   const initiativeSelectedTaskId = selectedInitiativeId
     ? selectedTaskFromHash(locationHash)
     : null;
@@ -4491,14 +4608,34 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   // The title is a heading; the line under it says where the work lives —
   // its project and its worktree (branch and uncommitted changes) — and each
   // of those is a link of its own.
+  // The header chip's Schedule (AC12): the replica's own row, so the memoized
+  // chip redraws only when that Schedule changes.
+  const displaySessionId = displaySession?.sessionId;
+  const headerSchedule = useMemo(
+    () =>
+      displaySessionId
+        ? nextRepeatingForSession(state.schedules, displaySessionId)
+        : undefined,
+    [state.schedules, displaySessionId],
+  );
+  const sessionTitleLine = headerSchedule ? (
+    <div className="flex min-w-0 items-center gap-1.5">
+      <h2 className="min-w-0 truncate text-sm font-semibold tracking-tight text-foreground">
+        {sessionTitleText}
+      </h2>
+      <ScheduleHeaderChip schedule={headerSchedule} onOpen={navigate} />
+    </div>
+  ) : (
+    <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
+      {sessionTitleText}
+    </h2>
+  );
   const titleLink =
     "h-auto min-w-0 cursor-pointer justify-start gap-1 p-0 text-left text-xs font-normal text-muted-foreground hover:text-foreground hover:no-underline";
   const sessionTitleHeading =
     displayProject || displayWorktreeBranch || displayTask ? (
       <div className="flex min-w-0 flex-col">
-        <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
-          {sessionTitleText}
-        </h2>
+        {sessionTitleLine}
         {/* Responsive by its own width (`@container`): the project gives way
             to its key first, then the branch shortens with an ellipsis — the
             line never runs into the header's buttons. */}
@@ -4592,9 +4729,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         </div>
       </div>
     ) : (
-      <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
-        {sessionTitleText}
-      </h2>
+      sessionTitleLine
     );
   // The agentType applied to whatever harness the new chat picks (the top-left
   // agent picker drives this for ALL harnesses now).
@@ -5119,7 +5254,9 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       openObjects: {
         project: selectedProjectId ? [selectedProjectId] : [],
         task: failureHomeTaskId ? [failureHomeTaskId] : [],
+        schedule: selectedScheduleId ? [selectedScheduleId] : [],
       },
+      controls: scheduleControlsKey ? scheduleControlsKey.split("\n") : [],
     });
   }, [
     displayCurrentId,
@@ -5128,6 +5265,8 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     stagedSendSessionId,
     selectedProjectId,
     failureHomeTaskId,
+    selectedScheduleId,
+    scheduleControlsKey,
   ]);
 
   // Leaving settings returns to the chat we were in, or to /sessions/create for a fresh start.
@@ -5596,6 +5735,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       onOpenSession: openSession,
       onOpenTask: openTaskById,
       onOpenBackgroundWork: openBackgroundWork,
+      onOpenSchedule: openSchedule,
       onOpenWorktree: openWorktree,
       onDismissSessionFailure: dismissSessionFailure,
       onForkSession: actions.forkSession,
@@ -5614,6 +5754,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       openSession,
       openTaskById,
       openBackgroundWork,
+      openSchedule,
       openWorktree,
       dismissSessionFailure,
       actions.forkSession,
@@ -6234,6 +6375,37 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     },
     [mobileLayout, navigate, setInspectorOpen],
   );
+  // The inspector's Schedules section (AC11), only when the session has any.
+  const sessionSchedules = useMemo(
+    () =>
+      displaySessionId
+        ? schedulesForSession(state.schedules, displaySessionId)
+        : [],
+    [state.schedules, displaySessionId],
+  );
+  const sessionSchedulesSection = useMemo(
+    () =>
+      displaySessionId && sessionSchedules.length > 0 ? (
+        <SessionSchedulesSection
+          sessionId={displaySessionId}
+          schedules={sessionSchedules}
+          mutations={state.scheduleMutations}
+          attempts={state.scheduleAttempts}
+          onSetEnabled={actions.setScheduleEnabled}
+          onOpen={navigateFromInspector}
+          onClaimControls={claimInspectorControls}
+        />
+      ) : undefined,
+    [
+      displaySessionId,
+      sessionSchedules,
+      state.scheduleMutations,
+      state.scheduleAttempts,
+      actions.setScheduleEnabled,
+      navigateFromInspector,
+      claimInspectorControls,
+    ],
+  );
   /**
    * A worktree file picked in the session inspector opens in the right
    * panel's Worktree tab, beside the chat, pointed at that worktree until the
@@ -6704,6 +6876,13 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
             state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID]?.updatedAt ?? 0
           }
           onOpenKnowledgeFile={openKnowledgeFile}
+          schedules={state.schedules}
+          schedulesAnswered={schedulesAnswered}
+          scheduleListError={state.scheduleListError}
+          onRetrySchedules={actions.retrySchedules}
+          selectedScheduleId={selectedScheduleId}
+          onOpenSchedule={openSchedule}
+          schedulesScreen={phoneSchedulesScreen}
           onLoadWorktrees={actions.listWorktrees}
           onOpenWorktree={openWorktree}
           onStartSessionInWorktree={startSessionInWorktree}
@@ -7169,6 +7348,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
           sessionId={displaySession?.sessionId}
           toolExposure={displaySession?.toolExposure}
           agent={displaySession?.agent}
+          schedulesSection={sessionSchedulesSection}
           harness={displaySession?.harness}
           compactionWindow={displaySession?.compactionWindow}
           compactionWindowEdit={
@@ -7510,6 +7690,53 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                         onOpenSession={openSession}
                         workflowIndicators={workflowIndicators}
                       />
+                    </Suspense>
+                  ) : route.name === "schedules" ? (
+                    <Suspense fallback={<LazySurfaceFallback />}>
+                      {route.id ? (
+                        <ScheduleDetailPage
+                          // Another Schedule is another draft.
+                          key={route.id}
+                          back={screenBack}
+                          id={route.id}
+                          schedule={state.schedules.find(
+                            (item) => item.id === route.id,
+                          )}
+                          answered={schedulesAnswered}
+                          listError={state.scheduleListError}
+                          onRetry={actions.retrySchedules}
+                          history={state.scheduleHistory[route.id]}
+                          mutations={state.scheduleMutations}
+                          attempts={state.scheduleAttempts}
+                          failure={state.objectFailures.schedule[route.id]}
+                          liveSessions={state.liveSessions}
+                          archived={archivedTargets}
+                          onRequestArchived={actions.loadArchivedSessions}
+                          onSave={actions.updateSchedule}
+                          onDelete={actions.deleteSchedule}
+                          onOpenHistory={actions.openScheduleHistory}
+                          onCloseHistory={actions.closeScheduleHistory}
+                          onRetryHistory={actions.retryScheduleHistory}
+                          onOpen={navigate}
+                          onClaimControls={claimDetailControls}
+                        />
+                      ) : browserScreen ? null : (
+                        <SchedulesPage
+                          back={screenBack}
+                          schedules={state.schedules}
+                          answered={schedulesAnswered}
+                          listError={state.scheduleListError}
+                          onRetry={actions.retrySchedules}
+                          paused={state.settings.schedules.paused}
+                          mutations={state.scheduleMutations}
+                          attempts={state.scheduleAttempts}
+                          onSetPaused={actions.setSchedulesPaused}
+                          onSetEnabled={actions.setScheduleEnabled}
+                          onDelete={actions.deleteSchedule}
+                          onOpen={navigate}
+                          onClaimControls={claimPageControls}
+                        />
+                      )}
                     </Suspense>
                   ) : route.name === "initiatives" ? (
                     <Suspense

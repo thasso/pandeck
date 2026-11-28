@@ -133,6 +133,8 @@ export interface SessionChatHost {
   onOpenSession: (id: string) => void;
   onOpenTask: (id: string) => void;
   onOpenBackgroundWork: (id: string) => void;
+  /** A scheduled prompt's ⏰ label opens its Schedule; stable, like the rest. */
+  onOpenSchedule?: ((id: string) => void) | undefined;
   onOpenWorktree: (id: string) => void;
   onDismissSessionFailure: ComponentProps<
     typeof SpawnedSessionsLedge
@@ -1307,6 +1309,7 @@ export function useSessionChat({
       onOpenSession,
       onOpenTask: host.onOpenTask,
       onOpenBackgroundWork: host.onOpenBackgroundWork,
+      ...(host.onOpenSchedule ? { onOpenSchedule: host.onOpenSchedule } : {}),
       onOpenWorktree: host.onOpenWorktree,
       onApplyTaskStatusSuggestion: applyTaskStatusSuggestion,
       onWithdrawPeerRequest: withdrawPeerRequest,

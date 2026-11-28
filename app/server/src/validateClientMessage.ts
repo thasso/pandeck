@@ -706,6 +706,73 @@ const validateGetStateItems: Validator = (msg) => {
   return null;
 };
 
+/* ------------------------- Schedules (user writes) -------------------------- */
+
+const SCHEDULE_PATCH_KEYS = new Set(["prompt", "timing", "targetSessionId"]);
+
+/** The keys each timing kind takes from a client: never a zone. */
+const SCHEDULE_TIMING_KEYS: Record<string, readonly string[]> = {
+  once: ["kind", "date", "time"],
+  daily: ["kind", "time", "startsOn", "endsOn"],
+  weekdays: ["kind", "time", "startsOn", "endsOn"],
+  weekly: ["kind", "days", "time", "startsOn", "endsOn"],
+  monthly: ["kind", "day", "time", "startsOn", "endsOn"],
+};
+
+/** The fields each kind needs; their values are judged by the timing rules. */
+const SCHEDULE_TIMING_REQUIRED: Record<string, FieldSpecMap> = {
+  once: { date: STRING, time: STRING },
+  daily: { time: STRING },
+  weekdays: { time: STRING },
+  weekly: { days: STRING_ARRAY, time: STRING },
+  monthly: { day: NUMBER, time: STRING },
+};
+
+/**
+ * A user timing: exactly its kind's keys. The zone is the Schedule's own and
+ * never travels, so `timeZone` is refused like any other foreign key.
+ */
+function scheduleTimingInputError(value: unknown): string | null {
+  if (!isPlainObject(value)) return "patch.timing must be an object";
+  const kind = value.kind;
+  if (!isString(kind) || !hasOwn(SCHEDULE_TIMING_KEYS, kind))
+    return "patch.timing.kind must be once, daily, weekdays, weekly or monthly";
+  const allowed = SCHEDULE_TIMING_KEYS[kind]!;
+  const foreign = Object.keys(value).find((key) => !allowed.includes(key));
+  if (foreign !== undefined)
+    return `patch.timing.${foreign} is not a ${kind} timing field`;
+  const required = checkRequiredFields(value, SCHEDULE_TIMING_REQUIRED[kind]!);
+  if (required) return `patch.timing.${required}`;
+  const window = checkOptionalFields(value, {
+    startsOn: STRING,
+    endsOn: STRING,
+  });
+  return window ? `patch.timing.${window}` : null;
+}
+
+/**
+ * Only what the user may edit: a non-empty patch of `prompt`, `timing` and
+ * `targetSessionId`. Authority (`controlledBy`, `createdBy`, `cardless`), the
+ * name, `enabled` and the zone are refused before anything runs.
+ */
+const validateUpdateSchedule: Validator = (msg) => {
+  const patch = msg.patch;
+  if (!isPlainObject(patch)) return "patch must be an object";
+  const keys = Object.keys(patch);
+  if (keys.length === 0) return "patch must change at least one field";
+  const foreign = keys.find((key) => !SCHEDULE_PATCH_KEYS.has(key));
+  if (foreign !== undefined) return `patch.${foreign} is not editable`;
+  if (hasOwn(patch, "prompt") && !isString(patch.prompt))
+    return "patch.prompt must be a string";
+  if (
+    hasOwn(patch, "targetSessionId") &&
+    (!isString(patch.targetSessionId) || patch.targetSessionId.length === 0)
+  )
+    return "patch.targetSessionId must be a non-empty string";
+  if (hasOwn(patch, "timing")) return scheduleTimingInputError(patch.timing);
+  return null;
+};
+
 const validateSaveTask: Validator = (msg) => {
   if (!isPlainObject(msg.request)) return "request must be an object";
   // A create needs a title; an update may omit it to leave the stored one alone.
@@ -1257,6 +1324,19 @@ const REGISTRY = defineRegistry({
   archiveTask: fields({ id: STRING }, { archived: BOOLEAN, requestId: STRING }),
   deleteTask: fields({ id: STRING }, { requestId: STRING }),
   getTask: fields({ id: STRING, requestId: STRING }),
+  updateSchedule: fields(
+    { id: STRING, patch: OBJECT, requestId: STRING },
+    {},
+    validateUpdateSchedule,
+  ),
+  setScheduleEnabled: fields({
+    id: STRING,
+    enabled: BOOLEAN,
+    requestId: STRING,
+  }),
+  deleteSchedule: fields({ id: STRING, requestId: STRING }),
+  setSchedulesPaused: fields({ paused: BOOLEAN, requestId: STRING }),
+  getScheduleHistory: fields({ id: STRING, requestId: STRING }),
   listComments: fields({ target: OBJECT }, { requestId: STRING }, (msg) =>
     validateCommentTarget(msg.target),
   ),

@@ -50,6 +50,8 @@ import {
  *   /pull-requests       → Pull Requests section index (a real surface)
  *   /pull-requests/:projectId/:provider/:repositoryKey/:number → one PR
  *   /knowledge           → the Knowledge Base folder (files)
+ *   /schedules           → every Schedule, Active or Done (a real page)
+ *   /schedules/:id       → one Schedule's detail
  *   /knowledge/files?path=…      → one KB file
  *   /knowledge/changes?path=…    → uncommitted edits, or a commit range (from/to)
  *   /usage               → provider account usage/rate-limit surface (Claude today)
@@ -88,6 +90,12 @@ export type Route =
    * they sit above Projects (`docs/initiatives.md`). The index is a real page.
    */
   | { name: "initiatives"; id?: string }
+  /**
+   * The Schedules section (`docs/schedules.md`, Web). The index is the
+   * section's own path, so it is a section index like Pull Requests: the real
+   * page in the desktop main pane, the section browser on a phone.
+   */
+  | { name: "schedules"; id?: string }
   /**
    * The Pull Requests section. Addressing ONE pull request takes the same four
    * components the server joins on: project, provider, repository (`owner/repo`)
@@ -158,6 +166,12 @@ export const INITIATIVES_PATH = "/initiatives";
 
 export function initiativePath(id: string): string {
   return `${INITIATIVES_PATH}/${encodeURIComponent(id)}`;
+}
+
+export const SCHEDULES_PATH = "/schedules";
+
+export function schedulePath(id: string): string {
+  return `${SCHEDULES_PATH}/${encodeURIComponent(id)}`;
 }
 
 const PULL_REQUESTS_PATH = "/pull-requests";
@@ -306,6 +320,11 @@ export function parseRoute(pathAndSearch: string): Route {
       name: "initiatives",
       id: decodeURIComponent(initiativeDetail[1]),
     };
+  if (pathname === SCHEDULES_PATH || pathname === `${SCHEDULES_PATH}/`)
+    return { name: "schedules" };
+  const scheduleDetail = pathname.match(/^\/schedules\/([^/]+)\/?$/);
+  if (scheduleDetail?.[1])
+    return { name: "schedules", id: decodeURIComponent(scheduleDetail[1]) };
   if (pathname === PULL_REQUESTS_PATH || pathname === `${PULL_REQUESTS_PATH}/`)
     return { name: "pullRequests" };
   const pullRequestDetail = pathname.match(
@@ -437,6 +456,7 @@ export function isSectionIndexRoute(route: Route): boolean {
       return true;
     case "tasks":
     case "projects":
+    case "schedules":
       return !route.id;
     case "pullRequests":
       return route.number === undefined;
@@ -464,6 +484,8 @@ function routeKey(route: Route): string {
     return route.id ? `projects:${route.id}` : "projects";
   if (route.name === "initiatives")
     return route.id ? `initiatives:${route.id}` : "initiatives";
+  if (route.name === "schedules")
+    return route.id ? `schedules:${route.id}` : "schedules";
   if (route.name === "pullRequests")
     return route.number === undefined
       ? "pullRequests"
@@ -556,6 +578,7 @@ function routeMatchesServer(
     route.name === "tasks" ||
     route.name === "projects" ||
     route.name === "initiatives" ||
+    route.name === "schedules" ||
     route.name === "pullRequests" ||
     route.name === "worktrees" ||
     route.name === "knowledge" ||
@@ -678,6 +701,7 @@ export function useSessionRouting({
       route.name === "tasks" ||
       route.name === "projects" ||
       route.name === "initiatives" ||
+      route.name === "schedules" ||
       route.name === "pullRequests" ||
       route.name === "worktrees" ||
       route.name === "knowledge" ||
@@ -739,6 +763,7 @@ export function useSessionRouting({
       route.name === "tasks" ||
       route.name === "projects" ||
       route.name === "initiatives" ||
+      route.name === "schedules" ||
       route.name === "pullRequests" ||
       route.name === "worktrees" ||
       route.name === "knowledge" ||

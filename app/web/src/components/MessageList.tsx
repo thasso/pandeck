@@ -93,6 +93,7 @@ import { serverHttpOrigin, withToken } from "../lib/serverOrigin.ts";
 import { AttachmentThumbnail } from "./common/AttachmentThumbnail.tsx";
 import { attachmentPreviewSrc } from "../lib/attachmentPreviews.ts";
 import { bundleFromOffsets, describeAnchor } from "../lib/describeAnchor.ts";
+import { schedulePath } from "../hooks/useSessionRouting.ts";
 import {
   useSelectionAnchor,
   type CapturedSelection,
@@ -569,6 +570,7 @@ const UserMessage = memo(function UserMessage({
   onOpenPaObject,
   onOpenTask,
   onOpenBackgroundWork,
+  onOpenSchedule,
   onForkMessage,
   onCommentMessage,
   onResendPrompt,
@@ -585,6 +587,7 @@ const UserMessage = memo(function UserMessage({
   onOpenPaObject?: ((link: MarkdownPaObjectReference) => void) | undefined;
   onOpenTask?: ((taskId: string) => void) | undefined;
   onOpenBackgroundWork?: ((taskId: string) => void) | undefined;
+  onOpenSchedule?: ((scheduleId: string) => void) | undefined;
   onForkMessage?: MessageActionsProps["onForkMessage"];
   onCommentMessage?: MessageActionsProps["onCommentMessage"];
   onResendPrompt?: MessageActionsProps["onResendPrompt"];
@@ -594,6 +597,8 @@ const UserMessage = memo(function UserMessage({
   const origin = message.promptOrigin;
   const isHumanPrompt = !origin || origin.kind === "human";
   const originLabel = promptOriginLabel(origin);
+  const scheduleId =
+    origin?.kind === "schedule" ? origin.scheduleId : undefined;
   const peerPromptBlock = message.blocks.find((b) => b.kind === "peerPrompt");
   const backgroundWorkPresentation =
     origin?.kind === "system" && origin.presentation?.kind === "background-work"
@@ -698,7 +703,22 @@ const UserMessage = memo(function UserMessage({
         : "No message text");
     return (
       <div className="group/message min-w-0">
-        <ChatActivityRow icon={Bot} title={originLabel} preview={preview}>
+        <ChatActivityRow
+          icon={Bot}
+          title={originLabel}
+          preview={preview}
+          // A scheduled prompt's label links to its Schedule (AC13): the href
+          // comes from the origin alone, so it is there whether the Schedule
+          // is held, deleted or not loaded yet.
+          {...(scheduleId
+            ? {
+                href: schedulePath(scheduleId),
+                ...(onOpenSchedule
+                  ? { onOpenSource: () => onOpenSchedule(scheduleId) }
+                  : {}),
+              }
+            : {})}
+        >
           <p className="mb-2 break-words text-sm text-muted-foreground">
             {originLabel}
           </p>
@@ -818,8 +838,8 @@ function promptOriginLabel(origin: DisplayMessage["promptOrigin"]): string {
     return origin.agentId === "post-reload-continuation"
       ? "Agent continuation"
       : "Agent prompt";
-  // Plain: the Schedule link and ⏰ label are the Schedules page's (P2).
-  if (origin.kind === "schedule") return "Scheduled prompt";
+  // The ⏰ label; the prompt row's title links it to the Schedule (AC13).
+  if (origin.kind === "schedule") return "⏰ Scheduled prompt";
   // Delivered through the durable handoff queue since a Stop can hold it.
   if (origin.source === "post-reload-continuation") return "Agent continuation";
   return origin.source ? `System prompt · ${origin.source}` : "System prompt";
@@ -880,6 +900,8 @@ interface Props {
   onOpenChangedFile?: (path: string) => void;
   onOpenTask?: (taskId: string) => void;
   onOpenBackgroundWork?: (taskId: string) => void;
+  /** Opens a Schedule's detail from a scheduled prompt's label (AC13). */
+  onOpenSchedule?: (scheduleId: string) => void;
   onOpenWorktree?: (worktreeId: string) => void;
   /** Re-run a first send whose worktree provisioning failed (live card only). */
   onRetryWorktreeProvision?: (() => void) | undefined;
@@ -1009,6 +1031,7 @@ interface MessageRowProps {
   onOpenPaObject?: ((link: MarkdownPaObjectReference) => void) | undefined;
   onOpenTask?: ((taskId: string) => void) | undefined;
   onOpenBackgroundWork?: ((taskId: string) => void) | undefined;
+  onOpenSchedule?: ((scheduleId: string) => void) | undefined;
   onOpenWorktree?: ((worktreeId: string) => void) | undefined;
   /** Re-run a first send whose worktree provisioning failed (live card only). */
   onRetryWorktreeProvision?: (() => void) | undefined;
@@ -1108,6 +1131,7 @@ const MessageRow = memo(function MessageRow({
   onOpenPaObject,
   onOpenTask,
   onOpenBackgroundWork,
+  onOpenSchedule,
   onOpenWorktree,
   onRetryWorktreeProvision,
   onApplyTaskStatusSuggestion,
@@ -1179,6 +1203,7 @@ const MessageRow = memo(function MessageRow({
           onOpenPaObject={onOpenPaObject}
           onOpenTask={onOpenTask}
           onOpenBackgroundWork={onOpenBackgroundWork}
+          onOpenSchedule={onOpenSchedule}
           onForkMessage={onForkMessage}
           onCommentMessage={onCommentMessage}
           onResendPrompt={onResendPrompt}
@@ -1293,6 +1318,7 @@ export function MessageList({
   onOpenPaObject,
   onOpenTask,
   onOpenBackgroundWork,
+  onOpenSchedule,
   onOpenWorktree,
   onRetryWorktreeProvision,
   onApplyTaskStatusSuggestion,
@@ -2011,6 +2037,7 @@ export function MessageList({
                   onOpenPaObject={onOpenPaObject}
                   onOpenTask={onOpenTask}
                   onOpenBackgroundWork={onOpenBackgroundWork}
+                  onOpenSchedule={onOpenSchedule}
                   onOpenWorktree={onOpenWorktree}
                   onRetryWorktreeProvision={onRetryWorktreeProvision}
                   onApplyTaskStatusSuggestion={onApplyTaskStatusSuggestion}

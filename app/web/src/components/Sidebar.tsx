@@ -49,7 +49,10 @@ import {
 } from "./worktree/WorktreeFileTree.tsx";
 import { navigableSettingsGroups } from "./settingsSections.tsx";
 import { PRIMARY_NAV_SLOTS } from "./primaryNavSections.tsx";
-import { UnreadIcon } from "./UnreadDot.tsx";
+import { CountIcon, UnreadIcon } from "./UnreadDot.tsx";
+import { SchedulesBrowser } from "./schedules/SchedulesBrowser.tsx";
+import { needsAttentionCount } from "../lib/schedules.ts";
+import type { ScheduleSummary } from "@assistant/shared/schedules";
 import {
   NAV_CARD_INSET,
   PrimaryNav,
@@ -268,6 +271,21 @@ interface Props {
   knowledgeRefreshToken?: number;
   /** Open one Knowledge Base file in the main pane. */
   onOpenKnowledgeFile: (path: string) => void;
+  /** The live Schedules (`docs/schedules.md`, Web): browser rows and nav count. */
+  schedules: readonly ScheduleSummary[];
+  /** The `schedules` topic has answered, so an empty list is really empty. */
+  schedulesAnswered: boolean;
+  scheduleListError: string | null;
+  onRetrySchedules: () => void;
+  /** The Schedule open in the detail route, for highlighting. */
+  selectedScheduleId?: string | null;
+  onOpenSchedule: (id: string) => void;
+  /**
+   * On a phone, the Schedules browser screen IS the page (`docs/schedules.md`,
+   * Web): rendered in place of the minimal browser, with its own header and
+   * scroll. Undefined on a wide layout, where the browser stays minimal.
+   */
+  schedulesScreen?: ReactNode;
   /** Fetch the worktree list (called when a section that joins worktrees is shown). */
   onLoadWorktrees: () => void;
   /** Open a worktree's detail route. */
@@ -532,6 +550,13 @@ function SidebarImpl({
   knowledgeFilePath,
   knowledgeRefreshToken = 0,
   onOpenKnowledgeFile,
+  schedules,
+  schedulesAnswered,
+  scheduleListError,
+  onRetrySchedules,
+  selectedScheduleId,
+  onOpenSchedule,
+  schedulesScreen,
   onLoadWorktrees,
   onOpenWorktree,
   onStartSessionInWorktree,
@@ -854,6 +879,7 @@ function SidebarImpl({
       }),
     [onUpdatePrefs],
   );
+  const scheduleAttention = needsAttentionCount(schedules);
   const navSlots: Array<PrimaryNavSection<NavSlot>> = prefs.navSlots
     .filter((id) => !firstRunNav || id === "new-session" || id === "settings")
     .filter((id) => id !== "knowledge" || knowledgeEnabled)
@@ -869,6 +895,18 @@ function SidebarImpl({
                 unread={assistantUnread}
               />
             ),
+          }
+        : {}),
+      // The one counted slot (U1): an overlay, so the slot keeps its width.
+      ...(id === "schedules" && scheduleAttention > 0
+        ? {
+            icon: (
+              <CountIcon
+                icon={PRIMARY_NAV_SLOTS[id].icon}
+                count={scheduleAttention}
+              />
+            ),
+            accessibleLabel: `Schedules, ${scheduleAttention} need attention`,
           }
         : {}),
     }));
@@ -923,156 +961,175 @@ function SidebarImpl({
           />
         </div>
       ) : null}
-      <div
-        ref={browserScrollRef}
-        // The shared inset every browser reads its first row in — except the
-        // attention list, Settings groups and the Tasks and Projects trees,
-        // which run edge to
-        // edge: their
-        // rows are divided by hairlines, which a side inset would leave
-        // hanging in empty space. `isolate` keeps the rows' z-indexes inside this
-        // box, which holds them under its scrollbar in WebKit: there a row or
-        // sticky band stacked outside the box can paint over an overlay one.
-        className={`isolate min-h-0 flex-1 overflow-y-auto pb-2 ${
-          section === "sessions" || section === "settings"
-            ? ""
-            : section === "pull-requests" ||
-                section === "projects" ||
-                (section === "tasks" &&
-                  (prefs.backlogView === "focus" ||
-                    (prefs.backlogView === "backlog" &&
-                      prefs.backlogViewMode === "project")))
-              ? // Flush under its bar: a group band meets the bar's hairline
-                // the way a row meets the one above it. A top padding would
-                // also hold a sticky band that far below the edge, leaving a
-                // strip for rows to scroll through above it.
-                ""
-              : section === "tasks"
-                ? "pt-1"
-                : "px-1 pt-2 sm:px-2"
-        }`}
-        style={mobile ? { paddingBottom: NAV_CARD_INSET } : undefined}
-      >
-        {section === "settings" ? (
-          <SettingsSectionList
-            density={browserRowDensity(mobile)}
-            activeSection={activeSection}
-            onOpenSection={onOpenSection}
-          />
-        ) : section === "tasks" ? (
-          <BacklogList
-            state={state}
-            actions={actions}
-            prefs={prefs}
-            onUpdatePrefs={onUpdatePrefs}
-            selectedId={selectedTaskId ?? null}
-            onOpenTask={onOpenTask}
-            onOpenSession={onOpenSessionForTask}
-            onStartSessionForTask={onStartSessionForTask}
-            onNavigate={onNavigate}
-            hosting={worktreeHosting}
-            dirtyWorktrees={dirtyWorktrees}
-            workflowIndicators={workflowIndicators}
-            density={browserRowDensity(mobile)}
-            flush
-            externalToolbar
-          />
-        ) : section === "projects" ? (
-          <>
-            <ProjectTreePane
-              projects={shownProjects}
-              view={projectListView}
-              worktreeFacts={projectWorktreeFacts}
-              selectedId={selectedProjectId}
+      {mobile && section === "schedules" && schedulesScreen ? (
+        <div
+          className="flex min-h-0 flex-1 flex-col"
+          style={{ paddingBottom: NAV_CARD_INSET }}
+        >
+          {schedulesScreen}
+        </div>
+      ) : (
+        <div
+          ref={browserScrollRef}
+          // The shared inset every browser reads its first row in — except the
+          // attention list, Settings groups and the Tasks and Projects trees,
+          // which run edge to
+          // edge: their
+          // rows are divided by hairlines, which a side inset would leave
+          // hanging in empty space. `isolate` keeps the rows' z-indexes inside this
+          // box, which holds them under its scrollbar in WebKit: there a row or
+          // sticky band stacked outside the box can paint over an overlay one.
+          className={`isolate min-h-0 flex-1 overflow-y-auto pb-2 ${
+            section === "sessions" || section === "settings"
+              ? ""
+              : section === "pull-requests" ||
+                  section === "projects" ||
+                  (section === "tasks" &&
+                    (prefs.backlogView === "focus" ||
+                      (prefs.backlogView === "backlog" &&
+                        prefs.backlogViewMode === "project")))
+                ? // Flush under its bar: a group band meets the bar's hairline
+                  // the way a row meets the one above it. A top padding would
+                  // also hold a sticky band that far below the edge, leaving a
+                  // strip for rows to scroll through above it.
+                  ""
+                : section === "tasks"
+                  ? "pt-1"
+                  : "px-1 pt-2 sm:px-2"
+          }`}
+          style={mobile ? { paddingBottom: NAV_CARD_INSET } : undefined}
+        >
+          {section === "settings" ? (
+            <SettingsSectionList
               density={browserRowDensity(mobile)}
-              loading={!projectsLoaded}
-              reorderState={projectMutations["registry:reorder"]}
-              relationsLoading={worktrees === null}
-              sessions={projectSessionCache.current.value}
-              currentSessionId={currentId}
-              worktrees={worktrees}
-              worktreeStatuses={projectStatusCache.current.value}
-              selectedWorktreeId={selectedWorktreeId}
-              selectedFile={selectedWorktreeFile}
-              onReorder={onReorderProjects}
-              onOpenProject={onOpenProject}
-              onOpenSession={onSelect}
-              onOpenWorktree={onOpenWorktree}
-              onStartSession={onStartSessionForProject}
-              onStartSessionInWorktree={onStartSessionInWorktree}
-              onRemoveWorktree={onRemoveWorktree}
-              onVisibleWorktreeIdsChange={onVisibleProjectWorktreeIds}
-              onNavigate={onNavigate}
-              flush
+              activeSection={activeSection}
+              onOpenSection={onOpenSection}
             />
-          </>
-        ) : section === "pull-requests" ? (
-          <PullRequestBrowser
-            inventory={pullRequestInventory}
-            onReload={onReloadPullRequests}
-            projects={projects}
-            selected={selectedPullRequest}
-            onOpen={onOpenPullRequest}
-            // The host's call, as everywhere else: a phone screen gets
-            // thumb-sized rows, the rail keeps its tight ones.
-            density={browserRowDensity(mobile)}
-            idle={idleWorktrees}
-            listView={pullRequestListView}
-          />
-        ) : section === "knowledge" && !knowledgeEnabled ? (
-          <p className="px-2.5 py-2 text-sm text-muted-foreground">
-            The Knowledge Base is turned off in Settings.
-          </p>
-        ) : section === "knowledge" ? (
-          <KnowledgeBrowser
-            active={knowledgeView ?? null}
-            filePath={knowledgeFilePath ?? undefined}
-            refreshToken={knowledgeRefreshToken}
-            uncommitted={knowledgeUncommitted}
-            onOpen={onOpenKnowledge}
-            onOpenFile={onOpenKnowledgeFile}
-          />
-        ) : (
-          <SessionInbox
-            barStore={inboxBarStore}
-            filters={attentionFilters}
-            filterControl={attentionFilterControl}
-            onClearFilters={clearAttentionFilters}
-            sessions={sessions}
-            archivedSessionCount={archivedSessionCount}
-            archivedSessionsLoaded={archivedSessionsLoaded}
-            currentId={currentId}
-            readCurrentId={readCurrentId}
-            projects={projects}
-            worktrees={worktrees}
-            tasks={state.taskList?.items ?? []}
-            workflowRuns={workflowRuns}
-            workflowCards={workflowCards}
-            worktreeStatuses={worktreeStatuses}
-            animateListChanges={prefs.animateListChanges}
-            // The host's call, like the Backlog toolbar's: a phone screen gets
-            // thumb-sized rows, the rail keeps its tight ones.
-            density={browserRowDensity(mobile)}
-            onSelect={onSelect}
-            onSettle={onSettleSession}
-            onDismissFailure={onDismissSessionFailure}
-            onWithdrawPeerRequest={onWithdrawPeerRequest}
-            onArchive={onArchive}
-            onDeleteSession={onDeleteSession}
-            onRenameSession={onRenameSession}
-            onLoadArchivedSessions={onLoadArchivedSessions}
-            onOpenBackgroundTasks={onOpenBackgroundTasks}
-            onOpenProject={onOpenProject}
-            onOpenTask={onOpenTask}
-            onOpenWorkflowRun={onOpenWorkflowRun}
-            onSettleWorkflowRun={onSettleWorkflowRun}
-            initiatives={initiatives}
-            onOpenInitiative={openInitiative}
-            onSetInboxPositions={onSetInboxPositions}
-            onOpenWorktree={onOpenWorktree}
-          />
-        )}
-      </div>
+          ) : section === "tasks" ? (
+            <BacklogList
+              state={state}
+              actions={actions}
+              prefs={prefs}
+              onUpdatePrefs={onUpdatePrefs}
+              selectedId={selectedTaskId ?? null}
+              onOpenTask={onOpenTask}
+              onOpenSession={onOpenSessionForTask}
+              onStartSessionForTask={onStartSessionForTask}
+              onNavigate={onNavigate}
+              hosting={worktreeHosting}
+              dirtyWorktrees={dirtyWorktrees}
+              workflowIndicators={workflowIndicators}
+              density={browserRowDensity(mobile)}
+              flush
+              externalToolbar
+            />
+          ) : section === "projects" ? (
+            <>
+              <ProjectTreePane
+                projects={shownProjects}
+                view={projectListView}
+                worktreeFacts={projectWorktreeFacts}
+                selectedId={selectedProjectId}
+                density={browserRowDensity(mobile)}
+                loading={!projectsLoaded}
+                reorderState={projectMutations["registry:reorder"]}
+                relationsLoading={worktrees === null}
+                sessions={projectSessionCache.current.value}
+                currentSessionId={currentId}
+                worktrees={worktrees}
+                worktreeStatuses={projectStatusCache.current.value}
+                selectedWorktreeId={selectedWorktreeId}
+                selectedFile={selectedWorktreeFile}
+                onReorder={onReorderProjects}
+                onOpenProject={onOpenProject}
+                onOpenSession={onSelect}
+                onOpenWorktree={onOpenWorktree}
+                onStartSession={onStartSessionForProject}
+                onStartSessionInWorktree={onStartSessionInWorktree}
+                onRemoveWorktree={onRemoveWorktree}
+                onVisibleWorktreeIdsChange={onVisibleProjectWorktreeIds}
+                onNavigate={onNavigate}
+                flush
+              />
+            </>
+          ) : section === "pull-requests" ? (
+            <PullRequestBrowser
+              inventory={pullRequestInventory}
+              onReload={onReloadPullRequests}
+              projects={projects}
+              selected={selectedPullRequest}
+              onOpen={onOpenPullRequest}
+              // The host's call, as everywhere else: a phone screen gets
+              // thumb-sized rows, the rail keeps its tight ones.
+              density={browserRowDensity(mobile)}
+              idle={idleWorktrees}
+              listView={pullRequestListView}
+            />
+          ) : section === "schedules" ? (
+            <SchedulesBrowser
+              schedules={schedules}
+              answered={schedulesAnswered}
+              listError={scheduleListError}
+              onRetry={onRetrySchedules}
+              selectedId={selectedScheduleId ?? null}
+              density={browserRowDensity(mobile)}
+              onOpen={onOpenSchedule}
+            />
+          ) : section === "knowledge" && !knowledgeEnabled ? (
+            <p className="px-2.5 py-2 text-sm text-muted-foreground">
+              The Knowledge Base is turned off in Settings.
+            </p>
+          ) : section === "knowledge" ? (
+            <KnowledgeBrowser
+              active={knowledgeView ?? null}
+              filePath={knowledgeFilePath ?? undefined}
+              refreshToken={knowledgeRefreshToken}
+              uncommitted={knowledgeUncommitted}
+              onOpen={onOpenKnowledge}
+              onOpenFile={onOpenKnowledgeFile}
+            />
+          ) : (
+            <SessionInbox
+              barStore={inboxBarStore}
+              filters={attentionFilters}
+              filterControl={attentionFilterControl}
+              onClearFilters={clearAttentionFilters}
+              sessions={sessions}
+              archivedSessionCount={archivedSessionCount}
+              archivedSessionsLoaded={archivedSessionsLoaded}
+              currentId={currentId}
+              readCurrentId={readCurrentId}
+              projects={projects}
+              worktrees={worktrees}
+              tasks={state.taskList?.items ?? []}
+              workflowRuns={workflowRuns}
+              workflowCards={workflowCards}
+              worktreeStatuses={worktreeStatuses}
+              animateListChanges={prefs.animateListChanges}
+              // The host's call, like the Backlog toolbar's: a phone screen gets
+              // thumb-sized rows, the rail keeps its tight ones.
+              density={browserRowDensity(mobile)}
+              onSelect={onSelect}
+              onSettle={onSettleSession}
+              onDismissFailure={onDismissSessionFailure}
+              onWithdrawPeerRequest={onWithdrawPeerRequest}
+              onArchive={onArchive}
+              onDeleteSession={onDeleteSession}
+              onRenameSession={onRenameSession}
+              onLoadArchivedSessions={onLoadArchivedSessions}
+              onOpenBackgroundTasks={onOpenBackgroundTasks}
+              onOpenProject={onOpenProject}
+              onOpenTask={onOpenTask}
+              onOpenWorkflowRun={onOpenWorkflowRun}
+              onSettleWorkflowRun={onSettleWorkflowRun}
+              initiatives={initiatives}
+              onOpenInitiative={openInitiative}
+              onSetInboxPositions={onSetInboxPositions}
+              onOpenWorktree={onOpenWorktree}
+            />
+          )}
+        </div>
+      )}
 
       <PrimaryNav
         sections={navSlots}

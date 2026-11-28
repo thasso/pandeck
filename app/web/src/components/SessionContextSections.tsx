@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Markdown } from "./Markdown.tsx";
 import {
   Activity,
@@ -105,6 +105,11 @@ interface SessionContextSectionsProps {
   agent?: SessionAgentSummary | undefined;
   /** Open an agent definition on the Agents settings page. */
   onOpenAgent?: ((name: string) => void) | undefined;
+  /**
+   * The session's Schedules section (`SessionSchedulesSection`), built by the
+   * host only when the session has Schedules.
+   */
+  schedulesSection?: ReactNode;
   /** The engine that runs the session, for its compaction-window capability. */
   harness?: Harness | undefined;
   compactionWindow?: SessionCompactionWindow | undefined;
@@ -154,6 +159,7 @@ export function SessionContextSections({
   toolExposure,
   agent,
   onOpenAgent,
+  schedulesSection,
   harness,
   compactionWindow,
   compactionWindowEdit,
@@ -192,6 +198,8 @@ export function SessionContextSections({
           onOpenAgent={onOpenAgent}
         />
       )}
+
+      {schedulesSection}
 
       {harness && compactionWindow && (
         <CompactionWindowSection

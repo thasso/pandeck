@@ -48,3 +48,25 @@ export function UnreadIcon({
     </span>
   );
 }
+
+/**
+ * An icon-sized count overlay, the numeric sibling of `UnreadIcon`: absolute,
+ * so the slot it sits in keeps its width whatever the number. Nothing renders
+ * at 0. The host names the count in its own accessible label.
+ */
+export function CountIcon({ icon, count }: { icon: ReactNode; count: number }) {
+  return (
+    <span className="relative inline-flex shrink-0">
+      {icon}
+      {count > 0 ? (
+        <span
+          aria-hidden="true"
+          data-nav-count=""
+          className="absolute -top-1.5 -right-2 z-20 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-xs font-medium text-primary-foreground tabular-nums"
+        >
+          {count}
+        </span>
+      ) : null}
+    </span>
+  );
+}

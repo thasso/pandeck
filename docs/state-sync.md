@@ -51,7 +51,8 @@ failure, and explicit recovery reads.
 - Event payloads are summaries only (`taskSummaryOf` remains the one narrowing).
   The mutator's direct reply (`taskSaved`) keeps the full item — that is how
   detail views adopt the authoritative body and how a create settles its temp id
-  — and drops its full-list rider.
+  — and drops its full-list rider. Schedules' direct reply (`scheduleSaved`) is
+  one summary with the revision it is as of (`docs/schedules.md`).
 - Broadcast events carry NO `clientRequestId`. A flush coalesces writes from
   several actors, so an event cannot honestly carry one request's id.
   Correlation rides the existing per-mutation channel: `mutationSettled` and
@@ -248,9 +249,11 @@ before calling a terminal hook, so completion, stamped error, timeout and
 unknown retire it once. The core owns each record's settled bit; a descriptor
 can wait for fresh authoritative evidence after settle without resetting the
 deadline. Its first-settle hook runs once. Descriptors keep domain deadlines,
-control keys, recovery and failure policy. Task, Project, workflow delivery,
-compaction and PR-card correlation live in those records, not separate control
-maps. Replica item reads retain their own request table and deadlines.
+control keys, recovery and failure policy. Task, Project, Schedule, workflow
+delivery, compaction and PR-card correlation live in those records, not separate
+control maps; a Schedules record resolves its refusal to a control key
+(`docs/messaging.md`). Replica item reads retain their own request table and
+deadlines.
 
 For Tasks and Projects, loss of a connected socket is terminal with **outcome
 unknown**. Failed connection attempts do not retire queued, unsent writes: their
@@ -358,7 +361,11 @@ Initiatives, Sessions and Schedules. The module has no React and two halves, and
   replaces the rows even at the held revision. A lost baseline forgets the named
   revisions and keeps every row. A `settled` input, a direct mutation reply
   pairing a browser-local id with the server's, goes to the topic's `settle`
-  hook alone; revisions belong to events, so it never touches the sidecar.
+  hook alone; revisions belong to events, so it leaves the sidecar alone unless
+  the reply names the revision it was read at. Schedules' `scheduleSaved` does,
+  and its `settle` takes the row and that revision at or above the one held and
+  never below, so an event that landed first is never rolled back and a
+  value-equal reply keeps the row by identity.
 - A topic's DESCRIPTOR lends the replica its existing `UIState` fields through
   `read`/`write` lenses, so no component changes. It adapts the topic's own list
   message into the snapshot input (no wire change), and carries the topic's
@@ -629,7 +636,11 @@ per-surface sub-tasks — no page invents its own delta format.
   publishes as a `delete` at its delete's revision until the maintenance sweep
   purges it. Occurrence history is a request/response read, never on the topic.
   The client keeps no shell cache, so its digest baseline exists only after an
-  answer this hook instance applied.
+  answer this hook instance applied, and `stateEventRevisions.schedules` being
+  defined is what the page reads as "answered". The user's writes are tracked
+  mutations (`mutationLifecycle`) whose timeout or disconnect recovers the
+  touched rows with `getStateItems`; Pause all recovers through
+  `requestSettings`.
 
 ## Enforcement
 

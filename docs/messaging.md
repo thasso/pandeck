@@ -228,7 +228,7 @@ still announced. The same holds for the object notes: each exists for a failure,
 so a warning naming the open Task is still announced.
 
 What is claimed, then, is the viewed session, a staged send's situation, and the
-ids whose own surface is open AND VISIBLE — the projects and Tasks
+ids whose own surface is open AND VISIBLE — the projects, Tasks and Schedules
 (`FailureHomes.openObjects`). One id per type, because the app opens one of each
 at a time. A Knowledge Base file draws no note of its own, so a failure naming
 one is announced. The claim is by id rather than by type because the alternative
@@ -238,14 +238,28 @@ panel tab, or behind a collapsed panel, would suppress the announcement and then
 show the user nothing at all. A Task write the server never answers ends at its
 deadline, and that outcome is judged against the same claims as a refusal.
 
+A write that knows which control asked can be claimed by that CONTROL. A
+Schedules refusal is stamped with its request id, and the mutation record
+resolves it to a control key (`<id>:enabled`, `<id>:delete`, `<id>:update`,
+`schedules:pause`) before the record finishes. The key decides ahead of every
+claim below it, the staged send's included: the refusal is kept only while a
+mounted surface lists that key in `FailureHomes.controls`, and announced
+otherwise. `FailureHomes.controls` is the union of each surface's own claim
+(page, detail, session inspector), so one surface leaving never drops a key
+another still shows. Without this, a pause failure landing during a staged first
+send would be read as that send's untargeted blocker and narrated by a composer
+that knows nothing about it. An error that carries no control key still falls to
+the staged send as before.
+
 A collection's load failure needs no claim: it is a condition, kept on the
 collection and rendered by the pane whenever the user arrives, on screen or not,
-so it is never also said in passing. Four collections keep one — projects,
-Tasks, worktrees and Initiatives. An Initiative list failure is that condition
-and nothing more: it never reaches the viewed chat's outcome, whose live turn it
-has nothing to do with. Where the pane's note offers a RETRY, that failure also
-reopens the collection's once-per-episode read gate (Tasks, worktrees), or the
-retry is a no-op behind a gate that already believes the list was read.
+so it is never also said in passing. Five collections keep one — projects,
+Tasks, worktrees, Initiatives and Schedules. An Initiative list failure is that
+condition and nothing more: it never reaches the viewed chat's outcome, whose
+live turn it has nothing to do with. Where the pane's note offers a RETRY, that
+failure also reopens the collection's once-per-episode read gate (Tasks,
+worktrees), or the retry is a no-op behind a gate that already believes the list
+was read.
 
 A claim is stated from a committed render and read from the socket, so it lags
 by one effect flush: a message landing in that gap is judged against the view

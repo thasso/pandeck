@@ -20,7 +20,7 @@ import { announceMessage } from "./messageAnnounce.ts";
  */
 
 const nowhere = { viewedSessionId: null, revealRequestId: null };
-const NO_OBJECTS = { project: [], task: [] };
+const NO_OBJECTS = { project: [], task: [], schedule: [] };
 
 /** Claim only what a case is about; everything else is off screen. */
 function claim(homes: Partial<FailureHomes>): void {
@@ -308,6 +308,73 @@ it("keeps a staged send's claim to its own failure", () => {
       target: { type: "session", id: "pi-minted" },
     }),
   ).toBe(false);
+});
+
+// `docs/schedules.md`: a stamped Schedules refusal carries the control key of
+// the write it answers, and that key decides — ahead of the staged send's
+// claim on untargeted errors, which would otherwise swallow it.
+it("A1: keeps a refusal whose control is still rendered", () => {
+  claim({ controls: ["schedules:pause"] });
+  expect(
+    arrivalHasHome({
+      severity: "error",
+      message: "Failed to save Schedules settings: disk full",
+      controlKey: "schedules:pause",
+    }),
+  ).toBe(true);
+});
+
+it("A2: announces a refusal whose control is gone, even during a staged send", () => {
+  claim({ stagedSend: { sessionId: null }, controls: [] });
+  expect(
+    arrivalHasHome({
+      severity: "error",
+      message: "Failed to save Schedules settings: disk full",
+      controlKey: "schedules:pause",
+    }),
+  ).toBe(false);
+  // A targeted Schedule refusal is no different once its page is gone.
+  claim({
+    stagedSend: { sessionId: null },
+    openObjects: { ...NO_OBJECTS, schedule: [] },
+  });
+  expect(
+    arrivalHasHome({
+      severity: "error",
+      message: "Failed to delete Schedule: database is locked",
+      target: { type: "schedule", id: "a" },
+      controlKey: "a:delete",
+    }),
+  ).toBe(false);
+});
+
+it("A3: leaves an uncorrelated untargeted error to the staged send", () => {
+  claim({ stagedSend: { sessionId: null }, controls: ["schedules:pause"] });
+  expect(
+    arrivalHasHome({
+      severity: "error",
+      message: "Model openai/gpt-5 is not available.",
+    }),
+  ).toBe(true);
+});
+
+it("keys an open Schedule's object failure by id", () => {
+  const failure = {
+    severity: "error" as const,
+    message: "Failed to update Schedule: Session not found",
+    target: { type: "schedule" as const, id: "a" },
+  };
+  claim({ openObjects: { ...NO_OBJECTS, schedule: ["a"] } });
+  expect(arrivalHasHome(failure)).toBe(true);
+  expect(
+    objectFailureFrom({
+      type: "error",
+      message: failure.message,
+      target: failure.target,
+    }),
+  ).toEqual({ type: "schedule", id: "a", message: failure.message });
+  claim({ openObjects: { ...NO_OBJECTS, schedule: ["b"] } });
+  expect(arrivalHasHome(failure)).toBe(false);
 });
 
 it("claims nothing until a surface says so", () => {

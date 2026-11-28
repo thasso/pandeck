@@ -424,6 +424,7 @@ describe("a failure about a project or Task", () => {
     expect(latestState.objectFailures).toEqual({
       project: { p1: "Failed to save project: EACCES" },
       task: { t1: "Failed to archive task: locked" },
+      schedule: {},
     });
 
     // A member that is only a ROW in a list has no failure surface, so it is

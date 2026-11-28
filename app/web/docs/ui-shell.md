@@ -111,8 +111,11 @@ therefore lists no Actions and no View section on any layout — it holds the
 session's relations and sections. Neither the composer nor the dock row offers
 Comment any more, and the session header has no separate worktree button: in a
 worktree its title block (title, branch, uncommitted counts) is the link to the
-worktree's changes. Documents and worktree changes still follow the split above
-until they move to the same model.
+worktree's changes. The one other thing beside the title is the **next scheduled
+prompt** chip (Schedules, below): a sibling of the title, never nested in the
+title block's link, shown only while an enabled repeating Schedule targets the
+session. Documents and worktree changes still follow the split above until they
+move to the same model.
 
 Until every bottom-edge surface has migrated into shell furniture, the shell
 keeps `--app-bottom-chrome-inset` equal to the resting bottom card plus the safe
@@ -185,12 +188,16 @@ The nav bar carries **no counts or badges**: uniform slot widths are what make
 the overflow fold exact. The Personal Assistant is the one unread-dot exception:
 its singleton is absent from session lists, so an absolute icon overlay signals
 unseen content without changing slot width. It also appears on the folded icon
-in the overflow menu. `docs/notifications.md` owns its read and Slack rules. The
-active section renders as an icon + label pill, every other slot is icon-only,
-and whatever does not fit at the bar's current width folds away. The bar
-measures itself, so a resizable desktop panel and a full-width mobile browser
-screen share one presentation; the active section is never folded away. Slot
-order is a browser-local user preference edited in Settings → Appearance.
+in the overflow menu. `docs/notifications.md` owns its read and Slack rules.
+Schedules is the one count exception: the number of Schedules whose last
+occurrence failed sits in an absolute badge on its icon (`CountIcon`), hidden at
+zero, so the slot keeps its width; the slot's accessible name carries the count,
+in the bar and in the overflow (`docs/schedules.md`). The active section renders
+as an icon + label pill, every other slot is icon-only, and whatever does not
+fit at the bar's current width folds away. The bar measures itself, so a
+resizable desktop panel and a full-width mobile browser screen share one
+presentation; the active section is never folded away. Slot order is a
+browser-local user preference edited in Settings → Appearance.
 
 Where the folded slots live differs by viewport, and only there. A wide layout
 puts them behind a trailing **More** popover. A phone has no More control at
@@ -952,6 +959,49 @@ next attempt and merely brought up to date). An answer that lands after its
 panel is gone neither navigates nor vanishes: it becomes the sanctioned toast
 naming the pull request, with the hand-off as its action.
 
+## Schedules
+
+The **Schedules** section (`docs/schedules.md` owns the contract) has, on a wide
+layout, a minimal browser: the active Schedules, each with its next due time and
+a warning marker when its last occurrence failed. On/off, delete, Pause all and
+the Done filter are on the page, not in the browser.
+
+`/schedules` is the section index route, as Pull Requests' is. On a wide layout
+it is the **Schedules page** beside that browser. On a phone the browser screen
+renders the full page in the minimal browser's place (`Sidebar`'s
+`schedulesScreen` slot, keeping the section's nav bar), and the main pane
+renders nothing behind it, so the page's controls are never only behind the
+inert main pane. Its rows wrap to compact lines below the `sm` breakpoint and
+the column header hides. The page is one table of rows (`ListRow`,
+`interaction="content"`) with the Active/Done filter and the Pause all switch in
+its header; the delete confirmation belongs to the page, not the row, so an
+optimistic removal cannot unmount the dialog holding its own error and retry.
+`/schedules/:id` is one Schedule's detail: the editable prompt, timing and
+target, the next three occurrences in the Schedule's fixed zone, and the history
+read. While its own delete is in flight the detail keeps showing the last
+summary rather than "not found"; success navigates to the index. Every refusal
+renders in place with Try again on the surface that owns its write, the one that
+sent it or reopened while it was pending; a surface claims only those keys, so a
+refusal whose control is gone is announced instead (`lib/messageArrival.ts`).
+Each surface reports its claim separately and the shell claims their union, so
+the session inspector beside the page or a detail never overwrites theirs. A
+frame that keeps its content mounted while hidden (the right panel shut, a
+phone's dock not expanded, a right-panel tab behind another, a phone's main pane
+under a screen, an overlay or the expanded dock's sheet) wraps it in `OnScreen`
+(`components/shell/onScreen.tsx`); a surface claiming failures reads
+`useOnScreen()` rather than trusting that it is mounted. A delete dialog is
+portaled above any cover, so its owner claims its key while it is open.
+
+A session's Schedules also show in two places outside the section. The session
+inspector has a **Schedules** section, present only while the session has any:
+each row's name links to the detail and its switch is the page's own on/off
+write. The session header carries a chip beside the title for the earliest
+enabled repeating Schedule: the next due time from `md` up, and on a phone the
+icon alone, the one header element that shrinks to an icon there; at every width
+its accessible label and tooltip name the instant with its zone and the
+Schedule. Both read the shell's Schedules state; neither adds to the session
+list items.
+
 ## Navigation Rules
 
 The left sidebar and main pane are decoupled: the selected section is UI state,
@@ -972,14 +1022,14 @@ left at the top edge, not a pixel offset — these lists re-sort under them.
 
 Routes identify objects, not sidebar state: one canonical route shape per object
 type (`/sessions/:id`, `/tasks/:id`, `/worktrees/:id`, …) plus section index
-routes such as `/knowledge`. `/initiatives/:id` is one Initiative and
-`/initiatives` its index, a real page rather than a browser screen; both belong
-to the Projects section, so Back from either goes to `/projects`. The member
-Task selected on an Initiative page is a fragment, `#task-<id>` (see below), so
-a selection survives a reload and back/forward pass through it. The singleton
-Personal Assistant has the dedicated `/assistant` route so its empty first-use
-state is not mistaken for the ordinary `/sessions/create` draft surface. No
-legacy aliases.
+routes such as `/knowledge` and `/schedules`. `/initiatives/:id` is one
+Initiative and `/initiatives` its index, a real page rather than a browser
+screen; both belong to the Projects section, so Back from either goes to
+`/projects`. The member Task selected on an Initiative page is a fragment,
+`#task-<id>` (see below), so a selection survives a reload and back/forward pass
+through it. The singleton Personal Assistant has the dedicated `/assistant`
+route so its empty first-use state is not mistaken for the ordinary
+`/sessions/create` draft surface. No legacy aliases.
 
 Document routes share one navigation shell around source-specific renderers
 (`docs/document-presentation.md`). `/files/<absolute path>` addresses a live
@@ -1233,11 +1283,11 @@ the wide header, so the first row of the page clears them and the window can
 still be moved.
 
 - A **browser screen** is a section index route (`/sessions`, `/tasks`,
-  `/projects`, `/pull-requests`, `/knowledge`, `/settings`): the left sidebar
-  fills the viewport — object browser above, and the nav bar at the bottom as
-  the resting header of the same bottom card every other screen has, its folded
-  slots one drag up. Nothing competes with it there, since the composer only
-  exists on session routes.
+  `/projects`, `/pull-requests`, `/knowledge`, `/schedules`, `/settings`): the
+  left sidebar fills the viewport — object browser above, and the nav bar at the
+  bottom as the resting header of the same bottom card every other screen has,
+  its folded slots one drag up. Nothing competes with it there, since the
+  composer only exists on session routes.
 - An **object screen** is any other route: the main pane fills the viewport and
   carries a **back** control. Its own header is not automatic: on a phone a
   surface earns one only if it says something the content does not. Identity

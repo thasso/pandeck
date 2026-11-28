@@ -61,6 +61,10 @@ import {
   type PromptAttachment,
 } from "@assistant/shared";
 import { TIMELINE_RANGE_MAX_LIMIT } from "@assistant/shared/runtime";
+import type {
+  ScheduleSummary,
+  ScheduleUserPatch,
+} from "@assistant/shared/schedules";
 import {
   drainRecipient,
   peerPromptAnchorFor,
@@ -204,6 +208,13 @@ import { publishSkillLibrary } from "./skills/skillLibrary.ts";
 import { publishAgentLibrary } from "./agents/agentLibraryList.ts";
 import { projectStore } from "./db/projectStore.ts";
 import { scheduleStore } from "./db/scheduleStore.ts";
+import {
+  deleteScheduleAsUser,
+  scheduleHistoryForUser,
+  setScheduleEnabledAsUser,
+  setSchedulesPausedAsUser,
+  updateScheduleAsUser,
+} from "./schedules/scheduleUserCommands.ts";
 import { findSlashCommand, slashCommands } from "./slashCommands.ts";
 import { retitleSession } from "./sessionRetitle.ts";
 import { cancelSessionRetitle } from "./sessionRetitlePending.ts";
@@ -1202,6 +1213,16 @@ export class Connection implements Viewer {
         return this.onDeleteTask(msg.id);
       case "getTask":
         return this.onGetTask(msg.id, msg.requestId);
+      case "updateSchedule":
+        return this.onUpdateSchedule(msg.id, msg.patch, msg.requestId);
+      case "setScheduleEnabled":
+        return this.onSetScheduleEnabled(msg.id, msg.enabled, msg.requestId);
+      case "deleteSchedule":
+        return this.onDeleteSchedule(msg.id);
+      case "setSchedulesPaused":
+        return this.onSetSchedulesPaused(msg.paused);
+      case "getScheduleHistory":
+        return this.onGetScheduleHistory(msg.id, msg.requestId);
       case "listComments":
         return this.onListComments(msg.target, msg.requestId);
       case "unwatchComments": {
@@ -3672,6 +3693,108 @@ export class Connection implements Viewer {
         message: `Failed to submit question responses: ${errorText(err)}`,
       });
     }
+  }
+
+  /* ------------------------------- Schedules ------------------------------- */
+
+  /**
+   * The user's Schedule writes (`docs/schedules.md`, Web). An edit and an
+   * on/off answer with ONE authoritative Schedule before `handle()` settles;
+   * no write replies with the collection, whose rows travel as state events.
+   * A refusal names the Schedule.
+   *
+   * Every error here leaves `requestId` OFF on purpose: `send` stamps the
+   * scope's id onto it, and only an unstamped error marks the scope failed,
+   * which is what keeps `handle()` from also sending `mutationSettled`. Setting
+   * the id here would settle a refused write (`scheduleUserConnection.test.ts`
+   * asserts both the stamp and the missing settle).
+   */
+  private onUpdateSchedule(
+    id: string,
+    patch: ScheduleUserPatch,
+    requestId: string,
+  ): void {
+    try {
+      this.sendScheduleSaved(updateScheduleAsUser(id, patch), requestId);
+    } catch (err) {
+      this.sendScheduleRefusal("update", id, err);
+    }
+  }
+
+  private onSetScheduleEnabled(
+    id: string,
+    enabled: boolean,
+    requestId: string,
+  ): void {
+    try {
+      this.sendScheduleSaved(setScheduleEnabledAsUser(id, enabled), requestId);
+    } catch (err) {
+      this.sendScheduleRefusal("switch", id, err);
+    }
+  }
+
+  private onDeleteSchedule(id: string): void {
+    try {
+      deleteScheduleAsUser(id);
+    } catch (err) {
+      this.sendScheduleRefusal("delete", id, err);
+    }
+  }
+
+  /**
+   * Pause all settles only once its save has completed: `handle()` awaits this.
+   * A failure is stamped with the request alone, by `send` as above; a
+   * `{ type: "schedule" }` target would name the collection's list failure,
+   * which this is not.
+   */
+  private async onSetSchedulesPaused(paused: boolean): Promise<void> {
+    try {
+      await setSchedulesPausedAsUser(paused);
+    } catch (err) {
+      this.send({
+        type: "error",
+        message: `Failed to save Schedules settings: ${errorText(err)}`,
+      });
+    }
+  }
+
+  /** A read outside the live projection; a failure answers in `error`. */
+  private onGetScheduleHistory(id: string, requestId: string): void {
+    try {
+      this.send({
+        type: "scheduleHistory",
+        id,
+        requestId,
+        ...scheduleHistoryForUser(id),
+      });
+    } catch (err) {
+      this.send({
+        type: "scheduleHistory",
+        id,
+        requestId,
+        items: null,
+        error: errorText(err),
+      });
+    }
+  }
+
+  private sendScheduleSaved(
+    saved: { item: ScheduleSummary; revision: number },
+    requestId: string,
+  ): void {
+    this.send({ type: "scheduleSaved", ...saved, requestId });
+  }
+
+  private sendScheduleRefusal(
+    verb: "update" | "switch" | "delete",
+    id: string,
+    err: unknown,
+  ): void {
+    this.send({
+      type: "error",
+      message: `Failed to ${verb} Schedule: ${errorText(err)}`,
+      target: { type: "schedule", id },
+    });
   }
 
   private async onUpdateSettings(patch: Partial<AppSettings>): Promise<void> {

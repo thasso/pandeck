@@ -169,6 +169,7 @@ export function sessionFailureFrom(
 const OBJECT_FAILURE_TYPES = [
   "project",
   "task",
+  "schedule",
 ] as const satisfies readonly MessageTarget["type"][];
 
 export type ObjectFailureType = (typeof OBJECT_FAILURE_TYPES)[number];
@@ -226,8 +227,7 @@ function failureOnObject(
  * Collections whose load failure the client keeps as a CONDITION on the
  * collection itself (`projectListError`, `worktreeListError`, `taskListError`,
  * `initiativeListError`, `scheduleListError`),
- * rendered by the pane whenever the user goes there. The Schedules condition is
- * only held until its page renders it (Task-1500), and is still never announced.
+ * rendered by the pane whenever the user goes there.
  *
  * Listed once, and read by both the reducer that stores the condition and the
  * announcer that therefore says nothing: two lists would drift into a failure
@@ -284,7 +284,7 @@ export interface FailureHomes {
    */
   stagedSend: { sessionId: string | null } | null;
   /**
-   * The projects and Tasks whose OWN surface is open AND
+   * The projects, Tasks and Schedules whose OWN surface is open AND
    * visible. Such a surface renders a failure naming its object two ways, and
    * both are in place: the control that was refused (the per-object mutation
    * states), and the object's failure note for the writes no control tracks —
@@ -299,13 +299,22 @@ export interface FailureHomes {
    * panel tab draws its note where nobody can read it, which is the same as
    * suppressing the failure into nothing.
    */
-  openObjects: Record<ObjectFailureType, readonly string[]>;
+  openObjects: Record<"project" | "task", readonly string[]> &
+    Partial<Record<"schedule", readonly string[]>>;
+  /**
+   * The write controls currently rendered AND visible that draw their own
+   * refusal in place, by lifecycle control key (`docs/messaging.md`): the
+   * Pause all switch, the Schedule list and inspector switches, the delete
+   * dialog and the detail's Save. A failure correlated to one of these keys
+   * is decided by this list alone.
+   */
+  controls?: readonly string[];
 }
 
 const NO_HOMES: FailureHomes = {
   viewedSessionId: null,
   stagedSend: null,
-  openObjects: { project: [], task: [] },
+  openObjects: { project: [], task: [], schedule: [] },
 };
 
 let homes: FailureHomes = NO_HOMES;
@@ -346,12 +355,22 @@ export function resetFailureHomes(): void {
  * and the failure it described was long over.
  */
 export function arrivalHasHome(
-  arrival: ArrivalMessage,
+  arrival: ArrivalMessage & {
+    /**
+     * The control key of the write this failure answers, resolved from its
+     * request id before the write's record finished. It takes precedence
+     * over every claim below it, the staged send's included: a refusal whose
+     * control is gone is announced even while an unrelated send is in flight.
+     */
+    controlKey?: string;
+  },
   connection: "main" | "panel" = "main",
   current: FailureHomes = homes,
 ): boolean {
   if (arrival.severity !== "error") return false;
   if (isConditionCollection(arrival.target)) return true;
+  if (arrival.controlKey !== undefined)
+    return (current.controls ?? []).includes(arrival.controlKey);
   const target = arrival.target;
   const session = target?.type === "session" ? target.id : undefined;
   if (connection === "main" && current.stagedSend) {
@@ -376,5 +395,5 @@ export function arrivalHasHome(
   // about the twenty other rows in the list, whose failures still have to be
   // announced to reach the user at all.
   if (!target?.id || !isObjectFailureType(target.type)) return false;
-  return current.openObjects[target.type].includes(target.id);
+  return (current.openObjects[target.type] ?? []).includes(target.id);
 }
